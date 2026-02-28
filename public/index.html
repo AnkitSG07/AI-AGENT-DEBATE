@@ -3,6 +3,198 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Agent Debate</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
+    h2 { margin: 0 0 8px; }
+    .muted { color: #666; font-size: 13px; }
+    textarea { width: 100%; min-height: 120px; padding: 12px; font-size: 14px; border-radius: 10px; border: 1px solid #ddd; }
+    button { padding: 10px 14px; font-size: 14px; cursor: pointer; border-radius: 10px; border: 1px solid #ccc; background: #fff; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .row { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+    label { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+    input[type="number"] { width: 90px; padding: 6px; border-radius: 8px; border: 1px solid #ddd; }
+    .grid { display: grid; gap: 12px; grid-template-columns: 1fr; margin-top: 12px; }
+    .box { border: 1px solid #e3e3e3; border-radius: 12px; padding: 12px; white-space: pre-wrap; background: #fafafa; }
+    .title { font-weight: 600; margin-bottom: 8px; }
+    .pill { display: inline-block; font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid #ddd; background: #fff; margin-left: 8px; }
+    .turn { border: 1px solid #eee; border-radius: 12px; padding: 10px; background: #fff; margin: 10px 0; }
+    .turnHead { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
+    .agent { font-weight: 700; }
+    .time { color:#777; font-size:12px; }
+    .statusLine { color:#444; font-size:13px; }
+  </style>
+</head>
+<body>
+  <h2>AI Agent Debate</h2>
+  <div class="muted">One prompt → 3 AIs debate live → one final unified answer.</div>
+
+  <textarea id="prompt" placeholder="Type your prompt..."></textarea>
+
+  <div class="row">
+    <label>
+      Rounds (each round = 3 turns):
+      <input id="rounds" type="number" value="2" min="1" max="5" step="1" />
+    </label>
+    <label>
+      <input id="showDebate" type="checkbox" checked />
+      Show live debate
+    </label>
+    <button id="runBtn">Run Debate</button>
+    <button id="clearBtn" type="button">Clear</button>
+  </div>
+
+  <div id="status" class="muted"></div>
+
+  <div class="grid">
+    <div class="box" id="finalBox" style="display:none;">
+      <div class="title">Final Answer <span class="pill">Judge</span></div>
+      <div id="finalText"></div>
+    </div>
+
+    <div class="box" id="debateBox" style="display:none;">
+      <div class="title">Live Debate <span class="pill">Streaming</span></div>
+      <div id="debateStream"></div>
+    </div>
+  </div>
+
+  <script>
+    const runBtn = document.getElementById("runBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const statusEl = document.getElementById("status");
+
+    const finalBox = document.getElementById("finalBox");
+    const finalText = document.getElementById("finalText");
+
+    const debateBox = document.getElementById("debateBox");
+    const debateStream = document.getElementById("debateStream");
+
+    function escapeHtml(str) {
+      return (str || "").replace(/[&<>"']/g, (m) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
+      }[m]));
+    }
+
+    function appendTurn(agent, at, content) {
+      const el = document.createElement("div");
+      el.className = "turn";
+      el.innerHTML = `
+        <div class="turnHead">
+          <div class="agent">${escapeHtml(agent)}</div>
+          <div class="time">${escapeHtml(new Date(at).toLocaleString())}</div>
+        </div>
+        <div>${escapeHtml(content)}</div>
+      `;
+      debateStream.appendChild(el);
+      el.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || "";
+    }
+
+    function resetUI() {
+      setStatus("");
+      finalBox.style.display = "none";
+      finalText.textContent = "";
+      debateBox.style.display = "none";
+      debateStream.innerHTML = "";
+    }
+
+    clearBtn.addEventListener("click", () => {
+      document.getElementById("prompt").value = "";
+      resetUI();
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const prompt = document.getElementById("prompt").value.trim();
+      const rounds = Number(document.getElementById("rounds").value || 2);
+      const showDebate = document.getElementById("showDebate").checked;
+
+      resetUI();
+
+      if (!prompt) return alert("Please enter a prompt.");
+
+      runBtn.disabled = true;
+      setStatus("Starting debate…");
+
+      if (showDebate) {
+        debateBox.style.display = "block";
+      }
+
+      try {
+        const resp = await fetch("/api/debate-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt, rounds, showDebate })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.text();
+          throw new Error(err || "Request failed");
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // NDJSON: split by newline
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+
+            let msg;
+            try { msg = JSON.parse(line); }
+            catch { continue; }
+
+            if (msg.type === "meta") {
+              setStatus("Debate running…");
+            }
+
+            if (msg.type === "status") {
+              setStatus(msg.message || "");
+            }
+
+            if (msg.type === "turn") {
+              if (showDebate) appendTurn(msg.agent, msg.at, msg.content);
+            }
+
+            if (msg.type === "final") {
+              finalBox.style.display = "block";
+              finalText.textContent = msg.content || "";
+              setStatus("Done.");
+            }
+
+            if (msg.type === "error") {
+              setStatus("Error: " + (msg.message || "Unknown error"));
+            }
+
+            if (msg.type === "done") {
+              setStatus("Done.");
+            }
+          }
+        }
+      } catch (e) {
+        setStatus("Error: " + e.message);
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html><!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Debate Room</title>
   <style>
     body { font-family: system-ui, Arial; max-width: 900px; margin: 24px auto; padding: 0 12px; }
