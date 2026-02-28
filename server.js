@@ -42,7 +42,6 @@ const odooConfigured = !!(ODOO_URL && ODOO_DB && ODOO_USERNAME && ODOO_PASS);
 console.log("✅ Odoo configured:", odooConfigured);
 
 // ===================== STORES (in-memory) =====================
-// NOTE: Render restarts can reset memory. Later we can store PDFs as Odoo attachments.
 const labelsStore = new Map(); // labelId -> record
 const labelDraftsBySO = new Map(); // sale_order_id -> draft
 let labelCounter = 1;
@@ -130,9 +129,18 @@ async function odooGetSaleOrderByRef(ref) {
   const so = records[0];
   const shipPartnerId = so.partner_shipping_id?.[0] || so.partner_id?.[0];
 
+  // ✅ FIX: do NOT request "mobile" field (your db throws error)
   const partner = shipPartnerId
     ? await odooExecute(uid, "res.partner", "read", [[shipPartnerId], [
-        "name","phone","mobile","email","street","street2","city","state_id","zip","country_id"
+        "name",
+        "phone",
+        "email",
+        "street",
+        "street2",
+        "city",
+        "state_id",
+        "zip",
+        "country_id"
       ]])
     : [];
 
@@ -140,7 +148,7 @@ async function odooGetSaleOrderByRef(ref) {
   const stateName = p.state_id?.[1] || "";
   const countryName = p.country_id?.[1] || "";
 
-  const phone = p.phone || p.mobile || "";
+  const phone = p.phone || "";
 
   const lines = await odooExecute(
     uid,
@@ -209,8 +217,6 @@ function makeDraftFromSaleOrder(saleOrder) {
 }
 
 // ===================== PDF LABEL GENERATION =====================
-// Layout designed to match your screenshot: SHIP TO / ADDRESS / PHONE + FROM / ADDRESS / PHONE with separators.
-// Uses A4 for "printable sheet" style.
 function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   return new Promise((resolve, reject) => {
     try {
@@ -258,7 +264,6 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
           .filter(Boolean)
           .join(", ") || "Your Address";
 
-      // ---- SHIP TO ----
       doc.fillColor("#000").font("Helvetica-Bold").fontSize(18).text("SHIP TO:", 40, 60);
       doc.font("Helvetica").fontSize(14).text(shipName, 40, 92);
       line(120);
@@ -271,7 +276,6 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
       doc.font("Helvetica").fontSize(14).text(shipPhone, 40, 292);
       line(320);
 
-      // ---- FROM ----
       doc.font("Helvetica-Bold").fontSize(18).text("FROM:", 40, 380);
       doc.font("Helvetica").fontSize(14).text(fromName, 40, 412);
       line(440);
@@ -284,12 +288,7 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
       doc.font("Helvetica").fontSize(14).text(fromPhone, 40, 612);
       line(640);
 
-      // small footer with SO ref
-      doc
-        .fillColor("#444")
-        .font("Helvetica")
-        .fontSize(11)
-        .text(`SO: ${safe(so.ref) || so.id || ""}`, 40, 680);
+      doc.fillColor("#444").font("Helvetica").fontSize(11).text(`SO: ${safe(so.ref) || so.id || ""}`, 40, 680);
 
       doc.end();
     } catch (e) {
@@ -298,7 +297,6 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   });
 }
 
-// Generate label record using edited draft values
 async function generatePdfLabelForOrder({ saleOrder, draft }) {
   const editedOrder = {
     ...saleOrder,
@@ -306,7 +304,6 @@ async function generatePdfLabelForOrder({ saleOrder, draft }) {
   };
 
   const fromAddress = { ...(draft?.from || getDefaultFromAddress()) };
-
   const pdfBuffer = await buildLabelPdfBuffer({ saleOrder: editedOrder, fromAddress });
 
   const labelId = makeLabelId();
@@ -538,8 +535,6 @@ app.post("/api/debate-stream", async (req, res) => {
 });
 
 // ===================== LABEL ROUTES =====================
-
-// Fetch Sale Order from Odoo by reference
 app.get("/api/odoo/sale-order", async (req, res) => {
   try {
     const ref = String(req.query.ref || "").trim();
@@ -552,7 +547,6 @@ app.get("/api/odoo/sale-order", async (req, res) => {
 
     const so = await odooGetSaleOrderByRef(ref);
 
-    // initialize a draft baseline on first fetch
     if (!labelDraftsBySO.has(so.id)) {
       labelDraftsBySO.set(so.id, makeDraftFromSaleOrder(so));
     }
@@ -563,7 +557,6 @@ app.get("/api/odoo/sale-order", async (req, res) => {
   }
 });
 
-// Get editable draft fields for a sale order
 app.get("/api/labels/draft", async (req, res) => {
   try {
     const soId = Number(req.query.sale_order_id);
@@ -586,7 +579,6 @@ app.get("/api/labels/draft", async (req, res) => {
   }
 });
 
-// List labels (optional filter by sale_order_id)
 app.get("/api/labels", async (req, res) => {
   const sale_order_id = req.query.sale_order_id ? String(req.query.sale_order_id) : null;
 
@@ -606,24 +598,20 @@ app.get("/api/labels", async (req, res) => {
   res.json(all);
 });
 
-// Generate a PDF-only label for a Sales Order (supports overrides)
 app.post("/api/labels/generate", async (req, res) => {
   try {
     const { sale_order_id, overrides } = req.body || {};
     if (!sale_order_id) return res.status(400).json({ error: "Provide sale_order_id" });
     if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
 
-    // Load SO from Odoo
     const uid = await odooLogin();
     const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
     if (!recs?.length) throw new Error("Sale Order not found by id");
 
     const saleOrder = await odooGetSaleOrderByRef(recs[0].name);
 
-    // base draft
     let draft = labelDraftsBySO.get(Number(sale_order_id)) || makeDraftFromSaleOrder(saleOrder);
 
-    // apply overrides
     if (overrides && typeof overrides === "object") {
       draft = {
         ...draft,
@@ -632,10 +620,8 @@ app.post("/api/labels/generate", async (req, res) => {
       };
     }
 
-    // save draft
     labelDraftsBySO.set(Number(sale_order_id), draft);
 
-    // generate label using edited data
     const result = await generatePdfLabelForOrder({ saleOrder, draft });
 
     return res.json({
@@ -647,7 +633,6 @@ app.post("/api/labels/generate", async (req, res) => {
   }
 });
 
-// Download label PDF
 app.get("/api/labels/:id/pdf", async (req, res) => {
   const id = req.params.id;
   const record = labelsStore.get(id);
@@ -658,7 +643,6 @@ app.get("/api/labels/:id/pdf", async (req, res) => {
   res.send(record.pdfBuffer);
 });
 
-// Odoo webhook: SO confirmed -> auto generate label
 app.post("/api/odoo/sale-confirmed", async (req, res) => {
   try {
     const secret = process.env.ODOO_WEBHOOK_SECRET;
@@ -685,7 +669,6 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
       saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
     }
 
-    // ensure draft exists
     if (!labelDraftsBySO.has(saleOrder.id)) {
       labelDraftsBySO.set(saleOrder.id, makeDraftFromSaleOrder(saleOrder));
     }
@@ -698,7 +681,6 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
   }
 });
 
-// Health
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
 
 app.listen(PORT, () => {
