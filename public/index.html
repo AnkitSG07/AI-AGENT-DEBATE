@@ -252,6 +252,53 @@
     tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
     tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
     a{color:var(--accent)}
+
+    /* New: Order Preview nice card */
+    .previewCard{
+      font-family: var(--sans);
+      color: var(--text);
+      background: rgba(255,255,255,.02);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:12px;
+    }
+    .previewTop{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-bottom:10px;
+    }
+    .previewTop b{font-size:14px}
+    .previewSub{color:var(--muted);font-size:12px}
+    .previewGrid{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:10px;
+    }
+    @media(min-width: 980px){
+      .previewGrid{grid-template-columns:1fr 1fr;}
+    }
+    .kv{
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.02);
+      border-radius:12px;
+      padding:10px;
+    }
+    .kv .k{color:var(--muted);font-size:12px;margin-bottom:6px}
+    .kv .v{white-space:pre-wrap;font-size:13px;line-height:1.35}
+    .items{
+      margin-top:10px;
+      border-top:1px solid var(--border);
+      padding-top:10px;
+    }
+    .itemRow{
+      display:flex;justify-content:space-between;gap:10px;
+      padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.08);
+      font-size:13px;
+    }
+    .itemRow:last-child{border-bottom:none}
+    .qty{color:var(--muted);font-family:var(--mono)}
   </style>
 </head>
 
@@ -357,32 +404,22 @@
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
           <div>
             <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Shipping Labels</h1>
-            <div class="sub">Connect to Odoo: When Quotation → Sales Order, auto-generate a shipping label.</div>
+            <div class="sub">Connect to Odoo: Fetch SO, edit label fields if needed, generate printable PDF.</div>
           </div>
-          <div class="badge">Odoo → Webhook → Label</div>
+          <div class="badge">Odoo → PDF Label</div>
         </div>
 
         <div class="labelsGrid">
-          <!-- Left: Create / Fetch -->
+          <!-- Left -->
           <div class="box">
             <b>Create / Fetch Label</b>
             <div class="row" style="margin-top:12px">
               <div class="field">
                 Sales Order Reference
-                <input id="soRef" type="text" placeholder="e.g. S00045" style="width:220px">
+                <input id="soRef" type="text" placeholder="e.g. S00237" style="width:220px">
               </div>
               <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
-              <button class="btn primary" id="btnGenerateLabel" disabled>Generate Label</button>
-            </div>
-
-            <div class="row" style="margin-top:12px">
-              <label class="field">
-                <input type="checkbox" id="customFromToggle">
-                Use different “From” address
-              </label>
-              <select id="fromAddressSelect" disabled style="min-width:320px">
-                <option value="">Default Warehouse Address</option>
-              </select>
+              <button class="btn primary" id="btnGenerateLabel" disabled>Generate Label (PDF)</button>
             </div>
 
             <div class="status" style="margin-top:12px">
@@ -392,14 +429,70 @@
 
             <div class="box" style="margin-top:12px">
               <b>Order Preview</b>
-              <pre id="soPreview" class="muted" style="white-space:pre-wrap;margin:10px 0 0;font-family:var(--mono);font-size:12px">No order loaded.</pre>
+              <div id="soPreview" class="muted" style="margin-top:10px">No order loaded.</div>
+            </div>
+
+            <!-- Edit Label -->
+            <div class="box" style="margin-top:12px">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                <b>Edit Label (optional)</b>
+                <button class="btn" id="btnLoadDraft" disabled>Load Editable Fields</button>
+              </div>
+              <div class="muted" style="margin-top:6px;font-size:12px">
+                If Odoo address/phone is wrong, edit here before generating PDF. Edits apply only to the label.
+              </div>
+
+              <div id="editForm" style="margin-top:10px; display:none">
+                <div class="labelsGrid" style="grid-template-columns:1fr 1fr;gap:12px">
+                  <div class="box">
+                    <b>SHIP TO</b>
+                    <div style="margin-top:8px;display:grid;gap:8px">
+                      <input id="e_ship_name" type="text" placeholder="Name">
+                      <input id="e_ship_phone" type="text" placeholder="Phone">
+                      <input id="e_ship_line1" type="text" placeholder="Address line 1">
+                      <input id="e_ship_line2" type="text" placeholder="Address line 2">
+                      <div class="row" style="margin:0">
+                        <input id="e_ship_city" type="text" placeholder="City" style="width:48%">
+                        <input id="e_ship_state" type="text" placeholder="State" style="width:48%">
+                      </div>
+                      <div class="row" style="margin:0">
+                        <input id="e_ship_pin" type="text" placeholder="Pincode" style="width:48%">
+                        <input id="e_ship_country" type="text" placeholder="Country" style="width:48%">
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="box">
+                    <b>FROM</b>
+                    <div style="margin-top:8px;display:grid;gap:8px">
+                      <input id="e_from_name" type="text" placeholder="From name">
+                      <input id="e_from_phone" type="text" placeholder="From phone">
+                      <input id="e_from_line1" type="text" placeholder="From address line 1">
+                      <input id="e_from_line2" type="text" placeholder="From address line 2">
+                      <div class="row" style="margin:0">
+                        <input id="e_from_city" type="text" placeholder="City" style="width:48%">
+                        <input id="e_from_state" type="text" placeholder="State" style="width:48%">
+                      </div>
+                      <div class="row" style="margin:0">
+                        <input id="e_from_pin" type="text" placeholder="Pincode" style="width:48%">
+                        <input id="e_from_country" type="text" placeholder="Country" style="width:48%">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="row" style="margin-top:10px">
+                  <button class="btn" id="btnResetEdits">Reset to Odoo Draft</button>
+                  <span class="muted" style="font-size:12px">Edits are saved per Sales Order (until Render restart).</span>
+                </div>
+              </div>
             </div>
           </div>
 
-          <!-- Right: Labels List -->
+          <!-- Right -->
           <div class="box">
             <b>Generated Labels</b>
-            <div class="muted" style="margin-top:8px">Search & download labels created for Sales Orders.</div>
+            <div class="muted" style="margin-top:8px">Download labels created for this Sales Order.</div>
 
             <div style="margin-top:12px; overflow:auto;">
               <table>
@@ -420,8 +513,10 @@
             </div>
 
             <div class="muted" style="margin-top:10px;font-size:12px">
-              Backend endpoints needed: <span style="font-family:var(--mono)">/api/odoo/sale-order</span>,
-              <span style="font-family:var(--mono)">/api/labels</span>, <span style="font-family:var(--mono)">/api/labels/generate</span>
+              Endpoints: <span style="font-family:var(--mono)">/api/odoo/sale-order</span>,
+              <span style="font-family:var(--mono)">/api/labels/draft</span>,
+              <span style="font-family:var(--mono)">/api/labels</span>,
+              <span style="font-family:var(--mono)">/api/labels/generate</span>
             </div>
           </div>
         </div>
@@ -441,10 +536,24 @@
       tabDebate.style.display = (name === "debate") ? "block" : "none";
       tabLabels.style.display = (name === "labels") ? "block" : "none";
     }
+    tabs.forEach(t => t.addEventListener("click", () => setActiveTab(t.dataset.tab)));
 
-    tabs.forEach(t => {
-      t.addEventListener("click", () => setActiveTab(t.dataset.tab));
-    });
+    // =================== HELPERS ===================
+    function esc(s){
+      return (s || "").replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+      }[m]));
+    }
+
+    async function fetchJsonOrThrow(url, options){
+      const resp = await fetch(url, options);
+      if (!resp.ok) {
+        let msg = await resp.text();
+        try { msg = JSON.parse(msg).error || msg; } catch {}
+        throw new Error(msg);
+      }
+      return await resp.json();
+    }
 
     // =================== DEBATE UI ===================
     const runBtn = document.getElementById("runBtn");
@@ -474,12 +583,6 @@
     };
 
     let abortController = null;
-
-    function esc(s){
-      return (s || "").replace(/[&<>"']/g, m => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-      }[m]));
-    }
 
     function setStatus(msg, spinning=false){
       statusText.textContent = msg || "";
@@ -549,7 +652,11 @@
           signal: abortController.signal
         });
 
-        if (!resp.ok) throw new Error(await resp.text());
+        if (!resp.ok) {
+          let msg = await resp.text();
+          try { msg = JSON.parse(msg).error || msg; } catch {}
+          throw new Error(msg);
+        }
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder("utf-8");
@@ -607,28 +714,73 @@
       }
     });
 
-    // =================== LABELS UI (Frontend only) ===================
+    // =================== LABELS UI ===================
     const soRefEl = document.getElementById("soRef");
     const btnFetchSO = document.getElementById("btnFetchSO");
     const btnGenerateLabel = document.getElementById("btnGenerateLabel");
+    const btnLoadDraft = document.getElementById("btnLoadDraft");
+    const btnResetEdits = document.getElementById("btnResetEdits");
+
     const labelStatus = document.getElementById("labelStatus");
     const labelDot = document.getElementById("labelDot");
     const soPreview = document.getElementById("soPreview");
     const labelsTbody = document.getElementById("labelsTbody");
-    const customFromToggle = document.getElementById("customFromToggle");
-    const fromAddressSelect = document.getElementById("fromAddressSelect");
+
+    const editForm = document.getElementById("editForm");
 
     let loadedSaleOrder = null;
+    let currentDraft = null;
 
     function setLabelStatus(msg, spinning=false){
       labelStatus.textContent = msg || "";
       labelDot.style.display = spinning ? "inline-block" : "none";
     }
 
-    customFromToggle?.addEventListener("change", () => {
-      const enabled = customFromToggle.checked;
-      fromAddressSelect.disabled = !enabled;
-    });
+    function fmtAddress(s){
+      return [s.line1, s.line2, [s.city, s.state, s.pin].filter(Boolean).join(", "), s.country]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    function renderOrderPreview(data){
+      const ship = data.ship_to || {};
+      const addr = fmtAddress(ship);
+
+      const items = (data.items || []).slice(0, 12).map(it => `
+        <div class="itemRow">
+          <div>${esc(it.name || "-")}</div>
+          <div class="qty">x${esc(String(it.qty ?? "-"))}</div>
+        </div>
+      `).join("");
+
+      return `
+        <div class="previewCard">
+          <div class="previewTop">
+            <div>
+              <b>Sales Order: ${esc(data.ref || String(data.id || ""))}</b>
+              <div class="previewSub">State: ${esc(data.state || "-")} • Total: ${esc(String(data.amount_total || "-"))}</div>
+            </div>
+            <div class="previewSub">Order ID: ${esc(String(data.id || "-"))}</div>
+          </div>
+
+          <div class="previewGrid">
+            <div class="kv">
+              <div class="k">SHIP TO</div>
+              <div class="v"><b>${esc(ship.name || "-")}</b>\n${esc(addr || "-")}</div>
+            </div>
+            <div class="kv">
+              <div class="k">CONTACT</div>
+              <div class="v">Phone: ${esc(ship.phone || "-")}\nEmail: ${esc(ship.email || "-")}</div>
+            </div>
+          </div>
+
+          <div class="items">
+            <div class="k" style="color:var(--muted);font-size:12px;margin-bottom:6px">ITEMS</div>
+            ${items || `<div class="previewSub">No items.</div>`}
+          </div>
+        </div>
+      `;
+    }
 
     function renderLabels(labels){
       if (!labels || labels.length === 0){
@@ -648,66 +800,124 @@
       `).join("");
     }
 
+    function setEditInputs(d){
+      const s = d.ship_to || {};
+      const f = d.from || {};
+
+      e_ship_name.value = s.name || "";
+      e_ship_phone.value = s.phone || "";
+      e_ship_line1.value = s.line1 || "";
+      e_ship_line2.value = s.line2 || "";
+      e_ship_city.value = s.city || "";
+      e_ship_state.value = s.state || "";
+      e_ship_pin.value = s.pin || "";
+      e_ship_country.value = s.country || "";
+
+      e_from_name.value = f.name || "";
+      e_from_phone.value = f.phone || "";
+      e_from_line1.value = f.line1 || "";
+      e_from_line2.value = f.line2 || "";
+      e_from_city.value = f.city || "";
+      e_from_state.value = f.state || "";
+      e_from_pin.value = f.pin || "";
+      e_from_country.value = f.country || "";
+    }
+
+    function collectOverrides(){
+      return {
+        ship_to: {
+          name: e_ship_name.value.trim(),
+          phone: e_ship_phone.value.trim(),
+          line1: e_ship_line1.value.trim(),
+          line2: e_ship_line2.value.trim(),
+          city: e_ship_city.value.trim(),
+          state: e_ship_state.value.trim(),
+          pin: e_ship_pin.value.trim(),
+          country: e_ship_country.value.trim()
+        },
+        from: {
+          name: e_from_name.value.trim(),
+          phone: e_from_phone.value.trim(),
+          line1: e_from_line1.value.trim(),
+          line2: e_from_line2.value.trim(),
+          city: e_from_city.value.trim(),
+          state: e_from_state.value.trim(),
+          pin: e_from_pin.value.trim(),
+          country: e_from_country.value.trim()
+        }
+      };
+    }
+
     btnFetchSO?.addEventListener("click", async () => {
       const ref = (soRefEl.value || "").trim();
-      if (!ref) return alert("Enter Sales Order reference (e.g. S00045)");
+      if (!ref) return alert("Enter Sales Order reference (e.g. S00237)");
 
       setLabelStatus("Fetching Sales Order from Odoo…", true);
       btnGenerateLabel.disabled = true;
+      btnLoadDraft.disabled = true;
       loadedSaleOrder = null;
-      soPreview.textContent = "Loading…";
+      soPreview.innerHTML = "Loading…";
+      editForm.style.display = "none";
+      currentDraft = null;
 
       try{
-        // Backend route you will add in server.js later:
-        const resp = await fetch(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
-        if (!resp.ok) throw new Error(await resp.text());
-        const data = await resp.json();
-
+        const data = await fetchJsonOrThrow(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
         loadedSaleOrder = data;
-        soPreview.textContent = JSON.stringify(data, null, 2);
+
+        soPreview.innerHTML = renderOrderPreview(data);
         btnGenerateLabel.disabled = false;
+        btnLoadDraft.disabled = false;
         setLabelStatus("Sales Order loaded. Ready.", false);
 
-        // Load existing labels
-        const lab = await fetch(`/api/labels?sale_order_id=${encodeURIComponent(data.id)}`);
-        if (lab.ok){
-          const labels = await lab.json();
-          renderLabels(labels);
-        }
+        const labels = await fetchJsonOrThrow(`/api/labels?sale_order_id=${encodeURIComponent(data.id)}`);
+        renderLabels(labels);
       } catch(e){
         setLabelStatus("Error: " + e.message, false);
-        soPreview.textContent = "No order loaded.";
+        soPreview.innerHTML = "No order loaded.";
         renderLabels([]);
       }
+    });
+
+    btnLoadDraft?.addEventListener("click", async () => {
+      if (!loadedSaleOrder) return;
+      setLabelStatus("Loading editable label fields…", true);
+
+      try{
+        const d = await fetchJsonOrThrow(`/api/labels/draft?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
+        currentDraft = d;
+        setEditInputs(d);
+        editForm.style.display = "block";
+        setLabelStatus("Editable fields loaded. You can edit now.", false);
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+      }
+    });
+
+    btnResetEdits?.addEventListener("click", () => {
+      if (!currentDraft) return;
+      setEditInputs(currentDraft);
     });
 
     btnGenerateLabel?.addEventListener("click", async () => {
       if (!loadedSaleOrder) return;
 
-      const from_address_id = customFromToggle.checked ? (fromAddressSelect.value || null) : null;
-
       setLabelStatus("Generating shipping label…", true);
       btnGenerateLabel.disabled = true;
 
       try{
-        // Backend route you will add in server.js later:
-        const resp = await fetch(`/api/labels/generate`, {
+        await fetchJsonOrThrow(`/api/labels/generate`, {
           method:"POST",
           headers:{"Content-Type":"application/json"},
           body: JSON.stringify({
             sale_order_id: loadedSaleOrder.id,
-            from_address_id
+            overrides: (editForm.style.display === "block") ? collectOverrides() : null
           })
         });
-
-        if (!resp.ok) throw new Error(await resp.text());
-        await resp.json();
 
         setLabelStatus("Label created ✅", false);
         btnGenerateLabel.disabled = false;
 
-        const lab = await fetch(`/api/labels?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
-        const labels = lab.ok ? await lab.json() : [];
+        const labels = await fetchJsonOrThrow(`/api/labels?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
         renderLabels(labels);
       } catch(e){
         setLabelStatus("Error: " + e.message, false);
