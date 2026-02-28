@@ -3,21 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AI Agent Debate</title>
+  <title>AI Agent Debate + Shipping Labels</title>
   <style>
     :root{
       --bg:#0b0f17;
       --panel:#101826;
-      --panel2:#0f1522;
       --border:rgba(255,255,255,.08);
       --text:#eaf0ff;
       --muted:rgba(234,240,255,.65);
       --accent:#4da3ff;
-      --good:#44d7b6;
       --warn:#ffcc66;
-      --bad:#ff6b6b;
-      --bubble:#141f31;
-      --bubble2:#0f1a2d;
       --shadow: 0 12px 30px rgba(0,0,0,.35);
       --radius:16px;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
@@ -33,12 +28,14 @@
       color:var(--text);
     }
     .wrap{max-width:1200px;margin:24px auto;padding:0 14px}
+
     .topbar{
       display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
       margin-bottom:14px;
     }
     h1{font-size:20px;margin:0;letter-spacing:.2px}
     .sub{color:var(--muted);font-size:13px;margin-top:4px}
+
     .badge{
       border:1px solid var(--border);
       background:rgba(255,255,255,.03);
@@ -51,6 +48,36 @@
       border-radius:var(--radius);
       box-shadow:var(--shadow);
     }
+
+    /* Tabs */
+    .tabs{
+      display:flex;gap:10px;align-items:center;
+      padding:10px;
+      margin-bottom:14px;
+    }
+    .tab{
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      color:var(--muted);
+      padding:10px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      font-weight:700;
+      font-size:13px;
+      display:flex;align-items:center;gap:8px;
+      user-select:none;
+    }
+    .tab:hover{border-color:rgba(77,163,255,.45);color:var(--text)}
+    .tab.active{
+      background:linear-gradient(135deg, rgba(77,163,255,.95), rgba(77,163,255,.55));
+      border-color:rgba(77,163,255,.75);
+      color:#071018;
+    }
+    .tabDot{
+      width:8px;height:8px;border-radius:50%;
+      background:rgba(255,255,255,.45);
+    }
+    .tab.active .tabDot{background:#071018}
 
     .controls{padding:14px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
@@ -71,22 +98,22 @@
     .field{
       display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px
     }
-    input[type="number"]{
-      width:90px;
-      padding:8px 10px;
+    input[type="number"], input[type="text"], select{
+      padding:10px 10px;
       border-radius:12px;
       border:1px solid var(--border);
       background:rgba(255,255,255,.03);
       color:var(--text);
       outline:none;
     }
+    input[type="number"]{width:110px}
     input[type="checkbox"]{transform:scale(1.1)}
     .btn{
       padding:10px 14px;border-radius:12px;border:1px solid var(--border);
       background:rgba(255,255,255,.04);
       color:var(--text);
       cursor:pointer;
-      font-weight:600;
+      font-weight:700;
     }
     .btn:hover{border-color:rgba(77,163,255,.45)}
     .btn.primary{
@@ -99,6 +126,7 @@
       border-color:rgba(255,107,107,.35);
     }
     .btn:disabled{opacity:.55;cursor:not-allowed}
+
     .status{
       margin-top:10px;
       color:var(--muted);
@@ -117,6 +145,7 @@
       100%{transform:scale(.85);opacity:.7}
     }
 
+    /* Debate grid */
     .grid{
       margin-top:14px;
       display:grid;
@@ -126,13 +155,12 @@
     @media(min-width: 980px){
       .grid{grid-template-columns: 1fr 1fr 1fr;}
     }
-
     .col{padding:12px;min-height:340px;display:flex;flex-direction:column;gap:10px}
     .colHead{
       display:flex;align-items:center;justify-content:space-between;gap:10px;
       padding-bottom:10px;border-bottom:1px solid var(--border);
     }
-    .agentName{font-weight:800}
+    .agentName{font-weight:900}
     .pill{
       font-size:12px;
       color:var(--muted);
@@ -145,9 +173,7 @@
       display:flex;align-items:center;gap:8px;
       font-size:12px;color:var(--warn);
     }
-    .miniDots{
-      display:inline-flex;gap:3px;align-items:center
-    }
+    .miniDots{display:inline-flex;gap:3px;align-items:center}
     .miniDots span{
       width:4px;height:4px;border-radius:50%;background:var(--warn);
       animation:bounce .9s infinite;
@@ -159,13 +185,7 @@
       0%,100%{transform:translateY(0)}
       50%{transform:translateY(-4px)}
     }
-
-    .feed{
-      overflow:auto;
-      padding-right:4px;
-      flex:1;
-      scroll-behavior:smooth;
-    }
+    .feed{overflow:auto;padding-right:4px;flex:1;scroll-behavior:smooth;}
     .bubble{
       background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
       border:1px solid var(--border);
@@ -184,6 +204,7 @@
       font-family:var(--mono);
     }
 
+    /* Final */
     .finalWrap{margin-top:14px}
     .final{padding:14px}
     .finalHead{
@@ -198,7 +219,39 @@
       border-radius:14px;
       padding:12px;
     }
-    .hint{color:var(--muted);font-size:12px;margin-top:10px}
+
+    /* Labels UI */
+    .labelsGrid{
+      margin-top:14px;
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:12px;
+    }
+    @media(min-width: 980px){
+      .labelsGrid{grid-template-columns: 1.1fr .9fr;}
+    }
+    .box{
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.02);
+      border-radius:14px;
+      padding:12px;
+    }
+    .muted{color:var(--muted)}
+    table{
+      width:100%;
+      border-collapse:separate;
+      border-spacing:0 10px;
+      font-size:13px;
+    }
+    td,th{padding:10px 10px}
+    thead th{color:var(--muted);text-align:left;font-size:12px}
+    tbody tr{
+      background:rgba(255,255,255,.03);
+      border:1px solid var(--border);
+    }
+    tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
+    tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
+    a{color:var(--accent)}
   </style>
 </head>
 
@@ -207,94 +260,193 @@
     <div class="topbar">
       <div>
         <h1>AI Agent Debate</h1>
-        <div class="sub">One prompt → Gemini + Llama + Gemma debate live → Judge returns one unified answer</div>
+        <div class="sub">Debate + SmartHandicrafts Shipping Labels (Odoo-connected)</div>
       </div>
-      <div class="badge">NDJSON Live Stream</div>
+      <div class="badge">Render Hosted</div>
     </div>
 
-    <div class="card controls">
-      <textarea id="prompt" placeholder="Ask anything… (example: ‘Compare IC programmer options for PT8M2302 and what I should buy’)"></textarea>
+    <!-- Tabs -->
+    <div class="card tabs">
+      <div class="tab active" data-tab="debate"><span class="tabDot"></span> AI Debate</div>
+      <div class="tab" data-tab="labels"><span class="tabDot"></span> Shipping Labels</div>
+    </div>
 
-      <div class="row" style="margin-top:12px">
-        <div class="field">
-          Rounds (1 round = 3 turns)
-          <input id="rounds" type="number" min="1" max="6" value="1">
+    <!-- ================= TAB: DEBATE ================= -->
+    <section id="tab-debate">
+      <div class="card controls">
+        <textarea id="prompt" placeholder="Ask anything…"></textarea>
+
+        <div class="row" style="margin-top:12px">
+          <div class="field">
+            Rounds (1 round = 3 turns)
+            <input id="rounds" type="number" min="1" max="6" value="1">
+          </div>
+
+          <label class="field">
+            <input id="showDebate" type="checkbox" checked>
+            Show debate
+          </label>
+
+          <button id="runBtn" class="btn primary">Run Debate</button>
+          <button id="stopBtn" class="btn danger" disabled>Stop</button>
+          <button id="clearBtn" class="btn">Clear</button>
         </div>
 
-        <label class="field">
-          <input id="showDebate" type="checkbox" checked>
-          Show debate
-        </label>
-
-        <button id="runBtn" class="btn primary">Run Debate</button>
-        <button id="stopBtn" class="btn danger" disabled>Stop</button>
-        <button id="clearBtn" class="btn">Clear</button>
+        <div class="status" id="status">
+          <span class="dot" id="dot" style="display:none"></span>
+          <span id="statusText">Ready.</span>
+        </div>
       </div>
 
-      <div class="status" id="status">
-        <span class="dot" id="dot" style="display:none"></span>
-        <span id="statusText">Ready.</span>
-      </div>
-    </div>
+      <div class="grid" id="grid" style="display:none">
+        <div class="card col">
+          <div class="colHead">
+            <div>
+              <div class="agentName">Gemini</div>
+              <div class="pill">Agent A</div>
+            </div>
+            <div class="thinking" id="think-gemini" style="display:none">
+              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+            </div>
+          </div>
+          <div class="feed" id="feed-gemini"></div>
+        </div>
 
-    <div class="grid" id="grid" style="display:none">
-      <!-- Gemini -->
-      <div class="card col">
-        <div class="colHead">
+        <div class="card col">
+          <div class="colHead">
+            <div>
+              <div class="agentName">Llama</div>
+              <div class="pill">Agent B</div>
+            </div>
+            <div class="thinking" id="think-llama" style="display:none">
+              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+            </div>
+          </div>
+          <div class="feed" id="feed-llama"></div>
+        </div>
+
+        <div class="card col">
+          <div class="colHead">
+            <div>
+              <div class="agentName">Gemma</div>
+              <div class="pill">Agent C</div>
+            </div>
+            <div class="thinking" id="think-gemma" style="display:none">
+              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+            </div>
+          </div>
+          <div class="feed" id="feed-gemma"></div>
+        </div>
+      </div>
+
+      <div class="finalWrap card final" id="finalBox" style="display:none">
+        <div class="finalHead">
           <div>
-            <div class="agentName">Gemini</div>
-            <div class="pill">Agent A</div>
+            <div class="agentName">Final Answer</div>
+            <div class="sub" style="margin-top:4px">Judge (Gemini) synthesizes the debate into one answer.</div>
           </div>
-          <div class="thinking" id="think-gemini" style="display:none">
-            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-          </div>
+          <div class="pill">Judge</div>
         </div>
-        <div class="feed" id="feed-gemini"></div>
+        <div class="finalText" id="finalText"></div>
       </div>
+    </section>
 
-      <!-- Llama -->
-      <div class="card col">
-        <div class="colHead">
+    <!-- ================= TAB: LABELS ================= -->
+    <section id="tab-labels" style="display:none">
+      <div class="card controls">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
           <div>
-            <div class="agentName">Llama</div>
-            <div class="pill">Agent B</div>
+            <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Shipping Labels</h1>
+            <div class="sub">Connect to Odoo: When Quotation → Sales Order, auto-generate a shipping label.</div>
           </div>
-          <div class="thinking" id="think-llama" style="display:none">
-            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-          </div>
+          <div class="badge">Odoo → Webhook → Label</div>
         </div>
-        <div class="feed" id="feed-llama"></div>
-      </div>
 
-      <!-- Gemma -->
-      <div class="card col">
-        <div class="colHead">
-          <div>
-            <div class="agentName">Gemma</div>
-            <div class="pill">Agent C</div>
-          </div>
-          <div class="thinking" id="think-gemma" style="display:none">
-            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-          </div>
-        </div>
-        <div class="feed" id="feed-gemma"></div>
-      </div>
-    </div>
+        <div class="labelsGrid">
+          <!-- Left: Create / Fetch -->
+          <div class="box">
+            <b>Create / Fetch Label</b>
+            <div class="row" style="margin-top:12px">
+              <div class="field">
+                Sales Order Reference
+                <input id="soRef" type="text" placeholder="e.g. S00045" style="width:220px">
+              </div>
+              <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
+              <button class="btn primary" id="btnGenerateLabel" disabled>Generate Label</button>
+            </div>
 
-    <div class="finalWrap card final" id="finalBox" style="display:none">
-      <div class="finalHead">
-        <div>
-          <div class="agentName">Final Answer</div>
-          <div class="sub" style="margin-top:4px">Judge (Gemini) synthesizes the debate into one answer.</div>
+            <div class="row" style="margin-top:12px">
+              <label class="field">
+                <input type="checkbox" id="customFromToggle">
+                Use different “From” address
+              </label>
+              <select id="fromAddressSelect" disabled style="min-width:320px">
+                <option value="">Default Warehouse Address</option>
+              </select>
+            </div>
+
+            <div class="status" style="margin-top:12px">
+              <span class="dot" id="labelDot" style="display:none"></span>
+              <span id="labelStatus" class="muted">Ready.</span>
+            </div>
+
+            <div class="box" style="margin-top:12px">
+              <b>Order Preview</b>
+              <pre id="soPreview" class="muted" style="white-space:pre-wrap;margin:10px 0 0;font-family:var(--mono);font-size:12px">No order loaded.</pre>
+            </div>
+          </div>
+
+          <!-- Right: Labels List -->
+          <div class="box">
+            <b>Generated Labels</b>
+            <div class="muted" style="margin-top:8px">Search & download labels created for Sales Orders.</div>
+
+            <div style="margin-top:12px; overflow:auto;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>SO Ref</th>
+                    <th>Status</th>
+                    <th>Carrier</th>
+                    <th>Download</th>
+                  </tr>
+                </thead>
+                <tbody id="labelsTbody">
+                  <tr>
+                    <td colspan="4" class="muted">No labels yet.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="muted" style="margin-top:10px;font-size:12px">
+              Backend endpoints needed: <span style="font-family:var(--mono)">/api/odoo/sale-order</span>,
+              <span style="font-family:var(--mono)">/api/labels</span>, <span style="font-family:var(--mono)">/api/labels/generate</span>
+            </div>
+          </div>
         </div>
-        <div class="pill">Judge</div>
       </div>
-      <div class="finalText" id="finalText"></div>
-      <div class="hint">Tip: If OpenRouter rate-limits, reduce rounds to 1.</div>
-    </div>
+    </section>
+
   </div>
 
   <script>
+    // =================== TAB SWITCHER ===================
+    const tabs = document.querySelectorAll(".tab");
+    const tabDebate = document.getElementById("tab-debate");
+    const tabLabels = document.getElementById("tab-labels");
+
+    function setActiveTab(name){
+      tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+      tabDebate.style.display = (name === "debate") ? "block" : "none";
+      tabLabels.style.display = (name === "labels") ? "block" : "none";
+    }
+
+    tabs.forEach(t => {
+      t.addEventListener("click", () => setActiveTab(t.dataset.tab));
+    });
+
+    // =================== DEBATE UI ===================
     const runBtn = document.getElementById("runBtn");
     const stopBtn = document.getElementById("stopBtn");
     const clearBtn = document.getElementById("clearBtn");
@@ -338,12 +490,9 @@
       Object.values(thinking).forEach(x => x.style.display = "none");
       if (thinking[agentName]) thinking[agentName].style.display = "flex";
     }
+    function clearThinking(){ Object.values(thinking).forEach(x => x.style.display = "none"); }
 
-    function clearThinking(){
-      Object.values(thinking).forEach(x => x.style.display = "none");
-    }
-
-    function resetUI(){
+    function resetDebate(){
       grid.style.display = "none";
       finalBox.style.display = "none";
       finalText.textContent = "";
@@ -370,7 +519,7 @@
 
     clearBtn.addEventListener("click", () => {
       promptEl.value = "";
-      resetUI();
+      resetDebate();
     });
 
     stopBtn.addEventListener("click", () => {
@@ -383,7 +532,7 @@
       const showDebate = !!showDebateEl.checked;
 
       if (!prompt) return alert("Please enter a prompt.");
-      resetUI();
+      resetDebate();
 
       runBtn.disabled = true;
       stopBtn.disabled = false;
@@ -421,14 +570,11 @@
 
             if (msg.type === "status"){
               setStatus(msg.message || "Working…", true);
-
-              // Show "thinking" for whoever is currently processing
               const name = (msg.message || "").replace("Thinking...","").trim();
               if (name) showThinking(name);
             }
 
             if (msg.type === "turn"){
-              // turn agent: Gemini/Llama/Gemma
               clearThinking();
               if (showDebate) addBubble(msg.agent, msg.content || "", msg.time);
             }
@@ -458,6 +604,114 @@
         runBtn.disabled = false;
         stopBtn.disabled = true;
         abortController = null;
+      }
+    });
+
+    // =================== LABELS UI (Frontend only) ===================
+    const soRefEl = document.getElementById("soRef");
+    const btnFetchSO = document.getElementById("btnFetchSO");
+    const btnGenerateLabel = document.getElementById("btnGenerateLabel");
+    const labelStatus = document.getElementById("labelStatus");
+    const labelDot = document.getElementById("labelDot");
+    const soPreview = document.getElementById("soPreview");
+    const labelsTbody = document.getElementById("labelsTbody");
+    const customFromToggle = document.getElementById("customFromToggle");
+    const fromAddressSelect = document.getElementById("fromAddressSelect");
+
+    let loadedSaleOrder = null;
+
+    function setLabelStatus(msg, spinning=false){
+      labelStatus.textContent = msg || "";
+      labelDot.style.display = spinning ? "inline-block" : "none";
+    }
+
+    customFromToggle?.addEventListener("change", () => {
+      const enabled = customFromToggle.checked;
+      fromAddressSelect.disabled = !enabled;
+    });
+
+    function renderLabels(labels){
+      if (!labels || labels.length === 0){
+        labelsTbody.innerHTML = `<tr><td colspan="4" class="muted">No labels yet.</td></tr>`;
+        return;
+      }
+
+      labelsTbody.innerHTML = labels.map(l => `
+        <tr>
+          <td>${esc(l.sale_order_ref || l.sale_order_id || "-")}</td>
+          <td>${esc(l.status || "-")}</td>
+          <td>${esc(l.carrier || "-")}</td>
+          <td>
+            ${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF</a>` : `<span class="muted">-</span>`}
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    btnFetchSO?.addEventListener("click", async () => {
+      const ref = (soRefEl.value || "").trim();
+      if (!ref) return alert("Enter Sales Order reference (e.g. S00045)");
+
+      setLabelStatus("Fetching Sales Order from Odoo…", true);
+      btnGenerateLabel.disabled = true;
+      loadedSaleOrder = null;
+      soPreview.textContent = "Loading…";
+
+      try{
+        // Backend route you will add in server.js later:
+        const resp = await fetch(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+
+        loadedSaleOrder = data;
+        soPreview.textContent = JSON.stringify(data, null, 2);
+        btnGenerateLabel.disabled = false;
+        setLabelStatus("Sales Order loaded. Ready.", false);
+
+        // Load existing labels
+        const lab = await fetch(`/api/labels?sale_order_id=${encodeURIComponent(data.id)}`);
+        if (lab.ok){
+          const labels = await lab.json();
+          renderLabels(labels);
+        }
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+        soPreview.textContent = "No order loaded.";
+        renderLabels([]);
+      }
+    });
+
+    btnGenerateLabel?.addEventListener("click", async () => {
+      if (!loadedSaleOrder) return;
+
+      const from_address_id = customFromToggle.checked ? (fromAddressSelect.value || null) : null;
+
+      setLabelStatus("Generating shipping label…", true);
+      btnGenerateLabel.disabled = true;
+
+      try{
+        // Backend route you will add in server.js later:
+        const resp = await fetch(`/api/labels/generate`, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({
+            sale_order_id: loadedSaleOrder.id,
+            from_address_id
+          })
+        });
+
+        if (!resp.ok) throw new Error(await resp.text());
+        await resp.json();
+
+        setLabelStatus("Label created ✅", false);
+        btnGenerateLabel.disabled = false;
+
+        const lab = await fetch(`/api/labels?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
+        const labels = lab.ok ? await lab.json() : [];
+        renderLabels(labels);
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+        btnGenerateLabel.disabled = false;
       }
     });
   </script>
