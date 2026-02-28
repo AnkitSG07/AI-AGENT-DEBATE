@@ -106,7 +106,6 @@ async function odooFetchPartner(uid, partnerId) {
   const recs = await odooExecute(uid, "res.partner", "read", [[partnerId], [
     "name",
     "phone",
-    "mobile",
     "email",
     "street",
     "street2",
@@ -127,7 +126,7 @@ function mapPartnerToAddress(p) {
   return {
     name: p.name || p.parent_name || "",
     company: p.company_name || "",
-    phone: p.phone || p.mobile || "",
+    phone: p.phone || "",
     email: p.email || "",
     line1: p.street || "",
     line2: p.street2 || "",
