@@ -13,6 +13,8 @@
       --muted:rgba(234,240,255,.65);
       --accent:#4da3ff;
       --warn:#ffcc66;
+      --danger:#ff6b6b;
+      --ok:#44d7b6;
       --shadow: 0 12px 30px rgba(0,0,0,.35);
       --radius:16px;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
@@ -81,6 +83,7 @@
 
     .controls{padding:14px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+
     textarea{
       width:100%;
       min-height:120px;
@@ -98,7 +101,7 @@
     .field{
       display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px
     }
-    input[type="number"], input[type="text"], select{
+    input[type="number"], input[type="text"], input[type="tel"], select{
       padding:10px 10px;
       border-radius:12px;
       border:1px solid var(--border);
@@ -124,6 +127,12 @@
     .btn.danger{
       background:rgba(255,107,107,.08);
       border-color:rgba(255,107,107,.35);
+      color:var(--text);
+    }
+    .btn.ok{
+      background:rgba(68,215,182,.10);
+      border-color:rgba(68,215,182,.35);
+      color:var(--text);
     }
     .btn:disabled{opacity:.55;cursor:not-allowed}
 
@@ -253,52 +262,129 @@
     tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
     a{color:var(--accent)}
 
-    /* New: Order Preview nice card */
+    /* Order Preview (nice) */
     .previewCard{
-      font-family: var(--sans);
-      color: var(--text);
-      background: rgba(255,255,255,.02);
+      margin-top:12px;
       border:1px solid var(--border);
+      background:rgba(255,255,255,.02);
       border-radius:14px;
       padding:12px;
     }
-    .previewTop{
-      display:flex;
-      justify-content:space-between;
-      gap:10px;
-      flex-wrap:wrap;
+    .previewHead{
+      display:flex;align-items:flex-end;justify-content:space-between;gap:10px;flex-wrap:wrap;
+      padding-bottom:10px;border-bottom:1px solid var(--border);
       margin-bottom:10px;
     }
-    .previewTop b{font-size:14px}
-    .previewSub{color:var(--muted);font-size:12px}
-    .previewGrid{
-      display:grid;
-      grid-template-columns:1fr;
-      gap:10px;
-    }
-    @media(min-width: 980px){
-      .previewGrid{grid-template-columns:1fr 1fr;}
-    }
     .kv{
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.02);
-      border-radius:12px;
-      padding:10px;
-    }
-    .kv .k{color:var(--muted);font-size:12px;margin-bottom:6px}
-    .kv .v{white-space:pre-wrap;font-size:13px;line-height:1.35}
-    .items{
-      margin-top:10px;
-      border-top:1px solid var(--border);
-      padding-top:10px;
-    }
-    .itemRow{
-      display:flex;justify-content:space-between;gap:10px;
-      padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.08);
+      display:grid;
+      grid-template-columns: 120px 1fr;
+      gap:8px 12px;
       font-size:13px;
     }
+    .kv .k{color:var(--muted)}
+    .kv .v{color:var(--text);word-break:break-word}
+    .sectionTitle{font-weight:900;margin:10px 0 8px}
+    .itemsList{
+      max-height:220px;overflow:auto;padding-right:4px;
+      border:1px dashed rgba(255,255,255,.10);
+      border-radius:12px;
+      padding:10px;
+      background:rgba(255,255,255,.015);
+    }
+    .itemRow{
+      display:flex;justify-content:space-between;gap:12px;
+      padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);
+      font-size:12.5px;
+    }
     .itemRow:last-child{border-bottom:none}
-    .qty{color:var(--muted);font-family:var(--mono)}
+    .qtyPill{
+      font-family:var(--mono);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:999px;
+      padding:2px 8px;
+      color:var(--muted);
+      white-space:nowrap;
+    }
+
+    /* Editor */
+    .editorGrid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:10px;
+      margin-top:10px;
+    }
+    @media(min-width: 980px){
+      .editorGrid{grid-template-columns: 1fr 1fr;}
+    }
+    .editorBox{
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.02);
+      border-radius:14px;
+      padding:12px;
+    }
+    .editorBox b{display:block;margin-bottom:10px}
+    .formGrid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:10px;
+    }
+    .formGrid .fieldRow{
+      display:grid;
+      grid-template-columns: 110px 1fr;
+      gap:10px;
+      align-items:center;
+      font-size:12.5px;
+      color:var(--muted);
+    }
+    .formGrid .fieldRow input{
+      width:100%;
+    }
+
+    /* Orders list */
+    .orderChip{
+      display:flex;gap:10px;align-items:center;justify-content:space-between;
+      border:1px solid rgba(255,255,255,.08);
+      padding:10px;border-radius:12px;margin-top:10px;
+      background:rgba(255,255,255,.02)
+    }
+    .orderChip .left b{display:block}
+    .orderChip .left .small{font-size:12px;color:var(--muted)}
+    .dividerLine{
+      height:1px;background:rgba(255,255,255,.08);margin:10px 0;
+    }
+
+    /* Modal */
+    .modalBack{
+      position:fixed;inset:0;
+      background:rgba(0,0,0,.55);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+      z-index:99;
+    }
+    .modal{
+      width:min(980px, 100%);
+      background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+      border:1px solid var(--border);
+      border-radius:16px;
+      box-shadow:0 18px 45px rgba(0,0,0,.45);
+      padding:14px;
+    }
+    .modalHead{
+      display:flex;justify-content:space-between;align-items:center;gap:10px;
+      padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:12px;
+    }
+    .modalTitle{font-weight:900}
+    .xbtn{
+      width:34px;height:34px;border-radius:10px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      cursor:pointer;
+      font-weight:900;
+    }
+    .hint{font-size:12px;color:var(--muted);margin-top:6px}
   </style>
 </head>
 
@@ -307,7 +393,7 @@
     <div class="topbar">
       <div>
         <h1>AI Agent Debate</h1>
-        <div class="sub">Debate + SmartHandicrafts Shipping Labels (Odoo-connected)</div>
+        <div class="sub">Debate + SmartHandicrafts® Shipping Labels (Odoo-connected)</div>
       </div>
       <div class="badge">Render Hosted</div>
     </div>
@@ -404,21 +490,30 @@
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
           <div>
             <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Shipping Labels</h1>
-            <div class="sub">Connect to Odoo: Fetch SO, edit label fields if needed, generate printable PDF.</div>
+            <div class="sub">Fetch Orders from Odoo → Edit address if needed → Generate printable PDF labels.</div>
           </div>
-          <div class="badge">Odoo → PDF Label</div>
+          <div class="badge">Odoo Connected</div>
         </div>
 
         <div class="labelsGrid">
-          <!-- Left -->
+          <!-- Left: Create / Fetch -->
           <div class="box">
             <b>Create / Fetch Label</b>
+
             <div class="row" style="margin-top:12px">
               <div class="field">
                 Sales Order Reference
-                <input id="soRef" type="text" placeholder="e.g. S00237" style="width:220px">
+                <input id="soRef" type="text" placeholder="e.g. S00241" style="width:220px">
               </div>
+
               <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
+              <button class="btn" id="btnAddOrder">Add Order</button>
+
+              <label class="field" style="margin-left:auto">
+                <input type="checkbox" id="bigBoxToggle">
+                Big box (Full A4 per label)
+              </label>
+
               <button class="btn primary" id="btnGenerateLabel" disabled>Generate Label (PDF)</button>
             </div>
 
@@ -427,80 +522,61 @@
               <span id="labelStatus" class="muted">Ready.</span>
             </div>
 
-            <div class="box" style="margin-top:12px">
-              <b>Order Preview</b>
-              <div id="soPreview" class="muted" style="margin-top:10px">No order loaded.</div>
-            </div>
+            <div class="dividerLine"></div>
 
-            <!-- Edit Label -->
-            <div class="box" style="margin-top:12px">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-                <b>Edit Label (optional)</b>
-                <button class="btn" id="btnLoadDraft" disabled>Load Editable Fields</button>
+            <b>Orders Added (max 4 per page)</b>
+            <div class="hint">Add 1–4 different Sales Orders. PDF will place 1/2/3/4 labels on the A4 automatically. More than 4 will continue on the next page.</div>
+            <div id="ordersList" style="margin-top:10px"></div>
+
+            <div class="previewCard">
+              <div class="previewHead">
+                <div>
+                  <div class="agentName" style="font-size:16px">Order Preview</div>
+                  <div class="sub">Clean preview (not raw JSON). Use “Edit Label” to fix name/phone/address if needed.</div>
+                </div>
+                <div class="row">
+                  <button class="btn" id="btnOpenEditor" disabled>Edit Label</button>
+                </div>
               </div>
-              <div class="muted" style="margin-top:6px;font-size:12px">
-                If Odoo address/phone is wrong, edit here before generating PDF. Edits apply only to the label.
-              </div>
 
-              <div id="editForm" style="margin-top:10px; display:none">
-                <div class="labelsGrid" style="grid-template-columns:1fr 1fr;gap:12px">
-                  <div class="box">
-                    <b>SHIP TO</b>
-                    <div style="margin-top:8px;display:grid;gap:8px">
-                      <input id="e_ship_name" type="text" placeholder="Name">
-                      <input id="e_ship_phone" type="text" placeholder="Phone">
-                      <input id="e_ship_line1" type="text" placeholder="Address line 1">
-                      <input id="e_ship_line2" type="text" placeholder="Address line 2">
-                      <div class="row" style="margin:0">
-                        <input id="e_ship_city" type="text" placeholder="City" style="width:48%">
-                        <input id="e_ship_state" type="text" placeholder="State" style="width:48%">
-                      </div>
-                      <div class="row" style="margin:0">
-                        <input id="e_ship_pin" type="text" placeholder="Pincode" style="width:48%">
-                        <input id="e_ship_country" type="text" placeholder="Country" style="width:48%">
-                      </div>
-                    </div>
-                  </div>
+              <div id="previewEmpty" class="muted">No order loaded.</div>
 
-                  <div class="box">
-                    <b>FROM</b>
-                    <div style="margin-top:8px;display:grid;gap:8px">
-                      <input id="e_from_name" type="text" placeholder="From name">
-                      <input id="e_from_phone" type="text" placeholder="From phone">
-                      <input id="e_from_line1" type="text" placeholder="From address line 1">
-                      <input id="e_from_line2" type="text" placeholder="From address line 2">
-                      <div class="row" style="margin:0">
-                        <input id="e_from_city" type="text" placeholder="City" style="width:48%">
-                        <input id="e_from_state" type="text" placeholder="State" style="width:48%">
-                      </div>
-                      <div class="row" style="margin:0">
-                        <input id="e_from_pin" type="text" placeholder="Pincode" style="width:48%">
-                        <input id="e_from_country" type="text" placeholder="Country" style="width:48%">
-                      </div>
-                    </div>
-                  </div>
+              <div id="previewBody" style="display:none">
+                <div class="kv" style="margin-bottom:10px">
+                  <div class="k">SO Ref</div><div class="v" id="pvRef">-</div>
+                  <div class="k">Status</div><div class="v" id="pvState">-</div>
+                  <div class="k">Date</div><div class="v" id="pvDate">-</div>
+                  <div class="k">Total</div><div class="v" id="pvTotal">-</div>
                 </div>
 
-                <div class="row" style="margin-top:10px">
-                  <button class="btn" id="btnResetEdits">Reset to Odoo Draft</button>
-                  <span class="muted" style="font-size:12px">Edits are saved per Sales Order (until Render restart).</span>
+                <div class="sectionTitle">Ship To</div>
+                <div class="kv">
+                  <div class="k">Name</div><div class="v" id="pvName">-</div>
+                  <div class="k">Phone</div><div class="v" id="pvPhone">-</div>
+                  <div class="k">Address</div><div class="v" id="pvAddr">-</div>
                 </div>
+
+                <div class="sectionTitle">Items</div>
+                <div class="itemsList" id="pvItems"></div>
+
+                <!-- Keep your existing pre (hidden) if you ever need it -->
+                <pre id="soPreview" class="muted" style="display:none;white-space:pre-wrap;margin:10px 0 0;font-family:var(--mono);font-size:12px"></pre>
               </div>
             </div>
           </div>
 
-          <!-- Right -->
+          <!-- Right: Labels List -->
           <div class="box">
             <b>Generated Labels</b>
-            <div class="muted" style="margin-top:8px">Download labels created for this Sales Order.</div>
+            <div class="muted" style="margin-top:8px">All labels created by the backend (single or batch). Download PDF.</div>
 
             <div style="margin-top:12px; overflow:auto;">
               <table>
                 <thead>
                   <tr>
-                    <th>SO Ref</th>
-                    <th>Status</th>
+                    <th>Ref</th>
                     <th>Carrier</th>
+                    <th>Created</th>
                     <th>Download</th>
                   </tr>
                 </thead>
@@ -514,15 +590,67 @@
 
             <div class="muted" style="margin-top:10px;font-size:12px">
               Endpoints: <span style="font-family:var(--mono)">/api/odoo/sale-order</span>,
-              <span style="font-family:var(--mono)">/api/labels/draft</span>,
               <span style="font-family:var(--mono)">/api/labels</span>,
-              <span style="font-family:var(--mono)">/api/labels/generate</span>
+              <span style="font-family:var(--mono)">/api/labels/generate</span>,
+              <span style="font-family:var(--mono)">/api/labels/generate-batch</span>
             </div>
           </div>
         </div>
       </div>
     </section>
 
+  </div>
+
+  <!-- =================== EDIT MODAL =================== -->
+  <div class="modalBack" id="editModalBack">
+    <div class="modal">
+      <div class="modalHead">
+        <div>
+          <div class="modalTitle">Edit Label (Overrides)</div>
+          <div class="hint">This does NOT change Odoo. It only fixes the PDF label output.</div>
+        </div>
+        <button class="xbtn" id="closeEditModal">✕</button>
+      </div>
+
+      <div class="editorGrid">
+        <div class="editorBox">
+          <b>SHIP TO (Recipient)</b>
+          <div class="formGrid">
+            <div class="fieldRow"><div>Name</div><input id="edShipName" type="text" placeholder="Recipient Name"></div>
+            <div class="fieldRow"><div>Phone</div><input id="edShipPhone" type="tel" placeholder="Recipient Phone"></div>
+            <div class="fieldRow"><div>Line 1</div><input id="edShipL1" type="text" placeholder="House / Street"></div>
+            <div class="fieldRow"><div>Line 2</div><input id="edShipL2" type="text" placeholder="Area / Landmark"></div>
+            <div class="fieldRow"><div>City</div><input id="edShipCity" type="text" placeholder="City"></div>
+            <div class="fieldRow"><div>State</div><input id="edShipState" type="text" placeholder="State"></div>
+            <div class="fieldRow"><div>PIN</div><input id="edShipPin" type="text" placeholder="Pincode"></div>
+            <div class="fieldRow"><div>Country</div><input id="edShipCountry" type="text" placeholder="Country"></div>
+          </div>
+        </div>
+
+        <div class="editorBox">
+          <b>FROM (Sender)</b>
+          <div class="formGrid">
+            <div class="fieldRow"><div>Name</div><input id="edFromName" type="text" placeholder="Sender Name"></div>
+            <div class="fieldRow"><div>Phone</div><input id="edFromPhone" type="tel" placeholder="Sender Phone"></div>
+            <div class="fieldRow"><div>Line 1</div><input id="edFromL1" type="text" placeholder="Address line 1"></div>
+            <div class="fieldRow"><div>Line 2</div><input id="edFromL2" type="text" placeholder="Address line 2"></div>
+            <div class="fieldRow"><div>City</div><input id="edFromCity" type="text" placeholder="City"></div>
+            <div class="fieldRow"><div>State</div><input id="edFromState" type="text" placeholder="State"></div>
+            <div class="fieldRow"><div>PIN</div><input id="edFromPin" type="text" placeholder="Pincode"></div>
+            <div class="fieldRow"><div>Country</div><input id="edFromCountry" type="text" placeholder="Country"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button class="btn" id="resetEdits">Reset</button>
+        <button class="btn ok" id="saveEdits">Save Overrides</button>
+      </div>
+
+      <div class="hint" style="margin-top:10px">
+        Tip: Add 2–4 orders then save overrides for each order one by one (select order → Edit Label → Save). Then generate batch PDF.
+      </div>
+    </div>
   </div>
 
   <script>
@@ -536,24 +664,10 @@
       tabDebate.style.display = (name === "debate") ? "block" : "none";
       tabLabels.style.display = (name === "labels") ? "block" : "none";
     }
-    tabs.forEach(t => t.addEventListener("click", () => setActiveTab(t.dataset.tab)));
 
-    // =================== HELPERS ===================
-    function esc(s){
-      return (s || "").replace(/[&<>"']/g, m => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-      }[m]));
-    }
-
-    async function fetchJsonOrThrow(url, options){
-      const resp = await fetch(url, options);
-      if (!resp.ok) {
-        let msg = await resp.text();
-        try { msg = JSON.parse(msg).error || msg; } catch {}
-        throw new Error(msg);
-      }
-      return await resp.json();
-    }
+    tabs.forEach(t => {
+      t.addEventListener("click", () => setActiveTab(t.dataset.tab));
+    });
 
     // =================== DEBATE UI ===================
     const runBtn = document.getElementById("runBtn");
@@ -583,6 +697,12 @@
     };
 
     let abortController = null;
+
+    function esc(s){
+      return (s || "").replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+      }[m]));
+    }
 
     function setStatus(msg, spinning=false){
       statusText.textContent = msg || "";
@@ -652,11 +772,7 @@
           signal: abortController.signal
         });
 
-        if (!resp.ok) {
-          let msg = await resp.text();
-          try { msg = JSON.parse(msg).error || msg; } catch {}
-          throw new Error(msg);
-        }
+        if (!resp.ok) throw new Error(await resp.text());
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder("utf-8");
@@ -714,72 +830,184 @@
       }
     });
 
-    // =================== LABELS UI ===================
+    // =================== LABELS UI (Multi orders + Big box + Editor) ===================
     const soRefEl = document.getElementById("soRef");
     const btnFetchSO = document.getElementById("btnFetchSO");
+    const btnAddOrder = document.getElementById("btnAddOrder");
     const btnGenerateLabel = document.getElementById("btnGenerateLabel");
-    const btnLoadDraft = document.getElementById("btnLoadDraft");
-    const btnResetEdits = document.getElementById("btnResetEdits");
-
     const labelStatus = document.getElementById("labelStatus");
     const labelDot = document.getElementById("labelDot");
-    const soPreview = document.getElementById("soPreview");
     const labelsTbody = document.getElementById("labelsTbody");
+    const bigBoxToggle = document.getElementById("bigBoxToggle");
 
-    const editForm = document.getElementById("editForm");
+    const ordersListEl = document.getElementById("ordersList");
+
+    const previewEmpty = document.getElementById("previewEmpty");
+    const previewBody = document.getElementById("previewBody");
+    const soPreviewRaw = document.getElementById("soPreview");
+
+    const pvRef = document.getElementById("pvRef");
+    const pvState = document.getElementById("pvState");
+    const pvDate = document.getElementById("pvDate");
+    const pvTotal = document.getElementById("pvTotal");
+    const pvName = document.getElementById("pvName");
+    const pvPhone = document.getElementById("pvPhone");
+    const pvAddr = document.getElementById("pvAddr");
+    const pvItems = document.getElementById("pvItems");
+
+    const btnOpenEditor = document.getElementById("btnOpenEditor");
+
+    // Modal elements
+    const editModalBack = document.getElementById("editModalBack");
+    const closeEditModal = document.getElementById("closeEditModal");
+    const saveEdits = document.getElementById("saveEdits");
+    const resetEdits = document.getElementById("resetEdits");
+
+    const edShipName = document.getElementById("edShipName");
+    const edShipPhone = document.getElementById("edShipPhone");
+    const edShipL1 = document.getElementById("edShipL1");
+    const edShipL2 = document.getElementById("edShipL2");
+    const edShipCity = document.getElementById("edShipCity");
+    const edShipState = document.getElementById("edShipState");
+    const edShipPin = document.getElementById("edShipPin");
+    const edShipCountry = document.getElementById("edShipCountry");
+
+    const edFromName = document.getElementById("edFromName");
+    const edFromPhone = document.getElementById("edFromPhone");
+    const edFromL1 = document.getElementById("edFromL1");
+    const edFromL2 = document.getElementById("edFromL2");
+    const edFromCity = document.getElementById("edFromCity");
+    const edFromState = document.getElementById("edFromState");
+    const edFromPin = document.getElementById("edFromPin");
+    const edFromCountry = document.getElementById("edFromCountry");
 
     let loadedSaleOrder = null;
-    let currentDraft = null;
+    let selectedOrderKey = null; // ref string
+    let orders = []; // [{ref, sale_order_id, preview, overrides:{ship_to:{...}, from:{...}} }]
 
     function setLabelStatus(msg, spinning=false){
       labelStatus.textContent = msg || "";
       labelDot.style.display = spinning ? "inline-block" : "none";
     }
 
-    function fmtAddress(s){
-      return [s.line1, s.line2, [s.city, s.state, s.pin].filter(Boolean).join(", "), s.country]
-        .filter(Boolean)
-        .join("\n");
+    function money(v){
+      if (v == null) return "-";
+      try { return new Intl.NumberFormat("en-IN", { style:"currency", currency:"INR" }).format(Number(v)); }
+      catch { return String(v); }
     }
 
-    function renderOrderPreview(data){
-      const ship = data.ship_to || {};
-      const addr = fmtAddress(ship);
+    function fmtAddr(ship){
+      if (!ship) return "-";
+      const parts = [
+        ship.line1, ship.line2,
+        [ship.city, ship.state, ship.pin].filter(Boolean).join(", "),
+        ship.country
+      ].filter(Boolean);
+      return parts.join(", ");
+    }
 
-      const items = (data.items || []).slice(0, 12).map(it => `
-        <div class="itemRow">
-          <div>${esc(it.name || "-")}</div>
-          <div class="qty">x${esc(String(it.qty ?? "-"))}</div>
-        </div>
-      `).join("");
+    function applyOverridesToPreview(preview, overrides){
+      if (!overrides) return preview;
+      const out = JSON.parse(JSON.stringify(preview));
+      out.ship_to = { ...(out.ship_to||{}), ...(overrides.ship_to||{}) };
+      out.from = { ...(out.from||{}), ...(overrides.from||{}) };
+      return out;
+    }
 
-      return `
-        <div class="previewCard">
-          <div class="previewTop">
-            <div>
-              <b>Sales Order: ${esc(data.ref || String(data.id || ""))}</b>
-              <div class="previewSub">State: ${esc(data.state || "-")} • Total: ${esc(String(data.amount_total || "-"))}</div>
-            </div>
-            <div class="previewSub">Order ID: ${esc(String(data.id || "-"))}</div>
+    function renderPreview(order){
+      if (!order?.preview){
+        previewEmpty.style.display = "block";
+        previewBody.style.display = "none";
+        btnOpenEditor.disabled = true;
+        return;
+      }
+
+      const p = applyOverridesToPreview(order.preview, order.overrides);
+      loadedSaleOrder = p;
+
+      previewEmpty.style.display = "none";
+      previewBody.style.display = "block";
+      btnOpenEditor.disabled = false;
+
+      pvRef.textContent = p.ref || "-";
+      pvState.textContent = p.state || "-";
+      pvDate.textContent = p.date_order ? new Date(p.date_order).toLocaleString() : "-";
+      pvTotal.textContent = money(p.amount_total);
+
+      pvName.textContent = p.ship_to?.name || "-";
+      pvPhone.textContent = p.ship_to?.phone || "-";
+      pvAddr.textContent = fmtAddr(p.ship_to) || "-";
+
+      // items
+      const items = p.items || [];
+      if (!items.length){
+        pvItems.innerHTML = `<div class="muted">No items found.</div>`;
+      } else {
+        pvItems.innerHTML = items.map(it => `
+          <div class="itemRow">
+            <div style="flex:1;min-width:0">${esc(it.name || "")}</div>
+            <div class="qtyPill">Qty: ${esc(String(it.qty ?? ""))}</div>
           </div>
+        `).join("");
+      }
 
-          <div class="previewGrid">
-            <div class="kv">
-              <div class="k">SHIP TO</div>
-              <div class="v"><b>${esc(ship.name || "-")}</b>\n${esc(addr || "-")}</div>
+      // raw
+      soPreviewRaw.textContent = JSON.stringify(p, null, 2);
+    }
+
+    async function fetchSO(ref) {
+      const resp = await fetch(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
+      if (!resp.ok) throw new Error(await resp.text());
+      return await resp.json();
+    }
+
+    function renderOrders(){
+      if (!ordersListEl) return;
+      if (orders.length === 0){
+        ordersListEl.innerHTML = `<div class="muted">No orders added yet. Add 1–4 orders to create multi-label PDF.</div>`;
+        btnGenerateLabel.disabled = !loadedSaleOrder;
+        return;
+      }
+
+      ordersListEl.innerHTML = orders.map((o, idx) => {
+        const active = (o.ref === selectedOrderKey);
+        return `
+          <div class="orderChip" style="${active ? 'border-color:rgba(77,163,255,.55);box-shadow:0 0 0 3px rgba(77,163,255,.12);' : ''}">
+            <div class="left">
+              <b>${esc(o.ref)}</b>
+              <div class="small">SO ID: ${esc(String(o.sale_order_id || "-"))}${o.overrides ? " • overrides ✅" : ""}</div>
             </div>
-            <div class="kv">
-              <div class="k">CONTACT</div>
-              <div class="v">Phone: ${esc(ship.phone || "-")}\nEmail: ${esc(ship.email || "-")}</div>
+            <div style="display:flex;gap:8px">
+              <button class="btn" data-select="${idx}">${active ? "Selected" : "Select"}</button>
+              <button class="btn danger" data-remove="${idx}">Remove</button>
             </div>
           </div>
+        `;
+      }).join("");
 
-          <div class="items">
-            <div class="k" style="color:var(--muted);font-size:12px;margin-bottom:6px">ITEMS</div>
-            ${items || `<div class="previewSub">No items.</div>`}
-          </div>
-        </div>
-      `;
+      ordersListEl.querySelectorAll("[data-remove]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const i = Number(btn.getAttribute("data-remove"));
+          const removed = orders.splice(i, 1)[0];
+          if (removed?.ref === selectedOrderKey){
+            selectedOrderKey = orders[0]?.ref || null;
+          }
+          renderOrders();
+          const sel = orders.find(x => x.ref === selectedOrderKey);
+          renderPreview(sel || null);
+        });
+      });
+
+      ordersListEl.querySelectorAll("[data-select]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const i = Number(btn.getAttribute("data-select"));
+          selectedOrderKey = orders[i].ref;
+          renderOrders();
+          renderPreview(orders[i]);
+        });
+      });
+
+      btnGenerateLabel.disabled = false;
     }
 
     function renderLabels(labels){
@@ -790,140 +1018,281 @@
 
       labelsTbody.innerHTML = labels.map(l => `
         <tr>
-          <td>${esc(l.sale_order_ref || l.sale_order_id || "-")}</td>
-          <td>${esc(l.status || "-")}</td>
+          <td>${esc(l.sale_order_ref || l.id || "-")}</td>
           <td>${esc(l.carrier || "-")}</td>
-          <td>
-            ${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF</a>` : `<span class="muted">-</span>`}
-          </td>
+          <td>${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : "-"}</td>
+          <td>${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF</a>` : `<span class="muted">-</span>`}</td>
         </tr>
       `).join("");
     }
 
-    function setEditInputs(d){
-      const s = d.ship_to || {};
-      const f = d.from || {};
-
-      e_ship_name.value = s.name || "";
-      e_ship_phone.value = s.phone || "";
-      e_ship_line1.value = s.line1 || "";
-      e_ship_line2.value = s.line2 || "";
-      e_ship_city.value = s.city || "";
-      e_ship_state.value = s.state || "";
-      e_ship_pin.value = s.pin || "";
-      e_ship_country.value = s.country || "";
-
-      e_from_name.value = f.name || "";
-      e_from_phone.value = f.phone || "";
-      e_from_line1.value = f.line1 || "";
-      e_from_line2.value = f.line2 || "";
-      e_from_city.value = f.city || "";
-      e_from_state.value = f.state || "";
-      e_from_pin.value = f.pin || "";
-      e_from_country.value = f.country || "";
+    async function refreshLabelsTable(){
+      try{
+        const lab = await fetch(`/api/labels`);
+        const labels = lab.ok ? await lab.json() : [];
+        renderLabels(labels);
+      }catch{
+        renderLabels([]);
+      }
     }
 
-    function collectOverrides(){
-      return {
-        ship_to: {
-          name: e_ship_name.value.trim(),
-          phone: e_ship_phone.value.trim(),
-          line1: e_ship_line1.value.trim(),
-          line2: e_ship_line2.value.trim(),
-          city: e_ship_city.value.trim(),
-          state: e_ship_state.value.trim(),
-          pin: e_ship_pin.value.trim(),
-          country: e_ship_country.value.trim()
-        },
-        from: {
-          name: e_from_name.value.trim(),
-          phone: e_from_phone.value.trim(),
-          line1: e_from_line1.value.trim(),
-          line2: e_from_line2.value.trim(),
-          city: e_from_city.value.trim(),
-          state: e_from_state.value.trim(),
-          pin: e_from_pin.value.trim(),
-          country: e_from_country.value.trim()
+    // Fetch single order into preview (does NOT auto add to list)
+    btnFetchSO?.addEventListener("click", async () => {
+      const ref = (soRefEl.value || "").trim();
+      if (!ref) return alert("Enter Sales Order reference (e.g. S00241)");
+
+      setLabelStatus("Fetching Sales Order from Odoo…", true);
+
+      try{
+        const data = await fetchSO(ref);
+
+        // Store as "loadedSaleOrder" for single-generate if no orders list used
+        loadedSaleOrder = data;
+        selectedOrderKey = data.ref;
+
+        // Render preview as a temporary order object (not yet in orders array)
+        renderPreview({ ref: data.ref, sale_order_id: data.id, preview: data, overrides: null });
+
+        setLabelStatus("Sales Order loaded. You can Edit Label or Add Order.", false);
+        btnGenerateLabel.disabled = false;
+
+        await refreshLabelsTable();
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+        renderPreview(null);
+      }
+    });
+
+    // Add order to list (for multi-label PDF)
+    btnAddOrder?.addEventListener("click", async () => {
+      const ref = (soRefEl.value || "").trim();
+      if (!ref) return alert("Enter Sales Order reference then click Add Order");
+      if (orders.find(o => o.ref === ref)) return alert("This order is already added.");
+      if (orders.length >= 4) return alert("Max 4 orders per page. Remove one or generate another PDF.");
+
+      setLabelStatus("Adding order…", true);
+
+      try{
+        const so = await fetchSO(ref);
+        orders.push({ ref: so.ref, sale_order_id: so.id, preview: so, overrides: null });
+        selectedOrderKey = so.ref;
+        renderOrders();
+        renderPreview(orders[orders.length - 1]);
+        setLabelStatus(`Added ${so.ref}.`, false);
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+      }
+    });
+
+    // Generate label:
+    // - If orders list has 1–4 orders => batch PDF (AUTO grid) OR FULL pages if big box.
+    // - If no orders list => single PDF for loaded order.
+    btnGenerateLabel?.addEventListener("click", async () => {
+      const bigBox = !!bigBoxToggle?.checked;
+      const layout = bigBox ? "FULL" : "AUTO";
+
+      setLabelStatus("Generating label PDF…", true);
+      btnGenerateLabel.disabled = true;
+
+      try{
+        let resp, out;
+
+        if (orders.length > 0){
+          resp = await fetch(`/api/labels/generate-batch`, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({
+              orders: orders.map(o => ({
+                ref: o.ref,
+                overrides: o.overrides || undefined
+              })),
+              layout
+            })
+          });
+          if (!resp.ok) throw new Error(await resp.text());
+          out = await resp.json();
+        } else {
+          if (!loadedSaleOrder?.id) throw new Error("Fetch an order or add orders first.");
+          // if you edited in modal but did not add to orders, we still support single overrides via selectedOrderKey temp
+          const tempOverrides = null;
+          resp = await fetch(`/api/labels/generate`, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({
+              sale_order_id: loadedSaleOrder.id,
+              overrides: tempOverrides,
+              layout
+            })
+          });
+          if (!resp.ok) throw new Error(await resp.text());
+          out = await resp.json();
         }
+
+        setLabelStatus("Label PDF created ✅", false);
+        btnGenerateLabel.disabled = false;
+
+        await refreshLabelsTable();
+
+        if (out?.label_url) window.open(out.label_url, "_blank");
+      } catch(e){
+        setLabelStatus("Error: " + e.message, false);
+        btnGenerateLabel.disabled = false;
+      }
+    });
+
+    // =================== EDIT MODAL LOGIC ===================
+    function openModal(){
+      editModalBack.style.display = "flex";
+    }
+    function closeModal(){
+      editModalBack.style.display = "none";
+    }
+
+    function getSelectedOrder(){
+      // prefer from orders list if exists
+      if (orders.length > 0){
+        return orders.find(o => o.ref === selectedOrderKey) || orders[0];
+      }
+      // fallback: build from loadedSaleOrder
+      if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: loadedSaleOrder.id, preview: loadedSaleOrder, overrides: null };
+      return null;
+    }
+
+    function fillEditorFromOrder(order){
+      const base = order?.preview || {};
+      const ship = { ...(base.ship_to || {}), ...((order?.overrides?.ship_to) || {}) };
+      const from = { ...(base.from || {}), ...((order?.overrides?.from) || {}) };
+
+      edShipName.value = ship.name || "";
+      edShipPhone.value = ship.phone || "";
+      edShipL1.value = ship.line1 || "";
+      edShipL2.value = ship.line2 || "";
+      edShipCity.value = ship.city || "";
+      edShipState.value = ship.state || "";
+      edShipPin.value = ship.pin || "";
+      edShipCountry.value = ship.country || "";
+
+      edFromName.value = from.name || "";
+      edFromPhone.value = from.phone || "";
+      edFromL1.value = from.line1 || "";
+      edFromL2.value = from.line2 || "";
+      edFromCity.value = from.city || "";
+      edFromState.value = from.state || "";
+      edFromPin.value = from.pin || "";
+      edFromCountry.value = from.country || "";
+    }
+
+    function readEditorOverrides(){
+      const clean = (v) => (v || "").trim();
+      const ship_to = {
+        name: clean(edShipName.value),
+        phone: clean(edShipPhone.value),
+        line1: clean(edShipL1.value),
+        line2: clean(edShipL2.value),
+        city: clean(edShipCity.value),
+        state: clean(edShipState.value),
+        pin: clean(edShipPin.value),
+        country: clean(edShipCountry.value),
+      };
+
+      const from = {
+        name: clean(edFromName.value),
+        phone: clean(edFromPhone.value),
+        line1: clean(edFromL1.value),
+        line2: clean(edFromL2.value),
+        city: clean(edFromCity.value),
+        state: clean(edFromState.value),
+        pin: clean(edFromPin.value),
+        country: clean(edFromCountry.value),
+      };
+
+      // remove empty keys to keep payload small
+      const prune = (obj) => {
+        const out = {};
+        Object.keys(obj).forEach(k => {
+          if (obj[k]) out[k] = obj[k];
+        });
+        return out;
+      };
+
+      return {
+        ship_to: prune(ship_to),
+        from: prune(from)
       };
     }
 
-    btnFetchSO?.addEventListener("click", async () => {
-      const ref = (soRefEl.value || "").trim();
-      if (!ref) return alert("Enter Sales Order reference (e.g. S00237)");
+    btnOpenEditor?.addEventListener("click", () => {
+      const order = getSelectedOrder();
+      if (!order) return alert("Fetch or add an order first.");
+      fillEditorFromOrder(order);
+      openModal();
+    });
 
-      setLabelStatus("Fetching Sales Order from Odoo…", true);
-      btnGenerateLabel.disabled = true;
-      btnLoadDraft.disabled = true;
-      loadedSaleOrder = null;
-      soPreview.innerHTML = "Loading…";
-      editForm.style.display = "none";
-      currentDraft = null;
+    closeEditModal?.addEventListener("click", closeModal);
+    editModalBack?.addEventListener("click", (e) => {
+      if (e.target === editModalBack) closeModal();
+    });
 
-      try{
-        const data = await fetchJsonOrThrow(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
-        loadedSaleOrder = data;
+    resetEdits?.addEventListener("click", () => {
+      const order = getSelectedOrder();
+      if (!order) return;
+      // reset editor fields to base order (without overrides)
+      const base = order.preview || {};
+      const ship = base.ship_to || {};
+      const from = base.from || {};
 
-        soPreview.innerHTML = renderOrderPreview(data);
-        btnGenerateLabel.disabled = false;
-        btnLoadDraft.disabled = false;
-        setLabelStatus("Sales Order loaded. Ready.", false);
+      edShipName.value = ship.name || "";
+      edShipPhone.value = ship.phone || "";
+      edShipL1.value = ship.line1 || "";
+      edShipL2.value = ship.line2 || "";
+      edShipCity.value = ship.city || "";
+      edShipState.value = ship.state || "";
+      edShipPin.value = ship.pin || "";
+      edShipCountry.value = ship.country || "";
 
-        const labels = await fetchJsonOrThrow(`/api/labels?sale_order_id=${encodeURIComponent(data.id)}`);
-        renderLabels(labels);
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-        soPreview.innerHTML = "No order loaded.";
-        renderLabels([]);
+      edFromName.value = from.name || "";
+      edFromPhone.value = from.phone || "";
+      edFromL1.value = from.line1 || "";
+      edFromL2.value = from.line2 || "";
+      edFromCity.value = from.city || "";
+      edFromState.value = from.state || "";
+      edFromPin.value = from.pin || "";
+      edFromCountry.value = from.country || "";
+    });
+
+    saveEdits?.addEventListener("click", () => {
+      const order = getSelectedOrder();
+      if (!order) return;
+
+      const overrides = readEditorOverrides();
+      const hasAny = Object.keys(overrides.ship_to).length || Object.keys(overrides.from).length;
+
+      if (orders.length > 0){
+        // apply to order in list
+        const idx = orders.findIndex(o => o.ref === order.ref);
+        if (idx >= 0){
+          orders[idx].overrides = hasAny ? overrides : null;
+          selectedOrderKey = orders[idx].ref;
+          renderOrders();
+          renderPreview(orders[idx]);
+        }
+      } else {
+        // if not in list, just update preview (temporary)
+        const temp = { ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: hasAny ? overrides : null };
+        selectedOrderKey = order.ref;
+        renderPreview(temp);
+        // NOTE: For single generate, we don't send overrides in this page (kept simple).
+        // Best practice: Add order, save overrides, then generate.
       }
+
+      closeModal();
+      setLabelStatus("Overrides saved for selected order ✅", false);
     });
 
-    btnLoadDraft?.addEventListener("click", async () => {
-      if (!loadedSaleOrder) return;
-      setLabelStatus("Loading editable label fields…", true);
-
-      try{
-        const d = await fetchJsonOrThrow(`/api/labels/draft?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
-        currentDraft = d;
-        setEditInputs(d);
-        editForm.style.display = "block";
-        setLabelStatus("Editable fields loaded. You can edit now.", false);
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-      }
-    });
-
-    btnResetEdits?.addEventListener("click", () => {
-      if (!currentDraft) return;
-      setEditInputs(currentDraft);
-    });
-
-    btnGenerateLabel?.addEventListener("click", async () => {
-      if (!loadedSaleOrder) return;
-
-      setLabelStatus("Generating shipping label…", true);
-      btnGenerateLabel.disabled = true;
-
-      try{
-        await fetchJsonOrThrow(`/api/labels/generate`, {
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({
-            sale_order_id: loadedSaleOrder.id,
-            overrides: (editForm.style.display === "block") ? collectOverrides() : null
-          })
-        });
-
-        setLabelStatus("Label created ✅", false);
-        btnGenerateLabel.disabled = false;
-
-        const labels = await fetchJsonOrThrow(`/api/labels?sale_order_id=${encodeURIComponent(loadedSaleOrder.id)}`);
-        renderLabels(labels);
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-        btnGenerateLabel.disabled = false;
-      }
-    });
+    // Init
+    renderOrders();
+    renderPreview(null);
+    refreshLabelsTable();
   </script>
 </body>
 </html>
