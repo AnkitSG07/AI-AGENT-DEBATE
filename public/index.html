@@ -402,6 +402,7 @@
     <div class="card tabs">
       <div class="tab active" data-tab="debate"><span class="tabDot"></span> AI Debate</div>
       <div class="tab" data-tab="labels"><span class="tabDot"></span> Shipping Labels</div>
+      <div class="tab" data-tab="dashboard"><span class="tabDot"></span> Order Dashboard</div>
     </div>
 
     <!-- ================= TAB: DEBATE ================= -->
@@ -508,6 +509,11 @@
 
               <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
               <button class="btn" id="btnAddOrder">Add Order</button>
+              <div class="field">
+                Ship From
+                <select id="shipFromSelect" style="min-width:220px"><option value="">Default (env)</option></select>
+              </div>
+  
 
               <label class="field" style="margin-left:auto">
                 <input type="checkbox" id="bigBoxToggle">
@@ -534,8 +540,14 @@
                   <div class="agentName" style="font-size:16px">Order Preview</div>
                   <div class="sub">Clean preview (not raw JSON). Use “Edit Label” to fix name/phone/address if needed.</div>
                 </div>
-                <div class="row">
+                <div class="row">  
                   <button class="btn" id="btnOpenEditor" disabled>Edit Label</button>
+                  <button class="btn" id="btnInvoicePdf" disabled>Download Invoice</button>
+                  <button class="btn" id="btnPackingPdf" disabled>Packing Slip</button>
+                  <button class="btn" id="btnProformaPdf" disabled>Proforma</button>
+                  <button class="btn" id="btnLoadPickings" disabled>Delivery Orders</button>
+                  <button class="btn" id="btnLoadFulfillment" disabled>Fulfillment</button>
+  
                 </div>
               </div>
 
@@ -547,17 +559,37 @@
                   <div class="k">Status</div><div class="v" id="pvState">-</div>
                   <div class="k">Date</div><div class="v" id="pvDate">-</div>
                   <div class="k">Total</div><div class="v" id="pvTotal">-</div>
+                  <div class="k">Payment</div><div class="v" id="pvPayment">-</div>
+                  <div class="k">Shipping Method</div><div class="v" id="pvShippingMethod">-</div>
+    
                 </div>
 
                 <div class="sectionTitle">Ship To</div>
                 <div class="kv">
                   <div class="k">Name</div><div class="v" id="pvName">-</div>
                   <div class="k">Phone</div><div class="v" id="pvPhone">-</div>
+                  <div class="k">Email</div><div class="v" id="pvEmail">-</div>  
                   <div class="k">Address</div><div class="v" id="pvAddr">-</div>
                 </div>
+                <div class="sectionTitle">Bill To</div>
+                <div class="kv">
+                  <div class="k">Name</div><div class="v" id="pvBillName">-</div>
+                  <div class="k">Phone</div><div class="v" id="pvBillPhone">-</div>
+                  <div class="k">Address</div><div class="v" id="pvBillAddr">-</div>
+                  <div class="k">GST/VAT</div><div class="v" id="pvBillVat">-</div>
+                </div>
+
+                <div class="sectionTitle">Notes</div>
+                <div class="muted" id="pvNote">-</div>
 
                 <div class="sectionTitle">Items</div>
                 <div class="itemsList" id="pvItems"></div>
+                <div class="sectionTitle">Delivery Orders</div>
+                <div class="itemsList" id="pvPickings">Click "Delivery Orders" to load.</div>
+
+                <div class="sectionTitle">Fulfillment</div>
+                <div class="itemsList" id="pvFulfillment">Click "Fulfillment" to load stock status.</div>
+
 
                 <!-- Keep your existing pre (hidden) if you ever need it -->
                 <pre id="soPreview" class="muted" style="display:none;white-space:pre-wrap;margin:10px 0 0;font-family:var(--mono);font-size:12px"></pre>
@@ -595,6 +627,29 @@
               <span style="font-family:var(--mono)">/api/labels/generate-batch</span>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+    <section id="tab-dashboard" style="display:none">
+      <div class="card controls">
+        <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Order Dashboard</h1>
+        <div class="row" style="margin-top:12px">
+          <input id="dashQuery" type="text" placeholder="Search SO / customer" style="width:260px">
+          <select id="dashState">
+            <option value="">All States</option>
+            <option value="draft">Quotation</option>
+            <option value="sale">Sales Order</option>
+            <option value="done">Locked</option>
+          </select>
+          <button class="btn primary" id="btnDashSearch">Search</button>
+        </div>
+        <div style="margin-top:12px;overflow:auto">
+          <table>
+            <thead>
+              <tr><th>Ref</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>Payment</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="dashTbody"><tr><td colspan="7" class="muted">No rows.</td></tr></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -658,11 +713,13 @@
     const tabs = document.querySelectorAll(".tab");
     const tabDebate = document.getElementById("tab-debate");
     const tabLabels = document.getElementById("tab-labels");
-
+    const tabDashboard = document.getElementById("tab-dashboard");
+    
     function setActiveTab(name){
       tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
       tabDebate.style.display = (name === "debate") ? "block" : "none";
       tabLabels.style.display = (name === "labels") ? "block" : "none";
+      tabDashboard.style.display = (name === "dashboard") ? "block" : "none";
     }
 
     tabs.forEach(t => {
@@ -835,6 +892,7 @@
     const btnFetchSO = document.getElementById("btnFetchSO");
     const btnAddOrder = document.getElementById("btnAddOrder");
     const btnGenerateLabel = document.getElementById("btnGenerateLabel");
+    const shipFromSelect = document.getElementById("shipFromSelect");
     const labelStatus = document.getElementById("labelStatus");
     const labelDot = document.getElementById("labelDot");
     const labelsTbody = document.getElementById("labelsTbody");
@@ -850,12 +908,33 @@
     const pvState = document.getElementById("pvState");
     const pvDate = document.getElementById("pvDate");
     const pvTotal = document.getElementById("pvTotal");
+    const pvPayment = document.getElementById("pvPayment");
+    const pvShippingMethod = document.getElementById("pvShippingMethod");
     const pvName = document.getElementById("pvName");
+    const pvEmail = document.getElementById("pvEmail");
+    const pvBillName = document.getElementById("pvBillName");
+    const pvBillPhone = document.getElementById("pvBillPhone");
+    const pvBillAddr = document.getElementById("pvBillAddr");
+    const pvBillVat = document.getElementById("pvBillVat");
+    const pvNote = document.getElementById("pvNote");
+    const pvPickings = document.getElementById("pvPickings");
+    const pvFulfillment = document.getElementById("pvFulfillment");
+
     const pvPhone = document.getElementById("pvPhone");
     const pvAddr = document.getElementById("pvAddr");
     const pvItems = document.getElementById("pvItems");
 
     const btnOpenEditor = document.getElementById("btnOpenEditor");
+    const btnInvoicePdf = document.getElementById("btnInvoicePdf");
+    const btnPackingPdf = document.getElementById("btnPackingPdf");
+    const btnProformaPdf = document.getElementById("btnProformaPdf");
+    const btnLoadPickings = document.getElementById("btnLoadPickings");
+    const btnLoadFulfillment = document.getElementById("btnLoadFulfillment");
+
+    const dashQuery = document.getElementById("dashQuery");
+    const dashState = document.getElementById("dashState");
+    const btnDashSearch = document.getElementById("btnDashSearch");
+    const dashTbody = document.getElementById("dashTbody");
 
     // Modal elements
     const editModalBack = document.getElementById("editModalBack");
@@ -885,6 +964,19 @@
     let selectedOrderKey = null; // ref string
     let orders = []; // [{ref, sale_order_id, preview, overrides:{ship_to:{...}, from:{...}} }]
 
+    let shipFromOptions = [];
+
+    async function loadShipFromOptions(){
+      if (!shipFromSelect) return;
+      try {
+        const resp = await fetch('/api/odoo/ship-from-options');
+        if (!resp.ok) return;
+        const out = await resp.json();
+        shipFromOptions = out.options || [];
+        shipFromSelect.innerHTML = `<option value="">Default (env)</option>` + shipFromOptions.map((o, i) => `<option value="${i}">${esc(o.label || `Warehouse ${i+1}`)}</option>`).join('');
+      } catch {}
+    }
+    
     function setLabelStatus(msg, spinning=false){
       labelStatus.textContent = msg || "";
       labelDot.style.display = spinning ? "inline-block" : "none";
@@ -919,6 +1011,7 @@
         previewEmpty.style.display = "block";
         previewBody.style.display = "none";
         btnOpenEditor.disabled = true;
+        [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = true);
         return;
       }
 
@@ -928,30 +1021,40 @@
       previewEmpty.style.display = "none";
       previewBody.style.display = "block";
       btnOpenEditor.disabled = false;
+      [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = false);
 
       pvRef.textContent = p.ref || "-";
       pvState.textContent = p.state || "-";
       pvDate.textContent = p.date_order ? new Date(p.date_order).toLocaleString() : "-";
       pvTotal.textContent = money(p.amount_total);
+      pvPayment.textContent = p.payment_status || p.invoice_status || "-";
+      pvShippingMethod.textContent = p.shipping_method || "-";
 
       pvName.textContent = p.ship_to?.name || "-";
       pvPhone.textContent = p.ship_to?.phone || "-";
+      pvEmail.textContent = p.ship_to?.email || "-";
       pvAddr.textContent = fmtAddr(p.ship_to) || "-";
 
-      // items
+      pvBillName.textContent = p.bill_to?.name || "-";
+      pvBillPhone.textContent = p.bill_to?.phone || "-";
+      pvBillAddr.textContent = fmtAddr(p.bill_to) || "-";
+      pvBillVat.textContent = p.bill_to?.vat || "-";
+      pvNote.textContent = p.note || "-";
+
       const items = p.items || [];
       if (!items.length){
         pvItems.innerHTML = `<div class="muted">No items found.</div>`;
       } else {
         pvItems.innerHTML = items.map(it => `
           <div class="itemRow">
-            <div style="flex:1;min-width:0">${esc(it.name || "")}</div>
+            <div style="flex:1;min-width:0">${esc(it.name || it.product_name || "")}</div>
             <div class="qtyPill">Qty: ${esc(String(it.qty ?? ""))}</div>
           </div>
         `).join("");
       }
 
-      // raw
+      pvPickings.innerHTML = `Click "Delivery Orders" to load.`;
+      pvFulfillment.innerHTML = `Click "Fulfillment" to load stock status.`;
       soPreviewRaw.textContent = JSON.stringify(p, null, 2);
     }
 
@@ -1289,10 +1392,137 @@
       setLabelStatus("Overrides saved for selected order ✅", false);
     });
 
+    function openSOReport(type){
+      if (!loadedSaleOrder?.id) return;
+      const map = {
+        invoice: `/api/odoo/sale-order/${loadedSaleOrder.id}/invoice-pdf`,
+        packing: `/api/odoo/sale-order/${loadedSaleOrder.id}/packing-slip-pdf`,
+        proforma: `/api/odoo/sale-order/${loadedSaleOrder.id}/proforma-pdf`
+      };
+      const url = map[type];
+      if (url) window.open(url, "_blank");
+    }
+
+    btnInvoicePdf?.addEventListener("click", () => openSOReport("invoice"));
+    btnPackingPdf?.addEventListener("click", () => openSOReport("packing"));
+    btnProformaPdf?.addEventListener("click", () => openSOReport("proforma"));
+
+    btnLoadPickings?.addEventListener("click", async () => {
+      if (!loadedSaleOrder?.id) return;
+      pvPickings.innerHTML = `<div class="muted">Loading...</div>`;
+      try {
+        const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/pickings`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.pickings || [];
+        if (!rows.length) {
+          pvPickings.innerHTML = `<div class="muted">No delivery orders found.</div>`;
+          return;
+        }
+        pvPickings.innerHTML = rows.map((r) => `
+          <div class="itemRow">
+            <div style="flex:1">${esc(r.name || "-")} • ${esc(r.state || "-")}</div>
+            <button class="btn" data-validate-picking="${r.id}">Validate</button>
+          </div>
+        `).join("");
+
+        pvPickings.querySelectorAll("[data-validate-picking]").forEach((el) => {
+          el.addEventListener("click", async () => {
+            const id = el.getAttribute("data-validate-picking");
+            const vr = await fetch(`/api/odoo/picking/${id}/validate`, { method: "POST" });
+            alert(vr.ok ? "Picking validated" : await vr.text());
+          });
+        });
+      } catch (e) {
+        pvPickings.innerHTML = `<div class="muted">Error: ${esc(e.message)}</div>`;
+      }
+    });
+
+    btnLoadFulfillment?.addEventListener("click", async () => {
+      if (!loadedSaleOrder?.id) return;
+      pvFulfillment.innerHTML = `<div class="muted">Loading...</div>`;
+      try {
+        const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/fulfillment`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.rows || [];
+        if (!rows.length) {
+          pvFulfillment.innerHTML = `<div class="muted">No fulfillment data.</div>`;
+          return;
+        }
+        pvFulfillment.innerHTML = rows.map((r) => `
+          <div class="itemRow">
+            <div style="flex:1">${esc(r.product_name || "-")}</div>
+            <div class="qtyPill">Ord ${esc(String(r.ordered_qty))} / OnHand ${esc(String(r.on_hand_qty))} / Fcst ${esc(String(r.forecast_qty))}${r.backorder_warning ? " ⚠️" : ""}</div>
+          </div>
+        `).join("");
+      } catch (e) {
+        pvFulfillment.innerHTML = `<div class="muted">Error: ${esc(e.message)}</div>`;
+      }
+    });
+
+    async function loadDashboard(){
+      dashTbody.innerHTML = `<tr><td colspan="7" class="muted">Loading...</td></tr>`;
+      try {
+        const q = encodeURIComponent((dashQuery.value || "").trim());
+        const st = encodeURIComponent((dashState.value || "").trim());
+        const resp = await fetch(`/api/odoo/orders?query=${q}&state=${st}`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.rows || [];
+        if (!rows.length){
+          dashTbody.innerHTML = `<tr><td colspan="7" class="muted">No rows.</td></tr>`;
+          return;
+        }
+        dashTbody.innerHTML = rows.map((r) => `
+          <tr>
+            <td>${esc(r.ref || "-")}</td>
+            <td>${esc(r.customer || "-")}</td>
+            <td>${esc(r.date_order || "-")}</td>
+            <td>${esc(money(r.amount_total))}</td>
+            <td>${esc(r.state || "-")}</td>
+            <td>${esc(r.invoice_status || "-")}</td>
+            <td>
+              <button class="btn" data-open-so="${esc(String(r.ref || ""))}">Open</button>
+            </td>
+          </tr>
+        `).join("");
+
+        dashTbody.querySelectorAll("[data-open-so]").forEach((el) => {
+          el.addEventListener("click", async () => {
+            soRefEl.value = el.getAttribute("data-open-so") || "";
+            setActiveTab("labels");
+            btnFetchSO.click();
+          });
+        });
+      } catch(e){
+        dashTbody.innerHTML = `<tr><td colspan="7" class="muted">Error: ${esc(e.message)}</td></tr>`;
+      }
+    }
+
+    btnDashSearch?.addEventListener("click", loadDashboard);
+
+    shipFromSelect?.addEventListener("change", () => {
+      const idx = Number(shipFromSelect.value);
+      if (Number.isNaN(idx) || !shipFromOptions[idx]) return;
+      const from = shipFromOptions[idx].from || {};
+      if (orders.length > 0){
+        const order = orders.find(o => o.ref === selectedOrderKey) || orders[0];
+        if (order){
+          order.overrides = order.overrides || { ship_to: {}, from: {} };
+          order.overrides.from = { ...(order.overrides.from || {}), ...from };
+          renderOrders();
+          renderPreview(order);
+        }
+      }
+    });
     // Init
     renderOrders();
     renderPreview(null);
     refreshLabelsTable();
+    loadDashboard();
+    loadShipFromOptions();
   </script>
 </body>
 </html>
+
