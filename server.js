@@ -6,7 +6,7 @@ import PDFDocument from "pdfkit";
 dotenv.config();
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
@@ -26,11 +26,11 @@ const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
-const MISTRAL_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
+const AGENT_C_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
 
 console.log("✅ Using Gemini model:", GEMINI_MODEL);
 console.log("✅ Using OpenRouter model (Llama):", LLAMA_MODEL);
-console.log("✅ Using OpenRouter model (Agent C):", MISTRAL_MODEL);
+console.log("✅ Using OpenRouter model (Agent C):", AGENT_C_MODEL);
 
 // ===================== ODOO CONFIG =====================
 const ODOO_URL = process.env.ODOO_URL;
@@ -41,10 +41,10 @@ const ODOO_PASS = process.env.ODOO_API_KEY_OR_PASSWORD;
 const odooConfigured = !!(ODOO_URL && ODOO_DB && ODOO_USERNAME && ODOO_PASS);
 console.log("✅ Odoo configured:", odooConfigured);
 
-// ===================== LABEL STORE (in-memory) =====================
-// NOTE: Render free services can restart; memory resets.
-// Later: store PDFs in Odoo attachments or S3.
+// ===================== STORES (in-memory) =====================
+// NOTE: Render restarts can reset memory. Later we can store PDFs as Odoo attachments.
 const labelsStore = new Map(); // labelId -> record
+const labelDraftsBySO = new Map(); // sale_order_id -> draft
 let labelCounter = 1;
 
 function makeLabelId() {
@@ -68,7 +68,6 @@ function getDefaultFromAddress() {
 }
 
 // ===================== ODOO JSON-RPC HELPERS =====================
-// Odoo JSON-RPC endpoint: `${ODOO_URL}/jsonrpc`
 async function odooJsonRpc(service, method, args) {
   const base = ODOO_URL.replace(/\/$/, "");
   const resp = await fetch(`${base}/jsonrpc`, {
@@ -133,13 +132,15 @@ async function odooGetSaleOrderByRef(ref) {
 
   const partner = shipPartnerId
     ? await odooExecute(uid, "res.partner", "read", [[shipPartnerId], [
-        "name","phone","email","street","street2","city","state_id","zip","country_id"
+        "name","phone","mobile","email","street","street2","city","state_id","zip","country_id"
       ]])
     : [];
 
   const p = partner?.[0] || {};
   const stateName = p.state_id?.[1] || "";
   const countryName = p.country_id?.[1] || "";
+
+  const phone = p.phone || p.mobile || "";
 
   const lines = await odooExecute(
     uid,
@@ -149,7 +150,7 @@ async function odooGetSaleOrderByRef(ref) {
       [["order_id", "=", so.id]],
       ["name", "product_uom_qty"]
     ],
-    { limit: 50 }
+    { limit: 200 }
   );
 
   return {
@@ -160,78 +161,135 @@ async function odooGetSaleOrderByRef(ref) {
     amount_total: so.amount_total,
     ship_to: {
       name: p.name || "",
-      phone: p.phone || "",
+      phone,
       email: p.email || "",
       line1: p.street || "",
       line2: p.street2 || "",
       city: p.city || "",
       state: stateName,
       pin: p.zip || "",
-      country: countryName
+      country: countryName || "India"
     },
     items: (lines || []).map(l => ({ name: l.name, qty: l.product_uom_qty }))
   };
 }
 
+// ===================== LABEL DRAFTS =====================
+function makeDraftFromSaleOrder(saleOrder) {
+  const ship = saleOrder.ship_to || {};
+  const from = getDefaultFromAddress();
+
+  return {
+    sale_order_id: saleOrder.id,
+    sale_order_ref: saleOrder.ref || String(saleOrder.id),
+    ship_to: {
+      name: ship.name || "",
+      phone: ship.phone || "",
+      email: ship.email || "",
+      line1: ship.line1 || "",
+      line2: ship.line2 || "",
+      city: ship.city || "",
+      state: ship.state || "",
+      pin: ship.pin || "",
+      country: ship.country || ""
+    },
+    from: {
+      name: from.name || "",
+      company: from.company || "",
+      phone: from.phone || "",
+      email: from.email || "",
+      line1: from.line1 || "",
+      line2: from.line2 || "",
+      city: from.city || "",
+      state: from.state || "",
+      pin: from.pin || "",
+      country: from.country || ""
+    }
+  };
+}
+
 // ===================== PDF LABEL GENERATION =====================
+// Layout designed to match your screenshot: SHIP TO / ADDRESS / PHONE + FROM / ADDRESS / PHONE with separators.
+// Uses A4 for "printable sheet" style.
 function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A6", margin: 18 });
+      const doc = new PDFDocument({ size: "A4", margin: 40 });
       const chunks = [];
       doc.on("data", (d) => chunks.push(d));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      const so = saleOrder;
+      const so = saleOrder || {};
       const ship = so.ship_to || {};
 
-      doc.fontSize(12).font("Helvetica-Bold").text("SHIPPING LABEL", { align: "center" });
-      doc.moveDown(0.4);
+      const safe = (v) => (v && String(v).trim() ? String(v).trim() : "");
+      const line = (y) => {
+        doc
+          .moveTo(40, y)
+          .lineTo(doc.page.width - 40, y)
+          .lineWidth(1)
+          .strokeColor("#d9d9d9")
+          .stroke();
+      };
 
-      doc.fontSize(9).font("Helvetica").text(`Order: ${so.ref || so.id}`);
-      doc.text(`Generated: ${new Date().toLocaleString()}`);
-      doc.moveDown(0.6);
+      const shipName = safe(ship.name) || "Recipient Name";
+      const shipPhone = safe(ship.phone) || "Recipient Phone";
 
-      // FROM
-      doc.fontSize(10).font("Helvetica-Bold").text("FROM");
-      doc.fontSize(9).font("Helvetica");
-      if (fromAddress.company) doc.text(fromAddress.company);
-      if (fromAddress.name) doc.text(fromAddress.name);
-      if (fromAddress.line1) doc.text(fromAddress.line1);
-      if (fromAddress.line2) doc.text(fromAddress.line2);
-      const fromCityLine = `${fromAddress.city || ""} ${fromAddress.state || ""} ${fromAddress.pin || ""}`.trim();
-      if (fromCityLine) doc.text(fromCityLine);
-      if (fromAddress.country) doc.text(fromAddress.country);
-      if (fromAddress.phone) doc.text(`Phone: ${fromAddress.phone}`);
-      doc.moveDown(0.6);
+      const shipAddr =
+        [
+          safe(ship.line1),
+          safe(ship.line2),
+          [safe(ship.city), safe(ship.state), safe(ship.pin)].filter(Boolean).join(", "),
+          safe(ship.country)
+        ]
+          .filter(Boolean)
+          .join(", ") || "Full Address (Address, City, State, Pincode)";
 
-      // TO
-      doc.fontSize(10).font("Helvetica-Bold").text("TO");
-      doc.fontSize(9).font("Helvetica");
-      if (ship.name) doc.text(ship.name);
-      if (ship.line1) doc.text(ship.line1);
-      if (ship.line2) doc.text(ship.line2);
-      const toCityLine = `${ship.city || ""} ${ship.state || ""} ${ship.pin || ""}`.trim();
-      if (toCityLine) doc.text(toCityLine);
-      if (ship.country) doc.text(ship.country);
-      if (ship.phone) doc.text(`Phone: ${ship.phone}`);
-      doc.moveDown(0.8);
+      const fromName = safe(fromAddress.name) || "Smart Handicrafts";
+      const fromPhone = safe(fromAddress.phone) || "+91 XXXXX XXXXX";
 
-      // INTERNAL TRACK BLOCK
-      doc.fontSize(9).font("Helvetica-Bold").text("TRACK (INTERNAL)");
-      doc.fontSize(10).font("Helvetica").text(`|| ${String(so.ref || so.id).padEnd(18, " ")} ||`, {
-        align: "center"
-      });
-      doc.moveDown(0.6);
+      const fromAddr =
+        [
+          safe(fromAddress.line1),
+          safe(fromAddress.line2),
+          [safe(fromAddress.city), safe(fromAddress.state), safe(fromAddress.pin)].filter(Boolean).join(", "),
+          safe(fromAddress.country)
+        ]
+          .filter(Boolean)
+          .join(", ") || "Your Address";
 
-      // ITEMS
-      if (so.items?.length) {
-        doc.fontSize(9).font("Helvetica-Bold").text("ITEMS");
-        doc.fontSize(8).font("Helvetica");
-        so.items.slice(0, 8).forEach((it) => {
-          doc.text(`• ${it.name}  x${it.qty}`);
-        });
-      }
+      // ---- SHIP TO ----
+      doc.fillColor("#000").font("Helvetica-Bold").fontSize(18).text("SHIP TO:", 40, 60);
+      doc.font("Helvetica").fontSize(14).text(shipName, 40, 92);
+      line(120);
+
+      doc.font("Helvetica-Bold").fontSize(18).text("ADDRESS:", 40, 140);
+      doc.font("Helvetica").fontSize(14).text(shipAddr, 40, 172, { width: doc.page.width - 80 });
+      line(240);
+
+      doc.font("Helvetica-Bold").fontSize(18).text("PHONE:", 40, 260);
+      doc.font("Helvetica").fontSize(14).text(shipPhone, 40, 292);
+      line(320);
+
+      // ---- FROM ----
+      doc.font("Helvetica-Bold").fontSize(18).text("FROM:", 40, 380);
+      doc.font("Helvetica").fontSize(14).text(fromName, 40, 412);
+      line(440);
+
+      doc.font("Helvetica-Bold").fontSize(18).text("ADDRESS:", 40, 460);
+      doc.font("Helvetica").fontSize(14).text(fromAddr, 40, 492, { width: doc.page.width - 80 });
+      line(560);
+
+      doc.font("Helvetica-Bold").fontSize(18).text("PHONE:", 40, 580);
+      doc.font("Helvetica").fontSize(14).text(fromPhone, 40, 612);
+      line(640);
+
+      // small footer with SO ref
+      doc
+        .fillColor("#444")
+        .font("Helvetica")
+        .fontSize(11)
+        .text(`SO: ${safe(so.ref) || so.id || ""}`, 40, 680);
 
       doc.end();
     } catch (e) {
@@ -240,23 +298,30 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   });
 }
 
-async function generatePdfLabelForOrder(saleOrder) {
-  const fromAddress = getDefaultFromAddress();
-  const pdfBuffer = await buildLabelPdfBuffer({ saleOrder, fromAddress });
+// Generate label record using edited draft values
+async function generatePdfLabelForOrder({ saleOrder, draft }) {
+  const editedOrder = {
+    ...saleOrder,
+    ship_to: { ...(saleOrder.ship_to || {}), ...(draft?.ship_to || {}) }
+  };
+
+  const fromAddress = { ...(draft?.from || getDefaultFromAddress()) };
+
+  const pdfBuffer = await buildLabelPdfBuffer({ saleOrder: editedOrder, fromAddress });
 
   const labelId = makeLabelId();
   const label_url = `/api/labels/${encodeURIComponent(labelId)}/pdf`;
 
   const record = {
     id: labelId,
-    sale_order_id: saleOrder.id,
-    sale_order_ref: saleOrder.ref || String(saleOrder.id),
+    sale_order_id: editedOrder.id,
+    sale_order_ref: editedOrder.ref || String(editedOrder.id),
     status: "created",
     carrier: "PDF-only",
     created_at: now(),
     pdfBuffer,
     label_url,
-    meta: {}
+    meta: { edited: true }
   };
 
   labelsStore.set(labelId, record);
@@ -432,7 +497,7 @@ app.post("/api/debate-stream", async (req, res) => {
     const agents = [
       { name: "Gemini", type: "gemini", system: AGENT_A_SYSTEM },
       { name: "Llama", type: "openrouter", system: AGENT_B_SYSTEM, model: LLAMA_MODEL },
-      { name: "Gemma", type: "openrouter", system: AGENT_C_SYSTEM, model: MISTRAL_MODEL }
+      { name: "Gemma", type: "openrouter", system: AGENT_C_SYSTEM, model: AGENT_C_MODEL }
     ];
 
     send({ type: "meta", time: now(), agents: agents.map(a => a.name), rounds });
@@ -474,12 +539,11 @@ app.post("/api/debate-stream", async (req, res) => {
 
 // ===================== LABEL ROUTES =====================
 
-// 1) Fetch Sale Order from Odoo by reference (for Labels tab)
+// Fetch Sale Order from Odoo by reference
 app.get("/api/odoo/sale-order", async (req, res) => {
   try {
     const ref = String(req.query.ref || "").trim();
     if (!ref) return res.status(400).json({ error: "Missing ref" });
-
     if (!odooConfigured) {
       return res.status(400).json({
         error: "Odoo is not configured. Please set ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY_OR_PASSWORD."
@@ -487,13 +551,42 @@ app.get("/api/odoo/sale-order", async (req, res) => {
     }
 
     const so = await odooGetSaleOrderByRef(ref);
+
+    // initialize a draft baseline on first fetch
+    if (!labelDraftsBySO.has(so.id)) {
+      labelDraftsBySO.set(so.id, makeDraftFromSaleOrder(so));
+    }
+
     return res.json(so);
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
-// 2) List labels (optional filter by sale_order_id)
+// Get editable draft fields for a sale order
+app.get("/api/labels/draft", async (req, res) => {
+  try {
+    const soId = Number(req.query.sale_order_id);
+    if (!soId) return res.status(400).json({ error: "Missing sale_order_id" });
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+
+    const existing = labelDraftsBySO.get(soId);
+    if (existing) return res.json(existing);
+
+    const uid = await odooLogin();
+    const recs = await odooExecute(uid, "sale.order", "read", [[soId], ["id","name"]]);
+    if (!recs?.length) throw new Error("Sale Order not found by id");
+    const saleOrder = await odooGetSaleOrderByRef(recs[0].name);
+
+    const draft = makeDraftFromSaleOrder(saleOrder);
+    labelDraftsBySO.set(soId, draft);
+    return res.json(draft);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// List labels (optional filter by sale_order_id)
 app.get("/api/labels", async (req, res) => {
   const sale_order_id = req.query.sale_order_id ? String(req.query.sale_order_id) : null;
 
@@ -508,41 +601,53 @@ app.get("/api/labels", async (req, res) => {
       created_at: l.created_at,
       label_url: l.label_url
     }))
-    .sort((a,b) => (a.created_at < b.created_at ? 1 : -1));
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
   res.json(all);
 });
 
-// 3) Generate a PDF-only label for a Sales Order
+// Generate a PDF-only label for a Sales Order (supports overrides)
 app.post("/api/labels/generate", async (req, res) => {
   try {
-    const { sale_order_id, order } = req.body || {};
-    if (!sale_order_id && !order) {
-      return res.status(400).json({ error: "Provide sale_order_id (preferred) or order (testing)." });
+    const { sale_order_id, overrides } = req.body || {};
+    if (!sale_order_id) return res.status(400).json({ error: "Provide sale_order_id" });
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
+
+    // Load SO from Odoo
+    const uid = await odooLogin();
+    const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
+    if (!recs?.length) throw new Error("Sale Order not found by id");
+
+    const saleOrder = await odooGetSaleOrderByRef(recs[0].name);
+
+    // base draft
+    let draft = labelDraftsBySO.get(Number(sale_order_id)) || makeDraftFromSaleOrder(saleOrder);
+
+    // apply overrides
+    if (overrides && typeof overrides === "object") {
+      draft = {
+        ...draft,
+        ship_to: { ...draft.ship_to, ...(overrides.ship_to || {}) },
+        from: { ...draft.from, ...(overrides.from || {}) }
+      };
     }
 
-    let saleOrder = null;
+    // save draft
+    labelDraftsBySO.set(Number(sale_order_id), draft);
 
-    if (odooConfigured && sale_order_id) {
-      // fetch name by id then normalize via ref
-      const uid = await odooLogin();
-      const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
-      if (!recs?.length) throw new Error("Sale Order not found by id");
-      saleOrder = await odooGetSaleOrderByRef(recs[0].name);
-    } else if (order) {
-      saleOrder = order;
-    } else {
-      return res.status(400).json({ error: "Odoo not configured and no 'order' provided." });
-    }
+    // generate label using edited data
+    const result = await generatePdfLabelForOrder({ saleOrder, draft });
 
-    const result = await generatePdfLabelForOrder(saleOrder);
-    res.json(result);
+    return res.json({
+      ...result,
+      draft
+    });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({ error: e.message });
   }
 });
 
-// 4) Download label PDF
+// Download label PDF
 app.get("/api/labels/:id/pdf", async (req, res) => {
   const id = req.params.id;
   const record = labelsStore.get(id);
@@ -553,10 +658,9 @@ app.get("/api/labels/:id/pdf", async (req, res) => {
   res.send(record.pdfBuffer);
 });
 
-// 5) Odoo webhook: quotation -> confirmed SO -> auto generate label
+// Odoo webhook: SO confirmed -> auto generate label
 app.post("/api/odoo/sale-confirmed", async (req, res) => {
   try {
-    // Optional security
     const secret = process.env.ODOO_WEBHOOK_SECRET;
     if (secret) {
       const got = req.headers["x-odoo-secret"];
@@ -581,7 +685,13 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
       saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
     }
 
-    const result = await generatePdfLabelForOrder(saleOrder);
+    // ensure draft exists
+    if (!labelDraftsBySO.has(saleOrder.id)) {
+      labelDraftsBySO.set(saleOrder.id, makeDraftFromSaleOrder(saleOrder));
+    }
+    const draft = labelDraftsBySO.get(saleOrder.id);
+
+    const result = await generatePdfLabelForOrder({ saleOrder, draft });
     return res.json({ ok: true, ...result });
   } catch (e) {
     return res.status(500).json({ error: e.message });
