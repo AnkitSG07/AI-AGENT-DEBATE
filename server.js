@@ -101,6 +101,72 @@ async function odooExecute(uid, model, method, params = [], kw = {}) {
 }
 
 // Find SO by ref and normalize details
+async function odooFetchPartner(uid, partnerId) {
+  if (!partnerId) return {};
+  const recs = await odooExecute(uid, "res.partner", "read", [[partnerId], [
+    "name",
+    "phone",
+    "mobile",
+    "email",
+    "street",
+    "street2",
+    "city",
+    "state_id",
+    "zip",
+    "country_id",
+    "vat",
+    "company_name",
+    "parent_name"
+  ]]);
+  return recs?.[0] || {};
+}
+
+function mapPartnerToAddress(p) {
+  const stateName = p.state_id?.[1] || "";
+  const countryName = p.country_id?.[1] || "";
+  return {
+    name: p.name || p.parent_name || "",
+    company: p.company_name || "",
+    phone: p.phone || p.mobile || "",
+    email: p.email || "",
+    line1: p.street || "",
+    line2: p.street2 || "",
+    city: p.city || "",
+    state: stateName,
+    pin: p.zip || "",
+    country: countryName || "India",
+    vat: p.vat || ""
+  };
+}
+
+async function odooGetPaymentStatus(uid, invoiceIds) {
+  if (!Array.isArray(invoiceIds) || invoiceIds.length === 0) {
+    return { payment_status: "no_invoice", invoices: [] };
+  }
+
+  const invoices = await odooExecute(
+    uid,
+    "account.move",
+    "read",
+    [invoiceIds, ["id", "name", "amount_total", "amount_residual", "payment_state", "state"]]
+  );
+
+  const paid = (invoices || []).every((i) => i.payment_state === "paid");
+  const posted = (invoices || []).every((i) => i.state === "posted");
+
+  return {
+    payment_status: paid ? "paid" : (posted ? "unpaid" : "draft"),
+    invoices: (invoices || []).map((i) => ({
+      id: i.id,
+      name: i.name,
+      amount_total: i.amount_total,
+      amount_residual: i.amount_residual,
+      payment_state: i.payment_state,
+      state: i.state
+    }))
+  };
+}
+
 async function odooGetSaleOrderByRef(ref) {
   const uid = await odooLogin();
 
@@ -108,10 +174,11 @@ async function odooGetSaleOrderByRef(ref) {
     uid,
     "sale.order",
     "search_read",
-    [
-      [["name", "=", ref]],
-      ["id", "name", "partner_shipping_id", "partner_id", "date_order", "amount_total", "state"]
-    ],
+    [[ ["name", "=", ref] ], [
+      "id", "name", "partner_shipping_id", "partner_invoice_id", "partner_id",
+      "date_order", "amount_total", "state", "note", "client_order_ref",
+      "carrier_id", "invoice_status", "picking_ids", "invoice_ids"
+    ]],
     { limit: 1 }
   );
 
@@ -119,38 +186,20 @@ async function odooGetSaleOrderByRef(ref) {
 
   const so = records[0];
   const shipPartnerId = so.partner_shipping_id?.[0] || so.partner_id?.[0];
+  const billPartnerId = so.partner_invoice_id?.[0] || so.partner_id?.[0];
 
-  // ✅ IMPORTANT: do NOT request "mobile" (your db throws error)
-  const partner = shipPartnerId
-    ? await odooExecute(uid, "res.partner", "read", [[shipPartnerId], [
-        "name",
-        "phone",
-        "email",
-        "street",
-        "street2",
-        "city",
-        "state_id",
-        "zip",
-        "country_id"
-      ]])
-    : [];
-
-  const p = partner?.[0] || {};
-  const stateName = p.state_id?.[1] || "";
-  const countryName = p.country_id?.[1] || "";
-
-  const phone = p.phone || "";
+  const shipPartner = await odooFetchPartner(uid, shipPartnerId);
+  const billPartner = await odooFetchPartner(uid, billPartnerId);
 
   const lines = await odooExecute(
     uid,
     "sale.order.line",
     "search_read",
-    [
-      [["order_id", "=", so.id]],
-      ["name", "product_uom_qty"]
-    ],
+    [[ ["order_id", "=", so.id] ], ["name", "product_uom_qty", "product_id"]],
     { limit: 200 }
   );
+
+  const paymentInfo = await odooGetPaymentStatus(uid, so.invoice_ids || []);
 
   return {
     id: so.id,
@@ -158,18 +207,21 @@ async function odooGetSaleOrderByRef(ref) {
     date_order: so.date_order,
     state: so.state,
     amount_total: so.amount_total,
-    ship_to: {
-      name: p.name || "",
-      phone,
-      email: p.email || "",
-      line1: p.street || "",
-      line2: p.street2 || "",
-      city: p.city || "",
-      state: stateName,
-      pin: p.zip || "",
-      country: countryName || "India"
-    },
-    items: (lines || []).map(l => ({ name: l.name, qty: l.product_uom_qty }))
+    note: so.note || "",
+    client_order_ref: so.client_order_ref || "",
+    shipping_method: so.carrier_id?.[1] || "",
+    invoice_status: so.invoice_status || "",
+    payment_status: paymentInfo.payment_status,
+    invoices: paymentInfo.invoices,
+    picking_ids: so.picking_ids || [],
+    ship_to: mapPartnerToAddress(shipPartner),
+    bill_to: mapPartnerToAddress(billPartner),
+    items: (lines || []).map(l => ({
+      name: l.name,
+      qty: l.product_uom_qty,
+      product_id: l.product_id?.[0] || null,
+      product_name: l.product_id?.[1] || ""
+    }))
   };
 }
 
@@ -620,6 +672,76 @@ app.post("/api/debate-stream", async (req, res) => {
   }
 });
 
+async function odooFetchReportPdf(reportName, docId) {
+  if (!odooConfigured) throw new Error("Odoo not configured on server env.");
+  const base = ODOO_URL.replace(/\/$/, "");
+
+  const authResp = await fetch(`${base}/web/session/authenticate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "call",
+      params: {
+        db: ODOO_DB,
+        login: ODOO_USERNAME,
+        password: ODOO_PASS
+      }
+    })
+  });
+
+  if (!authResp.ok) throw new Error(`Odoo auth failed: HTTP ${authResp.status}`);
+  const setCookie = authResp.headers.get("set-cookie") || "";
+  const sessionIdMatch = setCookie.match(/session_id=([^;]+)/);
+  if (!sessionIdMatch) throw new Error("Odoo auth failed: no session cookie");
+  const sessionId = sessionIdMatch[1];
+
+  const pdfResp = await fetch(`${base}/report/pdf/${reportName}/${docId}`, {
+    headers: { Cookie: `session_id=${sessionId}` }
+  });
+
+  if (!pdfResp.ok) {
+    const text = await pdfResp.text().catch(() => "");
+    throw new Error(`Failed report ${reportName}: HTTP ${pdfResp.status} ${text}`);
+  }
+  const arr = await pdfResp.arrayBuffer();
+  return Buffer.from(arr);
+}
+
+async function odooGetPickingsBySaleOrderId(soId) {
+  const uid = await odooLogin();
+  return await odooExecute(
+    uid,
+    "stock.picking",
+    "search_read",
+    [[ ["sale_id", "=", soId] ], ["id", "name", "state", "scheduled_date", "carrier_id"]],
+    { limit: 100, order: "id desc" }
+  );
+}
+
+async function odooSearchOrders({ query = "", state = "", limit = 50 }) {
+  const uid = await odooLogin();
+  const domain = [];
+  if (state) domain.push(["state", "=", state]);
+  if (query) {
+    domain.push("|");
+    domain.push("|");
+    domain.push(["name", "ilike", query]);
+    domain.push(["client_order_ref", "ilike", query]);
+    domain.push(["partner_id.name", "ilike", query]);
+  }
+
+  const orders = await odooExecute(
+    uid,
+    "sale.order",
+    "search_read",
+    [domain, ["id", "name", "date_order", "amount_total", "state", "partner_id", "invoice_status"]],
+    { limit: Math.min(Number(limit) || 50, 100), order: "id desc" }
+  );
+
+  return orders || [];
+}
+
 // ===================== LABEL ROUTES =====================
 
 // Fetch SO (single)
@@ -786,8 +908,9 @@ app.get("/api/labels/:id/pdf", async (req, res) => {
   res.send(record.pdfBuffer);
 });
 
-// Webhook (optional)
-app.post("/api/odoo/sale-confirmed", async (req, res) => {
+const processedWebhookEvents = new Map();
+
+async function handleSaleConfirmed(req, res) {
   try {
     const secret = process.env.ODOO_WEBHOOK_SECRET;
     if (secret) {
@@ -795,11 +918,27 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
       if (got !== secret) return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const { sale_order_ref, big_box } = req.body || {};
-    if (!sale_order_ref) return res.status(400).json({ error: "Provide sale_order_ref" });
+    const { sale_order_ref, sale_order_id, big_box, event_id } = req.body || {};
+    const ref = sale_order_ref ? String(sale_order_ref) : null;
+    const id = sale_order_id ? Number(sale_order_id) : null;
+    if (!ref && !id) return res.status(400).json({ error: "Provide sale_order_ref or sale_order_id" });
+
     if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
 
-    const saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
+    const dedupeKey = String(event_id || `${ref || id}:sale_confirmed`);
+    if (processedWebhookEvents.has(dedupeKey)) {
+      return res.json({ ok: true, already_processed: true, ...processedWebhookEvents.get(dedupeKey) });
+    }
+
+    let saleOrder;
+    if (ref) {
+      saleOrder = await odooGetSaleOrderByRef(ref);
+    } else {
+      const uid = await odooLogin();
+      const recs = await odooExecute(uid, "sale.order", "read", [[id], ["name"]]);
+      if (!recs?.length) throw new Error("Sale Order not found");
+      saleOrder = await odooGetSaleOrderByRef(recs[0].name);
+    }
 
     if (!labelDraftsBySO.has(saleOrder.id)) {
       labelDraftsBySO.set(saleOrder.id, makeDraftFromSaleOrder(saleOrder));
@@ -818,7 +957,177 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
       layout: big_box ? "FULL" : "AUTO"
     });
 
-    return res.json({ ok: true, ...result });
+    const out = { ...result, sale_order_id: saleOrder.id, sale_order_ref: saleOrder.ref, already_processed: false };
+    processedWebhookEvents.set(dedupeKey, out);
+
+    return res.json({ ok: true, ...out });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+app.post("/api/odoo/sale-confirmed", handleSaleConfirmed);
+app.post("/api/odoo/webhook/sale-confirmed", handleSaleConfirmed);
+
+app.get("/api/odoo/sale-order/:id/pickings", async (req, res) => {
+  try {
+    const soId = Number(req.params.id);
+    if (!soId) return res.status(400).json({ error: "Invalid sale order id" });
+    const pickings = await odooGetPickingsBySaleOrderId(soId);
+    return res.json({ ok: true, pickings });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/odoo/picking/:id/validate", async (req, res) => {
+  try {
+    const pickingId = Number(req.params.id);
+    if (!pickingId) return res.status(400).json({ error: "Invalid picking id" });
+    const uid = await odooLogin();
+    await odooExecute(uid, "stock.picking", "button_validate", [[pickingId]]);
+    return res.json({ ok: true, message: "Picking validated" });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/sale-order/:id/fulfillment", async (req, res) => {
+  try {
+    const soId = Number(req.params.id);
+    if (!soId) return res.status(400).json({ error: "Invalid sale order id" });
+
+    const uid = await odooLogin();
+    const lineItems = await odooExecute(
+      uid,
+      "sale.order.line",
+      "search_read",
+      [[ ["order_id", "=", soId] ], ["id", "name", "product_id", "product_uom_qty"]],
+      { limit: 200 }
+    );
+
+    const productIds = Array.from(new Set((lineItems || []).map((l) => l.product_id?.[0]).filter(Boolean)));
+    let productMap = new Map();
+    if (productIds.length) {
+      const products = await odooExecute(
+        uid,
+        "product.product",
+        "read",
+        [productIds, ["id", "display_name", "qty_available", "virtual_available"]]
+      );
+      productMap = new Map((products || []).map((p) => [p.id, p]));
+    }
+
+    const rows = (lineItems || []).map((l) => {
+      const pid = l.product_id?.[0] || null;
+      const p = productMap.get(pid) || {};
+      const ordered = Number(l.product_uom_qty || 0);
+      const onHand = Number(p.qty_available || 0);
+      const forecast = Number(p.virtual_available || 0);
+      return {
+        line_id: l.id,
+        product_id: pid,
+        product_name: p.display_name || l.product_id?.[1] || l.name,
+        ordered_qty: ordered,
+        on_hand_qty: onHand,
+        forecast_qty: forecast,
+        backorder_warning: onHand < ordered
+      };
+    });
+
+    return res.json({ ok: true, rows });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/sale-order/:id/invoice-pdf", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const pdf = await odooFetchReportPdf("account.account_invoices", id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="SO-${id}-invoice.pdf"`);
+    return res.send(pdf);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/sale-order/:id/packing-slip-pdf", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const pdf = await odooFetchReportPdf("stock.report_delivery_document", id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="SO-${id}-packing-slip.pdf"`);
+    return res.send(pdf);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/sale-order/:id/proforma-pdf", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const pdf = await odooFetchReportPdf("sale.report_saleorder", id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="SO-${id}-proforma.pdf"`);
+    return res.send(pdf);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/ship-from-options", async (req, res) => {
+  try {
+    const uid = await odooLogin();
+    const warehouses = await odooExecute(
+      uid,
+      "stock.warehouse",
+      "search_read",
+      [[], ["id", "name", "partner_id"]],
+      { limit: 100 }
+    );
+
+    const partnerIds = Array.from(new Set((warehouses || []).map((w) => w.partner_id?.[0]).filter(Boolean)));
+    let partners = [];
+    if (partnerIds.length) {
+      partners = await odooExecute(uid, "res.partner", "read", [partnerIds, ["id", "name", "phone", "email", "street", "street2", "city", "state_id", "zip", "country_id"]]);
+    }
+    const map = new Map((partners || []).map((p) => [p.id, p]));
+
+    const options = (warehouses || []).map((w) => {
+      const p = map.get(w.partner_id?.[0]) || {};
+      return {
+        id: w.id,
+        label: `${w.name}${p.city ? ` - ${p.city}` : ""}`,
+        from: mapPartnerToAddress(p)
+      };
+    });
+
+    return res.json({ ok: true, options, fallback: getDefaultFromAddress() });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/orders", async (req, res) => {
+  try {
+    const query = String(req.query.query || "").trim();
+    const state = String(req.query.state || "").trim();
+    const limit = Number(req.query.limit || 50);
+
+    const rows = await odooSearchOrders({ query, state, limit });
+    const normalized = rows.map((r) => ({
+      id: r.id,
+      ref: r.name,
+      date_order: r.date_order,
+      amount_total: r.amount_total,
+      state: r.state,
+      customer: r.partner_id?.[1] || "",
+      invoice_status: r.invoice_status || ""
+    }));
+
+    return res.json({ ok: true, rows: normalized });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
