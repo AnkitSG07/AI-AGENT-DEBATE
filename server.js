@@ -11,6 +11,10 @@ app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
 
+function now() {
+  return new Date().toISOString();
+}
+
 // ===================== AI CONFIG =====================
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -21,10 +25,8 @@ if (!OPENROUTER_API_KEY) console.error("❌ Missing OPENROUTER_API_KEY");
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 const GEMINI_MODEL = "gemini-2.5-flash";
-const LLAMA_MODEL =
-  process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
-const MISTRAL_MODEL =
-  process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
+const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
+const MISTRAL_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
 
 console.log("✅ Using Gemini model:", GEMINI_MODEL);
 console.log("✅ Using OpenRouter model (Llama):", LLAMA_MODEL);
@@ -40,14 +42,10 @@ const odooConfigured = !!(ODOO_URL && ODOO_DB && ODOO_USERNAME && ODOO_PASS);
 console.log("✅ Odoo configured:", odooConfigured);
 
 // ===================== LABEL STORE (in-memory) =====================
-// NOTE: Render free tier has no persistent disk. This resets on restart.
-// Later: store in Odoo attachments or S3.
-const labelsStore = new Map(); // labelId -> { id, sale_order_id, sale_order_ref, status, carrier, created_at, pdfBuffer, label_url, meta }
+// NOTE: Render free services can restart; memory resets.
+// Later: store PDFs in Odoo attachments or S3.
+const labelsStore = new Map(); // labelId -> record
 let labelCounter = 1;
-
-function now() {
-  return new Date().toISOString();
-}
 
 function makeLabelId() {
   return `LBL-${Date.now()}-${labelCounter++}`;
@@ -72,7 +70,8 @@ function getDefaultFromAddress() {
 // ===================== ODOO JSON-RPC HELPERS =====================
 // Odoo JSON-RPC endpoint: `${ODOO_URL}/jsonrpc`
 async function odooJsonRpc(service, method, args) {
-  const resp = await fetch(`${ODOO_URL.replace(/\/$/, "")}/jsonrpc`, {
+  const base = ODOO_URL.replace(/\/$/, "");
+  const resp = await fetch(`${base}/jsonrpc`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -85,7 +84,10 @@ async function odooJsonRpc(service, method, args) {
 
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || data?.error) {
-    const msg = data?.error?.data?.message || data?.error?.message || JSON.stringify(data);
+    const msg =
+      data?.error?.data?.message ||
+      data?.error?.message ||
+      `HTTP ${resp.status}: ${JSON.stringify(data)}`;
     throw new Error(`Odoo RPC error: ${msg}`);
   }
   return data.result;
@@ -93,12 +95,11 @@ async function odooJsonRpc(service, method, args) {
 
 async function odooLogin() {
   const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
-  if (!uid) throw new Error("Odoo login failed (uid missing)");
+  if (!uid) throw new Error("Odoo login failed (uid missing). Check DB/username/api key.");
   return uid;
 }
 
 async function odooExecute(uid, model, method, params = [], kw = {}) {
-  // execute_kw args: [db, uid, password, model, method, params, kw]
   return await odooJsonRpc("object", "execute_kw", [
     ODOO_DB,
     uid,
@@ -110,7 +111,7 @@ async function odooExecute(uid, model, method, params = [], kw = {}) {
   ]);
 }
 
-// Find SO by name/ref and return a normalized object for label generation
+// Find SO by ref and normalize details
 async function odooGetSaleOrderByRef(ref) {
   const uid = await odooLogin();
 
@@ -129,6 +130,7 @@ async function odooGetSaleOrderByRef(ref) {
 
   const so = records[0];
   const shipPartnerId = so.partner_shipping_id?.[0] || so.partner_id?.[0];
+
   const partner = shipPartnerId
     ? await odooExecute(uid, "res.partner", "read", [[shipPartnerId], [
         "name","phone","email","street","street2","city","state_id","zip","country_id"
@@ -139,7 +141,6 @@ async function odooGetSaleOrderByRef(ref) {
   const stateName = p.state_id?.[1] || "";
   const countryName = p.country_id?.[1] || "";
 
-  // Order lines (optional for label)
   const lines = await odooExecute(
     uid,
     "sale.order.line",
@@ -148,7 +149,7 @@ async function odooGetSaleOrderByRef(ref) {
       [["order_id", "=", so.id]],
       ["name", "product_uom_qty"]
     ],
-    { limit: 30 }
+    { limit: 50 }
   );
 
   return {
@@ -176,7 +177,7 @@ async function odooGetSaleOrderByRef(ref) {
 function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A6", margin: 18 }); // label-like size
+      const doc = new PDFDocument({ size: "A6", margin: 18 });
       const chunks = [];
       doc.on("data", (d) => chunks.push(d));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
@@ -184,49 +185,50 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
       const so = saleOrder;
       const ship = so.ship_to || {};
 
-      // Header
       doc.fontSize(12).font("Helvetica-Bold").text("SHIPPING LABEL", { align: "center" });
       doc.moveDown(0.4);
 
       doc.fontSize(9).font("Helvetica").text(`Order: ${so.ref || so.id}`);
-      doc.text(`Date: ${new Date().toLocaleDateString()}`);
+      doc.text(`Generated: ${new Date().toLocaleString()}`);
       doc.moveDown(0.6);
 
-      // From
+      // FROM
       doc.fontSize(10).font("Helvetica-Bold").text("FROM");
       doc.fontSize(9).font("Helvetica");
-      doc.text(fromAddress.company || "");
-      doc.text(fromAddress.name || "");
+      if (fromAddress.company) doc.text(fromAddress.company);
+      if (fromAddress.name) doc.text(fromAddress.name);
       if (fromAddress.line1) doc.text(fromAddress.line1);
       if (fromAddress.line2) doc.text(fromAddress.line2);
-      doc.text(`${fromAddress.city || ""} ${fromAddress.state || ""} ${fromAddress.pin || ""}`.trim());
+      const fromCityLine = `${fromAddress.city || ""} ${fromAddress.state || ""} ${fromAddress.pin || ""}`.trim();
+      if (fromCityLine) doc.text(fromCityLine);
       if (fromAddress.country) doc.text(fromAddress.country);
       if (fromAddress.phone) doc.text(`Phone: ${fromAddress.phone}`);
       doc.moveDown(0.6);
 
-      // To
+      // TO
       doc.fontSize(10).font("Helvetica-Bold").text("TO");
       doc.fontSize(9).font("Helvetica");
-      doc.text(ship.name || "");
+      if (ship.name) doc.text(ship.name);
       if (ship.line1) doc.text(ship.line1);
       if (ship.line2) doc.text(ship.line2);
-      doc.text(`${ship.city || ""} ${ship.state || ""} ${ship.pin || ""}`.trim());
+      const toCityLine = `${ship.city || ""} ${ship.state || ""} ${ship.pin || ""}`.trim();
+      if (toCityLine) doc.text(toCityLine);
       if (ship.country) doc.text(ship.country);
       if (ship.phone) doc.text(`Phone: ${ship.phone}`);
       doc.moveDown(0.8);
 
-      // Simple barcode-like block (text)
+      // INTERNAL TRACK BLOCK
       doc.fontSize(9).font("Helvetica-Bold").text("TRACK (INTERNAL)");
       doc.fontSize(10).font("Helvetica").text(`|| ${String(so.ref || so.id).padEnd(18, " ")} ||`, {
         align: "center"
       });
       doc.moveDown(0.6);
 
-      // Items (optional)
+      // ITEMS
       if (so.items?.length) {
         doc.fontSize(9).font("Helvetica-Bold").text("ITEMS");
         doc.fontSize(8).font("Helvetica");
-        so.items.slice(0, 6).forEach((it) => {
+        so.items.slice(0, 8).forEach((it) => {
           doc.text(`• ${it.name}  x${it.qty}`);
         });
       }
@@ -236,6 +238,38 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
       reject(e);
     }
   });
+}
+
+async function generatePdfLabelForOrder(saleOrder) {
+  const fromAddress = getDefaultFromAddress();
+  const pdfBuffer = await buildLabelPdfBuffer({ saleOrder, fromAddress });
+
+  const labelId = makeLabelId();
+  const label_url = `/api/labels/${encodeURIComponent(labelId)}/pdf`;
+
+  const record = {
+    id: labelId,
+    sale_order_id: saleOrder.id,
+    sale_order_ref: saleOrder.ref || String(saleOrder.id),
+    status: "created",
+    carrier: "PDF-only",
+    created_at: now(),
+    pdfBuffer,
+    label_url,
+    meta: {}
+  };
+
+  labelsStore.set(labelId, record);
+
+  return {
+    id: record.id,
+    sale_order_id: record.sale_order_id,
+    sale_order_ref: record.sale_order_ref,
+    status: record.status,
+    carrier: record.carrier,
+    created_at: record.created_at,
+    label_url: record.label_url
+  };
 }
 
 // ===================== AI PROMPTS =====================
@@ -447,29 +481,8 @@ app.get("/api/odoo/sale-order", async (req, res) => {
     if (!ref) return res.status(400).json({ error: "Missing ref" });
 
     if (!odooConfigured) {
-      // Demo response if Odoo isn't configured yet
-      return res.json({
-        id: 12345,
-        ref,
-        state: "sale",
-        date_order: now(),
-        amount_total: 0,
-        ship_to: {
-          name: "Demo Customer",
-          phone: "+91XXXXXXXXXX",
-          email: "customer@example.com",
-          line1: "Demo Address Line 1",
-          line2: "Demo Address Line 2",
-          city: "New Delhi",
-          state: "Delhi",
-          pin: "1100XX",
-          country: "India"
-        },
-        items: [
-          { name: "Demo Item A", qty: 1 },
-          { name: "Demo Item B", qty: 2 }
-        ],
-        _note: "Odoo not configured. This is demo data."
+      return res.status(400).json({
+        error: "Odoo is not configured. Please set ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY_OR_PASSWORD."
       });
     }
 
@@ -480,7 +493,7 @@ app.get("/api/odoo/sale-order", async (req, res) => {
   }
 });
 
-// 2) List labels (optionally filter by sale_order_id)
+// 2) List labels (optional filter by sale_order_id)
 app.get("/api/labels", async (req, res) => {
   const sale_order_id = req.query.sale_order_id ? String(req.query.sale_order_id) : null;
 
@@ -503,78 +516,27 @@ app.get("/api/labels", async (req, res) => {
 // 3) Generate a PDF-only label for a Sales Order
 app.post("/api/labels/generate", async (req, res) => {
   try {
-    const { sale_order_id, from_address_id, order } = req.body || {};
+    const { sale_order_id, order } = req.body || {};
     if (!sale_order_id && !order) {
-      return res.status(400).json({ error: "Provide sale_order_id (preferred) or order (demo/testing)." });
+      return res.status(400).json({ error: "Provide sale_order_id (preferred) or order (testing)." });
     }
 
     let saleOrder = null;
 
-    // If Odoo is configured, fetch by ID using Odoo
     if (odooConfigured && sale_order_id) {
+      // fetch name by id then normalize via ref
       const uid = await odooLogin();
-      const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name","partner_shipping_id","partner_id","date_order","amount_total","state"]]);
+      const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
       if (!recs?.length) throw new Error("Sale Order not found by id");
-
-      const so = recs[0];
-      // Use existing helper by ref for normalized structure (simpler)
-      saleOrder = await odooGetSaleOrderByRef(so.name);
+      saleOrder = await odooGetSaleOrderByRef(recs[0].name);
     } else if (order) {
-      // Allow demo/testing without Odoo
       saleOrder = order;
     } else {
-      // Odoo not configured: create demo order from ID
-      saleOrder = {
-        id: sale_order_id,
-        ref: `S${sale_order_id}`,
-        state: "sale",
-        date_order: now(),
-        ship_to: {
-          name: "Demo Customer",
-          phone: "+91XXXXXXXXXX",
-          email: "customer@example.com",
-          line1: "Demo Address Line 1",
-          line2: "Demo Address Line 2",
-          city: "New Delhi",
-          state: "Delhi",
-          pin: "1100XX",
-          country: "India"
-        },
-        items: [{ name: "Demo Item", qty: 1 }]
-      };
+      return res.status(400).json({ error: "Odoo not configured and no 'order' provided." });
     }
 
-    const fromAddress = getDefaultFromAddress();
-    // from_address_id reserved for future (multiple warehouses)
-
-    const pdfBuffer = await buildLabelPdfBuffer({ saleOrder, fromAddress });
-
-    const labelId = makeLabelId();
-    const label_url = `/api/labels/${encodeURIComponent(labelId)}/pdf`;
-
-    const record = {
-      id: labelId,
-      sale_order_id: saleOrder.id,
-      sale_order_ref: saleOrder.ref || String(saleOrder.id),
-      status: "created",
-      carrier: "PDF-only",
-      created_at: now(),
-      pdfBuffer,
-      label_url,
-      meta: { from_address_id: from_address_id || null }
-    };
-
-    labelsStore.set(labelId, record);
-
-    res.json({
-      id: record.id,
-      sale_order_id: record.sale_order_id,
-      sale_order_ref: record.sale_order_ref,
-      status: record.status,
-      carrier: record.carrier,
-      created_at: record.created_at,
-      label_url: record.label_url
-    });
+    const result = await generatePdfLabelForOrder(saleOrder);
+    res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -591,31 +553,43 @@ app.get("/api/labels/:id/pdf", async (req, res) => {
   res.send(record.pdfBuffer);
 });
 
-// 5) Odoo webhook: call this when quotation -> sales order confirmed
-// You can trigger this from an Odoo Automated Action.
+// 5) Odoo webhook: quotation -> confirmed SO -> auto generate label
 app.post("/api/odoo/sale-confirmed", async (req, res) => {
   try {
+    // Optional security
+    const secret = process.env.ODOO_WEBHOOK_SECRET;
+    if (secret) {
+      const got = req.headers["x-odoo-secret"];
+      if (got !== secret) return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const { sale_order_id, sale_order_ref } = req.body || {};
     if (!sale_order_id && !sale_order_ref) {
       return res.status(400).json({ error: "Provide sale_order_id or sale_order_ref" });
     }
+    if (!odooConfigured) {
+      return res.status(400).json({ error: "Odoo not configured on server env." });
+    }
 
-    // Generate label by calling our own route logic
-    const payload = sale_order_id
-      ? { sale_order_id }
-      : { order: await odooGetSaleOrderByRef(String(sale_order_ref)) };
+    let saleOrder;
+    if (sale_order_id) {
+      const uid = await odooLogin();
+      const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
+      if (!recs?.length) throw new Error("Sale Order not found by id");
+      saleOrder = await odooGetSaleOrderByRef(recs[0].name);
+    } else {
+      saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
+    }
 
-    // Reuse generate logic
-    req.body = payload;
-    // Call handler directly (simple):
-    return app._router.handle(req, res, () => {});
+    const result = await generatePdfLabelForOrder(saleOrder);
+    return res.json({ ok: true, ...result });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
 // Health
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
