@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -16,27 +16,28 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 if (!GEMINI_API_KEY) console.error("❌ Missing GEMINI_API_KEY");
 if (!OPENROUTER_API_KEY) console.error("❌ Missing OPENROUTER_API_KEY");
 
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+// Initialize Gemini (NEW SDK)
+const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// ====== MODEL CONFIG ======
-const GEMINI_MODEL = "gemini-1.5-flash-latest";
+// ===== MODEL CONFIG =====
+const GEMINI_MODEL = "gemini-2.5-flash";
 const LLAMA_MODEL =
   process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
 const MISTRAL_MODEL =
   process.env.OR_MODEL_MISTRAL || "mistralai/mistral-7b-instruct";
 
-// ====== PROMPTS ======
+// ===== SYSTEM RULES =====
 const BASE_RULES = `
 Rules:
 - Do NOT invent facts.
 - If unsure, say "UNCERTAIN".
-- Be concise but logical.
+- Be concise and logical.
 - Follow required format strictly.
 `;
 
 const AGENT_A_SYSTEM = `
 You are Agent A (Gemini).
-Provide a strong answer and start the debate.
+Start the debate strongly.
 
 Format:
 CLAIMS:
@@ -53,7 +54,7 @@ ${BASE_RULES}
 
 const AGENT_B_SYSTEM = `
 You are Agent B (Llama).
-Challenge weak reasoning and correct mistakes.
+Challenge reasoning and fix weak logic.
 
 Format:
 RESPONSE:
@@ -70,7 +71,7 @@ ${BASE_RULES}
 
 const AGENT_C_SYSTEM = `
 You are Agent C (Mistral).
-Focus on risks and missing constraints.
+Focus on risks and edge cases.
 
 Format:
 RESPONSE:
@@ -101,31 +102,32 @@ UNCERTAIN OR CONFLICTING:
 ${BASE_RULES}
 `;
 
-// ====== HELPERS ======
+// ===== HELPERS =====
 function now() {
   return new Date().toISOString();
 }
 
 function historyToText(history) {
   return history
-    .map((m) => `${m.role.toUpperCase()} (${m.agent || "User"}):\n${m.content}`)
+    .map((m) => `${m.agent || "User"}:\n${m.content}`)
     .join("\n\n---\n\n");
 }
 
-// ====== GEMINI CALL ======
+// ===== GEMINI CALL =====
 async function callGemini(system, prompt, debateText) {
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-
   const fullPrompt =
-    `${system}\n\n` +
-    `USER PROMPT:\n${prompt}\n\n` +
-    (debateText ? `DEBATE SO FAR:\n${debateText}\n\n` : "");
+    `${system}\n\nUSER PROMPT:\n${prompt}\n\n` +
+    (debateText ? `DEBATE SO FAR:\n${debateText}` : "");
 
-  const result = await model.generateContent(fullPrompt);
-  return (result?.response?.text?.() || "").trim();
+  const response = await genAI.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: fullPrompt
+  });
+
+  return response.text?.trim() || "";
 }
 
-// ====== OPENROUTER CALL ======
+// ===== OPENROUTER CALL =====
 async function callOpenRouter(system, prompt, debateText, modelName) {
   const response = await fetch(
     "https://openrouter.ai/api/v1/chat/completions",
@@ -135,7 +137,7 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
         Authorization: `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "HTTP-Referer": process.env.APP_URL || "http://localhost",
-        "X-Title": "AI Debate App"
+        "X-Title": "AI Debate"
       },
       body: JSON.stringify({
         model: modelName,
@@ -145,7 +147,7 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
             role: "user",
             content:
               `USER PROMPT:\n${prompt}\n\n` +
-              (debateText ? `DEBATE SO FAR:\n${debateText}\n\n` : "")
+              (debateText ? `DEBATE SO FAR:\n${debateText}` : "")
           }
         ],
         temperature: 0.4
@@ -162,7 +164,7 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
   return data.choices?.[0]?.message?.content?.trim() || "";
 }
 
-// ====== STREAMING ENDPOINT ======
+// ===== STREAMING ENDPOINT =====
 app.post("/api/debate-stream", async (req, res) => {
   res.setHeader("Content-Type", "application/x-ndjson");
   res.setHeader("Cache-Control", "no-cache");
@@ -183,7 +185,7 @@ app.post("/api/debate-stream", async (req, res) => {
       { name: "Mistral", type: "openrouter", system: AGENT_C_SYSTEM, model: MISTRAL_MODEL }
     ];
 
-    const history = [{ role: "user", content: prompt }];
+    const history = [{ agent: "User", content: prompt }];
 
     const totalTurns = rounds * agents.length;
 
@@ -210,7 +212,7 @@ app.post("/api/debate-stream", async (req, res) => {
         );
       }
 
-      history.push({ role: "assistant", agent: agent.name, content: reply });
+      history.push({ agent: agent.name, content: reply });
 
       send({
         type: "turn",
@@ -220,8 +222,8 @@ app.post("/api/debate-stream", async (req, res) => {
       });
     }
 
-    // Judge
-    send({ type: "status", message: "Judge finalizing answer...", time: now() });
+    // Judge final synthesis
+    send({ type: "status", message: "Judge finalizing...", time: now() });
 
     const finalAnswer = await callGemini(
       JUDGE_SYSTEM,
@@ -243,7 +245,7 @@ app.post("/api/debate-stream", async (req, res) => {
   }
 });
 
-// ====== HEALTH CHECK ======
+// ===== HEALTH CHECK =====
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
