@@ -5,104 +5,399 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>AI Agent Debate</title>
   <style>
-    body { font-family: system-ui, Arial; max-width: 1000px; margin: 24px auto; padding: 0 12px; }
-    textarea { width: 100%; min-height: 120px; padding: 12px; font-size: 14px; border-radius: 10px; border: 1px solid #ddd; }
-    button { padding: 10px 14px; font-size: 14px; cursor: pointer; border-radius: 10px; border: 1px solid #ccc; background: #fff; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    .row { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
-    .muted { color: #666; font-size: 13px; }
-    .box { border: 1px solid #e3e3e3; border-radius: 12px; padding: 12px; margin-top: 12px; background: #fafafa; }
-    .turn { background:#fff; border:1px solid #eee; border-radius: 12px; padding: 10px; margin: 10px 0; white-space: pre-wrap; }
-    .head { display:flex; justify-content:space-between; gap:12px; margin-bottom: 6px; }
-    .agent { font-weight: 700; }
-    .time { font-size: 12px; color: #777; }
-    #finalText { white-space: pre-wrap; }
+    :root{
+      --bg:#0b0f17;
+      --panel:#101826;
+      --panel2:#0f1522;
+      --border:rgba(255,255,255,.08);
+      --text:#eaf0ff;
+      --muted:rgba(234,240,255,.65);
+      --accent:#4da3ff;
+      --good:#44d7b6;
+      --warn:#ffcc66;
+      --bad:#ff6b6b;
+      --bubble:#141f31;
+      --bubble2:#0f1a2d;
+      --shadow: 0 12px 30px rgba(0,0,0,.35);
+      --radius:16px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      --sans: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background: radial-gradient(1200px 700px at 20% -10%, rgba(77,163,255,.18), transparent 60%),
+                  radial-gradient(900px 600px at 80% 0%, rgba(68,215,182,.12), transparent 55%),
+                  var(--bg);
+      color:var(--text);
+    }
+    .wrap{max-width:1200px;margin:24px auto;padding:0 14px}
+    .topbar{
+      display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
+      margin-bottom:14px;
+    }
+    h1{font-size:20px;margin:0;letter-spacing:.2px}
+    .sub{color:var(--muted);font-size:13px;margin-top:4px}
+    .badge{
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      padding:6px 10px;border-radius:999px;font-size:12px;color:var(--muted)
+    }
+
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+    }
+
+    .controls{padding:14px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    textarea{
+      width:100%;
+      min-height:120px;
+      resize:vertical;
+      padding:12px 12px;
+      border-radius:14px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      outline:none;
+      font-size:14px;
+      line-height:1.35;
+    }
+    textarea:focus{border-color:rgba(77,163,255,.55);box-shadow:0 0 0 3px rgba(77,163,255,.14)}
+    .field{
+      display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px
+    }
+    input[type="number"]{
+      width:90px;
+      padding:8px 10px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      outline:none;
+    }
+    input[type="checkbox"]{transform:scale(1.1)}
+    .btn{
+      padding:10px 14px;border-radius:12px;border:1px solid var(--border);
+      background:rgba(255,255,255,.04);
+      color:var(--text);
+      cursor:pointer;
+      font-weight:600;
+    }
+    .btn:hover{border-color:rgba(77,163,255,.45)}
+    .btn.primary{
+      background:linear-gradient(135deg, rgba(77,163,255,.95), rgba(77,163,255,.65));
+      border-color:rgba(77,163,255,.7);
+      color:#081018;
+    }
+    .btn.danger{
+      background:rgba(255,107,107,.08);
+      border-color:rgba(255,107,107,.35);
+    }
+    .btn:disabled{opacity:.55;cursor:not-allowed}
+    .status{
+      margin-top:10px;
+      color:var(--muted);
+      font-size:13px;
+      display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    }
+    .dot{
+      width:8px;height:8px;border-radius:50%;
+      background:var(--accent);
+      box-shadow:0 0 0 5px rgba(77,163,255,.12);
+      animation:pulse 1.2s infinite;
+    }
+    @keyframes pulse{
+      0%{transform:scale(.85);opacity:.7}
+      50%{transform:scale(1.05);opacity:1}
+      100%{transform:scale(.85);opacity:.7}
+    }
+
+    .grid{
+      margin-top:14px;
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:12px;
+    }
+    @media(min-width: 980px){
+      .grid{grid-template-columns: 1fr 1fr 1fr;}
+    }
+
+    .col{padding:12px;min-height:340px;display:flex;flex-direction:column;gap:10px}
+    .colHead{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      padding-bottom:10px;border-bottom:1px solid var(--border);
+    }
+    .agentName{font-weight:800}
+    .pill{
+      font-size:12px;
+      color:var(--muted);
+      border:1px solid var(--border);
+      padding:4px 10px;border-radius:999px;
+      background:rgba(255,255,255,.03);
+      white-space:nowrap;
+    }
+    .thinking{
+      display:flex;align-items:center;gap:8px;
+      font-size:12px;color:var(--warn);
+    }
+    .miniDots{
+      display:inline-flex;gap:3px;align-items:center
+    }
+    .miniDots span{
+      width:4px;height:4px;border-radius:50%;background:var(--warn);
+      animation:bounce .9s infinite;
+      opacity:.8
+    }
+    .miniDots span:nth-child(2){animation-delay:.12s}
+    .miniDots span:nth-child(3){animation-delay:.24s}
+    @keyframes bounce{
+      0%,100%{transform:translateY(0)}
+      50%{transform:translateY(-4px)}
+    }
+
+    .feed{
+      overflow:auto;
+      padding-right:4px;
+      flex:1;
+      scroll-behavior:smooth;
+    }
+    .bubble{
+      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:10px 10px;
+      margin:10px 0;
+      white-space:pre-wrap;
+      line-height:1.35;
+      font-size:13.5px;
+    }
+    .metaLine{
+      display:flex;justify-content:space-between;gap:10px;
+      color:var(--muted);
+      font-size:11.5px;
+      margin-bottom:6px;
+      font-family:var(--mono);
+    }
+
+    .finalWrap{margin-top:14px}
+    .final{padding:14px}
+    .finalHead{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px
+    }
+    .finalText{
+      white-space:pre-wrap;
+      line-height:1.4;
+      font-size:14px;
+      background:rgba(255,255,255,.02);
+      border:1px solid var(--border);
+      border-radius:14px;
+      padding:12px;
+    }
+    .hint{color:var(--muted);font-size:12px;margin-top:10px}
   </style>
 </head>
+
 <body>
-  <h2>AI Agent Debate</h2>
-  <div class="muted">One prompt → 3 AIs debate live → final unified answer.</div>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>AI Agent Debate</h1>
+        <div class="sub">One prompt → Gemini + Llama + Gemma debate live → Judge returns one unified answer</div>
+      </div>
+      <div class="badge">NDJSON Live Stream</div>
+    </div>
 
-  <textarea id="prompt" placeholder="Type your prompt..."></textarea>
+    <div class="card controls">
+      <textarea id="prompt" placeholder="Ask anything… (example: ‘Compare IC programmer options for PT8M2302 and what I should buy’)"></textarea>
 
-  <div class="row">
-    <label>Rounds:
-      <input id="rounds" type="number" value="1" min="1" max="5" />
-    </label>
-    <label>
-      <input id="showDebate" type="checkbox" checked />
-      Show live debate
-    </label>
-    <button id="runBtn">Run Debate</button>
-    <button id="clearBtn" type="button">Clear</button>
-  </div>
+      <div class="row" style="margin-top:12px">
+        <div class="field">
+          Rounds (1 round = 3 turns)
+          <input id="rounds" type="number" min="1" max="6" value="1">
+        </div>
 
-  <div id="status" class="muted"></div>
+        <label class="field">
+          <input id="showDebate" type="checkbox" checked>
+          Show debate
+        </label>
 
-  <div class="box" id="debateBox" style="display:none;">
-    <div><b>Live Debate</b></div>
-    <div id="debateStream"></div>
-  </div>
+        <button id="runBtn" class="btn primary">Run Debate</button>
+        <button id="stopBtn" class="btn danger" disabled>Stop</button>
+        <button id="clearBtn" class="btn">Clear</button>
+      </div>
 
-  <div class="box" id="finalBox" style="display:none;">
-    <div><b>Final Answer (Judge)</b></div>
-    <div id="finalText"></div>
+      <div class="status" id="status">
+        <span class="dot" id="dot" style="display:none"></span>
+        <span id="statusText">Ready.</span>
+      </div>
+    </div>
+
+    <div class="grid" id="grid" style="display:none">
+      <!-- Gemini -->
+      <div class="card col">
+        <div class="colHead">
+          <div>
+            <div class="agentName">Gemini</div>
+            <div class="pill">Agent A</div>
+          </div>
+          <div class="thinking" id="think-gemini" style="display:none">
+            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+          </div>
+        </div>
+        <div class="feed" id="feed-gemini"></div>
+      </div>
+
+      <!-- Llama -->
+      <div class="card col">
+        <div class="colHead">
+          <div>
+            <div class="agentName">Llama</div>
+            <div class="pill">Agent B</div>
+          </div>
+          <div class="thinking" id="think-llama" style="display:none">
+            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+          </div>
+        </div>
+        <div class="feed" id="feed-llama"></div>
+      </div>
+
+      <!-- Gemma -->
+      <div class="card col">
+        <div class="colHead">
+          <div>
+            <div class="agentName">Gemma</div>
+            <div class="pill">Agent C</div>
+          </div>
+          <div class="thinking" id="think-gemma" style="display:none">
+            Thinking <span class="miniDots"><span></span><span></span><span></span></span>
+          </div>
+        </div>
+        <div class="feed" id="feed-gemma"></div>
+      </div>
+    </div>
+
+    <div class="finalWrap card final" id="finalBox" style="display:none">
+      <div class="finalHead">
+        <div>
+          <div class="agentName">Final Answer</div>
+          <div class="sub" style="margin-top:4px">Judge (Gemini) synthesizes the debate into one answer.</div>
+        </div>
+        <div class="pill">Judge</div>
+      </div>
+      <div class="finalText" id="finalText"></div>
+      <div class="hint">Tip: If OpenRouter rate-limits, reduce rounds to 1.</div>
+    </div>
   </div>
 
   <script>
     const runBtn = document.getElementById("runBtn");
+    const stopBtn = document.getElementById("stopBtn");
     const clearBtn = document.getElementById("clearBtn");
-    const statusEl = document.getElementById("status");
-    const debateBox = document.getElementById("debateBox");
-    const debateStream = document.getElementById("debateStream");
+    const promptEl = document.getElementById("prompt");
+    const roundsEl = document.getElementById("rounds");
+    const showDebateEl = document.getElementById("showDebate");
+
+    const statusText = document.getElementById("statusText");
+    const dot = document.getElementById("dot");
+
+    const grid = document.getElementById("grid");
     const finalBox = document.getElementById("finalBox");
     const finalText = document.getElementById("finalText");
 
-    function resetUI() {
-      statusEl.textContent = "";
-      debateStream.innerHTML = "";
-      finalText.textContent = "";
-      debateBox.style.display = "none";
+    const feeds = {
+      "Gemini": document.getElementById("feed-gemini"),
+      "Llama": document.getElementById("feed-llama"),
+      "Gemma": document.getElementById("feed-gemma")
+    };
+
+    const thinking = {
+      "Gemini": document.getElementById("think-gemini"),
+      "Llama": document.getElementById("think-llama"),
+      "Gemma": document.getElementById("think-gemma")
+    };
+
+    let abortController = null;
+
+    function esc(s){
+      return (s || "").replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+      }[m]));
+    }
+
+    function setStatus(msg, spinning=false){
+      statusText.textContent = msg || "";
+      dot.style.display = spinning ? "inline-block" : "none";
+    }
+
+    function showThinking(agentName){
+      Object.values(thinking).forEach(x => x.style.display = "none");
+      if (thinking[agentName]) thinking[agentName].style.display = "flex";
+    }
+
+    function clearThinking(){
+      Object.values(thinking).forEach(x => x.style.display = "none");
+    }
+
+    function resetUI(){
+      grid.style.display = "none";
       finalBox.style.display = "none";
+      finalText.textContent = "";
+      Object.values(feeds).forEach(f => f.innerHTML = "");
+      clearThinking();
+      setStatus("Ready.", false);
+    }
+
+    function addBubble(agent, content, time){
+      if (!feeds[agent]) return;
+      const wrap = document.createElement("div");
+      wrap.className = "bubble";
+      const t = time ? new Date(time).toLocaleString() : "";
+      wrap.innerHTML = `
+        <div class="metaLine">
+          <span>${esc(agent)}</span>
+          <span>${esc(t)}</span>
+        </div>
+        <div>${esc(content)}</div>
+      `;
+      feeds[agent].appendChild(wrap);
+      feeds[agent].scrollTop = feeds[agent].scrollHeight;
     }
 
     clearBtn.addEventListener("click", () => {
-      document.getElementById("prompt").value = "";
+      promptEl.value = "";
       resetUI();
     });
 
-    function addTurn(agent, time, content) {
-      const div = document.createElement("div");
-      div.className = "turn";
-      div.innerHTML = `
-        <div class="head">
-          <div class="agent">${agent}</div>
-          <div class="time">${new Date(time).toLocaleString()}</div>
-        </div>
-        <div>${content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
-      `;
-      debateStream.appendChild(div);
-      div.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
+    stopBtn.addEventListener("click", () => {
+      if (abortController) abortController.abort();
+    });
 
     runBtn.addEventListener("click", async () => {
-      const prompt = document.getElementById("prompt").value.trim();
-      const rounds = Number(document.getElementById("rounds").value || 1);
-      const showDebate = document.getElementById("showDebate").checked;
+      const prompt = promptEl.value.trim();
+      const rounds = Number(roundsEl.value || 1);
+      const showDebate = !!showDebateEl.checked;
 
-      resetUI();
       if (!prompt) return alert("Please enter a prompt.");
+      resetUI();
 
       runBtn.disabled = true;
-      statusEl.textContent = "Starting...";
+      stopBtn.disabled = false;
+      abortController = new AbortController();
 
-      if (showDebate) debateBox.style.display = "block";
+      setStatus("Starting debate…", true);
+      grid.style.display = showDebate ? "grid" : "none";
 
-      try {
+      try{
         const resp = await fetch("/api/debate-stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, rounds, showDebate })
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ prompt, rounds, showDebate }),
+          signal: abortController.signal
         });
 
         if (!resp.ok) throw new Error(await resp.text());
@@ -111,33 +406,58 @@
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
+        while(true){
+          const {done, value} = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
+          buffer += decoder.decode(value, {stream:true});
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
-          for (const line of lines) {
+          for (const line of lines){
             if (!line.trim()) continue;
             let msg;
-            try { msg = JSON.parse(line); } catch { continue; }
+            try{ msg = JSON.parse(line); } catch { continue; }
 
-            if (msg.type === "status") statusEl.textContent = msg.message || "";
-            if (msg.type === "turn" && showDebate) addTurn(msg.agent, msg.time, msg.content || "");
-            if (msg.type === "final") {
+            if (msg.type === "status"){
+              setStatus(msg.message || "Working…", true);
+
+              // Show "thinking" for whoever is currently processing
+              const name = (msg.message || "").replace("Thinking...","").trim();
+              if (name) showThinking(name);
+            }
+
+            if (msg.type === "turn"){
+              // turn agent: Gemini/Llama/Gemma
+              clearThinking();
+              if (showDebate) addBubble(msg.agent, msg.content || "", msg.time);
+            }
+
+            if (msg.type === "final"){
+              clearThinking();
               finalBox.style.display = "block";
               finalText.textContent = msg.content || "";
-              statusEl.textContent = "Done.";
+              setStatus("Done.", false);
             }
-            if (msg.type === "error") statusEl.textContent = "Error: " + (msg.message || "");
+
+            if (msg.type === "error"){
+              clearThinking();
+              setStatus("Error: " + (msg.message || "Unknown error"), false);
+            }
+
+            if (msg.type === "done"){
+              clearThinking();
+              setStatus("Done.", false);
+            }
           }
         }
-      } catch (e) {
-        statusEl.textContent = "Error: " + e.message;
-      } finally {
+      } catch(e){
+        const isAbort = (e && (e.name === "AbortError"));
+        setStatus(isAbort ? "Stopped." : ("Error: " + e.message), false);
+      } finally{
         runBtn.disabled = false;
+        stopBtn.disabled = true;
+        abortController = null;
       }
     });
   </script>
