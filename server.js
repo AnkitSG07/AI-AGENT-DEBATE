@@ -6,7 +6,7 @@ import PDFDocument from "pdfkit";
 dotenv.config();
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "4mb" }));
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
@@ -19,27 +19,18 @@ function now() {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-if (!GEMINI_API_KEY) console.error("❌ Missing GEMINI_API_KEY");
-if (!OPENROUTER_API_KEY) console.error("❌ Missing OPENROUTER_API_KEY");
-
-const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const genAI = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
 const AGENT_C_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
-
-console.log("✅ Using Gemini model:", GEMINI_MODEL);
-console.log("✅ Using OpenRouter model (Llama):", LLAMA_MODEL);
-console.log("✅ Using OpenRouter model (Agent C):", AGENT_C_MODEL);
 
 // ===================== ODOO CONFIG =====================
 const ODOO_URL = process.env.ODOO_URL;
 const ODOO_DB = process.env.ODOO_DB;
 const ODOO_USERNAME = process.env.ODOO_USERNAME;
 const ODOO_PASS = process.env.ODOO_API_KEY_OR_PASSWORD;
-
 const odooConfigured = !!(ODOO_URL && ODOO_DB && ODOO_USERNAME && ODOO_PASS);
-console.log("✅ Odoo configured:", odooConfigured);
 
 // ===================== STORES (in-memory) =====================
 const labelsStore = new Map(); // labelId -> record
@@ -93,7 +84,7 @@ async function odooJsonRpc(service, method, args) {
 
 async function odooLogin() {
   const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
-  if (!uid) throw new Error("Odoo login failed (uid missing). Check DB/username/api key.");
+  if (!uid) throw new Error("Odoo login failed. Check DB/username/api key.");
   return uid;
 }
 
@@ -129,7 +120,7 @@ async function odooGetSaleOrderByRef(ref) {
   const so = records[0];
   const shipPartnerId = so.partner_shipping_id?.[0] || so.partner_id?.[0];
 
-  // ✅ FIX: do NOT request "mobile" field (your db throws error)
+  // ✅ IMPORTANT: do NOT request "mobile" (your db throws error)
   const partner = shipPartnerId
     ? await odooExecute(uid, "res.partner", "read", [[shipPartnerId], [
         "name",
@@ -216,79 +207,182 @@ function makeDraftFromSaleOrder(saleOrder) {
   };
 }
 
+function applyOverridesToDraft(draft, overrides) {
+  if (!overrides || typeof overrides !== "object") return draft;
+  return {
+    ...draft,
+    ship_to: { ...draft.ship_to, ...(overrides.ship_to || {}) },
+    from: { ...draft.from, ...(overrides.from || {}) }
+  };
+}
+
+function normalizeAddressBlock(addr) {
+  const safe = (v) => (v && String(v).trim() ? String(v).trim() : "");
+  return {
+    name: safe(addr?.name),
+    phone: safe(addr?.phone),
+    email: safe(addr?.email),
+    line1: safe(addr?.line1),
+    line2: safe(addr?.line2),
+    city: safe(addr?.city),
+    state: safe(addr?.state),
+    pin: safe(addr?.pin),
+    country: safe(addr?.country)
+  };
+}
+
+function joinAddressLines(a) {
+  const parts = [
+    a.line1,
+    a.line2,
+    [a.city, a.state, a.pin].filter(Boolean).join(", "),
+    a.country
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
 // ===================== PDF LABEL GENERATION =====================
-function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
+// Layout modes:
+// - "AUTO" (grid): up to 4 labels per page (2x2). If 1 order => 1 label only (top-left).
+// - "FULL": each label takes full A4 page.
+async function buildMultiLabelPdfBuffer({ labels, layout = "AUTO" }) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A4", margin: 40 });
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
       const chunks = [];
       doc.on("data", (d) => chunks.push(d));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      const so = saleOrder || {};
-      const ship = so.ship_to || {};
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
 
       const safe = (v) => (v && String(v).trim() ? String(v).trim() : "");
-      const line = (y) => {
+
+      function drawDivider(x, y, w) {
         doc
-          .moveTo(40, y)
-          .lineTo(doc.page.width - 40, y)
+          .moveTo(x, y)
+          .lineTo(x + w, y)
           .lineWidth(1)
           .strokeColor("#d9d9d9")
           .stroke();
-      };
+      }
 
-      const shipName = safe(ship.name) || "Recipient Name";
-      const shipPhone = safe(ship.phone) || "Recipient Phone";
+      function drawSingleLabel(x, y, w, h, labelData) {
+        const pad = 18;
+        const left = x + pad;
+        const contentW = w - pad * 2;
 
-      const shipAddr =
-        [
-          safe(ship.line1),
-          safe(ship.line2),
-          [safe(ship.city), safe(ship.state), safe(ship.pin)].filter(Boolean).join(", "),
-          safe(ship.country)
-        ]
-          .filter(Boolean)
-          .join(", ") || "Full Address (Address, City, State, Pincode)";
+        // Border
+        doc.rect(x, y, w, h).lineWidth(1).strokeColor("#000").stroke();
 
-      const fromName = safe(fromAddress.name) || "Smart Handicrafts";
-      const fromPhone = safe(fromAddress.phone) || "+91 XXXXX XXXXX";
+        const ship = normalizeAddressBlock(labelData.ship_to);
+        const from = normalizeAddressBlock(labelData.from);
 
-      const fromAddr =
-        [
-          safe(fromAddress.line1),
-          safe(fromAddress.line2),
-          [safe(fromAddress.city), safe(fromAddress.state), safe(fromAddress.pin)].filter(Boolean).join(", "),
-          safe(fromAddress.country)
-        ]
-          .filter(Boolean)
-          .join(", ") || "Your Address";
+        const shipName = ship.name || "Recipient Name";
+        const shipPhone = ship.phone || "Recipient Phone";
+        const shipAddr = joinAddressLines(ship) || "Full Address (Address, City, State, Pincode)";
 
-      doc.fillColor("#000").font("Helvetica-Bold").fontSize(18).text("SHIP TO:", 40, 60);
-      doc.font("Helvetica").fontSize(14).text(shipName, 40, 92);
-      line(120);
+        const fromName = from.name || "Smart Handicrafts";
+        const fromPhone = from.phone || "+91 XXXXX XXXXX";
+        const fromAddr = joinAddressLines(from) || "Your Address";
 
-      doc.font("Helvetica-Bold").fontSize(18).text("ADDRESS:", 40, 140);
-      doc.font("Helvetica").fontSize(14).text(shipAddr, 40, 172, { width: doc.page.width - 80 });
-      line(240);
+        let cursorY = y + pad;
 
-      doc.font("Helvetica-Bold").fontSize(18).text("PHONE:", 40, 260);
-      doc.font("Helvetica").fontSize(14).text(shipPhone, 40, 292);
-      line(320);
+        const H = (t) => doc.font("Helvetica-Bold").fontSize(12).fillColor("#000").text(t, left, cursorY);
+        const V = (t) => doc.font("Helvetica").fontSize(10).fillColor("#444").text(t, left, cursorY, { width: contentW });
 
-      doc.font("Helvetica-Bold").fontSize(18).text("FROM:", 40, 380);
-      doc.font("Helvetica").fontSize(14).text(fromName, 40, 412);
-      line(440);
+        // SHIP TO
+        H("SHIP TO:");
+        cursorY += 16;
+        V(shipName);
+        cursorY += 12;
+        drawDivider(left, cursorY, contentW);
+        cursorY += 14;
 
-      doc.font("Helvetica-Bold").fontSize(18).text("ADDRESS:", 40, 460);
-      doc.font("Helvetica").fontSize(14).text(fromAddr, 40, 492, { width: doc.page.width - 80 });
-      line(560);
+        // ADDRESS
+        H("ADDRESS:");
+        cursorY += 16;
+        V(shipAddr);
+        cursorY += 40;
+        drawDivider(left, cursorY, contentW);
+        cursorY += 14;
 
-      doc.font("Helvetica-Bold").fontSize(18).text("PHONE:", 40, 580);
-      doc.font("Helvetica").fontSize(14).text(fromPhone, 40, 612);
-      line(640);
+        // PHONE
+        H("PHONE:");
+        cursorY += 16;
+        V(shipPhone);
+        cursorY += 12;
+        drawDivider(left, cursorY, contentW);
+        cursorY += 20;
 
-      doc.fillColor("#444").font("Helvetica").fontSize(11).text(`SO: ${safe(so.ref) || so.id || ""}`, 40, 680);
+        // FROM
+        H("FROM:");
+        cursorY += 16;
+        V(fromName);
+        cursorY += 12;
+        drawDivider(left, cursorY, contentW);
+        cursorY += 14;
+
+        // FROM ADDRESS
+        H("ADDRESS:");
+        cursorY += 16;
+        V(fromAddr);
+        cursorY += 40;
+        drawDivider(left, cursorY, contentW);
+        cursorY += 14;
+
+        // FROM PHONE
+        H("PHONE:");
+        cursorY += 16;
+        V(fromPhone);
+
+        // Footer SO ref
+        const soText = `SO: ${safe(labelData.sale_order_ref || "")}`;
+        doc.font("Helvetica").fontSize(8).fillColor("#444").text(soText, left, y + h - 14);
+      }
+
+      // FULL PAGE MODE
+      if (String(layout).toUpperCase() === "FULL") {
+        labels.forEach((lab, idx) => {
+          if (idx > 0) doc.addPage();
+          const margin = 24;
+          drawSingleLabel(margin, margin, pageW - margin * 2, pageH - margin * 2, lab);
+        });
+
+        doc.end();
+        return;
+      }
+
+      // AUTO GRID MODE (2x2) - but only place as many labels as provided
+      const outerMargin = 24;
+      const gap = 14;
+      const cols = 2;
+      const rows = 2;
+      const labelW = (pageW - outerMargin * 2 - gap) / cols;
+      const labelH = (pageH - outerMargin * 2 - gap) / rows;
+
+      const positions = [
+        { x: outerMargin, y: outerMargin },                               // 1: top-left
+        { x: outerMargin + labelW + gap, y: outerMargin },                // 2: top-right
+        { x: outerMargin, y: outerMargin + labelH + gap },                // 3: bottom-left
+        { x: outerMargin + labelW + gap, y: outerMargin + labelH + gap }  // 4: bottom-right
+      ];
+
+      let i = 0;
+      while (i < labels.length) {
+        // new page after every 4 labels (except first page which already exists)
+        if (i > 0 && i % 4 === 0) doc.addPage();
+
+        const pageIndexStart = i;
+        const chunk = labels.slice(pageIndexStart, pageIndexStart + 4);
+
+        for (let p = 0; p < chunk.length; p++) {
+          const pos = positions[p];
+          drawSingleLabel(pos.x, pos.y, labelW, labelH, chunk[p]);
+        }
+
+        i += chunk.length;
+      }
 
       doc.end();
     } catch (e) {
@@ -297,44 +391,37 @@ function buildLabelPdfBuffer({ saleOrder, fromAddress }) {
   });
 }
 
-async function generatePdfLabelForOrder({ saleOrder, draft }) {
-  const editedOrder = {
-    ...saleOrder,
-    ship_to: { ...(saleOrder.ship_to || {}), ...(draft?.ship_to || {}) }
-  };
-
-  const fromAddress = { ...(draft?.from || getDefaultFromAddress()) };
-  const pdfBuffer = await buildLabelPdfBuffer({ saleOrder: editedOrder, fromAddress });
+async function createBatchLabelPdfRecord({ labels, layout }) {
+  const pdfBuffer = await buildMultiLabelPdfBuffer({ labels, layout });
 
   const labelId = makeLabelId();
   const label_url = `/api/labels/${encodeURIComponent(labelId)}/pdf`;
 
   const record = {
     id: labelId,
-    sale_order_id: editedOrder.id,
-    sale_order_ref: editedOrder.ref || String(editedOrder.id),
+    sale_order_id: labels.length === 1 ? labels[0].sale_order_id : null,
+    sale_order_ref: labels.length === 1 ? labels[0].sale_order_ref : `BATCH-${labels.length}`,
     status: "created",
-    carrier: "PDF-only",
+    carrier: layout === "FULL" ? "PDF-fullpage" : "PDF-grid",
     created_at: now(),
     pdfBuffer,
     label_url,
-    meta: { edited: true }
+    meta: { batch: true, count: labels.length, layout }
   };
 
   labelsStore.set(labelId, record);
 
   return {
     id: record.id,
-    sale_order_id: record.sale_order_id,
-    sale_order_ref: record.sale_order_ref,
     status: record.status,
     carrier: record.carrier,
     created_at: record.created_at,
-    label_url: record.label_url
+    label_url: record.label_url,
+    meta: record.meta
   };
 }
 
-// ===================== AI PROMPTS =====================
+// ===================== AI STREAM (unchanged) =====================
 const BASE_RULES = `
 Rules:
 - Do NOT invent facts.
@@ -406,8 +493,8 @@ UNCERTAIN OR CONFLICTING:
 ${BASE_RULES}
 `;
 
-// ===================== AI CALLS =====================
 async function callGemini(system, prompt, debateText) {
+  if (!genAI) throw new Error("Gemini is not configured (missing GEMINI_API_KEY).");
   const fullPrompt =
     `${system}\n\nUSER PROMPT:\n${prompt}\n\n` +
     (debateText ? `DEBATE SO FAR:\n${debateText}` : "");
@@ -421,6 +508,8 @@ async function callGemini(system, prompt, debateText) {
 }
 
 async function callOpenRouter(system, prompt, debateText, modelName) {
+  if (!OPENROUTER_API_KEY) throw new Error("OpenRouter not configured (missing OPENROUTER_API_KEY).");
+
   const fallbacks = [
     modelName,
     "google/gemma-2-9b-it",
@@ -476,7 +565,6 @@ function historyToText(history) {
   return history.map((m) => `${m.agent}:\n${m.content}`).join("\n\n---\n\n");
 }
 
-// ===================== AI STREAM ENDPOINT =====================
 app.post("/api/debate-stream", async (req, res) => {
   res.setHeader("Content-Type", "application/x-ndjson");
   res.setHeader("Cache-Control", "no-cache");
@@ -517,9 +605,7 @@ app.post("/api/debate-stream", async (req, res) => {
 
       history.push({ agent: agent.name, content: reply });
 
-      if (showDebate) {
-        send({ type: "turn", agent: agent.name, content: reply, time: now() });
-      }
+      if (showDebate) send({ type: "turn", agent: agent.name, content: reply, time: now() });
     }
 
     send({ type: "status", message: "Judge finalizing...", time: now() });
@@ -535,13 +621,15 @@ app.post("/api/debate-stream", async (req, res) => {
 });
 
 // ===================== LABEL ROUTES =====================
+
+// Fetch SO (single)
 app.get("/api/odoo/sale-order", async (req, res) => {
   try {
     const ref = String(req.query.ref || "").trim();
     if (!ref) return res.status(400).json({ error: "Missing ref" });
     if (!odooConfigured) {
       return res.status(400).json({
-        error: "Odoo is not configured. Please set ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY_OR_PASSWORD."
+        error: "Odoo not configured. Set ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_API_KEY_OR_PASSWORD."
       });
     }
 
@@ -557,6 +645,7 @@ app.get("/api/odoo/sale-order", async (req, res) => {
   }
 });
 
+// Get label draft for editing (single SO)
 app.get("/api/labels/draft", async (req, res) => {
   try {
     const soId = Number(req.query.sale_order_id);
@@ -569,6 +658,7 @@ app.get("/api/labels/draft", async (req, res) => {
     const uid = await odooLogin();
     const recs = await odooExecute(uid, "sale.order", "read", [[soId], ["id","name"]]);
     if (!recs?.length) throw new Error("Sale Order not found by id");
+
     const saleOrder = await odooGetSaleOrderByRef(recs[0].name);
 
     const draft = makeDraftFromSaleOrder(saleOrder);
@@ -579,6 +669,7 @@ app.get("/api/labels/draft", async (req, res) => {
   }
 });
 
+// List labels
 app.get("/api/labels", async (req, res) => {
   const sale_order_id = req.query.sale_order_id ? String(req.query.sale_order_id) : null;
 
@@ -591,16 +682,18 @@ app.get("/api/labels", async (req, res) => {
       status: l.status,
       carrier: l.carrier,
       created_at: l.created_at,
-      label_url: l.label_url
+      label_url: l.label_url,
+      meta: l.meta
     }))
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
   res.json(all);
 });
 
+// Generate label (single SO) => creates 1 label (NOT 4 copies)
 app.post("/api/labels/generate", async (req, res) => {
   try {
-    const { sale_order_id, overrides } = req.body || {};
+    const { sale_order_id, overrides, layout } = req.body || {};
     if (!sale_order_id) return res.status(400).json({ error: "Provide sale_order_id" });
     if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
 
@@ -611,28 +704,78 @@ app.post("/api/labels/generate", async (req, res) => {
     const saleOrder = await odooGetSaleOrderByRef(recs[0].name);
 
     let draft = labelDraftsBySO.get(Number(sale_order_id)) || makeDraftFromSaleOrder(saleOrder);
-
-    if (overrides && typeof overrides === "object") {
-      draft = {
-        ...draft,
-        ship_to: { ...draft.ship_to, ...(overrides.ship_to || {}) },
-        from: { ...draft.from, ...(overrides.from || {}) }
-      };
-    }
-
+    draft = applyOverridesToDraft(draft, overrides);
     labelDraftsBySO.set(Number(sale_order_id), draft);
 
-    const result = await generatePdfLabelForOrder({ saleOrder, draft });
+    const labelData = {
+      sale_order_id: saleOrder.id,
+      sale_order_ref: saleOrder.ref,
+      ship_to: { ...(saleOrder.ship_to || {}), ...(draft.ship_to || {}) },
+      from: { ...(draft.from || getDefaultFromAddress()) }
+    };
 
-    return res.json({
-      ...result,
-      draft
+    const result = await createBatchLabelPdfRecord({
+      labels: [labelData],
+      layout: String(layout || "AUTO").toUpperCase() === "FULL" ? "FULL" : "AUTO"
     });
+
+    return res.json({ ok: true, ...result, draft });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 });
 
+// ✅ NEW: Batch generate (multiple SO refs / ids)
+// layout: "AUTO" (grid up to 4/page) or "FULL" (one per page)
+app.post("/api/labels/generate-batch", async (req, res) => {
+  try {
+    const { orders, layout } = req.body || {};
+    if (!Array.isArray(orders) || orders.length === 0) {
+      return res.status(400).json({ error: "Provide orders: [{ref:'S0001'}...]" });
+    }
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
+
+    const mode = String(layout || "AUTO").toUpperCase() === "FULL" ? "FULL" : "AUTO";
+
+    // Fetch each SO and apply saved draft edits if any
+    const labels = [];
+    for (const o of orders) {
+      const ref = String(o?.ref || "").trim();
+      const sale_order_id = o?.sale_order_id ? Number(o.sale_order_id) : null;
+
+      let saleOrder;
+      if (ref) {
+        saleOrder = await odooGetSaleOrderByRef(ref);
+      } else if (sale_order_id) {
+        const uid = await odooLogin();
+        const recs = await odooExecute(uid, "sale.order", "read", [[sale_order_id], ["id","name"]]);
+        if (!recs?.length) throw new Error(`Sale Order not found by id: ${sale_order_id}`);
+        saleOrder = await odooGetSaleOrderByRef(recs[0].name);
+      } else {
+        throw new Error("Each order must include ref or sale_order_id");
+      }
+
+      let draft = labelDraftsBySO.get(Number(saleOrder.id)) || makeDraftFromSaleOrder(saleOrder);
+      // allow per-order overrides from request too:
+      draft = applyOverridesToDraft(draft, o?.overrides);
+      labelDraftsBySO.set(Number(saleOrder.id), draft);
+
+      labels.push({
+        sale_order_id: saleOrder.id,
+        sale_order_ref: saleOrder.ref,
+        ship_to: { ...(saleOrder.ship_to || {}), ...(draft.ship_to || {}) },
+        from: { ...(draft.from || getDefaultFromAddress()) }
+      });
+    }
+
+    const result = await createBatchLabelPdfRecord({ labels, layout: mode });
+    return res.json({ ok: true, ...result, count: labels.length, layout: mode });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Serve PDF
 app.get("/api/labels/:id/pdf", async (req, res) => {
   const id = req.params.id;
   const record = labelsStore.get(id);
@@ -643,6 +786,7 @@ app.get("/api/labels/:id/pdf", async (req, res) => {
   res.send(record.pdfBuffer);
 });
 
+// Webhook (optional)
 app.post("/api/odoo/sale-confirmed", async (req, res) => {
   try {
     const secret = process.env.ODOO_WEBHOOK_SECRET;
@@ -651,30 +795,29 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
       if (got !== secret) return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const { sale_order_id, sale_order_ref } = req.body || {};
-    if (!sale_order_id && !sale_order_ref) {
-      return res.status(400).json({ error: "Provide sale_order_id or sale_order_ref" });
-    }
-    if (!odooConfigured) {
-      return res.status(400).json({ error: "Odoo not configured on server env." });
-    }
+    const { sale_order_ref, big_box } = req.body || {};
+    if (!sale_order_ref) return res.status(400).json({ error: "Provide sale_order_ref" });
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured on server env." });
 
-    let saleOrder;
-    if (sale_order_id) {
-      const uid = await odooLogin();
-      const recs = await odooExecute(uid, "sale.order", "read", [[Number(sale_order_id)], ["id","name"]]);
-      if (!recs?.length) throw new Error("Sale Order not found by id");
-      saleOrder = await odooGetSaleOrderByRef(recs[0].name);
-    } else {
-      saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
-    }
+    const saleOrder = await odooGetSaleOrderByRef(String(sale_order_ref));
 
     if (!labelDraftsBySO.has(saleOrder.id)) {
       labelDraftsBySO.set(saleOrder.id, makeDraftFromSaleOrder(saleOrder));
     }
     const draft = labelDraftsBySO.get(saleOrder.id);
 
-    const result = await generatePdfLabelForOrder({ saleOrder, draft });
+    const labelData = {
+      sale_order_id: saleOrder.id,
+      sale_order_ref: saleOrder.ref,
+      ship_to: { ...(saleOrder.ship_to || {}), ...(draft.ship_to || {}) },
+      from: { ...(draft.from || getDefaultFromAddress()) }
+    };
+
+    const result = await createBatchLabelPdfRecord({
+      labels: [labelData],
+      layout: big_box ? "FULL" : "AUTO"
+    });
+
     return res.json({ ok: true, ...result });
   } catch (e) {
     return res.status(500).json({ error: e.message });
@@ -683,6 +826,4 @@ app.post("/api/odoo/sale-confirmed", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
