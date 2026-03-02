@@ -1071,10 +1071,24 @@ app.get("/api/odoo/sale-order/:id/invoice-pdf", async (req, res) => {
 
 app.get("/api/odoo/sale-order/:id/packing-slip-pdf", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    const pdf = await odooFetchReportPdf("stock.report_delivery_document", id);
+    const soId = Number(req.params.id);
+
+    // 1. Fetch the Delivery Orders (stock.picking) linked to this Sale Order
+    const pickings = await odooGetPickingsBySaleOrderId(soId);
+    
+    if (!pickings || pickings.length === 0) {
+      return res.status(404).json({ error: "No delivery slips (pickings) found for this Sale Order." });
+    }
+
+    // 2. Grab the ID of the latest delivery order
+    // (odooGetPickingsBySaleOrderId already sorts them by 'id desc')
+    const pickingId = pickings[0].id;
+
+    // 3. Fetch the PDF using the PICKING ID and the correct Odoo 19 report name
+    const pdf = await odooFetchReportPdf("stock.report_deliveryslip", pickingId);
+    
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="SO-${id}-packing-slip.pdf"`);
+    res.setHeader("Content-Disposition", `inline; filename="SO-${soId}-packing-slip.pdf"`);
     return res.send(pdf);
   } catch (e) {
     return res.status(500).json({ error: e.message });
