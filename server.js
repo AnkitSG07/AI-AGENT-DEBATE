@@ -650,9 +650,13 @@ required integrations, and CRM/ERP handoff notes based only on retrieved context
 };
 
 function detectAutoMode(message, history = []) {
-  const combined = `${history.map((h) => String(h?.content || "")).join(" ")} ${String(message || "")}`.toLowerCase();
+  const userHistoryText = history
+    .filter((h) => String(h?.role || "").toLowerCase() === "user")
+    .map((h) => String(h?.content || ""))
+    .join(" ");
+  const combined = `${userHistoryText} ${String(message || "")}`.toLowerCase();
   const hasOrderIntent = /(create|make|place|confirm|process)\s+(an?\s+)?(order|quotation|quote|sales\s*order)/i.test(combined)
-    || /(crm|handoff|lead stage|next_action|workflow|automation|json)/i.test(combined);
+    || /(crm\s*handoff|lead stage|sales automation|automation workflow)/i.test(combined);
   if (hasOrderIntent) {
     return { mode: "sales_automation", reason: "Detected workflow/order automation intent." };
   }
@@ -675,34 +679,28 @@ function isHelpIntent(message) {
 }
 
 function buildInternalOdooHelpReply() {
-  return `I can help you with internal Odoo operations end-to-end.
+  return `I can help you with SmartHandicrafts product and sales support.
 
-1) Read/query data
-- Customers (contact + outstanding balance)
-- Sales orders, invoices, products, CRM leads/opportunities
-- Purchase orders + vendor bills
-- Employees, timesheets, attendance
+1) Product guidance
+- Compare products, variants, bundles, and compatible pairings
+- Explain integrations and use-case fit
+- Share compliance notes and policy highlights from the knowledge base
 
-2) Perform actions
-- Create lead/contact
-- Create quotation/sales order
-- Create invoice draft
-- Update opportunity stage
-- Add activities/reminders/tasks
-- Confirm order / mark done (approval required)
+2) Sales support
+- Recommend SKUs based on your needs
+- Help prepare quote intake details
+- Clarify what information is needed before pricing
 
-3) Automation support
-- Overdue invoice follow-up and task creation
-- Lead assignment support
-- Daily summary (new leads, unpaid invoices, low stock)
-- Exception visibility (payment issues, stockouts, delays)
+3) Quote and pricing context
+- Share known pricing status and freshness warnings
+- Flag missing fields (quantity, use case, project details)
+- Point to support contact when human follow-up is needed
 
-4) Insights and reports
-- Monthly revenue, pipeline value, collection aging
-- Top products/customers
-- Weekly summary reports
+4) Clear next steps
+- Suggest whether to request details, send a quote, or book a call
+- Provide source-backed answers with traceability
 
-Tell me in plain language what you need, and I’ll fetch or execute it in Odoo.`;
+Tell me what product or requirement you have, and I'll guide you from there.`;
 }
 
 const PRODUCT_BOT_EMBED_MODEL = process.env.PRODUCT_BOT_EMBED_MODEL || "text-embedding-004";
