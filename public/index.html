@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SmartHandicrafts® — Command Center</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     /* ─── TOKENS ─── */
     :root {
@@ -14,8 +14,8 @@
       --radius-lg: 20px;
       --radius-xl: 28px;
       --mono: 'JetBrains Mono', ui-monospace, monospace;
-      --sans: 'DM Sans', system-ui, sans-serif;
-      --display: 'Syne', var(--sans);
+      --sans: 'Inter', system-ui, sans-serif;
+      --display: 'Inter', system-ui, sans-serif;
       --transition: 220ms cubic-bezier(.4,0,.2,1);
     }
 
@@ -206,6 +206,13 @@
     }
 
     .topbar-left {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-left-text {
       display: flex;
       flex-direction: column;
       gap: 1px;
@@ -1105,11 +1112,199 @@
       z-index: 999;
       opacity: .4;
     }
+
+    /* ─── MOBILE NAV TOGGLE ─── */
+    .mobile-nav-toggle {
+      display: none;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-primary);
+      flex-shrink: 0;
+      transition: background var(--transition);
+    }
+    .mobile-nav-toggle svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+    .mobile-nav-toggle:hover { background: var(--surface-2); }
+
+    /* ─── SIDEBAR OVERLAY (mobile) ─── */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.5);
+      backdrop-filter: blur(2px);
+      z-index: 45;
+    }
+    .sidebar-overlay.open { display: block; }
+
+    /* ─── BOTTOM NAV (mobile) ─── */
+    .bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 64px;
+      background: var(--surface-0);
+      border-top: 1px solid var(--border);
+      z-index: 50;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 8px;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .bottom-nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      padding: 6px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      color: var(--text-tertiary);
+      transition: color var(--transition), background var(--transition);
+      font-size: 10px;
+      font-weight: 600;
+      font-family: var(--display);
+      border: none;
+      background: transparent;
+      min-width: 60px;
+    }
+
+    .bottom-nav-item svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .bottom-nav-item.active { color: var(--accent); }
+    .bottom-nav-item:hover { background: var(--surface-1); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 768px) {
+      .mobile-nav-toggle { display: flex; }
+      .bottom-nav { display: flex; }
+
+      .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        width: 220px;
+        padding: 16px 12px;
+        transform: translateX(-100%);
+        transition: transform 0.28s cubic-bezier(.4,0,.2,1), background var(--transition);
+        z-index: 60;
+        align-items: flex-start;
+        gap: 2px;
+      }
+
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-logo { margin-bottom: 12px; }
+
+      .nav-item {
+        width: 100%;
+        justify-content: flex-start;
+        padding: 0 12px;
+        gap: 12px;
+        border-radius: 10px;
+      }
+
+      .nav-tooltip {
+        position: static;
+        transform: none;
+        opacity: 1;
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        pointer-events: none;
+      }
+
+      .layout { grid-template-columns: 1fr; }
+      .main { min-height: 100vh; }
+
+      .topbar { padding: 0 14px; gap: 10px; }
+      .topbar-title { font-size: 14px; }
+      .topbar-sub { display: none; }
+      .status-badge { display: none; }
+
+      .page { padding: 16px 14px 80px; }
+
+      .section-header { flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 16px; }
+      .section-title { font-size: 18px; }
+
+      .tab-bar { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      .tab-btn { white-space: nowrap; flex-shrink: 0; padding: 8px 12px; font-size: 12px; }
+
+      .flex.flex-wrap.gap-12.items-center > div[style*="margin-left:auto"] {
+        margin-left: 0 !important;
+        width: 100%;
+        justify-content: flex-end;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      input[type="tel"],
+      select {
+        width: 100%;
+        max-width: 100% !important;
+      }
+
+      input[type="number"] { width: 80px; }
+      .label-field { flex-wrap: wrap; }
+
+      .card-inner { padding: 14px; }
+      .card-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      td, th { white-space: nowrap; }
+
+      .two-col { grid-template-columns: 1fr !important; }
+
+      .debate-grid { gap: 12px; }
+      .agent-card { min-height: 240px; }
+
+      .modal { width: 100%; max-height: 95vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+      .modal-backdrop { align-items: flex-end; padding: 0; }
+      .modal-body { padding: 16px; }
+      .modal-header { padding: 14px 16px; }
+      .editor-grid { grid-template-columns: 1fr !important; }
+      .form-row { grid-template-columns: 80px 1fr; }
+
+      .bot-launcher { left: auto; right: 16px; bottom: 76px; }
+      .bot-widget { left: auto; right: 16px; bottom: 148px; width: calc(100vw - 32px); }
+
+      #soRef { width: 100% !important; }
+
+      .search-bar { flex-direction: column; align-items: stretch; }
+      .search-bar input { max-width: 100% !important; }
+
+      .kv-grid { grid-template-columns: 90px 1fr; }
+      .preview-header { flex-direction: column; align-items: flex-start; }
+    }
+
+    @media (max-width: 480px) {
+      .topbar { padding: 0 10px; height: 54px; }
+      .page { padding: 12px 10px 80px; }
+      .section-title { font-size: 16px; }
+      .tab-btn { padding: 7px 10px; font-size: 11px; }
+      .btn { padding: 8px 12px; font-size: 12px; }
+      .btn-sm { padding: 5px 10px; font-size: 11px; }
+    }
   </style>
 </head>
 
 <body>
   <div class="noise-overlay"></div>
+
+  <!-- Sidebar overlay for mobile -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <div class="layout">
     <!-- ─── SIDEBAR ─── -->
@@ -1145,8 +1340,13 @@
       <!-- TOP BAR -->
       <header class="topbar">
         <div class="topbar-left">
-          <div class="topbar-title" id="topbar-title">AI Agent Debate</div>
-          <div class="topbar-sub" id="topbar-sub">Multi-agent reasoning with Gemini · Llama · Gemma</div>
+          <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Open navigation">
+            <svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div class="topbar-left-text">
+            <div class="topbar-title" id="topbar-title">AI Agent Debate</div>
+            <div class="topbar-sub" id="topbar-sub">Multi-agent reasoning with Gemini · Llama · Gemma</div>
+          </div>
         </div>
         <div class="topbar-right">
           <div class="status-badge">
@@ -1459,7 +1659,21 @@
     </div>
   </div>
 
-  <!-- ═══════════════ MODAL: EDIT LABEL ═══════════════ -->
+  <!-- ─── BOTTOM NAV (mobile) ─── -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bottom-nav-item active" data-page="debate">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Debate
+    </button>
+    <button class="bottom-nav-item" data-page="labels">
+      <svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+      Labels
+    </button>
+    <button class="bottom-nav-item" data-page="dashboard">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+  </nav>
   <div class="modal-backdrop" id="editModalBack">
     <div class="modal">
       <div class="modal-header">
@@ -1536,14 +1750,50 @@
     // ─── THEME ───
     const html = document.documentElement;
 
-    function toggleTheme() {
-      const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
-      html.dataset.theme = next;
-      localStorage.setItem('theme', next);
+    /**
+     * Determine theme from system time:
+     *  6:00 AM – 6:59 PM  → light (day)
+     *  7:00 PM – 5:59 AM  → dark  (night)
+     * User can manually override; override is stored in localStorage for the session.
+     */
+    function getTimeBasedTheme() {
+      const hour = new Date().getHours(); // 0-23
+      return (hour >= 6 && hour < 19) ? 'light' : 'dark';
     }
 
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme) html.dataset.theme = savedTheme;
+    function applyTheme(theme) {
+      html.dataset.theme = theme;
+    }
+
+    function toggleTheme() {
+      const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+      localStorage.setItem('theme-override', next);
+      localStorage.setItem('theme-override-ts', Date.now().toString());
+    }
+
+    // Check if there's a recent manual override (expires after 2 hours)
+    const savedOverride = localStorage.getItem('theme-override');
+    const savedOverrideTs = parseInt(localStorage.getItem('theme-override-ts') || '0', 10);
+    const overrideAge = Date.now() - savedOverrideTs;
+    const OVERRIDE_TTL = 2 * 60 * 60 * 1000; // 2 hours
+
+    if (savedOverride && overrideAge < OVERRIDE_TTL) {
+      applyTheme(savedOverride);
+    } else {
+      // Clear stale override and use time-based theme
+      localStorage.removeItem('theme-override');
+      localStorage.removeItem('theme-override-ts');
+      applyTheme(getTimeBasedTheme());
+    }
+
+    // Re-check theme every minute in case user crosses the 6 AM / 7 PM boundary
+    setInterval(() => {
+      const activeOverride = localStorage.getItem('theme-override');
+      const ts = parseInt(localStorage.getItem('theme-override-ts') || '0', 10);
+      if (activeOverride && (Date.now() - ts) < OVERRIDE_TTL) return; // respect manual override
+      applyTheme(getTimeBasedTheme());
+    }, 60_000);
 
     document.getElementById('themeToggle').addEventListener('click', toggleTheme);
     document.getElementById('themeToggleNav').addEventListener('click', toggleTheme);
@@ -1571,8 +1821,63 @@
 
     navItems.forEach(n => n.addEventListener('click', () => setPage(n.dataset.page)));
 
-    // For tab switching from dashboard → labels (used in loadDashboard)
-    function setActiveTab(name) { setPage(name); }
+    // ─── MOBILE NAV ───
+    const mobileNavToggle = document.getElementById('mobileNavToggle');
+    const sidebar = document.querySelector('.sidebar');
+    const sidebarOverlay = document.getElementById('sidebarOverlay');
+    const bottomNav = document.getElementById('bottomNav');
+    const bottomNavItems = bottomNav ? bottomNav.querySelectorAll('.bottom-nav-item') : [];
+
+    function openSidebar() {
+      sidebar.classList.add('open');
+      sidebarOverlay.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSidebar() {
+      sidebar.classList.remove('open');
+      sidebarOverlay.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    mobileNavToggle?.addEventListener('click', () => {
+      sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+    });
+
+    sidebarOverlay?.addEventListener('click', closeSidebar);
+
+    // Close sidebar when a nav item is clicked on mobile
+    navItems.forEach(n => n.addEventListener('click', () => {
+      if (window.innerWidth <= 768) closeSidebar();
+    }));
+
+    // Sync bottom nav active state
+    function syncBottomNav(name) {
+      bottomNavItems.forEach(b => b.classList.toggle('active', b.dataset.page === name));
+    }
+
+    bottomNavItems.forEach(b => b.addEventListener('click', () => {
+      setPage(b.dataset.page);
+      syncBottomNav(b.dataset.page);
+    }));
+
+    // Override nav click listeners to use synced version
+    navItems.forEach(n => {
+      n.replaceWith(n.cloneNode(true)); // reset listeners
+    });
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => {
+      n.addEventListener('click', () => {
+        setPage(n.dataset.page);
+        syncBottomNav(n.dataset.page);
+        if (window.innerWidth <= 768) closeSidebar();
+      });
+    });
+
+    // For tab switching from dashboard → labels
+    function setActiveTab(name) {
+      setPage(name);
+      syncBottomNav(name);
+    }
 
     // ─── UTILS ───
     function esc(s) {
