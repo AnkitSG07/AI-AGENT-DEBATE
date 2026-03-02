@@ -782,3 +782,4 @@ Output format (for automation mode):
   "next_action": "request_details|send_quote|book_call",
   "support_contact": "care@smarthandicrafts.com"
 }
+```
