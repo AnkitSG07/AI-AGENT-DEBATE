@@ -504,6 +504,26 @@
     .items-center { align-items: center; }
     .label-field { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
 
+    .preview-note-wrap { padding: 0 16px 10px; }
+    .preview-note { font-size: 13px; color: var(--text-secondary); line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+    .preview-note.is-collapsed {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .preview-note-toggle {
+      margin-top: 6px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .preview-note-toggle:hover { text-decoration: underline; }
+  
     /* ─── AGENT DEBATE GRID ─── */
     .debate-grid {
       display: grid;
@@ -1576,7 +1596,10 @@
                 </div>
 
                 <div class="data-section-title">Notes</div>
-                <div style="padding:0 16px 10px;font-size:13px;color:var(--text-secondary)" id="pvNote">-</div>
+                <div class="preview-note-wrap">
+                  <div class="preview-note is-collapsed" id="pvNote">-</div>
+                  <button class="preview-note-toggle" id="pvNoteToggle" type="button" style="display:none">View more</button>
+                </div>
 
                 <div class="data-section-title">Items</div>
                 <div class="items-list" id="pvItems"></div>
@@ -2090,7 +2113,7 @@
           pvEmail = document.getElementById('pvEmail'), pvAddr = document.getElementById('pvAddr'),
           pvBillName = document.getElementById('pvBillName'), pvBillPhone = document.getElementById('pvBillPhone'),
           pvBillAddr = document.getElementById('pvBillAddr'), pvBillVat = document.getElementById('pvBillVat'),
-          pvNote = document.getElementById('pvNote'), pvPickings = document.getElementById('pvPickings'),
+          pvNote = document.getElementById('pvNote'), pvNoteToggle = document.getElementById('pvNoteToggle'), pvPickings = document.getElementById('pvPickings'),
           pvFulfillment = document.getElementById('pvFulfillment'), pvItems = document.getElementById('pvItems');
     const btnOpenEditor = document.getElementById('btnOpenEditor');
     const btnInvoicePdf = document.getElementById('btnInvoicePdf'), btnPackingPdf = document.getElementById('btnPackingPdf');
@@ -2137,7 +2160,35 @@
     function getOrderId(order) {
       return order?.sale_order_id || order?.preview?.id || order?.id || null;
     }
-  
+
+    function cleanPreviewNote(rawNote) {
+      const source = String(rawNote || '').trim();
+      if (!source) return '-';
+      const withBreaks = source
+        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+        .replace(/<\s*\/\s*div\s*>/gi, '\n')
+        .replace(/<\s*div[^>]*>/gi, '');
+      const decoded = new DOMParser().parseFromString(withBreaks, 'text/html').documentElement.textContent || withBreaks;
+      const normalized = decoded
+        .replace(/\r\n?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .split('\n')
+        .map(line => line.trim())
+        .join('\n')
+        .trim();
+      return normalized || '-';
+    }
+
+    function renderPreviewNote(noteValue) {
+      pvNote.textContent = cleanPreviewNote(noteValue);
+      pvNote.classList.add('is-collapsed');
+      pvNoteToggle.textContent = 'View more';
+      requestAnimationFrame(() => {
+        const hasOverflow = pvNote.scrollHeight > pvNote.clientHeight + 2;
+        pvNoteToggle.style.display = hasOverflow ? 'inline-block' : 'none';
+      });
+    }
+
     function renderPreview(order) {
       if (!order?.preview) {
         previewEmpty.style.display = 'block';
@@ -2166,7 +2217,7 @@
       pvBillPhone.textContent = p.bill_to?.phone || '-';
       pvBillAddr.textContent = fmtAddr(p.bill_to) || '-';
       pvBillVat.textContent = p.bill_to?.vat || '-';
-      pvNote.textContent = p.note || '-';
+      renderPreviewNote(p.note);
       const items = p.items || [];
       pvItems.innerHTML = !items.length
         ? `<div class="item-row" style="color:var(--text-tertiary)">No items found.</div>`
@@ -2175,6 +2226,11 @@
       pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Click "Fulfillment" to load stock status.</div>`;
       soPreviewRaw.textContent = JSON.stringify(p, null, 2);
     }
+
+    pvNoteToggle.addEventListener('click', () => {
+      const collapsed = pvNote.classList.toggle('is-collapsed');
+      pvNoteToggle.textContent = collapsed ? 'View more' : 'View less';
+    });
 
     async function fetchSO(ref) {
       const resp = await fetch(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
