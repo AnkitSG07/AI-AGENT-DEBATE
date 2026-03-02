@@ -1040,6 +1040,61 @@
     .muted { color: var(--text-secondary); }
     .mt-12 { margin-top: 12px; }
     .mt-16 { margin-top: 16px; }
+    .bot-launcher {
+      position: fixed;
+      left: 22px;
+      bottom: 22px;
+      width: 58px;
+      height: 58px;
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), var(--teal));
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: var(--shadow-float);
+      cursor: pointer;
+      z-index: 1200;
+    }
+    .bot-widget {
+      position: fixed;
+      left: 22px;
+      bottom: 92px;
+      width: min(360px, calc(100vw - 30px));
+      height: min(540px, calc(100vh - 130px));
+      background: var(--surface-0);
+      border: 1px solid var(--border-strong);
+      border-radius: 16px;
+      box-shadow: var(--shadow-float);
+      z-index: 1200;
+      display: none;
+      overflow: hidden;
+    }
+    .bot-widget.open { display: flex; flex-direction: column; }
+    .bot-widget-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+    }
+    .bot-messages {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      background: var(--surface-1);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .bot-msg { max-width: 88%; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+    .bot-msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid rgba(91,143,255,.2); }
+    .bot-msg.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); }
+    .bot-widget-input { border-top: 1px solid var(--border); padding: 10px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .bot-widget-input textarea { min-height: 46px; max-height: 100px; resize: vertical; }
+    .bot-widget-footer { padding: 0 10px 10px; font-size: 12px; color: var(--text-secondary); }
 
     /* ─── NOISE OVERLAY ─── */
     [data-theme="dark"] .noise-overlay {
@@ -1455,6 +1510,29 @@
   </div>
 
   <script>
+
+  <button id="botLauncher" class="bot-launcher" title="Ask AI">
+    <svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"><path d="M12 2a3 3 0 0 0-3 3v1H7a2 2 0 0 0-2 2v5a7 7 0 0 0 14 0V8a2 2 0 0 0-2-2h-2V5a3 3 0 0 0-3-3z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 16c.8.7 1.8 1 3 1s2.2-.3 3-1"/></svg>
+  </button>
+
+  <section id="botWidget" class="bot-widget" aria-label="Ask AI widget">
+    <div class="bot-widget-header">
+      <div style="display:flex;align-items:center;gap:8px"><span>Ask AI</span><select id="botMode" style="max-width:190px"></select></div>
+      <button id="botCloseBtn" class="btn btn-sm">✕</button>
+    </div>
+    <div id="botMessages" class="bot-messages">
+      <div class="bot-msg assistant">Hi! I can answer questions from your company product knowledge base.</div>
+    </div>
+    <div class="bot-widget-input">
+      <textarea id="botPrompt" placeholder="Message Ask AI..."></textarea>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button id="botSendBtn" class="btn btn-primary btn-sm">Send</button>
+        <button id="botClearBtn" class="btn btn-sm">Clear</button>
+      </div>
+    </div>
+    <div id="botStatus" class="bot-widget-footer">Ready. Mode: Simple website chatbot.</div>
+  </section>
+
     // ─── THEME ───
     const html = document.documentElement;
 
@@ -1612,6 +1690,96 @@
         abortController = null;
       }
     });
+    // ─── PRODUCT BOT (FLOATING WIDGET) ───
+    const botLauncher = document.getElementById('botLauncher');
+    const botWidget = document.getElementById('botWidget');
+    const botCloseBtn = document.getElementById('botCloseBtn');
+    const botMode = document.getElementById('botMode');
+    const botMessages = document.getElementById('botMessages');
+    const botPrompt = document.getElementById('botPrompt');
+    const botSendBtn = document.getElementById('botSendBtn');
+    const botClearBtn = document.getElementById('botClearBtn');
+    const botStatus = document.getElementById('botStatus');
+    let botHistory = [];
+
+    const fallbackModes = [
+      { key: 'simple_chatbot', label: 'Simple website chatbot' },
+      { key: 'b2b_sales_assistant', label: 'Advanced B2B sales assistant' },
+      { key: 'compliance_assistant', label: 'Export-grade compliance assistant' },
+      { key: 'sales_automation', label: 'Full AI sales automation system' }
+    ];
+
+    async function loadBotModes() {
+      let modes = fallbackModes;
+      try {
+        const resp = await fetch('/api/product-bot/modes');
+        const out = await resp.json();
+        if (resp.ok && Array.isArray(out.modes) && out.modes.length) modes = out.modes;
+      } catch {}
+      botMode.innerHTML = modes.map((m) => `<option value="${esc(m.key)}">${esc(m.label)}</option>`).join('');
+      botMode.value = 'simple_chatbot';
+      botStatus.textContent = `Ready. Mode: ${botMode.options[botMode.selectedIndex]?.text || botMode.value}.`;
+    }
+
+    botMode.addEventListener('change', () => {
+      const label = botMode.options[botMode.selectedIndex]?.text || botMode.value;
+      botStatus.textContent = `Ready. Mode: ${label}.`;
+    });
+
+    function addBotMessage(role, text) {
+      const el = document.createElement('div');
+      el.className = `bot-msg ${role}`;
+      el.textContent = text;
+      botMessages.appendChild(el);
+      botMessages.scrollTop = botMessages.scrollHeight;
+    }
+
+    async function sendBotMessage() {
+      const message = (botPrompt.value || '').trim();
+      if (!message) return;
+      botPrompt.value = '';
+      addBotMessage('user', message);
+      botStatus.textContent = 'Thinking...';
+      botSendBtn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/product-bot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, history: botHistory, mode: botMode.value })
+        });
+        const out = await resp.json();
+        if (!resp.ok) throw new Error(out.error || 'Failed to get response');
+
+        const answer = out.answer || 'No answer returned.';
+        addBotMessage('assistant', answer);
+        botHistory.push({ role: 'user', content: message }, { role: 'assistant', content: answer });
+        if (botHistory.length > 24) botHistory = botHistory.slice(-24);
+        const label = botMode.options[botMode.selectedIndex]?.text || botMode.value;
+        const strategy = out?.retrieval?.strategy ? ` Retrieval: ${out.retrieval.strategy}.` : '';
+        botStatus.textContent = `Ready. Mode: ${label}.${strategy}`;
+      } catch (e) {
+        addBotMessage('assistant', `Error: ${e.message}`);
+        botStatus.textContent = 'Error.';
+      } finally {
+        botSendBtn.disabled = false;
+      }
+    }
+
+    botLauncher.addEventListener('click', () => botWidget.classList.toggle('open'));
+    botCloseBtn.addEventListener('click', () => botWidget.classList.remove('open'));
+
+    botSendBtn.addEventListener('click', sendBotMessage);
+    botPrompt.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendBotMessage();
+    });
+    botClearBtn.addEventListener('click', () => {
+      botHistory = [];
+      botMessages.innerHTML = '<div class="bot-msg assistant">Hi! I can answer questions from your company product knowledge base.</div>';
+      botStatus.textContent = `Ready. Mode: ${botMode.options[botMode.selectedIndex]?.text || botMode.value}.`;
+    });
+
+    loadBotModes();
 
     // ─── LABELS ───
     const soRefEl = document.getElementById('soRef');
