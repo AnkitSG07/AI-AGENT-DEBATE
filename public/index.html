@@ -1,973 +1,1661 @@
 <!doctype html>
-<html>
+<html data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AI Agent Debate + Shipping Labels</title>
+  <title>SmartHandicrafts® — Command Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root{
-      --bg:#0b0f17;
-      --panel:#101826;
-      --border:rgba(255,255,255,.08);
-      --text:#eaf0ff;
-      --muted:rgba(234,240,255,.65);
-      --accent:#4da3ff;
-      --warn:#ffcc66;
-      --danger:#ff6b6b;
-      --ok:#44d7b6;
-      --shadow: 0 12px 30px rgba(0,0,0,.35);
-      --radius:16px;
-      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
-      --sans: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family:var(--sans);
-      background: radial-gradient(1200px 700px at 20% -10%, rgba(77,163,255,.18), transparent 60%),
-                  radial-gradient(900px 600px at 80% 0%, rgba(68,215,182,.12), transparent 55%),
-                  var(--bg);
-      color:var(--text);
-    }
-    .wrap{max-width:1200px;margin:24px auto;padding:0 14px}
-
-    .topbar{
-      display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
-      margin-bottom:14px;
-    }
-    h1{font-size:20px;margin:0;letter-spacing:.2px}
-    .sub{color:var(--muted);font-size:13px;margin-top:4px}
-
-    .badge{
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.03);
-      padding:6px 10px;border-radius:999px;font-size:12px;color:var(--muted)
+    /* ─── TOKENS ─── */
+    :root {
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 28px;
+      --mono: 'JetBrains Mono', ui-monospace, monospace;
+      --sans: 'DM Sans', system-ui, sans-serif;
+      --display: 'Syne', var(--sans);
+      --transition: 220ms cubic-bezier(.4,0,.2,1);
     }
 
-    .card{
-      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
-      border:1px solid var(--border);
-      border-radius:var(--radius);
-      box-shadow:var(--shadow);
+    /* ─── DARK MODE (default) ─── */
+    [data-theme="dark"] {
+      --bg: #08090d;
+      --surface-0: #0e1018;
+      --surface-1: #141720;
+      --surface-2: #1c2030;
+      --surface-3: #252a3a;
+      --border: rgba(255,255,255,.07);
+      --border-strong: rgba(255,255,255,.14);
+      --text-primary: #f0f2ff;
+      --text-secondary: rgba(220,228,255,.6);
+      --text-tertiary: rgba(180,195,240,.38);
+      --accent: #5b8fff;
+      --accent-glow: rgba(91,143,255,.2);
+      --accent-soft: rgba(91,143,255,.12);
+      --teal: #3dd9b3;
+      --teal-soft: rgba(61,217,179,.1);
+      --warn: #f5c842;
+      --warn-soft: rgba(245,200,66,.1);
+      --danger: #ff5e6c;
+      --danger-soft: rgba(255,94,108,.1);
+      --ok: #3dd9b3;
+      --ok-soft: rgba(61,217,179,.1);
+      --shadow-card: 0 1px 3px rgba(0,0,0,.4), 0 6px 24px rgba(0,0,0,.3);
+      --shadow-float: 0 20px 60px rgba(0,0,0,.5), 0 4px 16px rgba(0,0,0,.4);
+      --noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
     }
 
-    /* Tabs */
-    .tabs{
-      display:flex;gap:10px;align-items:center;
-      padding:10px;
-      margin-bottom:14px;
-    }
-    .tab{
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.03);
-      color:var(--muted);
-      padding:10px 12px;
-      border-radius:12px;
-      cursor:pointer;
-      font-weight:700;
-      font-size:13px;
-      display:flex;align-items:center;gap:8px;
-      user-select:none;
-    }
-    .tab:hover{border-color:rgba(77,163,255,.45);color:var(--text)}
-    .tab.active{
-      background:linear-gradient(135deg, rgba(77,163,255,.95), rgba(77,163,255,.55));
-      border-color:rgba(77,163,255,.75);
-      color:#071018;
-    }
-    .tabDot{
-      width:8px;height:8px;border-radius:50%;
-      background:rgba(255,255,255,.45);
-    }
-    .tab.active .tabDot{background:#071018}
-
-    .controls{padding:14px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-
-    textarea{
-      width:100%;
-      min-height:120px;
-      resize:vertical;
-      padding:12px 12px;
-      border-radius:14px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.03);
-      color:var(--text);
-      outline:none;
-      font-size:14px;
-      line-height:1.35;
-    }
-    textarea:focus{border-color:rgba(77,163,255,.55);box-shadow:0 0 0 3px rgba(77,163,255,.14)}
-    .field{
-      display:flex;gap:8px;align-items:center;color:var(--muted);font-size:13px
-    }
-    input[type="number"], input[type="text"], input[type="tel"], select{
-      padding:10px 10px;
-      border-radius:12px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.03);
-      color:var(--text);
-      outline:none;
-    }
-    input[type="number"]{width:110px}
-    input[type="checkbox"]{transform:scale(1.1)}
-    .btn{
-      padding:10px 14px;border-radius:12px;border:1px solid var(--border);
-      background:rgba(255,255,255,.04);
-      color:var(--text);
-      cursor:pointer;
-      font-weight:700;
-    }
-    .btn:hover{border-color:rgba(77,163,255,.45)}
-    .btn.primary{
-      background:linear-gradient(135deg, rgba(77,163,255,.95), rgba(77,163,255,.65));
-      border-color:rgba(77,163,255,.7);
-      color:#081018;
-    }
-    .btn.danger{
-      background:rgba(255,107,107,.08);
-      border-color:rgba(255,107,107,.35);
-      color:var(--text);
-    }
-    .btn.ok{
-      background:rgba(68,215,182,.10);
-      border-color:rgba(68,215,182,.35);
-      color:var(--text);
-    }
-    .btn:disabled{opacity:.55;cursor:not-allowed}
-
-    .status{
-      margin-top:10px;
-      color:var(--muted);
-      font-size:13px;
-      display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-    }
-    .dot{
-      width:8px;height:8px;border-radius:50%;
-      background:var(--accent);
-      box-shadow:0 0 0 5px rgba(77,163,255,.12);
-      animation:pulse 1.2s infinite;
-    }
-    @keyframes pulse{
-      0%{transform:scale(.85);opacity:.7}
-      50%{transform:scale(1.05);opacity:1}
-      100%{transform:scale(.85);opacity:.7}
+    /* ─── LIGHT MODE ─── */
+    [data-theme="light"] {
+      --bg: #f5f6fa;
+      --surface-0: #ffffff;
+      --surface-1: #f8f9fd;
+      --surface-2: #f0f2f8;
+      --surface-3: #e8ebf4;
+      --border: rgba(0,0,0,.07);
+      --border-strong: rgba(0,0,0,.13);
+      --text-primary: #0d1120;
+      --text-secondary: rgba(15,25,60,.55);
+      --text-tertiary: rgba(15,25,60,.28);
+      --accent: #2f6bff;
+      --accent-glow: rgba(47,107,255,.15);
+      --accent-soft: rgba(47,107,255,.08);
+      --teal: #00a884;
+      --teal-soft: rgba(0,168,132,.08);
+      --warn: #c98a00;
+      --warn-soft: rgba(201,138,0,.08);
+      --danger: #e03041;
+      --danger-soft: rgba(224,48,65,.08);
+      --ok: #00a884;
+      --ok-soft: rgba(0,168,132,.08);
+      --shadow-card: 0 1px 3px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.07);
+      --shadow-float: 0 20px 60px rgba(0,0,0,.15), 0 4px 16px rgba(0,0,0,.1);
+      --noise: none;
     }
 
-    /* Debate grid */
-    .grid{
-      margin-top:14px;
-      display:grid;
+    /* ─── RESET ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      background: var(--bg);
+      min-height: 100vh;
+      transition: background var(--transition), color var(--transition);
+    }
+
+    [data-theme="dark"] body {
+      background:
+        radial-gradient(ellipse 900px 500px at 10% -5%, rgba(91,143,255,.12), transparent 60%),
+        radial-gradient(ellipse 700px 400px at 90% 10%, rgba(61,217,179,.07), transparent 55%),
+        var(--bg);
+    }
+
+    /* ─── LAYOUT ─── */
+    .layout {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ─── SIDEBAR ─── */
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      background: var(--surface-0);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 0;
+      gap: 4px;
+      z-index: 50;
+      transition: background var(--transition);
+    }
+
+    .sidebar-logo {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--teal));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--display);
+      font-weight: 800;
+      font-size: 15px;
+      color: #fff;
+      margin-bottom: 20px;
+      flex-shrink: 0;
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .nav-item {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+      color: var(--text-tertiary);
+      transition: background var(--transition), color var(--transition), box-shadow var(--transition);
+      border: 1px solid transparent;
+    }
+
+    .nav-item:hover { background: var(--surface-2); color: var(--text-primary); }
+
+    .nav-item.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: rgba(91,143,255,.2);
+      box-shadow: 0 0 0 1px rgba(91,143,255,.12);
+    }
+
+    .nav-item svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .nav-tooltip {
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--surface-3);
+      color: var(--text-primary);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 8px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-card);
+      transition: opacity var(--transition);
+      z-index: 100;
+    }
+
+    .nav-item:hover .nav-tooltip { opacity: 1; }
+
+    .sidebar-spacer { flex: 1; }
+
+    /* ─── MAIN CONTENT ─── */
+    .main { min-height: 100vh; overflow: hidden; }
+
+    /* ─── TOP BAR ─── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      background: var(--surface-0);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      z-index: 40;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      transition: background var(--transition);
+    }
+
+    .topbar-left {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .topbar-title {
+      font-family: var(--display);
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -.2px;
+    }
+
+    .topbar-sub {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* ─── STATUS BADGE ─── */
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      color: var(--text-secondary);
+    }
+
+    .status-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 3px var(--teal-soft);
+    }
+
+    /* ─── THEME TOGGLE ─── */
+    .theme-toggle {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      transition: background var(--transition), color var(--transition);
+    }
+
+    .theme-toggle:hover { background: var(--surface-2); color: var(--text-primary); }
+    .theme-toggle svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    [data-theme="dark"] .icon-moon { display: none; }
+    [data-theme="light"] .icon-sun { display: none; }
+
+    /* ─── PAGE ─── */
+    .page { display: none; padding: 24px 28px; }
+    .page.active { display: block; }
+
+    /* ─── SECTION HEADER ─── */
+    .section-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      font-family: var(--display);
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -.4px;
+    }
+
+    .section-sub {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    /* ─── CARD ─── */
+    .card {
+      background: var(--surface-0);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-card);
+      transition: background var(--transition), border-color var(--transition);
+    }
+
+    .card-inner { padding: 20px; }
+
+    .card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .card-title {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -.1px;
+    }
+
+    /* ─── TABS (horizontal pill tabs) ─── */
+    .tab-bar {
+      display: flex;
+      gap: 4px;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 4px;
+      margin-bottom: 24px;
+    }
+
+    .tab-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+      transition: all var(--transition);
+      user-select: none;
+      background: transparent;
+    }
+
+    .tab-btn:hover { background: var(--surface-2); color: var(--text-primary); }
+
+    .tab-btn.active {
+      background: var(--surface-0);
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-card);
+    }
+
+    .tab-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-tertiary);
+      transition: background var(--transition);
+    }
+
+    .tab-btn.active .tab-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+    /* ─── INPUTS ─── */
+    input[type="text"],
+    input[type="number"],
+    input[type="tel"],
+    select,
+    textarea {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: var(--sans);
+      font-size: 13.5px;
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+      padding: 9px 12px;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    input[type="tel"]:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      background: var(--surface-0);
+    }
+
+    select { cursor: pointer; }
+    input[type="number"] { width: 100px; }
+    input[type="checkbox"] { accent-color: var(--accent); transform: scale(1.2); cursor: pointer; }
+
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    /* ─── BUTTONS ─── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      color: var(--text-primary);
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+      letter-spacing: -.1px;
+    }
+
+    .btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+    .btn:active { transform: scale(.98); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+
+    .btn-primary:hover { filter: brightness(1.1); background: var(--accent); }
+
+    .btn-danger {
+      background: var(--danger-soft);
+      border-color: rgba(255,94,108,.25);
+      color: var(--danger);
+    }
+
+    .btn-danger:hover { background: rgba(255,94,108,.18); }
+
+    .btn-ok {
+      background: var(--ok-soft);
+      border-color: rgba(61,217,179,.25);
+      color: var(--ok);
+    }
+
+    .btn-ok:hover { background: rgba(61,217,179,.18); }
+
+    .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 7px; }
+    .btn-icon { padding: 8px; border-radius: var(--radius-sm); }
+
+    /* ─── STATUS ROW ─── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: none;
+      flex-shrink: 0;
+      animation: pulse 1.3s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(.85); opacity: .7; box-shadow: 0 0 0 0 var(--accent-glow); }
+      50% { transform: scale(1.05); opacity: 1; box-shadow: 0 0 0 5px rgba(91,143,255,0); }
+    }
+
+    /* ─── ROW FLEX ─── */
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .gap-8 { gap: 8px; }
+    .gap-12 { gap: 12px; }
+    .items-center { align-items: center; }
+    .label-field { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+
+    /* ─── AGENT DEBATE GRID ─── */
+    .debate-grid {
+      display: grid;
       grid-template-columns: 1fr;
-      gap:12px;
-    }
-    @media(min-width: 980px){
-      .grid{grid-template-columns: 1fr 1fr 1fr;}
-    }
-    .col{padding:12px;min-height:340px;display:flex;flex-direction:column;gap:10px}
-    .colHead{
-      display:flex;align-items:center;justify-content:space-between;gap:10px;
-      padding-bottom:10px;border-bottom:1px solid var(--border);
-    }
-    .agentName{font-weight:900}
-    .pill{
-      font-size:12px;
-      color:var(--muted);
-      border:1px solid var(--border);
-      padding:4px 10px;border-radius:999px;
-      background:rgba(255,255,255,.03);
-      white-space:nowrap;
-    }
-    .thinking{
-      display:flex;align-items:center;gap:8px;
-      font-size:12px;color:var(--warn);
-    }
-    .miniDots{display:inline-flex;gap:3px;align-items:center}
-    .miniDots span{
-      width:4px;height:4px;border-radius:50%;background:var(--warn);
-      animation:bounce .9s infinite;
-      opacity:.8
-    }
-    .miniDots span:nth-child(2){animation-delay:.12s}
-    .miniDots span:nth-child(3){animation-delay:.24s}
-    @keyframes bounce{
-      0%,100%{transform:translateY(0)}
-      50%{transform:translateY(-4px)}
-    }
-    .feed{overflow:auto;padding-right:4px;flex:1;scroll-behavior:smooth;}
-    .bubble{
-      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:10px 10px;
-      margin:10px 0;
-      white-space:pre-wrap;
-      line-height:1.35;
-      font-size:13.5px;
-    }
-    .metaLine{
-      display:flex;justify-content:space-between;gap:10px;
-      color:var(--muted);
-      font-size:11.5px;
-      margin-bottom:6px;
-      font-family:var(--mono);
+      gap: 16px;
+      margin-top: 20px;
     }
 
-    /* Final */
-    .finalWrap{margin-top:14px}
-    .final{padding:14px}
-    .finalHead{
-      display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px
-    }
-    .finalText{
-      white-space:pre-wrap;
-      line-height:1.4;
-      font-size:14px;
-      background:rgba(255,255,255,.02);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:12px;
+    @media(min-width: 900px) { .debate-grid { grid-template-columns: repeat(3, 1fr); } }
+
+    .agent-card {
+      border-radius: var(--radius-lg);
+      background: var(--surface-0);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 320px;
     }
 
-    /* Labels UI */
-    .labelsGrid{
-      margin-top:14px;
-      display:grid;
+    .agent-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .agent-name {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -.1px;
+    }
+
+    .agent-pill {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-tertiary);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 3px 9px;
+      border-radius: 999px;
+      margin-top: 2px;
+    }
+
+    .agent-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 800;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .av-a { background: linear-gradient(135deg, #5b8fff, #8b5fff); }
+    .av-b { background: linear-gradient(135deg, #ff6b6b, #ff9b50); }
+    .av-c { background: linear-gradient(135deg, #3dd9b3, #2f9dc3); }
+
+    .thinking-indicator {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--warn);
+      font-weight: 500;
+    }
+
+    .mini-dots { display: inline-flex; gap: 3px; align-items: center; }
+    .mini-dots span {
+      width: 4px; height: 4px; border-radius: 50%; background: var(--warn);
+      animation: bounce .9s infinite; opacity: .8;
+    }
+    .mini-dots span:nth-child(2) { animation-delay: .12s; }
+    .mini-dots span:nth-child(3) { animation-delay: .24s; }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    .agent-feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      scroll-behavior: smooth;
+    }
+
+    .bubble {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      animation: fadeSlideIn .2s ease;
+    }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .bubble-meta {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--text-tertiary);
+      margin-bottom: 6px;
+    }
+
+    /* ─── FINAL BOX ─── */
+    .final-card {
+      margin-top: 20px;
+      border-radius: var(--radius-lg);
+      background: var(--surface-0);
+      border: 1px solid var(--border-strong);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      animation: fadeSlideIn .3s ease;
+    }
+
+    .final-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(90deg, var(--accent-soft), transparent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .final-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 1px solid rgba(91,143,255,.2);
+      padding: 3px 10px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .final-text {
+      padding: 20px;
+      font-size: 14px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      color: var(--text-primary);
+    }
+
+    /* ─── LABELS / SHIPPING ─── */
+    .two-col {
+      display: grid;
       grid-template-columns: 1fr;
-      gap:12px;
-    }
-    @media(min-width: 980px){
-      .labelsGrid{grid-template-columns: 1.1fr .9fr;}
-    }
-    .box{
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.02);
-      border-radius:14px;
-      padding:12px;
-    }
-    .muted{color:var(--muted)}
-    table{
-      width:100%;
-      border-collapse:separate;
-      border-spacing:0 10px;
-      font-size:13px;
-    }
-    td,th{padding:10px 10px}
-    thead th{color:var(--muted);text-align:left;font-size:12px}
-    tbody tr{
-      background:rgba(255,255,255,.03);
-      border:1px solid var(--border);
-    }
-    tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
-    tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
-    a{color:var(--accent)}
-
-    /* Order Preview (nice) */
-    .previewCard{
-      margin-top:12px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.02);
-      border-radius:14px;
-      padding:12px;
-    }
-    .previewHead{
-      display:flex;align-items:flex-end;justify-content:space-between;gap:10px;flex-wrap:wrap;
-      padding-bottom:10px;border-bottom:1px solid var(--border);
-      margin-bottom:10px;
-    }
-    .kv{
-      display:grid;
-      grid-template-columns: 120px 1fr;
-      gap:8px 12px;
-      font-size:13px;
-    }
-    .kv .k{color:var(--muted)}
-    .kv .v{color:var(--text);word-break:break-word}
-    .sectionTitle{font-weight:900;margin:10px 0 8px}
-    .itemsList{
-      max-height:220px;overflow:auto;padding-right:4px;
-      border:1px dashed rgba(255,255,255,.10);
-      border-radius:12px;
-      padding:10px;
-      background:rgba(255,255,255,.015);
-    }
-    .itemRow{
-      display:flex;justify-content:space-between;gap:12px;
-      padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);
-      font-size:12.5px;
-    }
-    .itemRow:last-child{border-bottom:none}
-    .qtyPill{
-      font-family:var(--mono);
-      border:1px solid rgba(255,255,255,.10);
-      border-radius:999px;
-      padding:2px 8px;
-      color:var(--muted);
-      white-space:nowrap;
+      gap: 16px;
     }
 
-    /* Editor */
-    .editorGrid{
-      display:grid;
-      grid-template-columns: 1fr;
-      gap:10px;
-      margin-top:10px;
+    @media(min-width: 900px) { .two-col { grid-template-columns: 1.15fr .85fr; } }
+
+    /* ─── INSET BOX ─── */
+    .inset {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
     }
-    @media(min-width: 980px){
-      .editorGrid{grid-template-columns: 1fr 1fr;}
+
+    .inset-title {
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    .editorBox{
-      border:1px solid rgba(255,255,255,.08);
-      background:rgba(255,255,255,.02);
-      border-radius:14px;
-      padding:12px;
+
+    .inset-title .icon-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: var(--accent-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .editorBox b{display:block;margin-bottom:10px}
-    .formGrid{
-      display:grid;
-      grid-template-columns: 1fr;
-      gap:10px;
+
+    .inset-title .icon-badge svg { width: 13px; height: 13px; stroke: var(--accent); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    .hint-text { font-size: 12px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
+
+    /* ─── DIVIDER ─── */
+    .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+    /* ─── ORDER CHIP ─── */
+    .order-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      background: var(--surface-0);
+      margin-top: 10px;
+      cursor: pointer;
+      transition: all var(--transition);
     }
-    .formGrid .fieldRow{
-      display:grid;
+
+    .order-chip:hover { border-color: var(--border-strong); background: var(--surface-1); }
+    .order-chip.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--accent-soft); }
+
+    .order-chip-ref {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .order-chip-meta { font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; }
+
+    .override-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--ok);
+      background: var(--ok-soft);
+      border: 1px solid rgba(61,217,179,.2);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    /* ─── PREVIEW CARD ─── */
+    .preview-card {
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      overflow: hidden;
+      margin-top: 14px;
+    }
+
+    .preview-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .kv-grid {
+      display: grid;
       grid-template-columns: 110px 1fr;
-      gap:10px;
-      align-items:center;
-      font-size:12.5px;
-      color:var(--muted);
-    }
-    .formGrid .fieldRow input{
-      width:100%;
+      gap: 8px 12px;
+      font-size: 13px;
+      padding: 14px 16px;
     }
 
-    /* Orders list */
-    .orderChip{
-      display:flex;gap:10px;align-items:center;justify-content:space-between;
-      border:1px solid rgba(255,255,255,.08);
-      padding:10px;border-radius:12px;margin-top:10px;
-      background:rgba(255,255,255,.02)
-    }
-    .orderChip .left b{display:block}
-    .orderChip .left .small{font-size:12px;color:var(--muted)}
-    .dividerLine{
-      height:1px;background:rgba(255,255,255,.08);margin:10px 0;
+    .kv-key { color: var(--text-secondary); font-weight: 500; }
+    .kv-val { color: var(--text-primary); word-break: break-word; }
+
+    .data-section-title {
+      font-family: var(--display);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--text-tertiary);
+      padding: 10px 16px 4px;
     }
 
-    /* Modal */
-    .modalBack{
-      position:fixed;inset:0;
-      background:rgba(0,0,0,.55);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      padding:18px;
-      z-index:99;
+    .items-list {
+      max-height: 200px;
+      overflow-y: auto;
+      margin: 0 16px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-0);
     }
-    .modal{
-      width:min(980px, 100%);
-      background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
-      border:1px solid var(--border);
-      border-radius:16px;
-      box-shadow:0 18px 45px rgba(0,0,0,.45);
-      padding:14px;
+
+    .item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+      color: var(--text-secondary);
     }
-    .modalHead{
-      display:flex;justify-content:space-between;align-items:center;gap:10px;
-      padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:12px;
+
+    .item-row:last-child { border-bottom: none; }
+
+    .qty-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
-    .modalTitle{font-weight:900}
-    .xbtn{
-      width:34px;height:34px;border-radius:10px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.03);
-      color:var(--text);
-      cursor:pointer;
-      font-weight:900;
+
+    /* ─── TABLE ─── */
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 6px;
+      font-size: 13px;
     }
-    .hint{font-size:12px;color:var(--muted);margin-top:6px}
+
+    th {
+      text-align: left;
+      padding: 8px 14px;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      background: var(--surface-1);
+      transition: background var(--transition);
+    }
+
+    tbody tr:hover { background: var(--surface-2); }
+
+    td {
+      padding: 11px 14px;
+      color: var(--text-secondary);
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    td:first-child {
+      border-top-left-radius: 10px;
+      border-bottom-left-radius: 10px;
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    td:last-child {
+      border-top-right-radius: 10px;
+      border-bottom-right-radius: 10px;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ─── MODAL ─── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 200;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: min(960px, 100%);
+      max-height: 90vh;
+      overflow-y: auto;
+      background: var(--surface-0);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-float);
+      animation: modalIn .25s cubic-bezier(.34,1.4,.64,1);
+    }
+
+    @keyframes modalIn {
+      from { opacity: 0; transform: scale(.94) translateY(12px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .modal-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      background: var(--surface-0);
+      z-index: 5;
+    }
+
+    .modal-title {
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text-primary);
+    }
+
+    .modal-sub { font-size: 12.5px; color: var(--text-secondary); margin-top: 2px; }
+
+    .xbtn {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface-1);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all var(--transition);
+    }
+
+    .xbtn:hover { background: var(--surface-2); color: var(--text-primary); }
+
+    .modal-body { padding: 20px 24px; }
+
+    .editor-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    @media(min-width: 700px) { .editor-grid { grid-template-columns: 1fr 1fr; } }
+
+    .editor-section {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 16px;
+    }
+
+    .editor-section-title {
+      font-family: var(--display);
+      font-size: 12.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      color: var(--text-tertiary);
+      margin-bottom: 14px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .form-row label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .form-row input { width: 100%; }
+
+    /* ─── CHIPS ─── */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text-secondary);
+    }
+
+    /* ─── SCROLLBAR ─── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+    /* ─── EMPTY STATE ─── */
+    .empty-state {
+      padding: 32px;
+      text-align: center;
+      color: var(--text-tertiary);
+      font-size: 13px;
+    }
+
+    .empty-state svg { width: 36px; height: 36px; stroke: var(--text-tertiary); fill: none; stroke-width: 1.4; margin-bottom: 10px; opacity: .5; }
+
+    /* ─── ENDPOINT PILLS ─── */
+    .endpoint-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .endpoint-pill {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-tertiary);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      padding: 3px 9px;
+      border-radius: 6px;
+    }
+
+    /* ─── DASHBOARD ─── */
+    .search-bar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .search-bar input { flex: 1; min-width: 200px; }
+
+    /* ─── MUTED TEXT ─── */
+    .muted { color: var(--text-secondary); }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+
+    /* ─── NOISE OVERLAY ─── */
+    [data-theme="dark"] .noise-overlay {
+      position: fixed;
+      inset: 0;
+      background-image: var(--noise);
+      pointer-events: none;
+      z-index: 999;
+      opacity: .4;
+    }
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="topbar">
-      <div>
-        <h1>AI Agent Debate</h1>
-        <div class="sub">Debate + SmartHandicrafts® Shipping Labels (Odoo-connected)</div>
-      </div>
-      <div class="badge">Render Hosted</div>
-    </div>
+  <div class="noise-overlay"></div>
 
-    <!-- Tabs -->
-    <div class="card tabs">
-      <div class="tab active" data-tab="debate"><span class="tabDot"></span> AI Debate</div>
-      <div class="tab" data-tab="labels"><span class="tabDot"></span> Shipping Labels</div>
-      <div class="tab" data-tab="dashboard"><span class="tabDot"></span> Order Dashboard</div>
-    </div>
+  <div class="layout">
+    <!-- ─── SIDEBAR ─── -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">S</div>
 
-    <!-- ================= TAB: DEBATE ================= -->
-    <section id="tab-debate">
-      <div class="card controls">
-        <textarea id="prompt" placeholder="Ask anything…"></textarea>
-
-        <div class="row" style="margin-top:12px">
-          <div class="field">
-            Rounds (1 round = 3 turns)
-            <input id="rounds" type="number" min="1" max="6" value="1">
-          </div>
-
-          <label class="field">
-            <input id="showDebate" type="checkbox" checked>
-            Show debate
-          </label>
-
-          <button id="runBtn" class="btn primary">Run Debate</button>
-          <button id="stopBtn" class="btn danger" disabled>Stop</button>
-          <button id="clearBtn" class="btn">Clear</button>
-        </div>
-
-        <div class="status" id="status">
-          <span class="dot" id="dot" style="display:none"></span>
-          <span id="statusText">Ready.</span>
-        </div>
+      <div class="nav-item active" data-page="debate">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="nav-tooltip">AI Debate</span>
       </div>
 
-      <div class="grid" id="grid" style="display:none">
-        <div class="card col">
-          <div class="colHead">
-            <div>
-              <div class="agentName">Gemini</div>
-              <div class="pill">Agent A</div>
-            </div>
-            <div class="thinking" id="think-gemini" style="display:none">
-              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-            </div>
-          </div>
-          <div class="feed" id="feed-gemini"></div>
-        </div>
-
-        <div class="card col">
-          <div class="colHead">
-            <div>
-              <div class="agentName">Llama</div>
-              <div class="pill">Agent B</div>
-            </div>
-            <div class="thinking" id="think-llama" style="display:none">
-              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-            </div>
-          </div>
-          <div class="feed" id="feed-llama"></div>
-        </div>
-
-        <div class="card col">
-          <div class="colHead">
-            <div>
-              <div class="agentName">Gemma</div>
-              <div class="pill">Agent C</div>
-            </div>
-            <div class="thinking" id="think-gemma" style="display:none">
-              Thinking <span class="miniDots"><span></span><span></span><span></span></span>
-            </div>
-          </div>
-          <div class="feed" id="feed-gemma"></div>
-        </div>
+      <div class="nav-item" data-page="labels">
+        <svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        <span class="nav-tooltip">Shipping Labels</span>
       </div>
 
-      <div class="finalWrap card final" id="finalBox" style="display:none">
-        <div class="finalHead">
+      <div class="nav-item" data-page="dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span class="nav-tooltip">Order Dashboard</span>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <div class="nav-item" id="themeToggleNav" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span class="nav-tooltip">Toggle Theme</span>
+      </div>
+    </aside>
+
+    <!-- ─── MAIN ─── -->
+    <div class="main">
+      <!-- TOP BAR -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="topbar-title" id="topbar-title">AI Agent Debate</div>
+          <div class="topbar-sub" id="topbar-sub">Multi-agent reasoning with Gemini · Llama · Gemma</div>
+        </div>
+        <div class="topbar-right">
+          <div class="status-badge">
+            <span class="dot"></span>
+            Render Hosted
+          </div>
+          <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+            <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- ═══════════════ PAGE: DEBATE ═══════════════ -->
+      <section class="page active" id="page-debate">
+        <div class="section-header">
           <div>
-            <div class="agentName">Final Answer</div>
-            <div class="sub" style="margin-top:4px">Judge (Gemini) synthesizes the debate into one answer.</div>
+            <div class="section-title">AI Agent Debate</div>
+            <div class="section-sub">Pit multiple AI agents against each other — a judge synthesizes the final answer.</div>
           </div>
-          <div class="pill">Judge</div>
-        </div>
-        <div class="finalText" id="finalText"></div>
-      </div>
-    </section>
-
-    <!-- ================= TAB: LABELS ================= -->
-    <section id="tab-labels" style="display:none">
-      <div class="card controls">
-        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-          <div>
-            <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Shipping Labels</h1>
-            <div class="sub">Fetch Orders from Odoo → Edit address if needed → Generate printable PDF labels.</div>
-          </div>
-          <div class="badge">Odoo Connected</div>
         </div>
 
-        <div class="labelsGrid">
-          <!-- Left: Create / Fetch -->
-          <div class="box">
-            <b>Create / Fetch Label</b>
+        <div class="card">
+          <div class="card-inner">
+            <textarea id="prompt" placeholder="Enter your question or topic for the agents to debate…"></textarea>
 
-            <div class="row" style="margin-top:12px">
-              <div class="field">
-                Sales Order Reference
-                <input id="soRef" type="text" placeholder="e.g. S00241" style="width:220px">
+            <div class="flex flex-wrap gap-12 items-center mt-12">
+              <div class="label-field">
+                Rounds
+                <input id="rounds" type="number" min="1" max="6" value="1" style="width:80px">
+                <span style="font-size:12px;color:var(--text-tertiary)">× 3 turns</span>
               </div>
 
-              <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
-              <button class="btn" id="btnAddOrder">Add Order</button>
-              <div class="field">
-                Ship From
-                <select id="shipFromSelect" style="min-width:220px"><option value="">Default (env)</option></select>
-              </div>
-  
-
-              <label class="field" style="margin-left:auto">
-                <input type="checkbox" id="bigBoxToggle">
-                Big box (Full A4 per label)
+              <label class="label-field">
+                <input id="showDebate" type="checkbox" checked>
+                Show debate
               </label>
 
-              <button class="btn primary" id="btnGenerateLabel" disabled>Generate Label (PDF)</button>
+              <div style="margin-left:auto;display:flex;gap:8px">
+                <button id="clearBtn" class="btn btn-sm">Clear</button>
+                <button id="stopBtn" class="btn btn-danger btn-sm" disabled>Stop</button>
+                <button id="runBtn" class="btn btn-primary">
+                  <svg style="width:14px;height:14px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  Run Debate
+                </button>
+              </div>
             </div>
 
-            <div class="status" style="margin-top:12px">
-              <span class="dot" id="labelDot" style="display:none"></span>
+            <div class="status-row">
+              <span class="pulse-dot" id="dot"></span>
+              <span id="statusText" style="font-size:13px">Ready.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent columns -->
+        <div class="debate-grid" id="grid" style="display:none">
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Gemini</div>
+                <div class="agent-pill">Agent A</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-gemini">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-a">G</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-gemini"></div>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Llama</div>
+                <div class="agent-pill">Agent B</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-llama">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-b">L</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-llama"></div>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Gemma</div>
+                <div class="agent-pill">Agent C</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-gemma">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-c">Gm</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-gemma"></div>
+          </div>
+        </div>
+
+        <!-- Final Answer -->
+        <div class="final-card" id="finalBox" style="display:none">
+          <div class="final-header">
+            <div>
+              <div class="agent-name">Final Answer</div>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:3px">Judge (Gemini) synthesizes the debate into one answer.</div>
+            </div>
+            <div class="final-label">
+              <svg style="width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              Judge
+            </div>
+          </div>
+          <div class="final-text" id="finalText"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ PAGE: LABELS ═══════════════ -->
+      <section class="page" id="page-labels">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Shipping Labels</div>
+            <div class="section-sub">Fetch orders from Odoo → edit addresses if needed → generate printable PDF labels.</div>
+          </div>
+          <div class="chip">
+            <svg style="width:11px;height:11px;stroke:var(--teal);fill:none;stroke-width:2;stroke-linecap:round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Odoo Connected
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header">
+            <div class="card-title">Create / Fetch Label</div>
+          </div>
+          <div class="card-inner">
+            <div class="flex flex-wrap gap-12 items-center">
+              <div class="label-field">
+                Sales Order Ref
+                <input id="soRef" type="text" placeholder="e.g. S00241" style="width:200px">
+              </div>
+              <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
+              <button class="btn" id="btnAddOrder">Add Order</button>
+              <div class="label-field">
+                Ship From
+                <select id="shipFromSelect" style="min-width:200px"><option value="">Default (env)</option></select>
+              </div>
+              <label class="label-field" style="margin-left:auto">
+                <input type="checkbox" id="bigBoxToggle"> Full A4 per label
+              </label>
+              <button class="btn btn-primary" id="btnGenerateLabel" disabled>Generate PDF</button>
+            </div>
+
+            <div class="status-row">
+              <span class="pulse-dot" id="labelDot"></span>
               <span id="labelStatus" class="muted">Ready.</span>
             </div>
+          </div>
+        </div>
 
-            <div class="dividerLine"></div>
-
-            <b>Orders Added (max 4 per page)</b>
-            <div class="hint">Add 1–4 different Sales Orders. PDF will place 1/2/3/4 labels on the A4 automatically. More than 4 will continue on the next page.</div>
-            <div id="ordersList" style="margin-top:10px"></div>
-
-            <div class="previewCard">
-              <div class="previewHead">
-                <div>
-                  <div class="agentName" style="font-size:16px">Order Preview</div>
-                  <div class="sub">Clean preview (not raw JSON). Use “Edit Label” to fix name/phone/address if needed.</div>
+        <div class="two-col">
+          <!-- LEFT COL -->
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <!-- Orders list -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Orders Added</div>
+                <span style="font-size:12px;color:var(--text-tertiary)">max 4 per page</span>
+              </div>
+              <div class="card-inner">
+                <div class="hint-text">Add 1–4 Sales Orders. PDF auto-grids labels on A4. More than 4 continues on next page.</div>
+                <div id="ordersList" class="mt-12">
+                  <div class="empty-state" style="padding:20px">
+                    <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <div>No orders added yet. Add 1–4 orders to create multi-label PDF.</div>
+                  </div>
                 </div>
-                <div class="row">  
-                  <button class="btn" id="btnOpenEditor" disabled>Edit Label</button>
-                  <button class="btn" id="btnInvoicePdf" disabled>Download Invoice</button>
-                  <button class="btn" id="btnPackingPdf" disabled>Packing Slip</button>
-                  <button class="btn" id="btnProformaPdf" disabled>Proforma</button>
-                  <button class="btn" id="btnLoadPickings" disabled>Delivery Orders</button>
-                  <button class="btn" id="btnLoadFulfillment" disabled>Fulfillment</button>
-  
+              </div>
+            </div>
+
+            <!-- Preview card -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Order Preview</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn btn-sm" id="btnOpenEditor" disabled>Edit Label</button>
+                  <button class="btn btn-sm" id="btnInvoicePdf" disabled>Invoice</button>
+                  <button class="btn btn-sm" id="btnPackingPdf" disabled>Packing Slip</button>
+                  <button class="btn btn-sm" id="btnProformaPdf" disabled>Proforma</button>
+                  <button class="btn btn-sm" id="btnLoadPickings" disabled>Deliveries</button>
+                  <button class="btn btn-sm" id="btnLoadFulfillment" disabled>Fulfillment</button>
                 </div>
               </div>
 
-              <div id="previewEmpty" class="muted">No order loaded.</div>
+              <div id="previewEmpty" style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px">No order loaded.</div>
 
               <div id="previewBody" style="display:none">
-                <div class="kv" style="margin-bottom:10px">
-                  <div class="k">SO Ref</div><div class="v" id="pvRef">-</div>
-                  <div class="k">Status</div><div class="v" id="pvState">-</div>
-                  <div class="k">Date</div><div class="v" id="pvDate">-</div>
-                  <div class="k">Total</div><div class="v" id="pvTotal">-</div>
-                  <div class="k">Payment</div><div class="v" id="pvPayment">-</div>
-                  <div class="k">Shipping Method</div><div class="v" id="pvShippingMethod">-</div>
-    
+                <div class="kv-grid">
+                  <div class="kv-key">SO Ref</div><div class="kv-val" id="pvRef">-</div>
+                  <div class="kv-key">Status</div><div class="kv-val" id="pvState">-</div>
+                  <div class="kv-key">Date</div><div class="kv-val" id="pvDate">-</div>
+                  <div class="kv-key">Total</div><div class="kv-val" id="pvTotal">-</div>
+                  <div class="kv-key">Payment</div><div class="kv-val" id="pvPayment">-</div>
+                  <div class="kv-key">Shipping</div><div class="kv-val" id="pvShippingMethod">-</div>
                 </div>
 
-                <div class="sectionTitle">Ship To</div>
-                <div class="kv">
-                  <div class="k">Name</div><div class="v" id="pvName">-</div>
-                  <div class="k">Phone</div><div class="v" id="pvPhone">-</div>
-                  <div class="k">Email</div><div class="v" id="pvEmail">-</div>  
-                  <div class="k">Address</div><div class="v" id="pvAddr">-</div>
-                </div>
-                <div class="sectionTitle">Bill To</div>
-                <div class="kv">
-                  <div class="k">Name</div><div class="v" id="pvBillName">-</div>
-                  <div class="k">Phone</div><div class="v" id="pvBillPhone">-</div>
-                  <div class="k">Address</div><div class="v" id="pvBillAddr">-</div>
-                  <div class="k">GST/VAT</div><div class="v" id="pvBillVat">-</div>
+                <div class="data-section-title">Ship To</div>
+                <div class="kv-grid" style="padding-top:0">
+                  <div class="kv-key">Name</div><div class="kv-val" id="pvName">-</div>
+                  <div class="kv-key">Phone</div><div class="kv-val" id="pvPhone">-</div>
+                  <div class="kv-key">Email</div><div class="kv-val" id="pvEmail">-</div>
+                  <div class="kv-key">Address</div><div class="kv-val" id="pvAddr">-</div>
                 </div>
 
-                <div class="sectionTitle">Notes</div>
-                <div class="muted" id="pvNote">-</div>
+                <div class="data-section-title">Bill To</div>
+                <div class="kv-grid" style="padding-top:0">
+                  <div class="kv-key">Name</div><div class="kv-val" id="pvBillName">-</div>
+                  <div class="kv-key">Phone</div><div class="kv-val" id="pvBillPhone">-</div>
+                  <div class="kv-key">Address</div><div class="kv-val" id="pvBillAddr">-</div>
+                  <div class="kv-key">GST/VAT</div><div class="kv-val" id="pvBillVat">-</div>
+                </div>
 
-                <div class="sectionTitle">Items</div>
-                <div class="itemsList" id="pvItems"></div>
-                <div class="sectionTitle">Delivery Orders</div>
-                <div class="itemsList" id="pvPickings">Click "Delivery Orders" to load.</div>
+                <div class="data-section-title">Notes</div>
+                <div style="padding:0 16px 10px;font-size:13px;color:var(--text-secondary)" id="pvNote">-</div>
 
-                <div class="sectionTitle">Fulfillment</div>
-                <div class="itemsList" id="pvFulfillment">Click "Fulfillment" to load stock status.</div>
+                <div class="data-section-title">Items</div>
+                <div class="items-list" id="pvItems"></div>
 
+                <div class="data-section-title">Delivery Orders</div>
+                <div class="items-list" id="pvPickings"><div class="item-row" style="color:var(--text-tertiary)">Click "Deliveries" to load.</div></div>
 
-                <!-- Keep your existing pre (hidden) if you ever need it -->
-                <pre id="soPreview" class="muted" style="display:none;white-space:pre-wrap;margin:10px 0 0;font-family:var(--mono);font-size:12px"></pre>
+                <div class="data-section-title">Fulfillment</div>
+                <div class="items-list" id="pvFulfillment" style="margin-bottom:16px"><div class="item-row" style="color:var(--text-tertiary)">Click "Fulfillment" to load stock status.</div></div>
+
+                <pre id="soPreview" style="display:none"></pre>
               </div>
             </div>
           </div>
 
-          <!-- Right: Labels List -->
-          <div class="box">
-            <b>Generated Labels</b>
-            <div class="muted" style="margin-top:8px">All labels created by the backend (single or batch). Download PDF.</div>
-
-            <div style="margin-top:12px; overflow:auto;">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ref</th>
-                    <th>Carrier</th>
-                    <th>Created</th>
-                    <th>Download</th>
-                  </tr>
-                </thead>
-                <tbody id="labelsTbody">
-                  <tr>
-                    <td colspan="4" class="muted">No labels yet.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="muted" style="margin-top:10px;font-size:12px">
-              Endpoints: <span style="font-family:var(--mono)">/api/odoo/sale-order</span>,
-              <span style="font-family:var(--mono)">/api/labels</span>,
-              <span style="font-family:var(--mono)">/api/labels/generate</span>,
-              <span style="font-family:var(--mono)">/api/labels/generate-batch</span>
+          <!-- RIGHT COL -->
+          <div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Generated Labels</div>
+              </div>
+              <div class="card-inner">
+                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">All labels created by the backend. Download PDF to print.</div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Ref</th><th>Carrier</th><th>Created</th><th>Download</th></tr>
+                    </thead>
+                    <tbody id="labelsTbody">
+                      <tr><td colspan="4" class="muted" style="text-align:center;padding:20px">No labels yet.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="endpoint-list">
+                  <span class="endpoint-pill">/api/odoo/sale-order</span>
+                  <span class="endpoint-pill">/api/labels</span>
+                  <span class="endpoint-pill">/api/labels/generate</span>
+                  <span class="endpoint-pill">/api/labels/generate-batch</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </section>
-    <section id="tab-dashboard" style="display:none">
-      <div class="card controls">
-        <h1 style="font-size:18px;margin:0">SmartHandicrafts® — Order Dashboard</h1>
-        <div class="row" style="margin-top:12px">
-          <input id="dashQuery" type="text" placeholder="Search SO / customer" style="width:260px">
-          <select id="dashState">
-            <option value="">All States</option>
-            <option value="draft">Quotation</option>
-            <option value="sale">Sales Order</option>
-            <option value="done">Locked</option>
-          </select>
-          <button class="btn primary" id="btnDashSearch">Search</button>
-        </div>
-        <div style="margin-top:12px;overflow:auto">
-          <table>
-            <thead>
-              <tr><th>Ref</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>Payment</th><th>Actions</th></tr>
-            </thead>
-            <tbody id="dashTbody"><tr><td colspan="7" class="muted">No rows.</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
+      </section>
 
+      <!-- ═══════════════ PAGE: DASHBOARD ═══════════════ -->
+      <section class="page" id="page-dashboard">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Order Dashboard</div>
+            <div class="section-sub">SmartHandicrafts® — Browse and manage all Sales Orders from Odoo.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Search Orders</div>
+          </div>
+          <div class="card-inner">
+            <div class="search-bar">
+              <input id="dashQuery" type="text" placeholder="Search by SO ref or customer…" style="max-width:300px">
+              <select id="dashState">
+                <option value="">All States</option>
+                <option value="draft">Quotation</option>
+                <option value="sale">Sales Order</option>
+                <option value="done">Locked</option>
+              </select>
+              <button class="btn btn-primary" id="btnDashSearch">Search</button>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Ref</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>Payment</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="dashTbody"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">No rows.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 
-  <!-- =================== EDIT MODAL =================== -->
-  <div class="modalBack" id="editModalBack">
+  <!-- ═══════════════ MODAL: EDIT LABEL ═══════════════ -->
+  <div class="modal-backdrop" id="editModalBack">
     <div class="modal">
-      <div class="modalHead">
+      <div class="modal-header">
         <div>
-          <div class="modalTitle">Edit Label (Overrides)</div>
-          <div class="hint">This does NOT change Odoo. It only fixes the PDF label output.</div>
+          <div class="modal-title">Edit Label Overrides</div>
+          <div class="modal-sub">This does NOT change Odoo — it only fixes the PDF label output.</div>
         </div>
         <button class="xbtn" id="closeEditModal">✕</button>
       </div>
 
-      <div class="editorGrid">
-        <div class="editorBox">
-          <b>SHIP TO (Recipient)</b>
-          <div class="formGrid">
-            <div class="fieldRow"><div>Name</div><input id="edShipName" type="text" placeholder="Recipient Name"></div>
-            <div class="fieldRow"><div>Phone</div><input id="edShipPhone" type="tel" placeholder="Recipient Phone"></div>
-            <div class="fieldRow"><div>Line 1</div><input id="edShipL1" type="text" placeholder="House / Street"></div>
-            <div class="fieldRow"><div>Line 2</div><input id="edShipL2" type="text" placeholder="Area / Landmark"></div>
-            <div class="fieldRow"><div>City</div><input id="edShipCity" type="text" placeholder="City"></div>
-            <div class="fieldRow"><div>State</div><input id="edShipState" type="text" placeholder="State"></div>
-            <div class="fieldRow"><div>PIN</div><input id="edShipPin" type="text" placeholder="Pincode"></div>
-            <div class="fieldRow"><div>Country</div><input id="edShipCountry" type="text" placeholder="Country"></div>
+      <div class="modal-body">
+        <div class="editor-grid">
+          <div class="editor-section">
+            <div class="editor-section-title">Ship To — Recipient</div>
+            <div class="form-row"><label>Name</label><input id="edShipName" type="text" placeholder="Recipient Name"></div>
+            <div class="form-row"><label>Phone</label><input id="edShipPhone" type="tel" placeholder="Recipient Phone"></div>
+            <div class="form-row"><label>Line 1</label><input id="edShipL1" type="text" placeholder="House / Street"></div>
+            <div class="form-row"><label>Line 2</label><input id="edShipL2" type="text" placeholder="Area / Landmark"></div>
+            <div class="form-row"><label>City</label><input id="edShipCity" type="text" placeholder="City"></div>
+            <div class="form-row"><label>State</label><input id="edShipState" type="text" placeholder="State"></div>
+            <div class="form-row"><label>PIN</label><input id="edShipPin" type="text" placeholder="Pincode"></div>
+            <div class="form-row"><label>Country</label><input id="edShipCountry" type="text" placeholder="Country"></div>
+          </div>
+
+          <div class="editor-section">
+            <div class="editor-section-title">From — Sender</div>
+            <div class="form-row"><label>Name</label><input id="edFromName" type="text" placeholder="Sender Name"></div>
+            <div class="form-row"><label>Phone</label><input id="edFromPhone" type="tel" placeholder="Sender Phone"></div>
+            <div class="form-row"><label>Line 1</label><input id="edFromL1" type="text" placeholder="Address Line 1"></div>
+            <div class="form-row"><label>Line 2</label><input id="edFromL2" type="text" placeholder="Address Line 2"></div>
+            <div class="form-row"><label>City</label><input id="edFromCity" type="text" placeholder="City"></div>
+            <div class="form-row"><label>State</label><input id="edFromState" type="text" placeholder="State"></div>
+            <div class="form-row"><label>PIN</label><input id="edFromPin" type="text" placeholder="Pincode"></div>
+            <div class="form-row"><label>Country</label><input id="edFromCountry" type="text" placeholder="Country"></div>
           </div>
         </div>
 
-        <div class="editorBox">
-          <b>FROM (Sender)</b>
-          <div class="formGrid">
-            <div class="fieldRow"><div>Name</div><input id="edFromName" type="text" placeholder="Sender Name"></div>
-            <div class="fieldRow"><div>Phone</div><input id="edFromPhone" type="tel" placeholder="Sender Phone"></div>
-            <div class="fieldRow"><div>Line 1</div><input id="edFromL1" type="text" placeholder="Address line 1"></div>
-            <div class="fieldRow"><div>Line 2</div><input id="edFromL2" type="text" placeholder="Address line 2"></div>
-            <div class="fieldRow"><div>City</div><input id="edFromCity" type="text" placeholder="City"></div>
-            <div class="fieldRow"><div>State</div><input id="edFromState" type="text" placeholder="State"></div>
-            <div class="fieldRow"><div>PIN</div><input id="edFromPin" type="text" placeholder="Pincode"></div>
-            <div class="fieldRow"><div>Country</div><input id="edFromCountry" type="text" placeholder="Country"></div>
-          </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button class="btn" id="resetEdits">Reset</button>
+          <button class="btn btn-ok" id="saveEdits">Save Overrides</button>
         </div>
-      </div>
 
-      <div class="row" style="margin-top:12px;justify-content:flex-end">
-        <button class="btn" id="resetEdits">Reset</button>
-        <button class="btn ok" id="saveEdits">Save Overrides</button>
-      </div>
-
-      <div class="hint" style="margin-top:10px">
-        Tip: Add 2–4 orders then save overrides for each order one by one (select order → Edit Label → Save). Then generate batch PDF.
+        <div class="hint-text" style="margin-top:10px;text-align:right">
+          Tip: Add 2–4 orders, save overrides for each order, then generate batch PDF.
+        </div>
       </div>
     </div>
   </div>
 
   <script>
-    // =================== TAB SWITCHER ===================
-    const tabs = document.querySelectorAll(".tab");
-    const tabDebate = document.getElementById("tab-debate");
-    const tabLabels = document.getElementById("tab-labels");
-    const tabDashboard = document.getElementById("tab-dashboard");
-    
-    function setActiveTab(name){
-      tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-      tabDebate.style.display = (name === "debate") ? "block" : "none";
-      tabLabels.style.display = (name === "labels") ? "block" : "none";
-      tabDashboard.style.display = (name === "dashboard") ? "block" : "none";
+    // ─── THEME ───
+    const html = document.documentElement;
+
+    function toggleTheme() {
+      const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
+      html.dataset.theme = next;
+      localStorage.setItem('theme', next);
     }
 
-    tabs.forEach(t => {
-      t.addEventListener("click", () => setActiveTab(t.dataset.tab));
-    });
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) html.dataset.theme = savedTheme;
 
-    // =================== DEBATE UI ===================
-    const runBtn = document.getElementById("runBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const clearBtn = document.getElementById("clearBtn");
-    const promptEl = document.getElementById("prompt");
-    const roundsEl = document.getElementById("rounds");
-    const showDebateEl = document.getElementById("showDebate");
+    document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+    document.getElementById('themeToggleNav').addEventListener('click', toggleTheme);
 
-    const statusText = document.getElementById("statusText");
-    const dot = document.getElementById("dot");
+    // ─── NAV ───
+    const navItems = document.querySelectorAll('.nav-item[data-page]');
+    const pages = document.querySelectorAll('.page');
+    const topbarTitle = document.getElementById('topbar-title');
+    const topbarSub = document.getElementById('topbar-sub');
 
-    const grid = document.getElementById("grid");
-    const finalBox = document.getElementById("finalBox");
-    const finalText = document.getElementById("finalText");
-
-    const feeds = {
-      "Gemini": document.getElementById("feed-gemini"),
-      "Llama": document.getElementById("feed-llama"),
-      "Gemma": document.getElementById("feed-gemma")
+    const pageInfo = {
+      debate: { title: 'AI Agent Debate', sub: 'Multi-agent reasoning with Gemini · Llama · Gemma' },
+      labels: { title: 'Shipping Labels', sub: 'Fetch from Odoo · Edit addresses · Generate PDF labels' },
+      dashboard: { title: 'Order Dashboard', sub: 'SmartHandicrafts® — Browse and manage all Sales Orders' }
     };
 
-    const thinking = {
-      "Gemini": document.getElementById("think-gemini"),
-      "Llama": document.getElementById("think-llama"),
-      "Gemma": document.getElementById("think-gemma")
-    };
+    function setPage(name) {
+      navItems.forEach(n => n.classList.toggle('active', n.dataset.page === name));
+      pages.forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
+      if (pageInfo[name]) {
+        topbarTitle.textContent = pageInfo[name].title;
+        topbarSub.textContent = pageInfo[name].sub;
+      }
+    }
+
+    navItems.forEach(n => n.addEventListener('click', () => setPage(n.dataset.page)));
+
+    // For tab switching from dashboard → labels (used in loadDashboard)
+    function setActiveTab(name) { setPage(name); }
+
+    // ─── UTILS ───
+    function esc(s) {
+      return (s || '').replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[m]));
+    }
+
+    function money(v) {
+      if (v == null) return '-';
+      try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(v)); }
+      catch { return String(v); }
+    }
+
+    function fmtAddr(ship) {
+      if (!ship) return '-';
+      return [ship.line1, ship.line2, [ship.city, ship.state, ship.pin].filter(Boolean).join(', '), ship.country].filter(Boolean).join(', ');
+    }
+
+    // ─── DEBATE ───
+    const runBtn = document.getElementById('runBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const promptEl = document.getElementById('prompt');
+    const roundsEl = document.getElementById('rounds');
+    const showDebateEl = document.getElementById('showDebate');
+    const statusText = document.getElementById('statusText');
+    const dot = document.getElementById('dot');
+    const grid = document.getElementById('grid');
+    const finalBox = document.getElementById('finalBox');
+    const finalText = document.getElementById('finalText');
+
+    const feeds = { Gemini: document.getElementById('feed-gemini'), Llama: document.getElementById('feed-llama'), Gemma: document.getElementById('feed-gemma') };
+    const thinking = { Gemini: document.getElementById('think-gemini'), Llama: document.getElementById('think-llama'), Gemma: document.getElementById('think-gemma') };
 
     let abortController = null;
 
-    function esc(s){
-      return (s || "").replace(/[&<>"']/g, m => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-      }[m]));
+    function setStatus(msg, spinning = false) {
+      statusText.textContent = msg || '';
+      dot.style.display = spinning ? 'inline-block' : 'none';
     }
 
-    function setStatus(msg, spinning=false){
-      statusText.textContent = msg || "";
-      dot.style.display = spinning ? "inline-block" : "none";
+    function showThinking(agentName) {
+      Object.values(thinking).forEach(x => x.style.display = 'none');
+      if (thinking[agentName]) thinking[agentName].style.display = 'flex';
     }
 
-    function showThinking(agentName){
-      Object.values(thinking).forEach(x => x.style.display = "none");
-      if (thinking[agentName]) thinking[agentName].style.display = "flex";
-    }
-    function clearThinking(){ Object.values(thinking).forEach(x => x.style.display = "none"); }
+    function clearThinking() { Object.values(thinking).forEach(x => x.style.display = 'none'); }
 
-    function resetDebate(){
-      grid.style.display = "none";
-      finalBox.style.display = "none";
-      finalText.textContent = "";
-      Object.values(feeds).forEach(f => f.innerHTML = "");
+    function resetDebate() {
+      grid.style.display = 'none';
+      finalBox.style.display = 'none';
+      finalText.textContent = '';
+      Object.values(feeds).forEach(f => f.innerHTML = '');
       clearThinking();
-      setStatus("Ready.", false);
+      setStatus('Ready.', false);
     }
 
-    function addBubble(agent, content, time){
+    function addBubble(agent, content, time) {
       if (!feeds[agent]) return;
-      const wrap = document.createElement("div");
-      wrap.className = "bubble";
-      const t = time ? new Date(time).toLocaleString() : "";
-      wrap.innerHTML = `
-        <div class="metaLine">
-          <span>${esc(agent)}</span>
-          <span>${esc(t)}</span>
-        </div>
-        <div>${esc(content)}</div>
-      `;
+      const wrap = document.createElement('div');
+      wrap.className = 'bubble';
+      const t = time ? new Date(time).toLocaleString() : '';
+      wrap.innerHTML = `<div class="bubble-meta"><span>${esc(agent)}</span><span>${esc(t)}</span></div><div>${esc(content)}</div>`;
       feeds[agent].appendChild(wrap);
       feeds[agent].scrollTop = feeds[agent].scrollHeight;
     }
 
-    clearBtn.addEventListener("click", () => {
-      promptEl.value = "";
-      resetDebate();
-    });
+    clearBtn.addEventListener('click', () => { promptEl.value = ''; resetDebate(); });
+    stopBtn.addEventListener('click', () => { if (abortController) abortController.abort(); });
 
-    stopBtn.addEventListener("click", () => {
-      if (abortController) abortController.abort();
-    });
-
-    runBtn.addEventListener("click", async () => {
+    runBtn.addEventListener('click', async () => {
       const prompt = promptEl.value.trim();
       const rounds = Number(roundsEl.value || 1);
       const showDebate = !!showDebateEl.checked;
-
-      if (!prompt) return alert("Please enter a prompt.");
+      if (!prompt) return alert('Please enter a prompt.');
       resetDebate();
-
       runBtn.disabled = true;
       stopBtn.disabled = false;
       abortController = new AbortController();
+      setStatus('Starting debate…', true);
+      grid.style.display = showDebate ? 'grid' : 'none';
 
-      setStatus("Starting debate…", true);
-      grid.style.display = showDebate ? "grid" : "none";
-
-      try{
-        const resp = await fetch("/api/debate-stream", {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
+      try {
+        const resp = await fetch('/api/debate-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt, rounds, showDebate }),
           signal: abortController.signal
         });
-
         if (!resp.ok) throw new Error(await resp.text());
-
         const reader = resp.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let buffer = "";
-
-        while(true){
-          const {done, value} = await reader.read();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
           if (done) break;
-
-          buffer += decoder.decode(value, {stream:true});
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines){
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
             if (!line.trim()) continue;
             let msg;
-            try{ msg = JSON.parse(line); } catch { continue; }
-
-            if (msg.type === "status"){
-              setStatus(msg.message || "Working…", true);
-              const name = (msg.message || "").replace("Thinking...","").trim();
-              if (name) showThinking(name);
-            }
-
-            if (msg.type === "turn"){
-              clearThinking();
-              if (showDebate) addBubble(msg.agent, msg.content || "", msg.time);
-            }
-
-            if (msg.type === "final"){
-              clearThinking();
-              finalBox.style.display = "block";
-              finalText.textContent = msg.content || "";
-              setStatus("Done.", false);
-            }
-
-            if (msg.type === "error"){
-              clearThinking();
-              setStatus("Error: " + (msg.message || "Unknown error"), false);
-            }
-
-            if (msg.type === "done"){
-              clearThinking();
-              setStatus("Done.", false);
-            }
+            try { msg = JSON.parse(line); } catch { continue; }
+            if (msg.type === 'status') { setStatus(msg.message || 'Working…', true); const name = (msg.message || '').replace('Thinking...', '').trim(); if (name) showThinking(name); }
+            if (msg.type === 'turn') { clearThinking(); if (showDebate) addBubble(msg.agent, msg.content || '', msg.time); }
+            if (msg.type === 'final') { clearThinking(); finalBox.style.display = 'block'; finalText.textContent = msg.content || ''; setStatus('Done.', false); }
+            if (msg.type === 'error') { clearThinking(); setStatus('Error: ' + (msg.message || 'Unknown'), false); }
+            if (msg.type === 'done') { clearThinking(); setStatus('Done.', false); }
           }
         }
-      } catch(e){
-        const isAbort = (e && (e.name === "AbortError"));
-        setStatus(isAbort ? "Stopped." : ("Error: " + e.message), false);
-      } finally{
+      } catch (e) {
+        setStatus(e.name === 'AbortError' ? 'Stopped.' : 'Error: ' + e.message, false);
+      } finally {
         runBtn.disabled = false;
         stopBtn.disabled = true;
         abortController = null;
       }
     });
 
-    // =================== LABELS UI (Multi orders + Big box + Editor) ===================
-    const soRefEl = document.getElementById("soRef");
-    const btnFetchSO = document.getElementById("btnFetchSO");
-    const btnAddOrder = document.getElementById("btnAddOrder");
-    const btnGenerateLabel = document.getElementById("btnGenerateLabel");
-    const shipFromSelect = document.getElementById("shipFromSelect");
-    const labelStatus = document.getElementById("labelStatus");
-    const labelDot = document.getElementById("labelDot");
-    const labelsTbody = document.getElementById("labelsTbody");
-    const bigBoxToggle = document.getElementById("bigBoxToggle");
+    // ─── LABELS ───
+    const soRefEl = document.getElementById('soRef');
+    const btnFetchSO = document.getElementById('btnFetchSO');
+    const btnAddOrder = document.getElementById('btnAddOrder');
+    const btnGenerateLabel = document.getElementById('btnGenerateLabel');
+    const shipFromSelect = document.getElementById('shipFromSelect');
+    const labelStatus = document.getElementById('labelStatus');
+    const labelDot = document.getElementById('labelDot');
+    const labelsTbody = document.getElementById('labelsTbody');
+    const bigBoxToggle = document.getElementById('bigBoxToggle');
+    const ordersListEl = document.getElementById('ordersList');
+    const previewEmpty = document.getElementById('previewEmpty');
+    const previewBody = document.getElementById('previewBody');
+    const soPreviewRaw = document.getElementById('soPreview');
+    const pvRef = document.getElementById('pvRef'), pvState = document.getElementById('pvState'),
+          pvDate = document.getElementById('pvDate'), pvTotal = document.getElementById('pvTotal'),
+          pvPayment = document.getElementById('pvPayment'), pvShippingMethod = document.getElementById('pvShippingMethod'),
+          pvName = document.getElementById('pvName'), pvPhone = document.getElementById('pvPhone'),
+          pvEmail = document.getElementById('pvEmail'), pvAddr = document.getElementById('pvAddr'),
+          pvBillName = document.getElementById('pvBillName'), pvBillPhone = document.getElementById('pvBillPhone'),
+          pvBillAddr = document.getElementById('pvBillAddr'), pvBillVat = document.getElementById('pvBillVat'),
+          pvNote = document.getElementById('pvNote'), pvPickings = document.getElementById('pvPickings'),
+          pvFulfillment = document.getElementById('pvFulfillment'), pvItems = document.getElementById('pvItems');
+    const btnOpenEditor = document.getElementById('btnOpenEditor');
+    const btnInvoicePdf = document.getElementById('btnInvoicePdf'), btnPackingPdf = document.getElementById('btnPackingPdf');
+    const btnProformaPdf = document.getElementById('btnProformaPdf'), btnLoadPickings = document.getElementById('btnLoadPickings');
+    const btnLoadFulfillment = document.getElementById('btnLoadFulfillment');
+    const dashQuery = document.getElementById('dashQuery'), dashState = document.getElementById('dashState');
+    const btnDashSearch = document.getElementById('btnDashSearch'), dashTbody = document.getElementById('dashTbody');
+    const editModalBack = document.getElementById('editModalBack'), closeEditModal = document.getElementById('closeEditModal');
+    const saveEdits = document.getElementById('saveEdits'), resetEdits = document.getElementById('resetEdits');
+    const edShipName = document.getElementById('edShipName'), edShipPhone = document.getElementById('edShipPhone'),
+          edShipL1 = document.getElementById('edShipL1'), edShipL2 = document.getElementById('edShipL2'),
+          edShipCity = document.getElementById('edShipCity'), edShipState = document.getElementById('edShipState'),
+          edShipPin = document.getElementById('edShipPin'), edShipCountry = document.getElementById('edShipCountry');
+    const edFromName = document.getElementById('edFromName'), edFromPhone = document.getElementById('edFromPhone'),
+          edFromL1 = document.getElementById('edFromL1'), edFromL2 = document.getElementById('edFromL2'),
+          edFromCity = document.getElementById('edFromCity'), edFromState = document.getElementById('edFromState'),
+          edFromPin = document.getElementById('edFromPin'), edFromCountry = document.getElementById('edFromCountry');
 
-    const ordersListEl = document.getElementById("ordersList");
+    let loadedSaleOrder = null, selectedOrderKey = null, orders = [], shipFromOptions = [];
 
-    const previewEmpty = document.getElementById("previewEmpty");
-    const previewBody = document.getElementById("previewBody");
-    const soPreviewRaw = document.getElementById("soPreview");
-
-    const pvRef = document.getElementById("pvRef");
-    const pvState = document.getElementById("pvState");
-    const pvDate = document.getElementById("pvDate");
-    const pvTotal = document.getElementById("pvTotal");
-    const pvPayment = document.getElementById("pvPayment");
-    const pvShippingMethod = document.getElementById("pvShippingMethod");
-    const pvName = document.getElementById("pvName");
-    const pvEmail = document.getElementById("pvEmail");
-    const pvBillName = document.getElementById("pvBillName");
-    const pvBillPhone = document.getElementById("pvBillPhone");
-    const pvBillAddr = document.getElementById("pvBillAddr");
-    const pvBillVat = document.getElementById("pvBillVat");
-    const pvNote = document.getElementById("pvNote");
-    const pvPickings = document.getElementById("pvPickings");
-    const pvFulfillment = document.getElementById("pvFulfillment");
-
-    const pvPhone = document.getElementById("pvPhone");
-    const pvAddr = document.getElementById("pvAddr");
-    const pvItems = document.getElementById("pvItems");
-
-    const btnOpenEditor = document.getElementById("btnOpenEditor");
-    const btnInvoicePdf = document.getElementById("btnInvoicePdf");
-    const btnPackingPdf = document.getElementById("btnPackingPdf");
-    const btnProformaPdf = document.getElementById("btnProformaPdf");
-    const btnLoadPickings = document.getElementById("btnLoadPickings");
-    const btnLoadFulfillment = document.getElementById("btnLoadFulfillment");
-
-    const dashQuery = document.getElementById("dashQuery");
-    const dashState = document.getElementById("dashState");
-    const btnDashSearch = document.getElementById("btnDashSearch");
-    const dashTbody = document.getElementById("dashTbody");
-
-    // Modal elements
-    const editModalBack = document.getElementById("editModalBack");
-    const closeEditModal = document.getElementById("closeEditModal");
-    const saveEdits = document.getElementById("saveEdits");
-    const resetEdits = document.getElementById("resetEdits");
-
-    const edShipName = document.getElementById("edShipName");
-    const edShipPhone = document.getElementById("edShipPhone");
-    const edShipL1 = document.getElementById("edShipL1");
-    const edShipL2 = document.getElementById("edShipL2");
-    const edShipCity = document.getElementById("edShipCity");
-    const edShipState = document.getElementById("edShipState");
-    const edShipPin = document.getElementById("edShipPin");
-    const edShipCountry = document.getElementById("edShipCountry");
-
-    const edFromName = document.getElementById("edFromName");
-    const edFromPhone = document.getElementById("edFromPhone");
-    const edFromL1 = document.getElementById("edFromL1");
-    const edFromL2 = document.getElementById("edFromL2");
-    const edFromCity = document.getElementById("edFromCity");
-    const edFromState = document.getElementById("edFromState");
-    const edFromPin = document.getElementById("edFromPin");
-    const edFromCountry = document.getElementById("edFromCountry");
-
-    let loadedSaleOrder = null;
-    let selectedOrderKey = null; // ref string
-    let orders = []; // [{ref, sale_order_id, preview, overrides:{ship_to:{...}, from:{...}} }]
-
-    let shipFromOptions = [];
-
-    async function loadShipFromOptions(){
-      if (!shipFromSelect) return;
+    async function loadShipFromOptions() {
       try {
         const resp = await fetch('/api/odoo/ship-from-options');
         if (!resp.ok) return;
@@ -976,85 +1664,55 @@
         shipFromSelect.innerHTML = `<option value="">Default (env)</option>` + shipFromOptions.map((o, i) => `<option value="${i}">${esc(o.label || `Warehouse ${i+1}`)}</option>`).join('');
       } catch {}
     }
-    
-    function setLabelStatus(msg, spinning=false){
-      labelStatus.textContent = msg || "";
-      labelDot.style.display = spinning ? "inline-block" : "none";
+
+    function setLabelStatus(msg, spinning = false) {
+      labelStatus.textContent = msg || '';
+      labelDot.style.display = spinning ? 'inline-block' : 'none';
     }
 
-    function money(v){
-      if (v == null) return "-";
-      try { return new Intl.NumberFormat("en-IN", { style:"currency", currency:"INR" }).format(Number(v)); }
-      catch { return String(v); }
-    }
-
-    function fmtAddr(ship){
-      if (!ship) return "-";
-      const parts = [
-        ship.line1, ship.line2,
-        [ship.city, ship.state, ship.pin].filter(Boolean).join(", "),
-        ship.country
-      ].filter(Boolean);
-      return parts.join(", ");
-    }
-
-    function applyOverridesToPreview(preview, overrides){
+    function applyOverridesToPreview(preview, overrides) {
       if (!overrides) return preview;
       const out = JSON.parse(JSON.stringify(preview));
-      out.ship_to = { ...(out.ship_to||{}), ...(overrides.ship_to||{}) };
-      out.from = { ...(out.from||{}), ...(overrides.from||{}) };
+      out.ship_to = { ...(out.ship_to || {}), ...(overrides.ship_to || {}) };
+      out.from = { ...(out.from || {}), ...(overrides.from || {}) };
       return out;
     }
 
-    function renderPreview(order){
-      if (!order?.preview){
-        previewEmpty.style.display = "block";
-        previewBody.style.display = "none";
+    function renderPreview(order) {
+      if (!order?.preview) {
+        previewEmpty.style.display = 'block';
+        previewBody.style.display = 'none';
         btnOpenEditor.disabled = true;
         [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = true);
         return;
       }
-
       const p = applyOverridesToPreview(order.preview, order.overrides);
       loadedSaleOrder = p;
-
-      previewEmpty.style.display = "none";
-      previewBody.style.display = "block";
+      previewEmpty.style.display = 'none';
+      previewBody.style.display = 'block';
       btnOpenEditor.disabled = false;
       [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = false);
-
-      pvRef.textContent = p.ref || "-";
-      pvState.textContent = p.state || "-";
-      pvDate.textContent = p.date_order ? new Date(p.date_order).toLocaleString() : "-";
+      pvRef.textContent = p.ref || '-';
+      pvState.textContent = p.state || '-';
+      pvDate.textContent = p.date_order ? new Date(p.date_order).toLocaleString() : '-';
       pvTotal.textContent = money(p.amount_total);
-      pvPayment.textContent = p.payment_status || p.invoice_status || "-";
-      pvShippingMethod.textContent = p.shipping_method || "-";
-
-      pvName.textContent = p.ship_to?.name || "-";
-      pvPhone.textContent = p.ship_to?.phone || "-";
-      pvEmail.textContent = p.ship_to?.email || "-";
-      pvAddr.textContent = fmtAddr(p.ship_to) || "-";
-
-      pvBillName.textContent = p.bill_to?.name || "-";
-      pvBillPhone.textContent = p.bill_to?.phone || "-";
-      pvBillAddr.textContent = fmtAddr(p.bill_to) || "-";
-      pvBillVat.textContent = p.bill_to?.vat || "-";
-      pvNote.textContent = p.note || "-";
-
+      pvPayment.textContent = p.payment_status || p.invoice_status || '-';
+      pvShippingMethod.textContent = p.shipping_method || '-';
+      pvName.textContent = p.ship_to?.name || '-';
+      pvPhone.textContent = p.ship_to?.phone || '-';
+      pvEmail.textContent = p.ship_to?.email || '-';
+      pvAddr.textContent = fmtAddr(p.ship_to) || '-';
+      pvBillName.textContent = p.bill_to?.name || '-';
+      pvBillPhone.textContent = p.bill_to?.phone || '-';
+      pvBillAddr.textContent = fmtAddr(p.bill_to) || '-';
+      pvBillVat.textContent = p.bill_to?.vat || '-';
+      pvNote.textContent = p.note || '-';
       const items = p.items || [];
-      if (!items.length){
-        pvItems.innerHTML = `<div class="muted">No items found.</div>`;
-      } else {
-        pvItems.innerHTML = items.map(it => `
-          <div class="itemRow">
-            <div style="flex:1;min-width:0">${esc(it.name || it.product_name || "")}</div>
-            <div class="qtyPill">Qty: ${esc(String(it.qty ?? ""))}</div>
-          </div>
-        `).join("");
-      }
-
-      pvPickings.innerHTML = `Click "Delivery Orders" to load.`;
-      pvFulfillment.innerHTML = `Click "Fulfillment" to load stock status.`;
+      pvItems.innerHTML = !items.length
+        ? `<div class="item-row" style="color:var(--text-tertiary)">No items found.</div>`
+        : items.map(it => `<div class="item-row"><div style="flex:1">${esc(it.name || it.product_name || '')}</div><div class="qty-pill">Qty: ${esc(String(it.qty ?? ''))}</div></div>`).join('');
+      pvPickings.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Click "Deliveries" to load.</div>`;
+      pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Click "Fulfillment" to load stock status.</div>`;
       soPreviewRaw.textContent = JSON.stringify(p, null, 2);
     }
 
@@ -1064,46 +1722,39 @@
       return await resp.json();
     }
 
-    function renderOrders(){
-      if (!ordersListEl) return;
-      if (orders.length === 0){
-        ordersListEl.innerHTML = `<div class="muted">No orders added yet. Add 1–4 orders to create multi-label PDF.</div>`;
+    function renderOrders() {
+      if (orders.length === 0) {
+        ordersListEl.innerHTML = `<div class="empty-state" style="padding:16px"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><div>No orders added yet.</div></div>`;
         btnGenerateLabel.disabled = !loadedSaleOrder;
         return;
       }
-
       ordersListEl.innerHTML = orders.map((o, idx) => {
-        const active = (o.ref === selectedOrderKey);
-        return `
-          <div class="orderChip" style="${active ? 'border-color:rgba(77,163,255,.55);box-shadow:0 0 0 3px rgba(77,163,255,.12);' : ''}">
-            <div class="left">
-              <b>${esc(o.ref)}</b>
-              <div class="small">SO ID: ${esc(String(o.sale_order_id || "-"))}${o.overrides ? " • overrides ✅" : ""}</div>
-            </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn" data-select="${idx}">${active ? "Selected" : "Select"}</button>
-              <button class="btn danger" data-remove="${idx}">Remove</button>
-            </div>
+        const active = o.ref === selectedOrderKey;
+        return `<div class="order-chip${active ? ' selected' : ''}" >
+          <div>
+            <div class="order-chip-ref">${esc(o.ref)}</div>
+            <div class="order-chip-meta">SO ID: ${esc(String(o.sale_order_id || '-'))} ${o.overrides ? '<span class="override-tag">✓ Overrides saved</span>' : ''}</div>
           </div>
-        `;
-      }).join("");
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button class="btn btn-sm" data-select="${idx}">${active ? 'Selected' : 'Select'}</button>
+            <button class="btn btn-sm btn-danger" data-remove="${idx}">Remove</button>
+          </div>
+        </div>`;
+      }).join('');
 
-      ordersListEl.querySelectorAll("[data-remove]").forEach(btn => {
-        btn.addEventListener("click", () => {
-          const i = Number(btn.getAttribute("data-remove"));
+      ordersListEl.querySelectorAll('[data-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.getAttribute('data-remove'));
           const removed = orders.splice(i, 1)[0];
-          if (removed?.ref === selectedOrderKey){
-            selectedOrderKey = orders[0]?.ref || null;
-          }
+          if (removed?.ref === selectedOrderKey) selectedOrderKey = orders[0]?.ref || null;
           renderOrders();
-          const sel = orders.find(x => x.ref === selectedOrderKey);
-          renderPreview(sel || null);
+          renderPreview(orders.find(x => x.ref === selectedOrderKey) || null);
         });
       });
 
-      ordersListEl.querySelectorAll("[data-select]").forEach(btn => {
-        btn.addEventListener("click", () => {
-          const i = Number(btn.getAttribute("data-select"));
+      ordersListEl.querySelectorAll('[data-select]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.getAttribute('data-select'));
           selectedOrderKey = orders[i].ref;
           renderOrders();
           renderPreview(orders[i]);
@@ -1113,402 +1764,238 @@
       btnGenerateLabel.disabled = false;
     }
 
-    function renderLabels(labels){
-      if (!labels || labels.length === 0){
-        labelsTbody.innerHTML = `<tr><td colspan="4" class="muted">No labels yet.</td></tr>`;
+    function renderLabels(labels) {
+      if (!labels || labels.length === 0) {
+        labelsTbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-tertiary)">No labels yet.</td></tr>`;
         return;
       }
-
       labelsTbody.innerHTML = labels.map(l => `
         <tr>
-          <td>${esc(l.sale_order_ref || l.id || "-")}</td>
-          <td>${esc(l.carrier || "-")}</td>
-          <td>${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : "-"}</td>
-          <td>${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF</a>` : `<span class="muted">-</span>`}</td>
-        </tr>
-      `).join("");
+          <td>${esc(l.sale_order_ref || l.id || '-')}</td>
+          <td>${esc(l.carrier || '-')}</td>
+          <td>${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : '-'}</td>
+          <td>${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF ↗</a>` : '<span style="color:var(--text-tertiary)">-</span>'}</td>
+        </tr>`).join('');
     }
 
-    async function refreshLabelsTable(){
-      try{
-        const lab = await fetch(`/api/labels`);
-        const labels = lab.ok ? await lab.json() : [];
-        renderLabels(labels);
-      }catch{
-        renderLabels([]);
-      }
+    async function refreshLabelsTable() {
+      try { const lab = await fetch('/api/labels'); renderLabels(lab.ok ? await lab.json() : []); }
+      catch { renderLabels([]); }
     }
 
-    // Fetch single order into preview (does NOT auto add to list)
-    btnFetchSO?.addEventListener("click", async () => {
-      const ref = (soRefEl.value || "").trim();
-      if (!ref) return alert("Enter Sales Order reference (e.g. S00241)");
-
-      setLabelStatus("Fetching Sales Order from Odoo…", true);
-
-      try{
+    btnFetchSO?.addEventListener('click', async () => {
+      const ref = (soRefEl.value || '').trim();
+      if (!ref) return alert('Enter Sales Order reference (e.g. S00241)');
+      setLabelStatus('Fetching Sales Order from Odoo…', true);
+      try {
         const data = await fetchSO(ref);
-
-        // Store as "loadedSaleOrder" for single-generate if no orders list used
         loadedSaleOrder = data;
         selectedOrderKey = data.ref;
-
-        // Render preview as a temporary order object (not yet in orders array)
         renderPreview({ ref: data.ref, sale_order_id: data.id, preview: data, overrides: null });
-
-        setLabelStatus("Sales Order loaded. You can Edit Label or Add Order.", false);
+        setLabelStatus('Sales Order loaded. You can Edit Label or Add Order.', false);
         btnGenerateLabel.disabled = false;
-
         await refreshLabelsTable();
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-        renderPreview(null);
-      }
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); renderPreview(null); }
     });
 
-    // Add order to list (for multi-label PDF)
-    btnAddOrder?.addEventListener("click", async () => {
-      const ref = (soRefEl.value || "").trim();
-      if (!ref) return alert("Enter Sales Order reference then click Add Order");
-      if (orders.find(o => o.ref === ref)) return alert("This order is already added.");
-      if (orders.length >= 4) return alert("Max 4 orders per page. Remove one or generate another PDF.");
-
-      setLabelStatus("Adding order…", true);
-
-      try{
+    btnAddOrder?.addEventListener('click', async () => {
+      const ref = (soRefEl.value || '').trim();
+      if (!ref) return alert('Enter Sales Order reference then click Add Order');
+      if (orders.find(o => o.ref === ref)) return alert('This order is already added.');
+      if (orders.length >= 4) return alert('Max 4 orders per page. Remove one or generate another PDF.');
+      setLabelStatus('Adding order…', true);
+      try {
         const so = await fetchSO(ref);
         orders.push({ ref: so.ref, sale_order_id: so.id, preview: so, overrides: null });
         selectedOrderKey = so.ref;
         renderOrders();
         renderPreview(orders[orders.length - 1]);
         setLabelStatus(`Added ${so.ref}.`, false);
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-      }
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); }
     });
 
-    // Generate label:
-    // - If orders list has 1–4 orders => batch PDF (AUTO grid) OR FULL pages if big box.
-    // - If no orders list => single PDF for loaded order.
-    btnGenerateLabel?.addEventListener("click", async () => {
+    btnGenerateLabel?.addEventListener('click', async () => {
       const bigBox = !!bigBoxToggle?.checked;
-      const layout = bigBox ? "FULL" : "AUTO";
-
-      setLabelStatus("Generating label PDF…", true);
+      const layout = bigBox ? 'FULL' : 'AUTO';
+      setLabelStatus('Generating label PDF…', true);
       btnGenerateLabel.disabled = true;
-
-      try{
+      try {
         let resp, out;
-
-        if (orders.length > 0){
-          resp = await fetch(`/api/labels/generate-batch`, {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({
-              orders: orders.map(o => ({
-                ref: o.ref,
-                overrides: o.overrides || undefined
-              })),
-              layout
-            })
-          });
+        if (orders.length > 0) {
+          resp = await fetch('/api/labels/generate-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orders: orders.map(o => ({ ref: o.ref, overrides: o.overrides || undefined })), layout }) });
           if (!resp.ok) throw new Error(await resp.text());
           out = await resp.json();
         } else {
-          if (!loadedSaleOrder?.id) throw new Error("Fetch an order or add orders first.");
-          // if you edited in modal but did not add to orders, we still support single overrides via selectedOrderKey temp
-          const tempOverrides = null;
-          resp = await fetch(`/api/labels/generate`, {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({
-              sale_order_id: loadedSaleOrder.id,
-              overrides: tempOverrides,
-              layout
-            })
-          });
+          if (!loadedSaleOrder?.id) throw new Error('Fetch an order or add orders first.');
+          resp = await fetch('/api/labels/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sale_order_id: loadedSaleOrder.id, overrides: null, layout }) });
           if (!resp.ok) throw new Error(await resp.text());
           out = await resp.json();
         }
-
-        setLabelStatus("Label PDF created ✅", false);
+        setLabelStatus('Label PDF created ✅', false);
         btnGenerateLabel.disabled = false;
-
         await refreshLabelsTable();
-
-        if (out?.label_url) window.open(out.label_url, "_blank");
-      } catch(e){
-        setLabelStatus("Error: " + e.message, false);
-        btnGenerateLabel.disabled = false;
-      }
+        if (out?.label_url) window.open(out.label_url, '_blank');
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); btnGenerateLabel.disabled = false; }
     });
 
-    // =================== EDIT MODAL LOGIC ===================
-    function openModal(){
-      editModalBack.style.display = "flex";
-    }
-    function closeModal(){
-      editModalBack.style.display = "none";
-    }
+    function openModal() { editModalBack.classList.add('open'); }
+    function closeModal() { editModalBack.classList.remove('open'); }
 
-    function getSelectedOrder(){
-      // prefer from orders list if exists
-      if (orders.length > 0){
-        return orders.find(o => o.ref === selectedOrderKey) || orders[0];
-      }
-      // fallback: build from loadedSaleOrder
+    function getSelectedOrder() {
+      if (orders.length > 0) return orders.find(o => o.ref === selectedOrderKey) || orders[0];
       if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: loadedSaleOrder.id, preview: loadedSaleOrder, overrides: null };
       return null;
     }
 
-    function fillEditorFromOrder(order){
+    function fillEditorFromOrder(order) {
       const base = order?.preview || {};
       const ship = { ...(base.ship_to || {}), ...((order?.overrides?.ship_to) || {}) };
       const from = { ...(base.from || {}), ...((order?.overrides?.from) || {}) };
-
-      edShipName.value = ship.name || "";
-      edShipPhone.value = ship.phone || "";
-      edShipL1.value = ship.line1 || "";
-      edShipL2.value = ship.line2 || "";
-      edShipCity.value = ship.city || "";
-      edShipState.value = ship.state || "";
-      edShipPin.value = ship.pin || "";
-      edShipCountry.value = ship.country || "";
-
-      edFromName.value = from.name || "";
-      edFromPhone.value = from.phone || "";
-      edFromL1.value = from.line1 || "";
-      edFromL2.value = from.line2 || "";
-      edFromCity.value = from.city || "";
-      edFromState.value = from.state || "";
-      edFromPin.value = from.pin || "";
-      edFromCountry.value = from.country || "";
+      edShipName.value = ship.name || ''; edShipPhone.value = ship.phone || '';
+      edShipL1.value = ship.line1 || ''; edShipL2.value = ship.line2 || '';
+      edShipCity.value = ship.city || ''; edShipState.value = ship.state || '';
+      edShipPin.value = ship.pin || ''; edShipCountry.value = ship.country || '';
+      edFromName.value = from.name || ''; edFromPhone.value = from.phone || '';
+      edFromL1.value = from.line1 || ''; edFromL2.value = from.line2 || '';
+      edFromCity.value = from.city || ''; edFromState.value = from.state || '';
+      edFromPin.value = from.pin || ''; edFromCountry.value = from.country || '';
     }
 
-    function readEditorOverrides(){
-      const clean = (v) => (v || "").trim();
-      const ship_to = {
-        name: clean(edShipName.value),
-        phone: clean(edShipPhone.value),
-        line1: clean(edShipL1.value),
-        line2: clean(edShipL2.value),
-        city: clean(edShipCity.value),
-        state: clean(edShipState.value),
-        pin: clean(edShipPin.value),
-        country: clean(edShipCountry.value),
-      };
-
-      const from = {
-        name: clean(edFromName.value),
-        phone: clean(edFromPhone.value),
-        line1: clean(edFromL1.value),
-        line2: clean(edFromL2.value),
-        city: clean(edFromCity.value),
-        state: clean(edFromState.value),
-        pin: clean(edFromPin.value),
-        country: clean(edFromCountry.value),
-      };
-
-      // remove empty keys to keep payload small
-      const prune = (obj) => {
-        const out = {};
-        Object.keys(obj).forEach(k => {
-          if (obj[k]) out[k] = obj[k];
-        });
-        return out;
-      };
-
+    function readEditorOverrides() {
+      const clean = (v) => (v || '').trim();
       return {
-        ship_to: prune(ship_to),
-        from: prune(from)
+        ship_to: { name: clean(edShipName.value), phone: clean(edShipPhone.value), line1: clean(edShipL1.value), line2: clean(edShipL2.value), city: clean(edShipCity.value), state: clean(edShipState.value), pin: clean(edShipPin.value), country: clean(edShipCountry.value) },
+        from: { name: clean(edFromName.value), phone: clean(edFromPhone.value), line1: clean(edFromL1.value), line2: clean(edFromL2.value), city: clean(edFromCity.value), state: clean(edFromState.value), pin: clean(edFromPin.value), country: clean(edFromCountry.value) }
       };
     }
 
-    btnOpenEditor?.addEventListener("click", () => {
+    btnOpenEditor?.addEventListener('click', () => {
       const order = getSelectedOrder();
-      if (!order) return alert("Fetch or add an order first.");
+      if (!order) return alert('Fetch or add an order first.');
       fillEditorFromOrder(order);
       openModal();
     });
 
-    closeEditModal?.addEventListener("click", closeModal);
-    editModalBack?.addEventListener("click", (e) => {
-      if (e.target === editModalBack) closeModal();
-    });
+    closeEditModal?.addEventListener('click', closeModal);
+    editModalBack?.addEventListener('click', (e) => { if (e.target === editModalBack) closeModal(); });
 
-    resetEdits?.addEventListener("click", () => {
+    resetEdits?.addEventListener('click', () => {
       const order = getSelectedOrder();
       if (!order) return;
-      // reset editor fields to base order (without overrides)
       const base = order.preview || {};
-      const ship = base.ship_to || {};
-      const from = base.from || {};
-
-      edShipName.value = ship.name || "";
-      edShipPhone.value = ship.phone || "";
-      edShipL1.value = ship.line1 || "";
-      edShipL2.value = ship.line2 || "";
-      edShipCity.value = ship.city || "";
-      edShipState.value = ship.state || "";
-      edShipPin.value = ship.pin || "";
-      edShipCountry.value = ship.country || "";
-
-      edFromName.value = from.name || "";
-      edFromPhone.value = from.phone || "";
-      edFromL1.value = from.line1 || "";
-      edFromL2.value = from.line2 || "";
-      edFromCity.value = from.city || "";
-      edFromState.value = from.state || "";
-      edFromPin.value = from.pin || "";
-      edFromCountry.value = from.country || "";
+      const ship = base.ship_to || {}, from = base.from || {};
+      edShipName.value = ship.name || ''; edShipPhone.value = ship.phone || '';
+      edShipL1.value = ship.line1 || ''; edShipL2.value = ship.line2 || '';
+      edShipCity.value = ship.city || ''; edShipState.value = ship.state || '';
+      edShipPin.value = ship.pin || ''; edShipCountry.value = ship.country || '';
+      edFromName.value = from.name || ''; edFromPhone.value = from.phone || '';
+      edFromL1.value = from.line1 || ''; edFromL2.value = from.line2 || '';
+      edFromCity.value = from.city || ''; edFromState.value = from.state || '';
+      edFromPin.value = from.pin || ''; edFromCountry.value = from.country || '';
     });
 
-    saveEdits?.addEventListener("click", () => {
+    saveEdits?.addEventListener('click', () => {
       const order = getSelectedOrder();
       if (!order) return;
-
       const overrides = readEditorOverrides();
-      const hasAny = Object.keys(overrides.ship_to).length || Object.keys(overrides.from).length;
-
-      if (orders.length > 0){
-        // apply to order in list
+      const prune = (obj) => { const out = {}; Object.keys(obj).forEach(k => { if (obj[k]) out[k] = obj[k]; }); return out; };
+      const pruned = { ship_to: prune(overrides.ship_to), from: prune(overrides.from) };
+      const hasAny = Object.keys(pruned.ship_to).length || Object.keys(pruned.from).length;
+      if (orders.length > 0) {
         const idx = orders.findIndex(o => o.ref === order.ref);
-        if (idx >= 0){
-          orders[idx].overrides = hasAny ? overrides : null;
-          selectedOrderKey = orders[idx].ref;
-          renderOrders();
-          renderPreview(orders[idx]);
-        }
+        if (idx >= 0) { orders[idx].overrides = hasAny ? pruned : null; selectedOrderKey = orders[idx].ref; renderOrders(); renderPreview(orders[idx]); }
       } else {
-        // if not in list, just update preview (temporary)
-        const temp = { ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: hasAny ? overrides : null };
-        selectedOrderKey = order.ref;
-        renderPreview(temp);
-        // NOTE: For single generate, we don't send overrides in this page (kept simple).
-        // Best practice: Add order, save overrides, then generate.
+        renderPreview({ ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: hasAny ? pruned : null });
       }
-
       closeModal();
-      setLabelStatus("Overrides saved for selected order ✅", false);
+      setLabelStatus('Overrides saved for selected order ✅', false);
     });
 
-    function openSOReport(type){
+    function openSOReport(type) {
       if (!loadedSaleOrder?.id) return;
-      const map = {
-        invoice: `/api/odoo/sale-order/${loadedSaleOrder.id}/invoice-pdf`,
-        packing: `/api/odoo/sale-order/${loadedSaleOrder.id}/packing-slip-pdf`,
-        proforma: `/api/odoo/sale-order/${loadedSaleOrder.id}/proforma-pdf`
-      };
+      const map = { invoice: `/api/odoo/sale-order/${loadedSaleOrder.id}/invoice-pdf`, packing: `/api/odoo/sale-order/${loadedSaleOrder.id}/packing-slip-pdf`, proforma: `/api/odoo/sale-order/${loadedSaleOrder.id}/proforma-pdf` };
       const url = map[type];
-      if (url) window.open(url, "_blank");
+      if (url) window.open(url, '_blank');
     }
 
-    btnInvoicePdf?.addEventListener("click", () => openSOReport("invoice"));
-    btnPackingPdf?.addEventListener("click", () => openSOReport("packing"));
-    btnProformaPdf?.addEventListener("click", () => openSOReport("proforma"));
+    btnInvoicePdf?.addEventListener('click', () => openSOReport('invoice'));
+    btnPackingPdf?.addEventListener('click', () => openSOReport('packing'));
+    btnProformaPdf?.addEventListener('click', () => openSOReport('proforma'));
 
-    btnLoadPickings?.addEventListener("click", async () => {
+    btnLoadPickings?.addEventListener('click', async () => {
       if (!loadedSaleOrder?.id) return;
-      pvPickings.innerHTML = `<div class="muted">Loading...</div>`;
+      pvPickings.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
       try {
         const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/pickings`);
         if (!resp.ok) throw new Error(await resp.text());
         const out = await resp.json();
         const rows = out.pickings || [];
-        if (!rows.length) {
-          pvPickings.innerHTML = `<div class="muted">No delivery orders found.</div>`;
-          return;
-        }
-        pvPickings.innerHTML = rows.map((r) => `
-          <div class="itemRow">
-            <div style="flex:1">${esc(r.name || "-")} • ${esc(r.state || "-")}</div>
-            <button class="btn" data-validate-picking="${r.id}">Validate</button>
-          </div>
-        `).join("");
-
-        pvPickings.querySelectorAll("[data-validate-picking]").forEach((el) => {
-          el.addEventListener("click", async () => {
-            const id = el.getAttribute("data-validate-picking");
-            const vr = await fetch(`/api/odoo/picking/${id}/validate`, { method: "POST" });
-            alert(vr.ok ? "Picking validated" : await vr.text());
+        pvPickings.innerHTML = !rows.length
+          ? `<div class="item-row" style="color:var(--text-tertiary)">No delivery orders found.</div>`
+          : rows.map(r => `<div class="item-row"><div style="flex:1">${esc(r.name || '-')} · ${esc(r.state || '-')}</div><button class="btn btn-sm" data-validate-picking="${r.id}">Validate</button></div>`).join('');
+        pvPickings.querySelectorAll('[data-validate-picking]').forEach(el => {
+          el.addEventListener('click', async () => {
+            const vr = await fetch(`/api/odoo/picking/${el.getAttribute('data-validate-picking')}/validate`, { method: 'POST' });
+            alert(vr.ok ? 'Picking validated' : await vr.text());
           });
         });
-      } catch (e) {
-        pvPickings.innerHTML = `<div class="muted">Error: ${esc(e.message)}</div>`;
-      }
+      } catch (e) { pvPickings.innerHTML = `<div class="item-row" style="color:var(--danger)">Error: ${esc(e.message)}</div>`; }
     });
 
-    btnLoadFulfillment?.addEventListener("click", async () => {
+    btnLoadFulfillment?.addEventListener('click', async () => {
       if (!loadedSaleOrder?.id) return;
-      pvFulfillment.innerHTML = `<div class="muted">Loading...</div>`;
+      pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
       try {
         const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/fulfillment`);
         if (!resp.ok) throw new Error(await resp.text());
         const out = await resp.json();
         const rows = out.rows || [];
-        if (!rows.length) {
-          pvFulfillment.innerHTML = `<div class="muted">No fulfillment data.</div>`;
-          return;
-        }
-        pvFulfillment.innerHTML = rows.map((r) => `
-          <div class="itemRow">
-            <div style="flex:1">${esc(r.product_name || "-")}</div>
-            <div class="qtyPill">Ord ${esc(String(r.ordered_qty))} / OnHand ${esc(String(r.on_hand_qty))} / Fcst ${esc(String(r.forecast_qty))}${r.backorder_warning ? " ⚠️" : ""}</div>
-          </div>
-        `).join("");
-      } catch (e) {
-        pvFulfillment.innerHTML = `<div class="muted">Error: ${esc(e.message)}</div>`;
-      }
+        pvFulfillment.innerHTML = !rows.length
+          ? `<div class="item-row" style="color:var(--text-tertiary)">No fulfillment data.</div>`
+          : rows.map(r => `<div class="item-row"><div style="flex:1">${esc(r.product_name || '-')}</div><div class="qty-pill">Ord ${esc(String(r.ordered_qty))} / OnHand ${esc(String(r.on_hand_qty))} / Fcst ${esc(String(r.forecast_qty))}${r.backorder_warning ? ' ⚠️' : ''}</div></div>`).join('');
+      } catch (e) { pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--danger)">Error: ${esc(e.message)}</div>`; }
     });
 
-    async function loadDashboard(){
-      dashTbody.innerHTML = `<tr><td colspan="7" class="muted">Loading...</td></tr>`;
+    // ─── DASHBOARD ───
+    async function loadDashboard() {
+      dashTbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-tertiary)">Loading…</td></tr>`;
       try {
-        const q = encodeURIComponent((dashQuery.value || "").trim());
-        const st = encodeURIComponent((dashState.value || "").trim());
+        const q = encodeURIComponent((dashQuery.value || '').trim());
+        const st = encodeURIComponent((dashState.value || '').trim());
         const resp = await fetch(`/api/odoo/orders?query=${q}&state=${st}`);
         if (!resp.ok) throw new Error(await resp.text());
         const out = await resp.json();
         const rows = out.rows || [];
-        if (!rows.length){
-          dashTbody.innerHTML = `<tr><td colspan="7" class="muted">No rows.</td></tr>`;
-          return;
-        }
-        dashTbody.innerHTML = rows.map((r) => `
+        if (!rows.length) { dashTbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-tertiary)">No rows.</td></tr>`; return; }
+        dashTbody.innerHTML = rows.map(r => `
           <tr>
-            <td>${esc(r.ref || "-")}</td>
-            <td>${esc(r.customer || "-")}</td>
-            <td>${esc(r.date_order || "-")}</td>
+            <td>${esc(r.ref || '-')}</td>
+            <td>${esc(r.customer || '-')}</td>
+            <td>${esc(r.date_order || '-')}</td>
             <td>${esc(money(r.amount_total))}</td>
-            <td>${esc(r.state || "-")}</td>
-            <td>${esc(r.invoice_status || "-")}</td>
-            <td>
-              <button class="btn" data-open-so="${esc(String(r.ref || ""))}">Open</button>
-            </td>
-          </tr>
-        `).join("");
-
-        dashTbody.querySelectorAll("[data-open-so]").forEach((el) => {
-          el.addEventListener("click", async () => {
-            soRefEl.value = el.getAttribute("data-open-so") || "";
-            setActiveTab("labels");
+            <td>${esc(r.state || '-')}</td>
+            <td>${esc(r.invoice_status || '-')}</td>
+            <td><button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button></td>
+          </tr>`).join('');
+        dashTbody.querySelectorAll('[data-open-so]').forEach(el => {
+          el.addEventListener('click', async () => {
+            soRefEl.value = el.getAttribute('data-open-so') || '';
+            setActiveTab('labels');
             btnFetchSO.click();
           });
         });
-      } catch(e){
-        dashTbody.innerHTML = `<tr><td colspan="7" class="muted">Error: ${esc(e.message)}</td></tr>`;
-      }
+      } catch (e) { dashTbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--danger)">Error: ${esc(e.message)}</td></tr>`; }
     }
 
-    btnDashSearch?.addEventListener("click", loadDashboard);
+    btnDashSearch?.addEventListener('click', loadDashboard);
 
-    shipFromSelect?.addEventListener("change", () => {
+    shipFromSelect?.addEventListener('change', () => {
       const idx = Number(shipFromSelect.value);
       if (Number.isNaN(idx) || !shipFromOptions[idx]) return;
       const from = shipFromOptions[idx].from || {};
-      if (orders.length > 0){
+      if (orders.length > 0) {
         const order = orders.find(o => o.ref === selectedOrderKey) || orders[0];
-        if (order){
+        if (order) {
           order.overrides = order.overrides || { ship_to: {}, from: {} };
           order.overrides.from = { ...(order.overrides.from || {}), ...from };
           renderOrders();
@@ -1516,7 +2003,8 @@
         }
       }
     });
-    // Init
+
+    // ─── INIT ───
     renderOrders();
     renderPreview(null);
     refreshLabelsTable();
@@ -1525,4 +2013,3 @@
   </script>
 </body>
 </html>
-
