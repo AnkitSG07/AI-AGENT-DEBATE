@@ -673,57 +673,29 @@ app.post("/api/debate-stream", async (req, res) => {
 
 async function odooFetchReportPdf(reportName, docId) {
   if (!odooConfigured) throw new Error("Odoo not configured on server env.");
-  const base = ODOO_URL.replace(/\/$/, "");
 
-  const authResp = await fetch(`${base}/web/session/authenticate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "call",
-      params: {
-        db: ODOO_DB,
-        login: ODOO_USERNAME,
-        password: ODOO_PASS
+  // Prefer JSON-RPC rendering because it uses the same auth path as odooLogin/odooExecute.
+  // This avoids deployment differences in /web/session/authenticate cookie behavior.
+  const uid = await odooLogin();
+
+  const attemptMethods = ["_render_qweb_pdf", "render_qweb_pdf"];
+  let lastErr = null;
+
+  for (const method of attemptMethods) {
+    try {
+      const rendered = await odooExecute(uid, "ir.actions.report", method, [reportName, [Number(docId)]]);
+      const pdfPayload = Array.isArray(rendered) ? rendered[0] : rendered;
+      if (typeof pdfPayload === "string" && pdfPayload.length) {
+        return Buffer.from(pdfPayload, "base64");
       }
-    })
-  });
-
-  if (!authResp.ok) throw new Error(`Odoo auth failed: HTTP ${authResp.status}`);
-  const authJson = await authResp
-    .json()
-    .catch(() => ({}));
-
-  if (authJson?.error) {
-    const message = authJson.error?.data?.message || authJson.error?.message || "unknown error";
-    throw new Error(`Odoo auth failed: ${message}`);
+      if (Buffer.isBuffer(pdfPayload)) return pdfPayload;
+      throw new Error("unexpected PDF payload");
+    } catch (err) {
+      lastErr = err;
+    }
   }
 
-  const setCookieHeader = authResp.headers.get("set-cookie") || "";
-  const setCookies = typeof authResp.headers.getSetCookie === "function"
-    ? authResp.headers.getSetCookie()
-    : [];
-  const cookieSource = [setCookieHeader, ...setCookies].filter(Boolean).join("; ");
-
-  const cookieSessionId = cookieSource.match(/(?:^|[;,]\s*)session_id=([^;]+)/)?.[1];
-  const bodySessionId = authJson?.result?.session_id || authJson?.result?.sessionId;
-  const sessionId = bodySessionId || cookieSessionId;
-
-  if (!sessionId) {
-    throw new Error("Odoo auth failed: no session cookie or session_id in response");
-  }
-
-
-  const pdfResp = await fetch(`${base}/report/pdf/${reportName}/${docId}`, {
-    headers: { Cookie: `session_id=${sessionId}` }
-  });
-
-  if (!pdfResp.ok) {
-    const text = await pdfResp.text().catch(() => "");
-    throw new Error(`Failed report ${reportName}: HTTP ${pdfResp.status} ${text}`);
-  }
-  const arr = await pdfResp.arrayBuffer();
-  return Buffer.from(arr);
+  throw new Error(`Failed report ${reportName}: ${lastErr?.message || "unable to render PDF"}`);
 }
 
 async function odooGetPickingsBySaleOrderId(soId) {
