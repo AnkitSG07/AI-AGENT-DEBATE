@@ -2107,7 +2107,7 @@
           edFromCity = document.getElementById('edFromCity'), edFromState = document.getElementById('edFromState'),
           edFromPin = document.getElementById('edFromPin'), edFromCountry = document.getElementById('edFromCountry');
 
-    let loadedSaleOrder = null, selectedOrderKey = null, orders = [], shipFromOptions = [];
+    let loadedSaleOrder = null, singleOrderOverrides = null, selectedOrderKey = null, orders = [], shipFromOptions = [];
 
     async function loadShipFromOptions() {
       try {
@@ -2132,6 +2132,10 @@
       return out;
     }
 
+    function getOrderId(order) {
+      return order?.sale_order_id || order?.preview?.id || order?.id || null;
+    }
+  
     function renderPreview(order) {
       if (!order?.preview) {
         previewEmpty.style.display = 'block';
@@ -2141,7 +2145,7 @@
         return;
       }
       const p = applyOverridesToPreview(order.preview, order.overrides);
-      loadedSaleOrder = p;
+      loadedSaleOrder = { ref: order.ref || p.ref, sale_order_id: getOrderId(order), preview: order.preview, overrides: order.overrides || null };
       previewEmpty.style.display = 'none';
       previewBody.style.display = 'block';
       btnOpenEditor.disabled = false;
@@ -2243,7 +2247,7 @@
       setLabelStatus('Fetching Sales Order from Odoo…', true);
       try {
         const data = await fetchSO(ref);
-        loadedSaleOrder = data;
+        singleOrderOverrides = null;
         selectedOrderKey = data.ref;
         renderPreview({ ref: data.ref, sale_order_id: data.id, preview: data, overrides: null });
         setLabelStatus('Sales Order loaded. You can Edit Label or Add Order.', false);
@@ -2268,6 +2272,10 @@
       } catch (e) { setLabelStatus('Error: ' + e.message, false); }
     });
 
+    function getActiveOrderPayload(order) {
+      return { ref: order.ref, overrides: order.overrides || undefined };
+    }
+  
     btnGenerateLabel?.addEventListener('click', async () => {
       const bigBox = !!bigBoxToggle?.checked;
       const layout = bigBox ? 'FULL' : 'AUTO';
@@ -2276,12 +2284,13 @@
       try {
         let resp, out;
         if (orders.length > 0) {
-          resp = await fetch('/api/labels/generate-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orders: orders.map(o => ({ ref: o.ref, overrides: o.overrides || undefined })), layout }) });
+          resp = await fetch('/api/labels/generate-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orders: orders.map(getActiveOrderPayload), layout }) });
           if (!resp.ok) throw new Error(await resp.text());
           out = await resp.json();
         } else {
-          if (!loadedSaleOrder?.id) throw new Error('Fetch an order or add orders first.');
-          resp = await fetch('/api/labels/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sale_order_id: loadedSaleOrder.id, overrides: null, layout }) });
+          const saleOrderId = getOrderId(loadedSaleOrder);
+          if (!saleOrderId) throw new Error('Fetch an order or add orders first.');
+          resp = await fetch('/api/labels/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sale_order_id: saleOrderId, overrides: singleOrderOverrides || undefined, layout }) });
           if (!resp.ok) throw new Error(await resp.text());
           out = await resp.json();
         }
@@ -2297,7 +2306,7 @@
 
     function getSelectedOrder() {
       if (orders.length > 0) return orders.find(o => o.ref === selectedOrderKey) || orders[0];
-      if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: loadedSaleOrder.id, preview: loadedSaleOrder, overrides: null };
+      if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: getOrderId(loadedSaleOrder), preview: loadedSaleOrder.preview, overrides: singleOrderOverrides };
       return null;
     }
 
@@ -2359,15 +2368,19 @@
         const idx = orders.findIndex(o => o.ref === order.ref);
         if (idx >= 0) { orders[idx].overrides = hasAny ? pruned : null; selectedOrderKey = orders[idx].ref; renderOrders(); renderPreview(orders[idx]); }
       } else {
-        renderPreview({ ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: hasAny ? pruned : null });
+        singleOrderOverrides = hasAny ? pruned : null;
+        renderPreview({ ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: singleOrderOverrides });
+
       }
       closeModal();
       setLabelStatus('Overrides saved for selected order ✅', false);
     });
 
     function openSOReport(type) {
-      if (!loadedSaleOrder?.id) return;
-      const map = { invoice: `/api/odoo/sale-order/${loadedSaleOrder.id}/invoice-pdf`, packing: `/api/odoo/sale-order/${loadedSaleOrder.id}/packing-slip-pdf`, proforma: `/api/odoo/sale-order/${loadedSaleOrder.id}/proforma-pdf` };
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
+      const map = { invoice: `/api/odoo/sale-order/${saleOrderId}/invoice-pdf`, packing: `/api/odoo/sale-order/${saleOrderId}/packing-slip-pdf`, proforma: `/api/odoo/sale-order/${saleOrderId}/proforma-pdf` };
+
       const url = map[type];
       if (url) window.open(url, '_blank');
     }
@@ -2377,10 +2390,12 @@
     btnProformaPdf?.addEventListener('click', () => openSOReport('proforma'));
 
     btnLoadPickings?.addEventListener('click', async () => {
-      if (!loadedSaleOrder?.id) return;
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
+
       pvPickings.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
       try {
-        const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/pickings`);
+        const resp = await fetch(`/api/odoo/sale-order/${saleOrderId}/pickings`);
         if (!resp.ok) throw new Error(await resp.text());
         const out = await resp.json();
         const rows = out.pickings || [];
@@ -2397,10 +2412,11 @@
     });
 
     btnLoadFulfillment?.addEventListener('click', async () => {
-      if (!loadedSaleOrder?.id) return;
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
       pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
       try {
-        const resp = await fetch(`/api/odoo/sale-order/${loadedSaleOrder.id}/fulfillment`);
+        const resp = await fetch(`/api/odoo/sale-order/${saleOrderId}/fulfillment`);
         if (!resp.ok) throw new Error(await resp.text());
         const out = await resp.json();
         const rows = out.rows || [];
