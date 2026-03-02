@@ -711,7 +711,11 @@ function detectAutoMode(message, history = []) {
     return { mode: "sales_automation", reason: "Detected workflow/order automation intent." };
   }
 
-  const hasComplianceIntent = /(compliance|ce|ukca|ul|rohs|bis|iec|certificate|certification|hs\s*code|incoterm|export|customs|regulation|legal)/i.test(combined);
+  // Routing sanity checks:
+  // - Should NOT trigger compliance: "201 price for 1000 pieces", "price for 202"
+  // - Should trigger compliance: "Do you have CE certificate?", "export compliance for EU"
+  const hasComplianceIntent = /\b(compliance|ce|ukca|ul|rohs|bis|iec|certificate|certification|hs\s*code|incoterm|export|customs|regulation|legal)\b/i.test(combined);
+
   if (hasComplianceIntent) {
     return { mode: "compliance_assistant", reason: "Detected compliance/export intent." };
   }
@@ -764,7 +768,9 @@ const productKnowledgeCache = {
   raw: "",
   chunks: [],
   vectors: [],
-  embedError: null
+  embedError: null,
+  skuCatalog: [],
+  pricingCatalog: new Map()
 };
 
 function normalizeText(v) {
@@ -939,10 +945,14 @@ async function ensureKnowledgeIndex(knowledgeText) {
   if (productKnowledgeCache.raw === raw && productKnowledgeCache.chunks.length) return;
 
   const chunks = splitKnowledgeIntoChunks(raw);
+  const skuCatalog = buildSkuCatalog(raw);
+  const pricingCatalog = buildPricingCatalog(raw, skuCatalog);
   productKnowledgeCache.raw = raw;
   productKnowledgeCache.chunks = chunks;
   productKnowledgeCache.vectors = [];
   productKnowledgeCache.embedError = null;
+  productKnowledgeCache.skuCatalog = skuCatalog;
+  productKnowledgeCache.pricingCatalog = pricingCatalog;
 
   try {
     const vectors = [];
@@ -955,6 +965,114 @@ async function ensureKnowledgeIndex(knowledgeText) {
   } catch (e) {
     productKnowledgeCache.embedError = e.message;
   }
+}
+
+function buildSkuCatalog(knowledgeText = "") {
+  return Array.from(knowledgeText.matchAll(/^## SKU:\s*([A-Z0-9-]+)\s*[—-]\s*(.+)$/gmi)).map((m) => {
+    const sku = m[1].trim();
+    const title = m[2].trim();
+    const compact = sku.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const numbers = Array.from(sku.matchAll(/\d{2,4}/g)).map((n) => n[0]);
+    const hasLC = /(?:^|-)lc(?:-|$)/i.test(sku);
+    return { sku, title, compact, numbers, hasLC };
+  });
+}
+
+function buildPricingCatalog(knowledgeText = "", skuCatalog = []) {
+  const catalog = new Map();
+  for (const entry of skuCatalog) {
+    const escapedSku = entry.sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const blockPattern = new RegExp(`## SKU:\\s*${escapedSku}[\\s\\S]*?(?=\\n## SKU:|\\n#\\s|$)`, "i");
+    const blockMatch = knowledgeText.match(blockPattern);
+    if (!blockMatch) continue;
+    const block = blockMatch[0];
+    const tiers = Array.from(block.matchAll(/-\s*([^:\n]+):\s*₹\s*(\d+(?:\.\d+)?)/gi)).map((m) => {
+      const label = m[1].trim();
+      const price = Number(m[2]);
+      const threshold = label.toLowerCase().includes("sample")
+        ? 1
+        : Number((label.match(/(\d{1,6})\s*\+/) || [])[1] || NaN);
+      return {
+        label,
+        price,
+        threshold: Number.isFinite(threshold) ? threshold : null
+      };
+    }).filter((t) => Number.isFinite(t.price));
+
+    if (tiers.length) {
+      catalog.set(entry.sku, tiers.sort((a, b) => (a.threshold ?? 0) - (b.threshold ?? 0)));
+    }
+  }
+  return catalog;
+}
+
+function parseUserQuantity(message = "") {
+  const text = normalizeText(message).toLowerCase();
+  if (!text) return null;
+
+  const qtyMatch = text.match(/\b(\d{1,6})\s*(?:\+|pcs?|pieces?|units?|qty|quantity|sets?)\b/i)
+    || text.match(/\bfor\s+(\d{1,6})\b/i);
+  if (!qtyMatch) return null;
+  const qty = Number(qtyMatch[1]);
+  return Number.isFinite(qty) ? qty : null;
+}
+
+function resolveSkuCandidates(message = "", skuCatalog = []) {
+  const text = normalizeText(message).toLowerCase();
+  if (!text) return [];
+
+  const tokens = new Set(Array.from(text.matchAll(/[a-z0-9-]{2,}/g)).map((m) => m[0]));
+  const compactText = text.replace(/[^a-z0-9]/g, "");
+  const numericTokens = new Set(Array.from(text.matchAll(/\b(\d{2,4})\b/g)).map((m) => m[1]));
+  const asksLC = /\blc\b/i.test(text);
+
+  const directMatches = skuCatalog.filter((entry) => {
+    if (tokens.has(entry.sku.toLowerCase())) return true;
+    if (compactText.includes(entry.compact)) return true;
+    return false;
+  });
+
+  if (directMatches.length) {
+    if (asksLC) {
+      const lcDirect = directMatches.filter((x) => x.hasLC);
+      return lcDirect.length ? lcDirect : directMatches;
+    }
+    return directMatches;
+  }
+
+  let numericMatches = skuCatalog.filter((entry) => entry.numbers.some((n) => numericTokens.has(n)));
+  if (asksLC) {
+    const lcMatches = numericMatches.filter((entry) => entry.hasLC);
+    if (lcMatches.length) return lcMatches;
+  }
+  return numericMatches;
+}
+
+function buildSkuClarificationReply(candidates = []) {
+  const lines = candidates.map((c) => `- ${c.sku}: ${c.title}`);
+  return `I found multiple matching SKUs. Please confirm which one you want:\n${lines.join("\n")}\n\nYou can reply with the exact SKU (for example: ${candidates[0]?.sku || "AS-B-202-DLD"}).`;
+}
+
+function buildDeterministicPricingReply({ sku, title, qty, tiers }) {
+  const tierRows = tiers
+    .map((t) => `- ${t.label}: ₹${t.price} per unit`)
+    .join("\n");
+
+  if (!qty) {
+    return `${sku} (${title}) pricing tiers:\n${tierRows}\n\nPlease share required quantity to confirm the applicable tier.`;
+  }
+
+  const minTier = tiers.find((t) => t.threshold && t.threshold > 1);
+  const applicable = tiers
+    .filter((t) => t.threshold !== null && qty >= t.threshold)
+    .sort((a, b) => (b.threshold ?? 0) - (a.threshold ?? 0))[0];
+
+  if (!applicable || (minTier && qty < minTier.threshold && qty > 1)) {
+    const nearest = minTier || tiers[0];
+    return `I don’t have an exact ${qty}-piece tier for ${sku}.\nNearest available tier is ${nearest.label}: ₹${nearest.price} per unit.\n\nFull tiers:\n${tierRows}`;
+  }
+
+  return `${sku} (${title}) for ${qty} pieces: ₹${applicable.price} per unit (${applicable.label} tier).\n\nFull tiers:\n${tierRows}`;
 }
 
 async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
@@ -1090,6 +1208,69 @@ app.post("/api/product-bot", async (req, res) => {
     }
 
     await ensureKnowledgeIndex(knowledge);
+
+    const skuCandidates = resolveSkuCandidates(message, productKnowledgeCache.skuCatalog);
+    const hasAmbiguousSku = skuCandidates.length > 1;
+    const asksPricing = /(price|pricing|quote|quotation|rate|cost)/i.test(message);
+    if (hasAmbiguousSku) {
+      return res.json({
+        ok: true,
+        mode: "b2b_sales_assistant",
+        mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+        mode_reason: "Detected multiple SKU matches; asking for variant clarification.",
+        answer: buildSkuClarificationReply(skuCandidates.slice(0, 5)),
+        retrieval: {
+          top_k: 0,
+          strategy: "sku_disambiguation",
+          embed_error: productKnowledgeCache.embedError,
+          sources: []
+        }
+      });
+    }
+
+    const resolvedSku = skuCandidates.length === 1 ? skuCandidates[0] : null;
+    const isShortSkuOnlyPrompt = resolvedSku && /^(?:[a-z]{1,3}-)?\d{2,4}(?:\s+lc)?$/i.test(normalizeText(message));
+    if (isShortSkuOnlyPrompt) {
+      return res.json({
+        ok: true,
+        mode: "b2b_sales_assistant",
+        mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+        mode_reason: "Resolved SKU variant from short query.",
+        answer: `Resolved SKU: ${resolvedSku.sku} (${resolvedSku.title}).
+Share quantity if you want exact tier pricing.`,
+        retrieval: {
+          top_k: 0,
+          strategy: "sku_resolution",
+          embed_error: productKnowledgeCache.embedError,
+          sources: []
+        }
+      });
+    }
+
+    if (asksPricing && resolvedSku && productKnowledgeCache.pricingCatalog.has(resolvedSku.sku)) {
+      const qty = parseUserQuantity(message);
+      const tiers = productKnowledgeCache.pricingCatalog.get(resolvedSku.sku) || [];
+      const answer = buildDeterministicPricingReply({
+        sku: resolvedSku.sku,
+        title: resolvedSku.title,
+        qty,
+        tiers
+      });
+      return res.json({
+        ok: true,
+        mode: "b2b_sales_assistant",
+        mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+        mode_reason: "Used deterministic SKU pricing tier logic.",
+        answer,
+        retrieval: {
+          top_k: 0,
+          strategy: "deterministic_pricing",
+          embed_error: productKnowledgeCache.embedError,
+          sources: []
+        }
+      });
+    }
+
     const retrieved = await retrieveRelevantChunks(message, PRODUCT_BOT_TOP_K);
     if (!retrieved.length) {
       return res.status(500).json({ error: "Knowledge index is empty. Expand product-knowledge.md content." });
@@ -1126,23 +1307,22 @@ Use freshness flags below when choosing pricing_status/policy_status/disclaimer_
 
     const outputContractByMode = {
       simple_chatbot: `
-Response contract:
-1) Start with one short direct answer line.
-2) Then add "Details:" with 2-5 bullet points.
-3) If info is missing, say exactly: "I don't have that in the knowledge base."
+Write naturally for end users.
+1) Start with a direct, concise answer.
+2) Add short supporting bullets only when helpful.
+3) If information is missing, clearly say you don't have it in the knowledge base and suggest support contact.
 4) End with "Sources: [x][y]".`,
       b2b_sales_assistant: `
-Response contract:
-1) "Recommendation:" one-line recommendation.
-2) "Why this fits:" 2-4 bullets tied to retrieved facts.
-3) "What I need from you:" ask only missing qualification fields.
-4) "Next step:" one of (quote, sample, technical call).
-5) End with "Sources: [x][y]".`,
+Write naturally for a buyer conversation.
+1) Provide the direct answer first (include pricing tiers when relevant).
+2) Ask at most one clarification question if critical details are missing.
+3) Keep recommendations practical and concise without legal boilerplate.
+4) End with "Sources: [x][y]".`,
       compliance_assistant: `
-Response contract:
-1) "Compliance summary:" one short paragraph.
-2) "Allowed claim:" and "Cannot claim:" bullets.
-3) "Action required:" include escalation to compliance officer/testing lab when needed.
+Write naturally and clearly.
+1) Give a short compliance summary grounded in retrieved policy text.
+2) Mention limitations only when relevant to the question.
+3) Recommend compliance officer/testing-lab validation only for regulatory uncertainty.
 4) End with "Sources: [x][y]".`,
       sales_automation: `
 Response contract:
