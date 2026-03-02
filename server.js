@@ -1060,7 +1060,7 @@ app.get("/api/odoo/sale-order/:id/fulfillment", async (req, res) => {
 app.get("/api/odoo/sale-order/:id/invoice-pdf", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const pdf = await odooFetchReportPdf("account.account_invoices", id);
+    const pdf = await odooFetchReportPdf("account.report_invoice", id);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="SO-${id}-invoice.pdf"`);
     return res.send(pdf);
