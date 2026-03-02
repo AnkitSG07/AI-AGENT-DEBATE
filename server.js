@@ -1102,6 +1102,232 @@ async function odooSearchOrders({ query = "", state = "", limit = 50 }) {
   return orders || [];
 }
 
+async function runAutomationRules(uid, options = {}) {
+  const overdueDays = Number(options.overdueDays ?? 7);
+  const out = { overdueInvoices: [], leadAssignments: [] };
+
+  const overdueInvoices = await odooExecute(
+    uid,
+    "account.move",
+    "search_read",
+    [[
+      ["move_type", "=", "out_invoice"],
+      ["state", "=", "posted"],
+      ["payment_state", "!=", "paid"],
+      ["invoice_date_due", "!=", false],
+      ["invoice_date_due", "<", new Date(Date.now() - overdueDays * 86400000).toISOString().slice(0, 10)]
+    ], ["id", "name", "partner_id", "invoice_date_due", "amount_residual"]],
+    { limit: 100 }
+  );
+
+  for (const inv of overdueInvoices || []) {
+    const note = `Invoice ${inv.name || inv.id} is overdue since ${inv.invoice_date_due || "unknown date"}.`;
+    const activityId = await odooExecute(uid, "mail.activity", "create", [{
+      res_model_id: false,
+      summary: "Overdue invoice follow-up",
+      note,
+      date_deadline: new Date().toISOString().slice(0, 10)
+    }]).catch(() => null);
+
+    out.overdueInvoices.push({
+      invoice_id: inv.id,
+      invoice: inv.name,
+      partner: inv.partner_id?.[1] || "",
+      due_date: inv.invoice_date_due,
+      amount_residual: inv.amount_residual,
+      followup_activity_id: activityId
+    });
+  }
+
+  const unassignedLeads = await odooExecute(
+    uid,
+    "crm.lead",
+    "search_read",
+    [[["user_id", "=", false], ["type", "=", "opportunity"]], ["id", "name", "country_id", "partner_name"]],
+    { limit: 100 }
+  );
+
+  const users = await odooExecute(uid, "res.users", "search_read", [[], ["id", "name"]], { limit: 200 });
+  const fallbackSalesUser = users?.[0]?.id || null;
+  for (const lead of unassignedLeads || []) {
+    if (!fallbackSalesUser) break;
+    await odooExecute(uid, "crm.lead", "write", [[lead.id], { user_id: fallbackSalesUser }]);
+    out.leadAssignments.push({ lead_id: lead.id, lead: lead.name, assigned_user_id: fallbackSalesUser });
+  }
+
+  return out;
+}
+
+async function generateOdooSummary(uid) {
+  const [newLeads, unpaidInvoices, lowStockProducts] = await Promise.all([
+    odooExecute(uid, "crm.lead", "search_count", [[["create_date", ">=", new Date(Date.now() - 86400000).toISOString()]]]),
+    odooExecute(uid, "account.move", "search_count", [[["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "!=", "paid"]]]),
+    odooExecute(uid, "product.product", "search_read", [[["qty_available", "<=", 5]], ["id", "display_name", "qty_available"]], { limit: 20 })
+  ]);
+
+  return {
+    generated_at: now(),
+    new_leads_24h: newLeads,
+    unpaid_invoices: unpaidInvoices,
+    low_stock: lowStockProducts || []
+  };
+}
+
+async function computeKpis(uid) {
+  const monthlyRevenue = await odooExecute(
+    uid,
+    "account.move",
+    "search_read",
+    [[
+      ["move_type", "=", "out_invoice"],
+      ["state", "=", "posted"],
+      ["invoice_date", ">=", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10)]
+    ], ["amount_total"]],
+    { limit: 5000 }
+  );
+
+  const pipeline = await odooExecute(uid, "crm.lead", "search_read", [[["type", "=", "opportunity"], ["active", "=", true]], ["expected_revenue"]], { limit: 5000 });
+  const aging = await odooExecute(uid, "account.move", "search_read", [[["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "!=", "paid"]], ["name", "invoice_date_due", "amount_residual", "partner_id"]], { limit: 2000 });
+  const topProducts = await odooExecute(uid, "sale.order.line", "search_read", [[], ["product_id", "price_total"]], { limit: 5000, order: "id desc" });
+
+  const topMap = new Map();
+  for (const row of topProducts || []) {
+    const key = row.product_id?.[1] || "Unknown";
+    topMap.set(key, (topMap.get(key) || 0) + Number(row.price_total || 0));
+  }
+
+  return {
+    monthly_revenue: (monthlyRevenue || []).reduce((a, b) => a + Number(b.amount_total || 0), 0),
+    pipeline_value: (pipeline || []).reduce((a, b) => a + Number(b.expected_revenue || 0), 0),
+    collection_aging: aging || [],
+    top_products: Array.from(topMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, revenue]) => ({ name, revenue }))
+  };
+}
+
+async function handleNaturalLanguageQuery(uid, text) {
+  const q = String(text || "").toLowerCase();
+  if (q.includes("unpaid") && q.includes("invoice")) {
+    const rows = await odooExecute(uid, "account.move", "search_read", [[["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "!=", "paid"]], ["id", "name", "invoice_date_due", "amount_residual", "partner_id"]], { limit: 50, order: "invoice_date_due asc" });
+    return { intent: "list_unpaid_invoices", rows };
+  }
+  if (q.includes("delayed") && q.includes("order")) {
+    const rows = await odooExecute(uid, "sale.order", "search_read", [[["state", "in", ["sale", "done"]]], ["id", "name", "partner_id", "commitment_date", "invoice_status"]], { limit: 20, order: "id desc" });
+    return {
+      intent: "explain_order_delay",
+      rows,
+      explanation: "Use fulfillment endpoint plus latest purchase orders and stock pickings to diagnose stockout, supplier delay, or pending delivery validation."
+    };
+  }
+  return { intent: "fallback", message: "Could not infer intent. Try: unpaid invoices, delayed order, customer lookup." };
+}
+
+// ===================== ODOO CRM/ERP ASSISTANT ROUTES =====================
+app.post("/api/odoo/query", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const { model, domain = [], fields = [], limit = 50 } = req.body || {};
+    if (!model) return res.status(400).json({ error: "model is required" });
+    const uid = await odooLogin();
+    const rows = await odooExecute(uid, model, "search_read", [domain, fields], { limit: Math.min(Number(limit) || 50, 200) });
+    return res.json({ ok: true, model, rows });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/odoo/action", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const { action, payload = {}, approval = {} } = req.body || {};
+    const uid = await odooLogin();
+
+    if (["confirm_order", "mark_done"].includes(action) && !approval?.approved) {
+      return res.status(403).json({ error: `Action '${action}' requires approval`, approval_required: true });
+    }
+
+    if (action === "create_lead") {
+      const id = await odooExecute(uid, "crm.lead", "create", [payload]);
+      return res.json({ ok: true, action, id });
+    }
+    if (action === "create_contact") {
+      const id = await odooExecute(uid, "res.partner", "create", [payload]);
+      return res.json({ ok: true, action, id });
+    }
+    if (action === "create_quotation") {
+      const id = await odooExecute(uid, "sale.order", "create", [payload]);
+      return res.json({ ok: true, action, id });
+    }
+    if (action === "create_invoice_draft") {
+      const id = await odooExecute(uid, "account.move", "create", [{ ...payload, state: "draft" }]);
+      return res.json({ ok: true, action, id });
+    }
+    if (action === "update_opportunity_stage") {
+      await odooExecute(uid, "crm.lead", "write", [[payload.id], { stage_id: payload.stage_id }]);
+      return res.json({ ok: true, action, id: payload.id });
+    }
+    if (action === "add_activity") {
+      const id = await odooExecute(uid, "mail.activity", "create", [payload]);
+      return res.json({ ok: true, action, id });
+    }
+    if (action === "confirm_order") {
+      await odooExecute(uid, "sale.order", "action_confirm", [[payload.id]]);
+      return res.json({ ok: true, action, id: payload.id });
+    }
+    if (action === "mark_done") {
+      await odooExecute(uid, payload.model, "write", [[payload.id], { state: "done" }]);
+      return res.json({ ok: true, action, id: payload.id, model: payload.model });
+    }
+    return res.status(400).json({ error: `Unsupported action '${action}'` });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/odoo/automation/run", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const uid = await odooLogin();
+    const rules = await runAutomationRules(uid, req.body || {});
+    const dailySummary = await generateOdooSummary(uid);
+    return res.json({ ok: true, rules, dailySummary });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/api/odoo/nl-query", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const uid = await odooLogin();
+    const result = await handleNaturalLanguageQuery(uid, req.body?.message || "");
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/kpi-dashboard", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const uid = await odooLogin();
+    const kpis = await computeKpis(uid);
+    return res.json({ ok: true, generated_at: now(), ...kpis });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/reports/weekly", async (req, res) => {
+  try {
+    if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
+    const uid = await odooLogin();
+    const [kpis, summary] = await Promise.all([computeKpis(uid), generateOdooSummary(uid)]);
+    return res.json({ ok: true, report_type: "weekly", generated_at: now(), kpis, summary });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+});
+
 // ===================== LABEL ROUTES =====================
 
 // Fetch SO (single)
