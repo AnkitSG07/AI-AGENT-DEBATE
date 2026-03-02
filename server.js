@@ -724,6 +724,45 @@ function tokenize(text) {
   return normalizeText(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((x) => x.length > 2);
 }
 
+function extractQueryHints(query) {
+  const raw = normalizeText(query).toLowerCase();
+  if (!raw) return [];
+
+  const directMatches = Array.from(raw.matchAll(/[a-z0-9-]{3,}/g)).map((m) => m[0]);
+  const normalizedParts = directMatches.flatMap((part) => [part, part.replace(/[^a-z0-9]/g, "")]);
+  const compact = normalizedParts
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 3)
+    .filter((part) => /\d/.test(part) || /sku|price|model|driver|battery|usb|lc/.test(part));
+
+  return Array.from(new Set(compact));
+}
+
+function chunkHintScore(chunk, hints) {
+  if (!hints.length) return 0;
+
+  const haystack = `${chunk.title}\n${chunk.content}`.toLowerCase();
+  const compactHaystack = haystack.replace(/[^a-z0-9]/g, "");
+  let score = 0;
+
+  for (const hint of hints) {
+    if (hint.includes("-")) {
+      const escaped = hint.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(haystack)) score += 3;
+      continue;
+    }
+
+    if (/^\d+$/.test(hint)) {
+      if (new RegExp(`(^|[^a-z0-9])${hint}([^a-z0-9]|$)`, "i").test(haystack)) score += 2;
+      continue;
+    }
+
+    if (haystack.includes(hint) || compactHaystack.includes(hint)) score += 1;
+  }
+
+  return score;
+}
+
 function keywordScore(query, chunk) {
   const q = new Set(tokenize(query));
   const c = tokenize(`${chunk.title} ${chunk.content}`);
@@ -789,25 +828,32 @@ async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
   const chunks = productKnowledgeCache.chunks || [];
   if (!chunks.length) return [];
 
+  const hints = extractQueryHints(query);
+  const lexicalScored = chunks.map((chunk) => ({ chunk, lexicalScore: keywordScore(query, chunk) }));
+  let vectorScores = null;
+
   if (productKnowledgeCache.vectors.length === chunks.length) {
     try {
       const qVec = await embedText(query);
-      const scored = chunks.map((chunk, i) => ({
-        chunk,
-        score: cosine(qVec, productKnowledgeCache.vectors[i])
-      }));
-      return scored
-        .sort((a, b) => b.score - a.score)
-        .slice(0, topK)
-        .map((x) => x.chunk);
+      vectorScores = chunks.map((chunk, i) => ({ chunk, vectorScore: cosine(qVec, productKnowledgeCache.vectors[i]) }));
     } catch {
       // fallback to lexical retrieval
     }
   }
 
-  return chunks
-    .map((chunk) => ({ chunk, score: keywordScore(query, chunk) }))
-    .sort((a, b) => b.score - a.score)
+  const merged = chunks.map((chunk, i) => {
+    const lexicalScore = lexicalScored[i].lexicalScore;
+    const vectorScore = vectorScores?.[i]?.vectorScore ?? 0;
+    const hintScore = chunkHintScore(chunk, hints);
+    const combinedScore = (vectorScore * 0.7) + (lexicalScore * 0.3) + (hintScore * 0.4);
+    return { chunk, score: combinedScore, hintScore };
+  });
+
+  return merged
+    .sort((a, b) => {
+      if (b.hintScore !== a.hintScore) return b.hintScore - a.hintScore;
+      return b.score - a.score;
+    })
     .slice(0, topK)
     .map((x) => x.chunk);
 }
