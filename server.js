@@ -24,7 +24,11 @@ const genAI = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : nul
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
-const AGENT_C_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
+const AGENT_C_MODEL = process.env.OR_MODEL_GEMMA || process.env.OR_MODEL_MISTRAL || "google/gemma-3-4b-it";
+const PRODUCT_BOT_OR_MODEL = process.env.OR_MODEL_PRODUCT_BOT || process.env.OR_MODEL_GEMMA || AGENT_C_MODEL;
+const AGENT_A_OR_MODEL = process.env.OR_MODEL_AGENT_A || process.env.OR_MODEL_DEBATE_GEMINI || PRODUCT_BOT_OR_MODEL;
+const JUDGE_OR_MODEL = process.env.OR_MODEL_JUDGE || process.env.OR_MODEL_DEBATE_JUDGE || PRODUCT_BOT_OR_MODEL;
+
 const PRODUCT_KNOWLEDGE_PATH = process.env.PRODUCT_KNOWLEDGE_PATH || "./product-knowledge.md";
 const PRODUCT_BOT_FALLBACK_CONTEXT = process.env.PRODUCT_BOT_CONTEXT || "";
 
@@ -562,15 +566,47 @@ async function callGemini(system, prompt, debateText) {
   return response.text?.trim() || "";
 }
 
-async function callOpenRouter(system, prompt, debateText, modelName) {
+async function callGeminiWithFallback(system, prompt, debateText, openRouterModel) {
+  let geminiError = null;
+
+  if (genAI) {
+    try {
+      const text = await callGemini(system, prompt, debateText);
+      return {
+        text,
+        provider: "gemini",
+        model_used: GEMINI_MODEL,
+        fallback_from: null
+      };
+    } catch (e) {
+      geminiError = e;
+      if (!OPENROUTER_API_KEY || !isRateLimitOrQuotaError(e)) throw e;
+    }
+  }
+
+  if (!OPENROUTER_API_KEY) {
+    throw geminiError || new Error("No LLM provider configured.");
+  }
+
+  const openRouterResult = await callOpenRouterWithMeta(system, prompt, debateText, openRouterModel || PRODUCT_BOT_OR_MODEL);
+  return {
+    text: openRouterResult.text,
+    provider: "openrouter",
+    model_used: openRouterResult.model_used,
+    fallback_from: geminiError ? GEMINI_MODEL : null
+  };
+}
+
+async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
   if (!OPENROUTER_API_KEY) throw new Error("OpenRouter not configured (missing OPENROUTER_API_KEY).");
 
   const fallbacks = [
     modelName,
-    "google/gemma-2-9b-it",
-    "meta-llama/llama-3.1-8b-instruct",
-    "meta-llama/llama-3-8b-instruct"
-  ];
+    "google/gemma-3-1b-it",
+    "google/gemma-3-4b-it",
+    "google/gemma-3-12b-it",
+    "google/gemma-3-27b-it"
+  ].filter((m, index, arr) => m && arr.indexOf(m) === index);
 
   let lastErr = null;
 
@@ -607,13 +643,27 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
       const data = await response.json();
       const text = data.choices?.[0]?.message?.content?.trim() || "";
       if (!text) throw new Error("Empty response from provider");
-      return text;
+      return { text, model_used: m };
     } catch (e) {
       lastErr = e;
     }
   }
 
   throw new Error(`OpenRouter Error (all models failed): ${String(lastErr?.message || lastErr)}`);
+}
+
+async function callOpenRouter(system, prompt, debateText, modelName) {
+  const result = await callOpenRouterWithMeta(system, prompt, debateText, modelName);
+  return result.text;
+}
+
+function isRateLimitOrQuotaError(err) {
+  const text = String(err?.message || err || "").toLowerCase();
+  return text.includes("429") || text.includes("rate limit") || text.includes("quota") || text.includes("resource_exhausted");
+}
+
+async function callProductBotModel(system, prompt) {
+  return await callGeminiWithFallback(system, prompt, "", PRODUCT_BOT_OR_MODEL);
 }
 
 function historyToText(history) {
@@ -1033,8 +1083,6 @@ app.post("/api/product-bot", async (req, res) => {
         odoo_result: odooResult
       });
     }
-
-    if (!genAI) return res.status(503).json({ error: "Gemini is not configured (missing GEMINI_API_KEY)." });
   
     const knowledge = await readProductKnowledge();
     if (!knowledge) {
@@ -1120,22 +1168,22 @@ ${historyText || "(none)"}
 USER QUESTION:
 ${message}`;
 
-    const response = await genAI.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: prompt
-    });
+    const modelResult = await callProductBotModel(mode.system, prompt);
 
     return res.json({
       ok: true,
       mode: resolvedModeKey,
       mode_label: mode.label,
       mode_reason: requestedMode === "auto" || !PRODUCT_BOT_MODES[requestedMode] ? autoDetection.reason : "User-selected mode.",
-      answer: response.text?.trim() || "I could not generate a response.",
+      answer: modelResult.text || "I could not generate a response.",
       retrieval: {
         top_k: PRODUCT_BOT_TOP_K,
         strategy: productKnowledgeCache.vectors.length ? "embeddings" : "keyword_fallback",
         embed_error: productKnowledgeCache.embedError,
         sources: retrieved.map((c, i) => ({ id: i + 1, title: c.title })),
+        llm_provider: modelResult.provider,
+        llm_model: modelResult.model_used,
+        fallback_from: modelResult.fallback_from || null,
         ...freshness
       }
     });
@@ -1182,7 +1230,8 @@ app.post("/api/debate-stream", async (req, res) => {
 
       let reply = "";
       if (agent.type === "gemini") {
-        reply = await callGemini(agent.system, prompt, debateText);
+        const result = await callGeminiWithFallback(agent.system, prompt, debateText, AGENT_A_OR_MODEL);
+        reply = result.text;
       } else {
         reply = await callOpenRouter(agent.system, prompt, debateText, agent.model);
       }
@@ -1193,7 +1242,9 @@ app.post("/api/debate-stream", async (req, res) => {
     }
 
     send({ type: "status", message: "Judge finalizing...", time: now() });
-    const finalAnswer = await callGemini(JUDGE_SYSTEM, prompt, historyToText(history));
+    const judgeResult = await callGeminiWithFallback(JUDGE_SYSTEM, prompt, historyToText(history), JUDGE_OR_MODEL);
+    const finalAnswer = judgeResult.text;
+
 
     send({ type: "final", content: finalAnswer, time: now() });
     send({ type: "done", time: now() });
