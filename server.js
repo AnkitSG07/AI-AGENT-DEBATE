@@ -648,6 +648,27 @@ required integrations, and CRM/ERP handoff notes based only on retrieved context
   }
 };
 
+function detectAutoMode(message, history = []) {
+  const combined = `${history.map((h) => String(h?.content || "")).join(" ")} ${String(message || "")}`.toLowerCase();
+  const hasOrderIntent = /(create|make|place|confirm|process)\s+(an?\s+)?(order|quotation|quote|sales\s*order)/i.test(combined)
+    || /(crm|handoff|lead stage|next_action|workflow|automation|json)/i.test(combined);
+  if (hasOrderIntent) {
+    return { mode: "sales_automation", reason: "Detected workflow/order automation intent." };
+  }
+
+  const hasComplianceIntent = /(compliance|ce|ukca|ul|rohs|bis|iec|certificate|certification|hs\s*code|incoterm|export|customs|regulation|legal)/i.test(combined);
+  if (hasComplianceIntent) {
+    return { mode: "compliance_assistant", reason: "Detected compliance/export intent." };
+  }
+
+  const hasSalesIntent = /(price|pricing|quote|quotation|moq|lead\s*time|bundle|pairing|compatible|recommend|quantity|sku|integration|odoo|shopify|woocommerce|amazon)/i.test(combined);
+  if (hasSalesIntent) {
+    return { mode: "b2b_sales_assistant", reason: "Detected product qualification/sales intent." };
+  }
+
+  return { mode: "simple_chatbot", reason: "Defaulted to general website assistance." };
+}
+
 const PRODUCT_BOT_EMBED_MODEL = process.env.PRODUCT_BOT_EMBED_MODEL || "text-embedding-004";
 const PRODUCT_BOT_TOP_K = Math.max(2, Number(process.env.PRODUCT_BOT_TOP_K || 6));
 
@@ -817,8 +838,12 @@ app.post("/api/product-bot", async (req, res) => {
 
     const message = String(req.body?.message || "").trim();
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
-    const modeKey = String(req.body?.mode || "simple_chatbot").trim();
-    const mode = PRODUCT_BOT_MODES[modeKey] || PRODUCT_BOT_MODES.simple_chatbot;
+    const requestedMode = String(req.body?.mode || "auto").trim();
+    const autoDetection = detectAutoMode(message, history);
+    const resolvedModeKey = (requestedMode && requestedMode !== "auto" && PRODUCT_BOT_MODES[requestedMode])
+      ? requestedMode
+      : autoDetection.mode;
+    const mode = PRODUCT_BOT_MODES[resolvedModeKey] || PRODUCT_BOT_MODES.simple_chatbot;
 
     if (!message) return res.status(400).json({ error: "Missing message" });
 
@@ -842,7 +867,7 @@ app.post("/api/product-bot", async (req, res) => {
       .join("\n\n---\n\n");
 
     const freshness = extractFreshnessFlags(retrieved);
-    const automationSchema = modeKey === "sales_automation"
+    const automationSchema = resolvedModeKey === "sales_automation"
       ? `
 Automation JSON requirements:
 {
@@ -862,12 +887,37 @@ Use freshness flags below when choosing pricing_status/policy_status/disclaimer_
 `
       : "";
 
+    const outputContractByMode = {
+      simple_chatbot: `
+Response contract:
+1) Start with one short direct answer line.
+2) Then add "Details:" with 2-5 bullet points.
+3) If info is missing, say exactly: "I don't have that in the knowledge base."
+4) End with "Sources: [x][y]".`,
+      b2b_sales_assistant: `
+Response contract:
+1) "Recommendation:" one-line recommendation.
+2) "Why this fits:" 2-4 bullets tied to retrieved facts.
+3) "What I need from you:" ask only missing qualification fields.
+4) "Next step:" one of (quote, sample, technical call).
+5) End with "Sources: [x][y]".`,
+      compliance_assistant: `
+Response contract:
+1) "Compliance summary:" one short paragraph.
+2) "Allowed claim:" and "Cannot claim:" bullets.
+3) "Action required:" include escalation to compliance officer/testing lab when needed.
+4) End with "Sources: [x][y]".`,
+      sales_automation: `
+Response contract:
+1) Return ONLY valid JSON.
+2) No markdown, no prose.
+3) End your JSON with a "sources" field like ["[1]","[3]"] for traceability.`
+    };
+
     const prompt = `${mode.system}
 
 Output style:
-- Clear answer first
-- Then bullet points
-- End with "Sources:" and source numbers used${automationSchema}
+${outputContractByMode[resolvedModeKey]}${automationSchema}
 
 FRESHNESS FLAGS:
 ${JSON.stringify(freshness, null, 2)}
@@ -888,7 +938,9 @@ ${message}`;
 
     return res.json({
       ok: true,
-      mode: modeKey,
+      mode: resolvedModeKey,
+      mode_label: mode.label,
+      mode_reason: requestedMode === "auto" || !PRODUCT_BOT_MODES[requestedMode] ? autoDetection.reason : "User-selected mode.",
       answer: response.text?.trim() || "I could not generate a response.",
       retrieval: {
         top_k: PRODUCT_BOT_TOP_K,
@@ -904,7 +956,7 @@ ${message}`;
 });
 
 app.get("/api/product-bot/modes", (req, res) => {
-  const modes = Object.entries(PRODUCT_BOT_MODES).map(([key, value]) => ({ key, label: value.label }));
+  const modes = [{ key: "auto", label: "Auto-detect" }, ...Object.entries(PRODUCT_BOT_MODES).map(([key, value]) => ({ key, label: value.label }))];
   res.json({ ok: true, modes });
 });
 
