@@ -5,7 +5,8 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check:no-duplicate-odoo": "node scripts/check-no-duplicate-odoo.mjs"
   },
   "engines": {
     "node": "18.x"
