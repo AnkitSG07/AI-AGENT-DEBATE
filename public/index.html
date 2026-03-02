@@ -1515,7 +1515,7 @@
 
   <section id="botWidget" class="bot-widget" aria-label="Ask AI widget">
     <div class="bot-widget-header">
-      <div style="display:flex;align-items:center;gap:8px"><span>Ask AI</span><select id="botMode" style="max-width:190px"></select></div>
+      <div style="display:flex;align-items:center;gap:8px"><span>Ask AI</span><span class="hint-text">Auto mode</span></div>
       <button id="botCloseBtn" class="btn btn-sm">✕</button>
     </div>
     <div id="botMessages" class="bot-messages">
@@ -1528,7 +1528,7 @@
         <button id="botClearBtn" class="btn btn-sm">Clear</button>
       </div>
     </div>
-    <div id="botStatus" class="bot-widget-footer">Ready. Mode: Simple website chatbot.</div>
+    <div id="botStatus" class="bot-widget-footer">Ready. Auto mode is on.</div>
   </section>
 
   <script>
@@ -1694,7 +1694,6 @@
     const botLauncher = document.getElementById('botLauncher');
     const botWidget = document.getElementById('botWidget');
     const botCloseBtn = document.getElementById('botCloseBtn');
-    const botMode = document.getElementById('botMode');
     const botMessages = document.getElementById('botMessages');
     const botPrompt = document.getElementById('botPrompt');
     const botSendBtn = document.getElementById('botSendBtn');
@@ -1702,29 +1701,12 @@
     const botStatus = document.getElementById('botStatus');
     let botHistory = [];
 
-    const fallbackModes = [
-      { key: 'simple_chatbot', label: 'Simple website chatbot' },
-      { key: 'b2b_sales_assistant', label: 'Advanced B2B sales assistant' },
-      { key: 'compliance_assistant', label: 'Export-grade compliance assistant' },
-      { key: 'sales_automation', label: 'Full AI sales automation system' }
-    ];
-
-    async function loadBotModes() {
-      let modes = fallbackModes;
-      try {
-        const resp = await fetch('/api/product-bot/modes');
-        const out = await resp.json();
-        if (resp.ok && Array.isArray(out.modes) && out.modes.length) modes = out.modes;
-      } catch {}
-      botMode.innerHTML = modes.map((m) => `<option value="${esc(m.key)}">${esc(m.label)}</option>`).join('');
-      botMode.value = 'simple_chatbot';
-      botStatus.textContent = `Ready. Mode: ${botMode.options[botMode.selectedIndex]?.text || botMode.value}.`;
-    }
-
-    botMode.addEventListener('change', () => {
-      const label = botMode.options[botMode.selectedIndex]?.text || botMode.value;
-      botStatus.textContent = `Ready. Mode: ${label}.`;
-    });
+    const modeLabelMap = {
+      simple_chatbot: 'Simple website chatbot',
+      b2b_sales_assistant: 'Advanced B2B sales assistant',
+      compliance_assistant: 'Export-grade compliance assistant',
+      sales_automation: 'Full AI sales automation system'
+    };
 
     function addBotMessage(role, text) {
       const el = document.createElement('div');
@@ -1746,7 +1728,7 @@
         const resp = await fetch('/api/product-bot', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, history: botHistory, mode: botMode.value })
+          body: JSON.stringify({ message, history: botHistory, mode: 'auto' })
         });
         const out = await resp.json();
         if (!resp.ok) throw new Error(out.error || 'Failed to get response');
@@ -1755,7 +1737,7 @@
         addBotMessage('assistant', answer);
         botHistory.push({ role: 'user', content: message }, { role: 'assistant', content: answer });
         if (botHistory.length > 24) botHistory = botHistory.slice(-24);
-        const label = botMode.options[botMode.selectedIndex]?.text || botMode.value;
+        const label = out?.mode_label || modeLabelMap[out?.mode] || 'Auto-detect';
         const strategy = out?.retrieval?.strategy ? ` Retrieval: ${out.retrieval.strategy}.` : '';
         botStatus.textContent = `Ready. Mode: ${label}.${strategy}`;
       } catch (e) {
@@ -1776,10 +1758,8 @@
     botClearBtn.addEventListener('click', () => {
       botHistory = [];
       botMessages.innerHTML = '<div class="bot-msg assistant">Hi! I can answer questions from your company product knowledge base.</div>';
-      botStatus.textContent = `Ready. Mode: ${botMode.options[botMode.selectedIndex]?.text || botMode.value}.`;
+      botStatus.textContent = 'Ready. Auto mode is on.';
     });
-
-    loadBotModes();
 
     // ─── LABELS ───
     const soRefEl = document.getElementById('soRef');
