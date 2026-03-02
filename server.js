@@ -678,6 +678,10 @@ function isHelpIntent(message) {
   return /(how can you help|what can you do|help me|capabilities|what do you do)/i.test(text);
 }
 
+function isOdooOpsIntent(message) {
+  const text = String(message || "").toLowerCase();
+  return /(\bunpaid\b.*\binvoice\b|\binvoice\b.*\bunpaid\b|\boverdue\b.*\binvoice\b|\bcustomer\b|\bsales\s*order\b|\bquotation\b|\bcrm\b|\bpurchase\s*order\b|\bvendor\s*bill\b|\battendance\b|\btimesheet\b|\bemployee\b)/i.test(text);
+}
 function buildInternalOdooHelpReply() {
   return `I can help you with SmartHandicrafts product and sales support.
 
@@ -914,7 +918,6 @@ function extractFreshnessFlags(chunks) {
 
 app.post("/api/product-bot", async (req, res) => {
   try {
-    if (!genAI) return res.status(503).json({ error: "Gemini is not configured (missing GEMINI_API_KEY)." });
 
     const message = String(req.body?.message || "").trim();
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
@@ -942,6 +945,49 @@ app.post("/api/product-bot", async (req, res) => {
         }
       });
     }
+
+
+    if (isOdooOpsIntent(message)) {
+      if (!odooConfigured) {
+        return res.json({
+          ok: true,
+          mode: "odoo_operations",
+          mode_label: "Odoo operations assistant",
+          mode_reason: "Detected ERP/operations intent but Odoo is not configured.",
+          answer: "This looks like an Odoo operations question (invoices/customers/orders), but Odoo is not configured on this server. Please set ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_API_KEY_OR_PASSWORD.",
+          retrieval: {
+            top_k: 0,
+            strategy: "odoo_unavailable",
+            embed_error: null,
+            sources: []
+          }
+        });
+      }
+
+      const uid = await odooLogin();
+      const odooResult = await handleNaturalLanguageQuery(uid, message, {
+        role: req.body?.role,
+        user: req.body?.user || "product-bot"
+      });
+
+      const answer = odooResult.summary || odooResult.message || "Processed your Odoo query.";
+      return res.json({
+        ok: true,
+        mode: "odoo_operations",
+        mode_label: "Odoo operations assistant",
+        mode_reason: "Detected ERP/operations intent and routed to Odoo assistant.",
+        answer,
+        retrieval: {
+          top_k: 0,
+          strategy: "odoo_nl_query",
+          embed_error: null,
+          sources: []
+        },
+        odoo_result: odooResult
+      });
+    }
+
+    if (!genAI) return res.status(503).json({ error: "Gemini is not configured (missing GEMINI_API_KEY)." });
   
     const knowledge = await readProductKnowledge();
     if (!knowledge) {
