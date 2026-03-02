@@ -776,6 +776,51 @@ function extractQueryHints(query) {
   return Array.from(new Set(compact));
 }
 
+function collectSkuAliasesFromChunks(chunks = []) {
+  const aliasMap = new Map();
+
+  for (const chunk of chunks) {
+    const text = `${chunk?.title || ""}
+${chunk?.content || ""}`;
+    const matches = Array.from(text.matchAll(/\bAS-B-[A-Z0-9-]+\b/gi)).map((m) => m[0].toLowerCase());
+
+    for (const sku of matches) {
+      const compactSku = sku.replace(/[^a-z0-9]/g, "");
+      const numberMatches = Array.from(sku.matchAll(/\d{2,4}/g)).map((m) => m[0]);
+      for (const number of numberMatches) {
+        if (!aliasMap.has(number)) aliasMap.set(number, new Set([number]));
+        aliasMap.get(number).add(sku);
+        aliasMap.get(number).add(compactSku);
+      }
+    }
+  }
+
+  return aliasMap;
+}
+
+function buildPricingQueryCanonicalForm(query, chunks = []) {
+  const raw = normalizeText(query).toLowerCase();
+  if (!raw) return null;
+
+  const asksPrice = /(price|pricing|quote|quotation|rate|cost)/i.test(raw);
+  const asksMoq = /(moq|min(?:imum)?\s*order|minimum\s*qty|minimum\s*quantity)/i.test(raw);
+  const mentionsPcs = /(pcs?|pieces?|units?)/i.test(raw);
+  const hasQtyContext = asksMoq || mentionsPcs || /\b\d{2,6}\s*(?:\+|plus)\b/i.test(raw);
+  if (!asksPrice || !hasQtyContext) return null;
+
+  const compact = raw.replace(/[^a-z0-9]+/g, " ");
+  const qtyMatch = compact.match(/\b(\d{2,6})\s*(?:pcs?|pieces?|units?|qty|quantity|moq)?\b/);
+  const numbers = Array.from(compact.matchAll(/\b\d{2,6}\b/g)).map((m) => m[1]);
+  const qty = qtyMatch?.[1] || numbers.find((n) => Number(n) >= 50 && Number(n) <= 50000);
+  const skuNumber = numbers.find((n) => Number(n) >= 100 && Number(n) < 1000);
+  if (!qty || !skuNumber) return null;
+
+  const skuAliasMap = collectSkuAliasesFromChunks(chunks);
+  const skuHints = Array.from(skuAliasMap.get(skuNumber) || [skuNumber]);
+
+  return `pricing query sku ${skuHints.join(" ")} quantity ${qty} pcs moq ${qty}+`;
+}
+
 function chunkHintScore(chunk, hints) {
   if (!hints.length) return 0;
 
@@ -866,13 +911,15 @@ async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
   const chunks = productKnowledgeCache.chunks || [];
   if (!chunks.length) return [];
 
-  const hints = extractQueryHints(query);
-  const lexicalScored = chunks.map((chunk) => ({ chunk, lexicalScore: keywordScore(query, chunk) }));
+  const canonicalPricingQuery = buildPricingQueryCanonicalForm(query, chunks);
+  const effectiveQuery = canonicalPricingQuery ? `${query}\n${canonicalPricingQuery}` : query;
+  const hints = extractQueryHints(effectiveQuery);
+  const lexicalScored = chunks.map((chunk) => ({ chunk, lexicalScore: keywordScore(effectiveQuery, chunk) }));
   let vectorScores = null;
 
   if (productKnowledgeCache.vectors.length === chunks.length) {
     try {
-      const qVec = await embedText(query);
+      const qVec = await embedText(effectiveQuery);
       vectorScores = chunks.map((chunk, i) => ({ chunk, vectorScore: cosine(qVec, productKnowledgeCache.vectors[i]) }));
     } catch {
       // fallback to lexical retrieval
