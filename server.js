@@ -696,19 +696,46 @@ Never present guesses as legal advice.`
     system: `You are an AI sales automation copilot.
 Provide structured outputs for workflow automation: lead stage, qualification summary, next actions,
 required integrations, and CRM/ERP handoff notes based only on retrieved context.`
+  },
+  odoo_operations: {
+    label: "Odoo operations assistant",
+    system: `You are an ERP operations assistant for Odoo workflows covering invoices, customers, quotations, and sales orders.`
+
   }
 };
 
-function detectAutoMode(message, history = []) {
+const AUTO_MODE_CONFIDENCE_THRESHOLD = Number(process.env.AUTO_MODE_CONFIDENCE_THRESHOLD || 0.8);
+const AUTO_MODE_AMBIGUITY_DELTA = Number(process.env.AUTO_MODE_AMBIGUITY_DELTA || 0.15);
+
+function detectRuleBasedAutoMode(message, history = []) {
   const userHistoryText = history
     .filter((h) => String(h?.role || "").toLowerCase() === "user")
     .map((h) => String(h?.content || ""))
     .join(" ");
   const combined = `${userHistoryText} ${String(message || "")}`.toLowerCase();
+  
+  const scores = {
+    simple_chatbot: 0.2,
+    b2b_sales_assistant: 0,
+    compliance_assistant: 0,
+    sales_automation: 0,
+    odoo_operations: 0
+  };
+
+  if (/\b(invoice|bill|payment\s*status|customer\s*ledger|account\s*statement|outstanding\s*payment)\b/i.test(combined)) {
+    scores.odoo_operations = Math.max(scores.odoo_operations, 0.88);
+  }
+  if (/\b(invoice|bill)\b\s+(of|for)\s+[a-z0-9 .&-]{2,}/i.test(combined) || /\b(show|get|find|download)\b.*\b(invoice|bill)\b/i.test(combined)) {
+    scores.odoo_operations = Math.max(scores.odoo_operations, 0.9);
+  }
+  if (/\b(customer|sales\s*order|quotation|crm|purchase\s*order|vendor\s*bill|attendance|timesheet|employee|order\s*status)\b/i.test(combined)) {
+    scores.odoo_operations = Math.max(scores.odoo_operations, 0.86);
+  }
+
   const hasOrderIntent = /(create|make|place|confirm|process)\s+(an?\s+)?(order|quotation|quote|sales\s*order)/i.test(combined)
     || /(crm\s*handoff|lead stage|sales automation|automation workflow)/i.test(combined);
   if (hasOrderIntent) {
-    return { mode: "sales_automation", reason: "Detected workflow/order automation intent." };
+    scores.sales_automation = Math.max(scores.sales_automation, 0.9);
   }
 
   // Routing sanity checks:
@@ -717,15 +744,78 @@ function detectAutoMode(message, history = []) {
   const hasComplianceIntent = /\b(compliance|ce|ukca|ul|rohs|bis|iec|certificate|certification|hs\s*code|incoterm|export|customs|regulation|legal)\b/i.test(combined);
 
   if (hasComplianceIntent) {
-    return { mode: "compliance_assistant", reason: "Detected compliance/export intent." };
+    scores.compliance_assistant = Math.max(scores.compliance_assistant, 0.9);
   }
 
   const hasSalesIntent = /(price|pricing|quote|quotation|moq|lead\s*time|bundle|pairing|compatible|recommend|quantity|sku|integration|odoo|shopify|woocommerce|amazon)/i.test(combined);
   if (hasSalesIntent) {
-    return { mode: "b2b_sales_assistant", reason: "Detected product qualification/sales intent." };
+    scores.b2b_sales_assistant = Math.max(scores.b2b_sales_assistant, 0.82);
   }
 
-  return { mode: "simple_chatbot", reason: "Defaulted to general website assistance." };
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const [topMode, topScore] = sorted[0];
+  const secondScore = sorted[1]?.[1] || 0;
+  const isAmbiguous = topScore >= AUTO_MODE_CONFIDENCE_THRESHOLD && Math.abs(topScore - secondScore) < AUTO_MODE_AMBIGUITY_DELTA;
+
+  if (topScore >= AUTO_MODE_CONFIDENCE_THRESHOLD) {
+    return {
+      mode: topMode,
+      reason: `Rule-based routing matched ${topMode}.`,
+      confidence: Number(topScore.toFixed(2)),
+      stage: "rules",
+      scores,
+      ambiguous: isAmbiguous
+    };
+  }
+
+  return {
+    mode: "simple_chatbot",
+    reason: "Rule-based routing confidence too low; deferring to classifier.",
+    confidence: Number(topScore.toFixed(2)),
+    stage: "rules",
+    scores,
+    ambiguous: false
+  };
+}
+
+async function classifyAutoModeWithLLM(message, history = []) {
+  const recentHistory = history
+    .slice(-6)
+    .map((h) => `${String(h?.role || "user")}: ${String(h?.content || "")}`)
+    .join("\n");
+  const prompt = `Classify the user's intent into exactly one mode.
+Allowed modes: simple_chatbot, b2b_sales_assistant, compliance_assistant, sales_automation, odoo_operations.
+Respond as JSON only with keys: mode, confidence, reason.
+Confidence must be between 0 and 1.
+
+History:\n${recentHistory || "(none)"}
+User message: ${message}`;
+
+  const result = await callProductBotModel(
+    "You are a strict intent classifier. Output only valid compact JSON with no markdown.",
+    prompt
+  );
+
+  const raw = String(result?.text || "").trim();
+  const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || "{}");
+  const mode = PRODUCT_BOT_MODES[parsed.mode] ? parsed.mode : "simple_chatbot";
+  const confidence = Math.max(0, Math.min(1, Number(parsed.confidence || 0.5)));
+  return {
+    mode,
+    reason: parsed.reason || `LLM classifier routed to ${mode}.`,
+    confidence: Number(confidence.toFixed(2)),
+    stage: "classifier"
+  };
+}
+
+async function detectAutoMode(message, history = []) {
+  const stageOne = detectRuleBasedAutoMode(message, history);
+  if (stageOne.confidence >= AUTO_MODE_CONFIDENCE_THRESHOLD) return stageOne;
+  try {
+    return await classifyAutoModeWithLLM(message, history);
+  } catch {
+    return stageOne;
+  }
 }
 function isHelpIntent(message) {
   const text = String(message || "").toLowerCase();
@@ -733,8 +823,8 @@ function isHelpIntent(message) {
 }
 
 function isOdooOpsIntent(message) {
-  const text = String(message || "").toLowerCase();
-  return /(\bunpaid\b.*\binvoice\b|\binvoice\b.*\bunpaid\b|\boverdue\b.*\binvoice\b|\bcustomer\b|\bsales\s*order\b|\bquotation\b|\bcrm\b|\bpurchase\s*order\b|\bvendor\s*bill\b|\battendance\b|\btimesheet\b|\bemployee\b)/i.test(text);
+  const detection = detectRuleBasedAutoMode(message, []);
+  return detection.mode === "odoo_operations";
 }
 function buildInternalOdooHelpReply() {
   return `I can help you with SmartHandicrafts product and sales support.
@@ -777,6 +867,45 @@ const SELF_TRAINING_ENABLED = String(process.env.BOT_SELF_TRAINING || process.en
 const SELF_TRAINING_MAX_EXAMPLES = Math.max(10, Number(process.env.BOT_SELF_TRAINING_MAX || process.env.PRODUCT_BOT_SELF_TRAINING_MAX || 500));
 const SELF_TRAINING_PROMPT_EXAMPLES = Math.max(1, Number(process.env.BOT_SELF_TRAINING_PROMPT_EXAMPLES || process.env.PRODUCT_BOT_SELF_TRAINING_PROMPT_EXAMPLES || 4));
 const selfTrainingMemory = [];
+const routingTelemetry = {
+  events: [],
+  counters: {
+    total: 0,
+    misroute_rate: 0,
+    clarification_rate: 0,
+    odoo_detected_but_unconfigured_rate: 0
+  }
+};
+
+function getPendingModeClarification(history = []) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const candidate = history[i]?.pending_mode_clarification;
+    if (candidate?.active) return candidate;
+  }
+  return null;
+}
+
+function recordRoutingTelemetry(event) {
+  const entry = {
+    at: now(),
+    message: String(event?.message || ""),
+    chosen_mode: event?.chosen_mode || "simple_chatbot",
+    confidence: Number(event?.confidence || 0),
+    fallback_used: !!event?.fallback_used,
+    clarification_asked: !!event?.clarification_asked,
+    odoo_detected_but_unconfigured: !!event?.odoo_detected_but_unconfigured,
+    final_user_satisfaction_signal: event?.final_user_satisfaction_signal ?? null,
+    route_feedback: event?.route_feedback ?? null
+  };
+  routingTelemetry.events.push(entry);
+  if (routingTelemetry.events.length > 500) routingTelemetry.events.shift();
+  const events = routingTelemetry.events;
+  const total = events.length || 1;
+  routingTelemetry.counters.total = events.length;
+  routingTelemetry.counters.misroute_rate = events.filter((x) => x.route_feedback === "misroute").length / total;
+  routingTelemetry.counters.clarification_rate = events.filter((x) => x.clarification_asked).length / total;
+  routingTelemetry.counters.odoo_detected_but_unconfigured_rate = events.filter((x) => x.odoo_detected_but_unconfigured).length / total;
+}
 
 function normalizeText(v) {
   return String(v || "").replace(/\r/g, "").trim();
@@ -1226,13 +1355,57 @@ app.post("/api/product-bot", async (req, res) => {
     const message = String(req.body?.message || "").trim();
     const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
     const requestedMode = String(req.body?.mode || "auto").trim();
-    const autoDetection = detectAutoMode(message, history);
+    if (!message) return res.status(400).json({ error: "Missing message" });
+
+    const pendingClarification = getPendingModeClarification(history);
+    const clarificationResolvedMode = pendingClarification && /\b(pricing|price|quote|sales|sku|moq|quantity)\b/i.test(message)
+      ? "b2b_sales_assistant"
+      : pendingClarification && /\b(compliance|certificate|ce|ukca|rohs|export|customs|legal)\b/i.test(message)
+        ? "compliance_assistant"
+        : null;
+
+    const autoDetection = clarificationResolvedMode
+      ? { mode: clarificationResolvedMode, reason: `Resolved clarification toward ${clarificationResolvedMode}.`, confidence: 0.9, stage: "clarification" }
+      : await detectAutoMode(message, history);
+
+    const routeScores = autoDetection.scores || detectRuleBasedAutoMode(message, history).scores;
+    const sortedScores = Object.entries(routeScores).sort((a, b) => b[1] - a[1]);
+    const shouldClarify = requestedMode === "auto" && !clarificationResolvedMode && sortedScores[1]
+      && Math.abs(sortedScores[0][1] - sortedScores[1][1]) < AUTO_MODE_AMBIGUITY_DELTA;
+
+    if (shouldClarify) {
+      recordRoutingTelemetry({
+        message,
+        chosen_mode: autoDetection.mode,
+        confidence: autoDetection.confidence,
+        clarification_asked: true,
+        final_user_satisfaction_signal: req.body?.final_user_satisfaction_signal,
+        route_feedback: req.body?.route_feedback || null
+      });
+      return res.json({
+        ok: true,
+        mode: autoDetection.mode,
+        mode_label: PRODUCT_BOT_MODES[autoDetection.mode]?.label || "Auto-detect",
+        mode_reason: `Ambiguous routing between ${sortedScores[0][0]} and ${sortedScores[1][0]}; clarification requested.`,
+        answer: "Quick clarification: do you want pricing/sales details or compliance/certification details?",
+        pending_mode_clarification: {
+          active: true,
+          options: ["b2b_sales_assistant", "compliance_assistant"],
+          created_at: now()
+        },
+        retrieval: {
+          top_k: 0,
+          strategy: "mode_clarification",
+          embed_error: null,
+          sources: []
+        }
+      });
+    }
+
     const resolvedModeKey = (requestedMode && requestedMode !== "auto" && PRODUCT_BOT_MODES[requestedMode])
       ? requestedMode
       : autoDetection.mode;
     const mode = PRODUCT_BOT_MODES[resolvedModeKey] || PRODUCT_BOT_MODES.simple_chatbot;
-
-    if (!message) return res.status(400).json({ error: "Missing message" });
 
     if (isHelpIntent(message)) {
       return res.json({
@@ -1250,14 +1423,22 @@ app.post("/api/product-bot", async (req, res) => {
       });
     }
 
-
-    if (isOdooOpsIntent(message)) {
+    if (resolvedModeKey === "odoo_operations" || isOdooOpsIntent(message)) {
       if (!odooConfigured) {
+        recordRoutingTelemetry({
+          message,
+          chosen_mode: "odoo_operations",
+          confidence: autoDetection.confidence,
+          odoo_detected_but_unconfigured: true,
+          fallback_used: false,
+          final_user_satisfaction_signal: req.body?.final_user_satisfaction_signal,
+          route_feedback: req.body?.route_feedback || null
+        });
         return res.json({
           ok: true,
           mode: "odoo_operations",
           mode_label: "Odoo operations assistant",
-          mode_reason: "Detected ERP/operations intent but Odoo is not configured.",
+          mode_reason: autoDetection.reason || "Detected ERP/operations intent but Odoo is not configured.",
           answer: "This looks like an Odoo operations question (invoices/customers/orders), but Odoo is not configured on this server. Please set ODOO_URL, ODOO_DB, ODOO_USERNAME, and ODOO_API_KEY_OR_PASSWORD.",
           retrieval: {
             top_k: 0,
@@ -1275,11 +1456,19 @@ app.post("/api/product-bot", async (req, res) => {
       });
 
       const answer = odooResult.summary || odooResult.message || "Processed your Odoo query.";
+      recordRoutingTelemetry({
+        message,
+        chosen_mode: "odoo_operations",
+        confidence: autoDetection.confidence,
+        fallback_used: autoDetection.stage === "classifier",
+        final_user_satisfaction_signal: req.body?.final_user_satisfaction_signal,
+        route_feedback: req.body?.route_feedback || null
+      });
       return res.json({
         ok: true,
         mode: "odoo_operations",
         mode_label: "Odoo operations assistant",
-        mode_reason: "Detected ERP/operations intent and routed to Odoo assistant.",
+        mode_reason: autoDetection.reason || "Detected ERP/operations intent and routed to Odoo assistant.",
         answer,
         retrieval: {
           top_k: 0,
@@ -1462,7 +1651,16 @@ ${message}`;
       mode: resolvedModeKey,
       retrieval: retrievalMeta
     });
-    
+
+    recordRoutingTelemetry({
+      message,
+      chosen_mode: resolvedModeKey,
+      confidence: autoDetection.confidence,
+      fallback_used: autoDetection.stage === "classifier",
+      final_user_satisfaction_signal: req.body?.final_user_satisfaction_signal,
+      route_feedback: req.body?.route_feedback || null
+    });
+
     return res.json({
       ok: true,
       mode: resolvedModeKey,
@@ -1528,6 +1726,10 @@ app.get("/api/product-bot/self-training", (req, res) => {
 app.get("/api/product-bot/modes", (req, res) => {
   const modes = [{ key: "auto", label: "Auto-detect" }, ...Object.entries(PRODUCT_BOT_MODES).map(([key, value]) => ({ key, label: value.label }))];
   res.json({ ok: true, modes });
+});
+
+app.get("/api/product-bot/routing-telemetry", (req, res) => {
+  return res.json({ ok: true, ...routingTelemetry });
 });
 
 app.post("/api/debate-stream", async (req, res) => {
@@ -1895,6 +2097,46 @@ async function handleNaturalLanguageQuery(uid, text, options = {}) {
       requested_by: queryUser
     };
   }
+
+  const directInvoiceLookup = /(invoice|bill)/i.test(q) && /\b(of|for|show|find|lookup|status|pdf)\b/i.test(q);
+  if (directInvoiceLookup) {
+    if (!roleGuard(role, "invoice")) return { intent: "forbidden", message: `Role '${role}' cannot view invoices.` };
+    const customerMatch = text.match(/(?:invoice|bill)\s+(?:of|for)\s+([a-z0-9 .&-]+)/i);
+    const invoiceRefMatch = text.match(/(?:invoice|bill)\s*(?:number|no\.?|#|ref(?:erence)?)?\s*[:\- ]*([a-z0-9\/-]{3,})/i);
+    const customer = customerMatch?.[1]?.trim();
+    const invoiceRef = invoiceRefMatch?.[1]?.trim();
+    const domain = [["move_type", "=", "out_invoice"]];
+    if (customer) domain.push(["partner_id.name", "ilike", customer]);
+    if (invoiceRef) domain.push(["name", "ilike", invoiceRef]);
+
+    const rows = await odooExecute(
+      uid,
+      "account.move",
+      "search_read",
+      [domain, ["id", "name", "partner_id", "payment_state", "amount_total", "amount_residual", "invoice_date_due"]],
+      { limit: 20, order: "invoice_date_due desc" }
+    );
+
+    const summary = (rows || []).length
+      ? `Found ${(rows || []).length} invoice(s)${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}.`
+      : `No invoices found${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}.`;
+
+    return {
+      intent: "lookup_customer_invoice",
+      role,
+      rows,
+      summary,
+      suggested_next_action: (rows || []).length === 1
+        ? "Use invoice id/name to generate or fetch invoice PDF via Odoo invoice print endpoint."
+        : "Refine with invoice number/reference for a direct PDF retrieval.",
+      invoice_pdf_hint: (rows || []).map((row) => ({
+        id: row.id,
+        name: row.name,
+        endpoint_hint: `/web#id=${row.id}&model=account.move&view_type=form`
+      })),
+      requested_by: queryUser
+    };
+  }  
 
   if (q.includes("delayed") && q.includes("order")) {
     if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot inspect sales orders.` };
