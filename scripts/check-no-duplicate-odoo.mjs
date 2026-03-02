@@ -1,4 +1,4 @@
-mport fs from "fs";
+import fs from "fs";
 
 const source = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
 
