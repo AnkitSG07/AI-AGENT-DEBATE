@@ -773,6 +773,11 @@ const productKnowledgeCache = {
   pricingCatalog: new Map()
 };
 
+const SELF_TRAINING_ENABLED = String(process.env.BOT_SELF_TRAINING || process.env.PRODUCT_BOT_SELF_TRAINING || "true").toLowerCase() !== "false";
+const SELF_TRAINING_MAX_EXAMPLES = Math.max(10, Number(process.env.BOT_SELF_TRAINING_MAX || process.env.PRODUCT_BOT_SELF_TRAINING_MAX || 500));
+const SELF_TRAINING_PROMPT_EXAMPLES = Math.max(1, Number(process.env.BOT_SELF_TRAINING_PROMPT_EXAMPLES || process.env.PRODUCT_BOT_SELF_TRAINING_PROMPT_EXAMPLES || 4));
+const selfTrainingMemory = [];
+
 function normalizeText(v) {
   return String(v || "").replace(/\r/g, "").trim();
 }
@@ -1112,6 +1117,90 @@ async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
 }
 
 
+
+
+function tokenOverlapScore(a = "", b = "") {
+  const aa = new Set(tokenize(a));
+  const bb = new Set(tokenize(b));
+  if (!aa.size || !bb.size) return 0;
+  let inter = 0;
+  for (const t of aa) if (bb.has(t)) inter += 1;
+  return inter / Math.sqrt(aa.size * bb.size);
+}
+
+function recordSelfTrainingExample({ scope = "product_bot", message, answer, mode, retrieval }) {
+  if (!SELF_TRAINING_ENABLED) return null;
+  const cleanMessage = normalizeText(message);
+  const cleanAnswer = normalizeText(answer);
+  if (!cleanMessage || !cleanAnswer || /^error:/i.test(cleanAnswer)) return null;
+
+  const example = {
+    id: `st-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    scope,
+    message: cleanMessage,
+    answer: cleanAnswer,
+    mode: mode || "simple_chatbot",
+    quality: 0.6,
+    uses: 0,
+    created_at: now(),
+    sources: Array.isArray(retrieval?.sources) ? retrieval.sources.slice(0, 3) : []
+  };
+
+  selfTrainingMemory.push(example);
+  if (selfTrainingMemory.length > SELF_TRAINING_MAX_EXAMPLES) {
+    selfTrainingMemory.splice(0, selfTrainingMemory.length - SELF_TRAINING_MAX_EXAMPLES);
+  }
+  return example.id;
+}
+
+function buildSelfTrainingContext(message, { scope = "product_bot", modeKey } = {}) {
+  if (!SELF_TRAINING_ENABLED || !selfTrainingMemory.length) return "";
+
+  const ranked = selfTrainingMemory
+    .filter((ex) => ex.scope === scope && ex.answer && (!modeKey || ex.mode === modeKey))
+    .map((ex) => ({
+      ex,
+      score: tokenOverlapScore(message, ex.message) + (ex.quality * 0.2)
+    }))
+    .filter((row) => row.score > 0.1)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SELF_TRAINING_PROMPT_EXAMPLES)
+    .map((row, idx) => {
+      row.ex.uses += 1;
+      return `Example ${idx + 1}
+User: ${row.ex.message}
+Assistant: ${row.ex.answer}`;
+    });
+
+  if (!ranked.length) return "";
+  return `PAST SUCCESSFUL ANSWER PATTERNS (self-training memory):\n${ranked.join("\n\n")}`;
+}
+
+
+function applySelfTrainingFeedback({ interactionId, score, scope }) {
+  const row = selfTrainingMemory.find((x) => x.id === interactionId && (!scope || x.scope === scope));
+  if (!row) return null;
+  row.quality = Math.max(0, Math.min(1, row.quality + (score * 0.2)));
+  if (score < -0.5) row.answer = "";
+  return row;
+}
+
+function getSelfTrainingStats(scope) {
+  const scoped = scope ? selfTrainingMemory.filter((x) => x.scope === scope) : selfTrainingMemory;
+  const recent = scoped
+    .slice(-10)
+    .map((x) => ({ id: x.id, scope: x.scope, mode: x.mode, quality: x.quality, uses: x.uses, created_at: x.created_at, message: x.message }));
+  return {
+    ok: true,
+    enabled: SELF_TRAINING_ENABLED,
+    memory_size: scoped.length,
+    total_memory_size: selfTrainingMemory.length,
+    prompt_examples: SELF_TRAINING_PROMPT_EXAMPLES,
+    scope: scope || "all",
+    recent
+  };
+}
+
 function extractFreshnessFlags(chunks) {
   const today = new Date().toISOString().slice(0, 10);
   const content = (chunks || []).map((c) => `${c.title}\n${c.content}`).join("\n");
@@ -1330,6 +1419,8 @@ Response contract:
 2) No markdown, no prose.
 3) End your JSON with a "sources" field like ["[1]","[3]"] for traceability.`
     };
+    
+    const selfTrainingContext = buildSelfTrainingContext(message, { scope: "product_bot", modeKey: resolvedModeKey });
 
     const prompt = `${mode.system}
 
@@ -1342,7 +1433,10 @@ ${JSON.stringify(freshness, null, 2)}
 RETRIEVED KNOWLEDGE:
 ${context}
 
-CHAT HISTORY:
+${selfTrainingContext ? `${selfTrainingContext}
+
+` : ""}CHAT HISTORY:
+
 ${historyText || "(none)"}
 
 USER QUESTION:
@@ -1350,26 +1444,85 @@ ${message}`;
 
     const modelResult = await callProductBotModel(mode.system, prompt);
 
+    const answerText = modelResult.text || "I could not generate a response.";
+    const retrievalMeta = {
+      top_k: PRODUCT_BOT_TOP_K,
+      strategy: productKnowledgeCache.vectors.length ? "embeddings" : "keyword_fallback",
+      embed_error: productKnowledgeCache.embedError,
+      sources: retrieved.map((c, i) => ({ id: i + 1, title: c.title })),
+      llm_provider: modelResult.provider,
+      llm_model: modelResult.model_used,
+      fallback_from: modelResult.fallback_from || null,
+      ...freshness
+    };
+    const interaction_id = recordSelfTrainingExample({
+      scope: "product_bot",
+      message,
+      answer: answerText,
+      mode: resolvedModeKey,
+      retrieval: retrievalMeta
+    });
+    
     return res.json({
       ok: true,
       mode: resolvedModeKey,
       mode_label: mode.label,
       mode_reason: requestedMode === "auto" || !PRODUCT_BOT_MODES[requestedMode] ? autoDetection.reason : "User-selected mode.",
-      answer: modelResult.text || "I could not generate a response.",
-      retrieval: {
-        top_k: PRODUCT_BOT_TOP_K,
-        strategy: productKnowledgeCache.vectors.length ? "embeddings" : "keyword_fallback",
-        embed_error: productKnowledgeCache.embedError,
-        sources: retrieved.map((c, i) => ({ id: i + 1, title: c.title })),
-        llm_provider: modelResult.provider,
-        llm_model: modelResult.model_used,
-        fallback_from: modelResult.fallback_from || null,
-        ...freshness
-      }
+      answer: answerText,
+      interaction_id,
+      self_training: {
+        enabled: SELF_TRAINING_ENABLED,
+        memory_size: selfTrainingMemory.length
+      },
+      retrieval: retrievalMeta
+
     });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
+});
+
+app.post("/api/self-training/feedback", (req, res) => {
+  try {
+    const interactionId = String(req.body?.interaction_id || "").trim();
+    const score = Number(req.body?.score);
+    const scope = String(req.body?.scope || "").trim() || undefined;
+    if (!interactionId) return res.status(400).json({ error: "interaction_id is required" });
+    if (!Number.isFinite(score) || score < -1 || score > 1) {
+      return res.status(400).json({ error: "score must be a number between -1 and 1" });
+    }
+
+    const row = applySelfTrainingFeedback({ interactionId, score, scope });
+    if (!row) return res.status(404).json({ error: "interaction not found in self-training memory" });
+    return res.json({ ok: true, interaction_id: interactionId, scope: row.scope, quality: row.quality });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/self-training", (req, res) => {
+  const scope = String(req.query?.scope || "").trim() || undefined;
+  return res.json(getSelfTrainingStats(scope));
+});
+
+app.post("/api/product-bot/feedback", (req, res) => {
+  try {
+    const interactionId = String(req.body?.interaction_id || "").trim();
+    const score = Number(req.body?.score);
+    if (!interactionId) return res.status(400).json({ error: "interaction_id is required" });
+    if (!Number.isFinite(score) || score < -1 || score > 1) {
+      return res.status(400).json({ error: "score must be a number between -1 and 1" });
+    }
+    const row = applySelfTrainingFeedback({ interactionId, score, scope: "product_bot" });
+    if (!row) return res.status(404).json({ error: "interaction not found in self-training memory" });
+    return res.json({ ok: true, interaction_id: interactionId, scope: row.scope, quality: row.quality });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/product-bot/self-training", (req, res) => {
+  return res.json(getSelfTrainingStats("product_bot"));
 });
 
 app.get("/api/product-bot/modes", (req, res) => {
@@ -1410,10 +1563,14 @@ app.post("/api/debate-stream", async (req, res) => {
 
       let reply = "";
       if (agent.type === "gemini") {
-        const result = await callGeminiWithFallback(agent.system, prompt, debateText, AGENT_A_OR_MODEL);
+        const agentMemory = buildSelfTrainingContext(prompt, { scope: "debate", modeKey: agent.name });
+        const agentSystem = agentMemory ? `${agent.system}\n\n${agentMemory}` : agent.system;
+        const result = await callGeminiWithFallback(agentSystem, prompt, debateText, AGENT_A_OR_MODEL);
         reply = result.text;
       } else {
-        reply = await callOpenRouter(agent.system, prompt, debateText, agent.model);
+        const agentMemory = buildSelfTrainingContext(prompt, { scope: "debate", modeKey: agent.name });
+        const agentSystem = agentMemory ? `${agent.system}\n\n${agentMemory}` : agent.system;
+        reply = await callOpenRouter(agentSystem, prompt, debateText, agent.model);
       }
 
       history.push({ agent: agent.name, content: reply });
@@ -1422,11 +1579,19 @@ app.post("/api/debate-stream", async (req, res) => {
     }
 
     send({ type: "status", message: "Judge finalizing...", time: now() });
-    const judgeResult = await callGeminiWithFallback(JUDGE_SYSTEM, prompt, historyToText(history), JUDGE_OR_MODEL);
+    const judgeMemory = buildSelfTrainingContext(prompt, { scope: "debate", modeKey: "Judge" });
+    const judgeSystem = judgeMemory ? `${JUDGE_SYSTEM}\n\n${judgeMemory}` : JUDGE_SYSTEM;
+    const judgeResult = await callGeminiWithFallback(judgeSystem, prompt, historyToText(history), JUDGE_OR_MODEL);
     const finalAnswer = judgeResult.text;
+    const interaction_id = recordSelfTrainingExample({
+      scope: "debate",
+      message: prompt,
+      answer: finalAnswer,
+      mode: "Judge",
+      retrieval: { sources: [] }
+    });
 
-
-    send({ type: "final", content: finalAnswer, time: now() });
+    send({ type: "final", content: finalAnswer, interaction_id, time: now() });
     send({ type: "done", time: now() });
     res.end();
   } catch (err) {
@@ -1884,8 +2049,16 @@ app.post("/api/odoo/nl-query", async (req, res) => {
   try {
     if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
     const uid = await odooLogin();
-    const result = await handleNaturalLanguageQuery(uid, req.body?.message || "", { role: req.body?.role, user: req.body?.user });
-    return res.json({ ok: true, ...result });
+    const message = String(req.body?.message || "");
+    const result = await handleNaturalLanguageQuery(uid, message, { role: req.body?.role, user: req.body?.user });
+    const interaction_id = recordSelfTrainingExample({
+      scope: "odoo",
+      message,
+      answer: JSON.stringify(result),
+      mode: result?.intent || "nl_query",
+      retrieval: { sources: [] }
+    });
+    return res.json({ ok: true, interaction_id, self_training: { enabled: SELF_TRAINING_ENABLED, memory_size: selfTrainingMemory.length }, ...result });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -1895,11 +2068,19 @@ app.post("/api/odoo/conversation", async (req, res) => {
   try {
     if (!odooConfigured) return res.status(400).json({ error: "Odoo not configured" });
     const uid = await odooLogin();
-    const response = await handleNaturalLanguageQuery(uid, req.body?.message || "", {
+    const message = String(req.body?.message || "");
+    const response = await handleNaturalLanguageQuery(uid, message, {
       role: req.body?.role,
       user: req.body?.user
     });
-    return res.json({ ok: true, conversation: response });
+    const interaction_id = recordSelfTrainingExample({
+      scope: "odoo",
+      message,
+      answer: JSON.stringify(response),
+      mode: response?.intent || "conversation",
+      retrieval: { sources: [] }
+    });
+    return res.json({ ok: true, interaction_id, self_training: { enabled: SELF_TRAINING_ENABLED, memory_size: selfTrainingMemory.length }, conversation: response });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
