@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
+import { readFile } from "node:fs/promises";
 
 dotenv.config();
 
@@ -24,6 +25,8 @@ const genAI = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : nul
 const GEMINI_MODEL = "gemini-2.5-flash";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
 const AGENT_C_MODEL = process.env.OR_MODEL_MISTRAL || "google/gemma-2-9b-it";
+const PRODUCT_KNOWLEDGE_PATH = process.env.PRODUCT_KNOWLEDGE_PATH || "./product-knowledge.md";
+const PRODUCT_BOT_FALLBACK_CONTEXT = process.env.PRODUCT_BOT_CONTEXT || "";
 
 // ===================== ODOO CONFIG =====================
 const ODOO_URL = process.env.ODOO_URL;
@@ -615,6 +618,295 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
 function historyToText(history) {
   return history.map((m) => `${m.agent}:\n${m.content}`).join("\n\n---\n\n");
 }
+
+const PRODUCT_BOT_MODES = {
+  simple_chatbot: {
+    label: "Simple website chatbot",
+    system: `You are a concise website support chatbot for SmartHandicrafts.
+Use only retrieved knowledge snippets.
+If the answer is missing, say you are not sure and ask the user to contact support.`
+  },
+  b2b_sales_assistant: {
+    label: "Advanced B2B sales assistant",
+    system: `You are a B2B sales assistant for SmartHandicrafts.
+Prioritize qualification, use-case mapping, integration fit, packaging, pricing guidance from knowledge,
+and end with a clear suggested next step (demo, pilot, quote, or technical call).
+Do not invent discounts or contractual terms.`
+  },
+  compliance_assistant: {
+    label: "Export-grade compliance assistant",
+    system: `You are a compliance assistant for export and operational documentation.
+Use only the provided company policies and compliance snippets.
+For legal or regulatory uncertainty, explicitly recommend validation with a compliance officer.
+Never present guesses as legal advice.`
+  },
+  sales_automation: {
+    label: "Full AI sales automation system",
+    system: `You are an AI sales automation copilot.
+Provide structured outputs for workflow automation: lead stage, qualification summary, next actions,
+required integrations, and CRM/ERP handoff notes based only on retrieved context.`
+  }
+};
+
+const PRODUCT_BOT_EMBED_MODEL = process.env.PRODUCT_BOT_EMBED_MODEL || "text-embedding-004";
+const PRODUCT_BOT_TOP_K = Math.max(2, Number(process.env.PRODUCT_BOT_TOP_K || 6));
+
+const productKnowledgeCache = {
+  raw: "",
+  chunks: [],
+  vectors: [],
+  embedError: null
+};
+
+function normalizeText(v) {
+  return String(v || "").replace(/\r/g, "").trim();
+}
+
+function splitKnowledgeIntoChunks(text) {
+  const lines = normalizeText(text).split("\n");
+  const chunks = [];
+  let currentTitle = "General";
+  let buffer = [];
+
+  const flush = () => {
+    const body = normalizeText(buffer.join("\n"));
+    if (!body) return;
+    const maxLen = 1200;
+    if (body.length <= maxLen) {
+      chunks.push({ title: currentTitle, content: body });
+    } else {
+      let i = 0;
+      while (i < body.length) {
+        const piece = body.slice(i, i + maxLen);
+        chunks.push({ title: currentTitle, content: piece });
+        i += maxLen;
+      }
+    }
+    buffer = [];
+  };
+
+  for (const line of lines) {
+    const heading = line.match(/^#{1,4}\s+(.+)/);
+    if (heading) {
+      flush();
+      currentTitle = heading[1].trim();
+      continue;
+    }
+    buffer.push(line);
+  }
+  flush();
+
+  return chunks.filter((c) => c.content.length > 20);
+}
+
+function tokenize(text) {
+  return normalizeText(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((x) => x.length > 2);
+}
+
+function keywordScore(query, chunk) {
+  const q = new Set(tokenize(query));
+  const c = tokenize(`${chunk.title} ${chunk.content}`);
+  let hit = 0;
+  for (const tok of c) if (q.has(tok)) hit += 1;
+  return hit / Math.max(1, c.length);
+}
+
+function cosine(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return -1;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (!na || !nb) return -1;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+async function embedText(text) {
+  const out = await genAI.models.embedContent({
+    model: PRODUCT_BOT_EMBED_MODEL,
+    contents: text
+  });
+  return out?.embeddings?.[0]?.values || out?.embedding?.values || out?.embedding || null;
+}
+
+async function readProductKnowledge() {
+  try {
+    const text = await readFile(PRODUCT_KNOWLEDGE_PATH, "utf8");
+    return text.trim();
+  } catch {
+    return PRODUCT_BOT_FALLBACK_CONTEXT.trim();
+  }
+}
+
+async function ensureKnowledgeIndex(knowledgeText) {
+  const raw = normalizeText(knowledgeText);
+  if (!raw) return;
+  if (productKnowledgeCache.raw === raw && productKnowledgeCache.chunks.length) return;
+
+  const chunks = splitKnowledgeIntoChunks(raw);
+  productKnowledgeCache.raw = raw;
+  productKnowledgeCache.chunks = chunks;
+  productKnowledgeCache.vectors = [];
+  productKnowledgeCache.embedError = null;
+
+  try {
+    const vectors = [];
+    for (const chunk of chunks) {
+      const vec = await embedText(`${chunk.title}\n${chunk.content}`);
+      vectors.push(vec);
+    }
+    if (vectors.some((v) => !Array.isArray(v))) throw new Error("Embedding response did not include vectors.");
+    productKnowledgeCache.vectors = vectors;
+  } catch (e) {
+    productKnowledgeCache.embedError = e.message;
+  }
+}
+
+async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
+  const chunks = productKnowledgeCache.chunks || [];
+  if (!chunks.length) return [];
+
+  if (productKnowledgeCache.vectors.length === chunks.length) {
+    try {
+      const qVec = await embedText(query);
+      const scored = chunks.map((chunk, i) => ({
+        chunk,
+        score: cosine(qVec, productKnowledgeCache.vectors[i])
+      }));
+      return scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+        .map((x) => x.chunk);
+    } catch {
+      // fallback to lexical retrieval
+    }
+  }
+
+  return chunks
+    .map((chunk) => ({ chunk, score: keywordScore(query, chunk) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map((x) => x.chunk);
+}
+
+
+function extractFreshnessFlags(chunks) {
+  const today = new Date().toISOString().slice(0, 10);
+  const content = (chunks || []).map((c) => `${c.title}\n${c.content}`).join("\n");
+
+  const dateMatches = Array.from(content.matchAll(/price_valid_until\s*=\s*(\d{4}-\d{2}-\d{2})/g)).map((m) => m[1]);
+  let pricing_status = "unknown";
+  if (dateMatches.length) {
+    pricing_status = dateMatches.some((d) => d < today) ? "stale" : "valid";
+  }
+
+  const policy_status = /policy_review_required_every\s*=/i.test(content) ? "review_required" : "current";
+  const compliance_status = /component-level|component level/i.test(content)
+    ? "component_level_only"
+    : "needs_lab_validation";
+  const disclaimer_required = pricing_status !== "valid" || policy_status === "review_required" || compliance_status !== "component_level_only";
+
+  return { pricing_status, policy_status, compliance_status, disclaimer_required };
+}
+
+app.post("/api/product-bot", async (req, res) => {
+  try {
+    if (!genAI) return res.status(503).json({ error: "Gemini is not configured (missing GEMINI_API_KEY)." });
+
+    const message = String(req.body?.message || "").trim();
+    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-12) : [];
+    const modeKey = String(req.body?.mode || "simple_chatbot").trim();
+    const mode = PRODUCT_BOT_MODES[modeKey] || PRODUCT_BOT_MODES.simple_chatbot;
+
+    if (!message) return res.status(400).json({ error: "Missing message" });
+
+    const knowledge = await readProductKnowledge();
+    if (!knowledge) {
+      return res.status(500).json({ error: `No product knowledge found. Add content to ${PRODUCT_KNOWLEDGE_PATH} or PRODUCT_BOT_CONTEXT.` });
+    }
+
+    await ensureKnowledgeIndex(knowledge);
+    const retrieved = await retrieveRelevantChunks(message, PRODUCT_BOT_TOP_K);
+    if (!retrieved.length) {
+      return res.status(500).json({ error: "Knowledge index is empty. Expand product-knowledge.md content." });
+    }
+
+    const historyText = history
+      .map((h) => `${h.role === "assistant" ? "Assistant" : "User"}: ${String(h.content || "")}`)
+      .join("\n");
+
+    const context = retrieved
+      .map((c, i) => `[${i + 1}] ${c.title}\n${c.content}`)
+      .join("\n\n---\n\n");
+
+    const freshness = extractFreshnessFlags(retrieved);
+    const automationSchema = modeKey === "sales_automation"
+      ? `
+Automation JSON requirements:
+{
+  "workflow": "quote_intake",
+  "lead_stage": "Inquiry|Qualified|Technical Review",
+  "recommended_skus": [],
+  "bundle_suggestion": "",
+  "missing_fields": [],
+  "pricing_status": "valid|stale|unknown",
+  "policy_status": "current|review_required",
+  "compliance_status": "component_level_only|needs_lab_validation",
+  "disclaimer_required": true,
+  "next_action": "request_details|send_quote|book_call",
+  "support_contact": "care@smarthandicrafts.com"
+}
+Use freshness flags below when choosing pricing_status/policy_status/disclaimer_required.
+`
+      : "";
+
+    const prompt = `${mode.system}
+
+Output style:
+- Clear answer first
+- Then bullet points
+- End with "Sources:" and source numbers used${automationSchema}
+
+FRESHNESS FLAGS:
+${JSON.stringify(freshness, null, 2)}
+
+RETRIEVED KNOWLEDGE:
+${context}
+
+CHAT HISTORY:
+${historyText || "(none)"}
+
+USER QUESTION:
+${message}`;
+
+    const response = await genAI.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt
+    });
+
+    return res.json({
+      ok: true,
+      mode: modeKey,
+      answer: response.text?.trim() || "I could not generate a response.",
+      retrieval: {
+        top_k: PRODUCT_BOT_TOP_K,
+        strategy: productKnowledgeCache.vectors.length ? "embeddings" : "keyword_fallback",
+        embed_error: productKnowledgeCache.embedError,
+        sources: retrieved.map((c, i) => ({ id: i + 1, title: c.title })),
+        ...freshness
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/product-bot/modes", (req, res) => {
+  const modes = Object.entries(PRODUCT_BOT_MODES).map(([key, value]) => ({ key, label: value.label }));
+  res.json({ ok: true, modes });
+});
 
 app.post("/api/debate-stream", async (req, res) => {
   res.setHeader("Content-Type", "application/x-ndjson");
