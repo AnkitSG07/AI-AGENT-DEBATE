@@ -690,10 +690,29 @@ async function odooFetchReportPdf(reportName, docId) {
   });
 
   if (!authResp.ok) throw new Error(`Odoo auth failed: HTTP ${authResp.status}`);
-  const setCookie = authResp.headers.get("set-cookie") || "";
-  const sessionIdMatch = setCookie.match(/session_id=([^;]+)/);
-  if (!sessionIdMatch) throw new Error("Odoo auth failed: no session cookie");
-  const sessionId = sessionIdMatch[1];
+  const authJson = await authResp
+    .json()
+    .catch(() => ({}));
+
+  if (authJson?.error) {
+    const message = authJson.error?.data?.message || authJson.error?.message || "unknown error";
+    throw new Error(`Odoo auth failed: ${message}`);
+  }
+
+  const setCookieHeader = authResp.headers.get("set-cookie") || "";
+  const setCookies = typeof authResp.headers.getSetCookie === "function"
+    ? authResp.headers.getSetCookie()
+    : [];
+  const cookieSource = [setCookieHeader, ...setCookies].filter(Boolean).join("; ");
+
+  const cookieSessionId = cookieSource.match(/(?:^|[;,]\s*)session_id=([^;]+)/)?.[1];
+  const bodySessionId = authJson?.result?.session_id || authJson?.result?.sessionId;
+  const sessionId = bodySessionId || cookieSessionId;
+
+  if (!sessionId) {
+    throw new Error("Odoo auth failed: no session cookie or session_id in response");
+  }
+
 
   const pdfResp = await fetch(`${base}/report/pdf/${reportName}/${docId}`, {
     headers: { Cookie: `session_id=${sessionId}` }
