@@ -525,12 +525,31 @@ Price note: holder category shows ₹25 fixed for AA/AAA (confirm if needed for 
 # 13) USB Cables
 Validity: price_valid_until=2026-06-30 (confirm after)
 
-- USB-A/C-01W (White) — Type A to C, 1.2m: Sample ₹50; 100+ ₹40
-- USB-A/C-01W-B (Golden braided) — Type A to C, 1.2m: Sample ₹100; 100+ ₹90
-- USB-C/C-01W-W — Type C to C, 1.2m, CE: Sample ₹120; 100+ ₹100
-- USB-A/C-02W (Black) — A to C / C to C, 1.2m, UL: Sample ₹70; 100+ ₹65
-- USB cable with switch — Type A, 1.2m: Sample ₹75; 100+ ₹70
-- Type A to C, 1.2m, CE: Sample ₹70; 100+ ₹60
+## SKU: USB-A/C-01W — USB Cable (White)
+Type: Type A to C, 1.2m  
+Pricing: Sample ₹50; 100+ ₹40
+
+## SKU: USB-A/C-01W-B — USB Cable (Golden braided)
+Type: Type A to C, 1.2m  
+Pricing: Sample ₹100; 100+ ₹90
+
+## SKU: USB-C/C-01W-W — USB Cable (White, CE)
+Type: Type C to C, 1.2m  
+Pricing: Sample ₹120; 100+ ₹100
+
+## SKU: USB-A/C-02W — USB Cable (Black, UL)
+Type: A to C / C to C, 1.2m  
+Pricing: Sample ₹70; 100+ ₹65
+
+## SKU: TMP-USB-SWITCH-A-1P2M — USB cable with switch (temporary canonical ID)
+Type: Type A, 1.2m  
+Pricing: Sample ₹75; 100+ ₹70  
+Quote note: Temporary SKU; support confirmation is required before quoting.
+
+## SKU: TMP-USB-A2C-CE-1P2M — USB Cable (Type A to C, CE) (temporary canonical ID)
+Type: Type A to C, 1.2m, CE  
+Pricing: Sample ₹70; 100+ ₹60  
+Quote note: Temporary SKU; support confirmation is required before quoting.
 
 ---
 
@@ -779,6 +798,10 @@ Output format (for automation mode):
   "recommended_skus": [],
   "bundle_suggestion": "",
   "missing_fields": [],
+  "pricing_status": "valid|stale|unknown",
+  "policy_status": "current|review_required",
+  "compliance_status": "component_level_only|needs_lab_validation",
+  "disclaimer_required": true,
   "next_action": "request_details|send_quote|book_call",
   "support_contact": "care@smarthandicrafts.com"
 }
