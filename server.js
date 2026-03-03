@@ -93,15 +93,18 @@ async function odooJsonRpc(service, method, args) {
 // ===================== ODOO UID CACHE =====================
 // Caches the Odoo UID for 20 minutes so we don't do a fresh login on every bot message
 const odooUidCache = { uid: null, expiresAt: 0 };
+
+async function odooLogin() {
+  const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
+  if (!uid) throw new Error("Odoo login failed. Check DB/username/api key.");
+  return uid;
+}
+
 async function odooLoginCached() {
   if (odooUidCache.uid && Date.now() < odooUidCache.expiresAt) return odooUidCache.uid;
   const uid = await odooLogin();
   odooUidCache.uid = uid;
   odooUidCache.expiresAt = Date.now() + 20 * 60 * 1000; // 20 min TTL
-  return uid;
-}
-  const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
-  if (!uid) throw new Error("Odoo login failed. Check DB/username/api key.");
   return uid;
 }
 
