@@ -120,6 +120,91 @@ async function odooExecute(uid, model, method, params = [], kw = {}) {
   ]);
 }
 
+async function odooFindOrCreatePartner(uid, companyName) {
+  const name = String(companyName || "").trim();
+  if (!name) throw new Error("Company name is required to create quotation.");
+
+  const existing = await odooExecute(
+    uid,
+    "res.partner",
+    "search_read",
+    [[["name", "ilike", name]], ["id", "name"]],
+    { limit: 1, order: "id desc" }
+  );
+  if (existing?.[0]?.id) return existing[0];
+
+  const partnerId = await odooExecute(uid, "res.partner", "create", [{ name, company_type: "company" }]);
+  const created = await odooExecute(uid, "res.partner", "read", [[partnerId], ["id", "name"]]);
+  return created?.[0] || { id: partnerId, name };
+}
+
+async function odooFindProductBySku(uid, sku) {
+  const code = String(sku || "").trim();
+  if (!code) return null;
+  const rows = await odooExecute(
+    uid,
+    "product.product",
+    "search_read",
+    [[["default_code", "=", code]], ["id", "display_name", "default_code", "lst_price"]],
+    { limit: 1 }
+  );
+  return rows?.[0] || null;
+}
+
+async function odooCreateQuotation(uid, { company_name, sku, qty, price_unit = null }) {
+  const safeQty = Number(qty);
+  if (!company_name) throw new Error("Missing company_name");
+  if (!sku) throw new Error("Missing sku");
+  if (!Number.isFinite(safeQty) || safeQty <= 0) throw new Error("Missing qty");
+
+  const partner = await odooFindOrCreatePartner(uid, company_name);
+  const product = await odooFindProductBySku(uid, sku);
+  if (!product?.id) {
+    return {
+      ok: false,
+      reason: "sku_not_found",
+      message: `SKU ${sku} was not found in Odoo products (default_code).`
+    };
+  }
+
+  const saleOrderId = await odooExecute(uid, "sale.order", "create", [{ partner_id: partner.id }]);
+  const linePayload = {
+    order_id: saleOrderId,
+    product_id: product.id,
+    product_uom_qty: safeQty
+  };
+  if (Number.isFinite(Number(price_unit)) && Number(price_unit) > 0) {
+    linePayload.price_unit = Number(price_unit);
+  }
+
+  await odooExecute(uid, "sale.order.line", "create", [linePayload]);
+
+  const so = await odooExecute(uid, "sale.order", "read", [[saleOrderId], ["id", "name", "amount_total", "currency_id", "partner_id"]]);
+  const lines = await odooExecute(
+    uid,
+    "sale.order.line",
+    "search_read",
+    [[["order_id", "=", saleOrderId], ["product_id", "=", product.id]], ["id", "price_unit", "price_subtotal", "product_uom_qty"]],
+    { limit: 1, order: "id desc" }
+  );
+
+  const order = so?.[0] || {};
+  const line = lines?.[0] || {};
+  return {
+    ok: true,
+    quotation_id: saleOrderId,
+    quotation_name: order.name || `SO#${saleOrderId}`,
+    partner_name: Array.isArray(order.partner_id) ? order.partner_id[1] : partner.name,
+    sku: product.default_code || sku,
+    product_name: product.display_name,
+    qty: Number(line.product_uom_qty || safeQty),
+    unit_price: Number(line.price_unit || 0),
+    subtotal: Number(line.price_subtotal || 0),
+    total: Number(order.amount_total || 0),
+    currency: Array.isArray(order.currency_id) ? order.currency_id[1] : ""
+  };
+}
+
 // Find SO by ref and normalize details
 async function odooFetchPartner(uid, partnerId) {
   if (!partnerId) return {};
@@ -694,7 +779,8 @@ If the answer is missing, say you are not sure and ask the user to contact suppo
     system: `You are a B2B sales assistant for SmartHandicrafts.
 Prioritize qualification, use-case mapping, integration fit, packaging, pricing guidance from knowledge,
 and end with a clear suggested next step (demo, pilot, quote, or technical call).
-Do not invent discounts or contractual terms.`
+Do not invent discounts or contractual terms.
+Do not ask for data that is already present in the user's latest message or chat history.
   },
   compliance_assistant: {
     label: "Export-grade compliance assistant",
@@ -1280,6 +1366,62 @@ function parseUserQuantity(message = "") {
   return Number.isFinite(qty) ? qty : null;
 }
 
+function isQuoteIntent(message = "") {
+  const text = normalizeText(message).toLowerCase();
+  return /(formal\s+quote|quotation|prepare\s+(a\s+)?quote|make\s+(a\s+)?quote|create\s+(a\s+)?quote|proforma)/i.test(text);
+}
+
+function extractCompanyName(message = "") {
+  const text = normalizeText(message);
+  if (!text) return null;
+  const patterns = [
+    /\b(?:for|to)\s+(?:company\s+)?([a-z][a-z0-9&.,\-\s]{1,80})$/i,
+    /\bcompany\s*(?:name)?\s*(?:is|:|=)\s*([a-z][a-z0-9&.,\-\s]{1,80})/i,
+    /\bfor\s+([a-z][a-z0-9&.,\-\s]{1,80})\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (!m?.[1]) continue;
+    const candidate = m[1].trim().replace(/\s+/g, " ");
+    if (!candidate || /^\d/.test(candidate)) continue;
+    if (/\b(units?|pieces?|pcs?|qty|quantity)\b/i.test(candidate)) continue;
+    if (candidate.length < 2) continue;
+    return candidate;
+  }
+  return null;
+}
+
+function parseQuoteEntities({ message = "", history = [], skuCatalog = [] }) {
+  const historyUserTexts = Array.isArray(history)
+    ? history
+        .filter((h) => String(h?.role || "").toLowerCase() === "user")
+        .map((h) => normalizeText(h?.content || ""))
+        .filter(Boolean)
+    : [];
+
+  const messageSku = resolveSkuCandidates(message, skuCatalog)[0] || null;
+  const historySku = historyUserTexts
+    .map((t) => resolveSkuCandidates(t, skuCatalog)[0] || null)
+    .find(Boolean) || null;
+
+  const messageQty = parseUserQuantity(message);
+  const historyQty = historyUserTexts
+    .map((t) => parseUserQuantity(t))
+    .find((q) => Number.isFinite(q) && q > 0) || null;
+
+  const messageCompany = extractCompanyName(message);
+  const historyCompany = historyUserTexts
+    .map((t) => extractCompanyName(t))
+    .find(Boolean) || null;
+
+  return {
+    skuCandidate: messageSku || historySku || null,
+    qty: messageQty || historyQty || null,
+    company_name: messageCompany || historyCompany || null
+  };
+}
+
 function resolveSkuCandidates(message = "", skuCatalog = []) {
   const text = normalizeText(message).toLowerCase();
   if (!text) return [];
@@ -1704,6 +1846,12 @@ app.post("/api/product-bot", async (req, res) => {
     await ensureKnowledgeIndex(knowledge);
 
     const skuCandidates = resolveSkuCandidates(message, productKnowledgeCache.skuCatalog);
+    const quoteEntities = parseQuoteEntities({
+      message,
+      history,
+      skuCatalog: productKnowledgeCache.skuCatalog
+    });
+    const quoteIntent = isQuoteIntent(message);
     const hasAmbiguousSku = skuCandidates.length > 1;
     const asksPricing = /(price|pricing|quote|quotation|rate|cost)/i.test(message);
     if (hasAmbiguousSku) {
@@ -1722,7 +1870,7 @@ app.post("/api/product-bot", async (req, res) => {
       });
     }
 
-    const resolvedSku = skuCandidates.length === 1 ? skuCandidates[0] : null;
+    const resolvedSku = quoteEntities.skuCandidate || (skuCandidates.length === 1 ? skuCandidates[0] : null);
     const isShortSkuOnlyPrompt = resolvedSku && /^(?:[a-z]{1,3}-)?\d{2,4}(?:\s+lc)?$/i.test(normalizeText(message));
     if (isShortSkuOnlyPrompt) {
       return res.json({
@@ -1742,8 +1890,112 @@ Share quantity if you want exact tier pricing.`,
     }
 
     if (asksPricing && resolvedSku && productKnowledgeCache.pricingCatalog.has(resolvedSku.sku)) {
-      const qty = parseUserQuantity(message);
+      const qty = quoteEntities.qty || parseUserQuantity(message);
       const tiers = productKnowledgeCache.pricingCatalog.get(resolvedSku.sku) || [];
+      const applicableTier = tiers
+        .filter((t) => Number.isFinite(t.threshold) && qty && qty >= t.threshold)
+        .sort((a, b) => (b.threshold || 0) - (a.threshold || 0))[0] || null;
+
+      if (quoteIntent) {
+        if (!quoteEntities.company_name) {
+          return res.json({
+            ok: true,
+            mode: "b2b_sales_assistant",
+            mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+            mode_reason: "Quote requested but company name missing.",
+            answer: "Please share the company name for the quotation (example: International Link).",
+            retrieval: {
+              top_k: 0,
+              strategy: "quote_intake_missing_company",
+              embed_error: productKnowledgeCache.embedError,
+              sources: []
+            }
+          });
+        }
+
+        if (!qty) {
+          return res.json({
+            ok: true,
+            mode: "b2b_sales_assistant",
+            mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+            mode_reason: "Quote requested but quantity missing.",
+            answer: `Please share quantity for ${resolvedSku.sku} so I can create the Odoo quotation.`,
+            retrieval: {
+              top_k: 0,
+              strategy: "quote_intake_missing_qty",
+              embed_error: productKnowledgeCache.embedError,
+              sources: []
+            }
+          });
+        }
+
+        if (!odooConfigured) {
+          return res.json({
+            ok: true,
+            mode: "b2b_sales_assistant",
+            mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+            mode_reason: "Quote requested but Odoo is not configured.",
+            answer: "I can prepare the quote, but direct Odoo quotation creation is unavailable because ODOO_URL / ODOO_DB / ODOO_USERNAME / ODOO_API_KEY_OR_PASSWORD are not configured.",
+            retrieval: {
+              top_k: 0,
+              strategy: "quote_odoo_unavailable",
+              embed_error: productKnowledgeCache.embedError,
+              sources: []
+            }
+          });
+        }
+
+        const uid = await odooLoginCached();
+        const quoteResult = await odooCreateQuotation(uid, {
+          company_name: quoteEntities.company_name,
+          sku: resolvedSku.sku,
+          qty,
+          price_unit: applicableTier?.price || null
+        });
+
+        if (!quoteResult.ok) {
+          return res.json({
+            ok: true,
+            mode: "b2b_sales_assistant",
+            mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+            mode_reason: "Odoo quotation creation failed.",
+            answer: quoteResult.message || "I could not create the quotation in Odoo.",
+            retrieval: {
+              top_k: 0,
+              strategy: "quote_odoo_create_failed",
+              embed_error: productKnowledgeCache.embedError,
+              sources: []
+            },
+            odoo_result: quoteResult
+          });
+        }
+
+        const quoteAnswer = [
+          `Quotation created in Odoo: **${quoteResult.quotation_name}**.`,
+          `Company: **${quoteResult.partner_name}**`,
+          `Item: **${quoteResult.sku}** (${quoteResult.product_name || resolvedSku.title})`,
+          `Quantity: **${quoteResult.qty}**`,
+          `Unit price: **₹${quoteResult.unit_price.toLocaleString("en-IN")}**`,
+          `Line subtotal: **₹${quoteResult.subtotal.toLocaleString("en-IN")}**`,
+          `Order total: **₹${quoteResult.total.toLocaleString("en-IN")}**`
+        ].join("\n");
+
+        return res.json({
+          ok: true,
+          mode: "b2b_sales_assistant",
+          mode_label: PRODUCT_BOT_MODES.b2b_sales_assistant.label,
+          mode_reason: "Quote request routed to Odoo sale.order creation.",
+          answer: quoteAnswer,
+          retrieval: {
+            top_k: 0,
+            strategy: "quote_to_odoo",
+            embed_error: productKnowledgeCache.embedError,
+            sources: []
+          },
+          odoo_result: quoteResult
+        });
+      }
+
       const answer = buildDeterministicPricingReply({
         sku: resolvedSku.sku,
         title: resolvedSku.title,
@@ -1817,8 +2069,9 @@ Write naturally for end users.
 Write naturally for a buyer conversation.
 1) Provide the direct answer first (include pricing tiers when relevant).
 2) Ask at most one clarification question if critical details are missing.
-3) Keep recommendations practical and concise without legal boilerplate.
-4) End with "Sources: [x][y]".`,
+3) Do not re-ask company/SKU/quantity if already provided; use provided company name directly in quote drafts.
+4) Keep recommendations practical and concise without legal boilerplate.
+5) End with "Sources: [x][y]".`,
       compliance_assistant: `
 Write naturally and clearly.
 1) Give a short compliance summary grounded in retrieved policy text.
@@ -2309,15 +2562,19 @@ User message: "${String(text || "").replace(/"/g, "'")}"
 
 Return JSON with these fields:
 {
-  "intent": one of: "list_invoices" | "list_unpaid_invoices" | "lookup_customer" | "list_orders" | "delayed_orders" | "list_products" | "kpi_summary" | "fallback",
+  "intent": one of: "create_quotation" | "list_invoices" | "list_unpaid_invoices" | "lookup_customer" | "list_orders" | "delayed_orders" | "list_products" | "kpi_summary" | "fallback",
   "customer_name": string or null,
   "invoice_ref": string or null,
   "days": number (default 30, extract from "last N days" if mentioned),
   "only_unpaid": boolean (true if user wants unpaid/pending/overdue/outstanding only),
-  "limit": number (default 20)
+  "limit": number (default 20),
+  "company_name": string or null,
+  "sku": string or null,
+  "qty": number or null
 }
 
 Intent rules:
+- "create_quotation" = user asks to create/prepare/make a quote or quotation in Odoo
 - "list_invoices" = any request to see/show/get/fetch invoices or bills for a company
 - "list_unpaid_invoices" = user specifically wants unpaid/pending/overdue/outstanding invoices
 - "lookup_customer" = find/search/show customer details or profile
@@ -2353,7 +2610,8 @@ Return ONLY the JSON object, no explanation, no markdown.`;
     const isDelayed = /(delay|late|stuck|pending|not\s+delivered)/i.test(q);
 
     parsed = {
-      intent: isUnpaid && hasInvoice ? "list_unpaid_invoices"
+      intent: /(create|prepare|make).*(quote|quotation)|proforma/i.test(q) ? "create_quotation"
+        : isUnpaid && hasInvoice ? "list_unpaid_invoices"
         : hasInvoice ? "list_invoices"
         : hasCustomer ? "lookup_customer"
         : isDelayed && hasOrder ? "delayed_orders"
@@ -2363,14 +2621,75 @@ Return ONLY the JSON object, no explanation, no markdown.`;
       invoice_ref: null,
       days,
       only_unpaid: isUnpaid,
-      limit: 20
+      limit: 20,
+      company_name: extractCompanyName(text),
+      sku: null,
+      qty: parseUserQuantity(text)
     };
   }
 
-  const { intent, customer_name, invoice_ref, days = 30, only_unpaid, limit = 20 } = parsed;
+  const { intent, customer_name, invoice_ref, days = 30, only_unpaid, limit = 20, company_name, sku, qty } = parsed;
   const safeLimit = Math.min(Number(limit) || 20, 100);
 
   // ── STEP 2: Execute the right Odoo query based on parsed intent ──
+
+  if (intent === "create_quotation") {
+    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot create quotations.` };
+
+    const parsedSku = sku || resolveSkuCandidates(text, productKnowledgeCache.skuCatalog || [])[0]?.sku || null;
+    const parsedQty = Number(qty || parseUserQuantity(text) || 0);
+    const parsedCompany = company_name || extractCompanyName(text) || customer_name || null;
+
+    if (!parsedCompany) {
+      return {
+        intent: "create_quotation",
+        role,
+        message: "Please provide company name to create quotation in Odoo.",
+        missing_fields: ["company_name"]
+      };
+    }
+
+    if (!parsedSku) {
+      return {
+        intent: "create_quotation",
+        role,
+        message: "Please provide SKU to create quotation in Odoo.",
+        missing_fields: ["sku"]
+      };
+    }
+
+    if (!Number.isFinite(parsedQty) || parsedQty <= 0) {
+      return {
+        intent: "create_quotation",
+        role,
+        message: "Please provide valid quantity to create quotation in Odoo.",
+        missing_fields: ["qty"]
+      };
+    }
+
+    const result = await odooCreateQuotation(uid, {
+      company_name: parsedCompany,
+      sku: parsedSku,
+      qty: parsedQty
+    });
+
+    if (!result.ok) {
+      return {
+        intent: "create_quotation",
+        role,
+        message: result.message || "Failed to create quotation in Odoo.",
+        reason: result.reason || "unknown"
+      };
+    }
+
+    return {
+      intent: "create_quotation",
+      role,
+      summary: `Quotation **${result.quotation_name}** created for **${result.partner_name}**.\n• SKU: ${result.sku}\n• Qty: ${result.qty}\n• Unit price: ₹${Number(result.unit_price || 0).toLocaleString("en-IN")}\n• Subtotal: ₹${Number(result.subtotal || 0).toLocaleString("en-IN")}\n• Total: ₹${Number(result.total || 0).toLocaleString("en-IN")}`,
+      quotation: result,
+      requested_by: queryUser
+    };
+  }
 
   if (intent === "list_invoices" || intent === "list_unpaid_invoices") {
     if (!roleGuard(role, "invoice")) return { intent: "forbidden", message: `Role '${role}' cannot view invoices.` };
