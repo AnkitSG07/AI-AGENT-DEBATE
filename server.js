@@ -704,6 +704,94 @@ required integrations, and CRM/ERP handoff notes based only on retrieved context
   }
 };
 
+// ─── QUERY EXPANSION ─────────────────────────────────────────────────────────
+// Enriches short/vague queries before retrieval so single-word inputs like
+// "201", "batteries", "strip" get proper context for chunk matching.
+const QUERY_EXPANSION_RULES = [
+  // Specific SKU numbers
+  { pattern: /\b201\b(?!-\d)/, expand: "AS-B-201-SLD rechargeable 1 colour single LED driver COB touch dimmable price INR" },
+  { pattern: /\b202\b(?!-\d)/, expand: "AS-B-202-DLD rechargeable 3 colour dual LED driver COB touch dimmable price INR" },
+  { pattern: /\b204\b/, expand: "AS-B-204-LSD LED strip dimmer rechargeable driver 12V 24V price" },
+  { pattern: /\b205\b/, expand: "AS-B-205-LSD LED strip fast charging rechargeable driver 12V 24V price" },
+  { pattern: /\b206\b/, expand: "AS-B-206 DOB driver on board 3 colour rechargeable LED 75mm 115mm 55mm" },
+  { pattern: /\bu[-.]?101\b/i, expand: "AS-U-101-SLD USB powered single 1 colour LED driver price" },
+  { pattern: /\bu[-.]?102\b/i, expand: "AS-U-102-DLD USB powered 3 colour dual LED driver price" },
+  { pattern: /\bu[-.]?103\b/i, expand: "AS-U-103-LSD USB strip driver 12V 24V price" },
+  { pattern: /\b(as.?b.?201|201.?sld)\b/i, expand: "AS-B-201-SLD rechargeable single colour driver price" },
+  { pattern: /\b(as.?b.?202|202.?dld)\b/i, expand: "AS-B-202-DLD rechargeable 3 colour driver price" },
+  // Product categories
+  { pattern: /\bbatter(y|ies)\b/i, expand: "18650 Li-ion battery 1200mAh 2600mAh 5200mAh price specification SH-BAT" },
+  { pattern: /\bstrip\b/i, expand: "COB LED strip 12V 24V warm white CCT RGB RGBCCT price per meter 3mm 5mm 8mm 10mm" },
+  { pattern: /\b(single\s+)?cob\b/i, expand: "LED COB 3W 5W 0.5W 2W single colour 3V price SH-COB" },
+  { pattern: /\bdual\s*(cob|led)\b/i, expand: "dual LED COB 3W 5W 2700K 5700K CCT price SH-COB-D" },
+  { pattern: /\b(switch|rocker|push\s*button)\b/i, expand: "push button rocker switch SPST price SH-SWT" },
+  { pattern: /\b(touch|dimm(er|able))\b/i, expand: "touch dimmable driver rechargeable USB single dual colour dimming" },
+  { pattern: /\b(cable|usb\s*cable)\b/i, expand: "USB cable Type-A Type-C 1.2m CE UL white braided price" },
+  { pattern: /\b(connector|panel\s*mount)\b/i, expand: "USB-C panel mount connector indicator black white transparent price" },
+  { pattern: /\bfilament\b/i, expand: "flexible filament LED 190mm 300mm 460mm 600mm 3V 12V 24V 2700K price" },
+  { pattern: /\bflame\s*(led)?\b/i, expand: "flame LED decorative 5V 1300K 2 inch 3 inch price per meter" },
+  { pattern: /\bfairy\s*(light)?\b/i, expand: "fairy lights silver copper wire warm white multicolour price per meter" },
+  { pattern: /\b(jst\s*)?wire\b/i, expand: "JST wire UL certified touch sensor connector 6 inch custom length" },
+  { pattern: /\blens\b/i, expand: "LED lens clear frosted PC 35mm COB compatible 3W 5W" },
+  { pattern: /\benclosur/i, expand: "plastic metal enclosure USB-C panel mount 19mm 16mm" },
+  { pattern: /\bholder\b/i, expand: "LED holder glass stone shade ring battery holder 18650 3xAA 3xAAA" },
+  { pattern: /\bdob\b/i, expand: "DOB driver on board LED rechargeable 3 colour 206 55mm 75mm 115mm price" },
+  { pattern: /\brechargeable\b/i, expand: "rechargeable LED driver 201 202 204 205 206 touch dimmable INR price" },
+  { pattern: /\busb\s*(powered|driver)?\b/i, expand: "USB powered LED driver 101 102 103 USB-C touch dimmable price" },
+  { pattern: /\blc\s*(set|series)?\b/i, expand: "LC set bundle driver LED battery connector 201 202 cost-optimized 2000+ price" },
+  // Intent expansions
+  { pattern: /^(price|pricing|cost|rate)\??$/i, expand: "pricing tiers INR MOQ sample 60 100 500 1000 LED driver battery strip" },
+  { pattern: /^moq\??$/i, expand: "minimum order quantity pricing tiers sample 60+ 100+ 500+ 1000+" },
+  { pattern: /^(compare|vs|difference)\??$/i, expand: "comparison rechargeable vs USB driver single vs dual colour COB" },
+  { pattern: /^(hello|hi|hey|hiya)\b/i, expand: "SmartHandicrafts overview LED driver product categories" },
+  { pattern: /^(help|assist)\??$/i, expand: "product overview LED driver battery strip accessories guide" },
+  { pattern: /\bpair(ing|ed|s)?\b/i, expand: "compatible pairing LED COB driver battery bundle recommended" },
+  { pattern: /\bbundle\b/i, expand: "LC set bundle driver LED battery connector cost-optimized" },
+  { pattern: /\brecommend\b/i, expand: "recommended LED driver COB battery bundle use-case selection guide" },
+  { pattern: /\bcompar/i, expand: "comparison rechargeable USB driver single dual colour COB strip DOB" },
+  // Compliance
+  { pattern: /\bce\s*(cert|standard)?\b/i, expand: "CE certification compliance standard LED driver strip certificate" },
+  { pattern: /\bul\s*(cert|listed)?\b/i, expand: "UL certification compliance LED driver strip battery certificate" },
+  { pattern: /\brohs\b/i, expand: "RoHS compliance LED module strip driver certificate" },
+  { pattern: /\bexport\b/i, expand: "export compliance CE UKCA UL RoHS certification HS code incoterm" },
+  { pattern: /\bhs\s*(code)?\b/i, expand: "HS code export customs compliance LED driver" },
+  { pattern: /\bcertif/i, expand: "certification CE UKCA UL RoHS BIS IEC certificate document" },
+  // Company info
+  { pattern: /\bcompany\b|\babout\b|\bwho\s+are/i, expand: "Smart Handicrafts company overview mission B2B LED technology artisan exporter" },
+  { pattern: /\bcontact\b|\baddress\b|\bemail\b/i, expand: "Smart Handicrafts contact email phone address New Delhi" },
+  { pattern: /\bshipp(ing|ed)\b/i, expand: "shipping policy dispatch export battery courier lead time" },
+  { pattern: /\bwarrant/i, expand: "warranty SLA technical support response time" },
+  { pattern: /\breturn(s)?\b/i, expand: "returns policy defect wrong item custom order" },
+  // Quantity/wattage patterns
+  { pattern: /\b(0\.?5|half)\s*w(att)?\b/i, expand: "0.5W LED COB 3V SH-COB-0.5W price" },
+  { pattern: /\b2\s*w(att)?\b/i, expand: "2W LED COB 20mm 35mm 3V price SH-COB-2W" },
+  { pattern: /\b3\s*w(att)?\b/i, expand: "3W LED COB 3V 12V single dual CREE price SH-COB-3W" },
+  { pattern: /\b5\s*w(att)?\b/i, expand: "5W LED COB 3V 24V single dual CREE price SH-COB-5W" },
+  { pattern: /\b7\s*w(att)?\b/i, expand: "7W DOB driver on board 3 colour dual 3.5W+3.5W" },
+  { pattern: /\b(12|24)\s*v\b/i, expand: "12V 24V LED COB strip driver rechargeable USB" },
+  { pattern: /\b(warm\s*white|ww|2700|3000)\b/i, expand: "warm white 2700K 3000K LED COB strip filament" },
+  { pattern: /\b(cool\s*white|cw|5700|6000)\b/i, expand: "cool white 5700K 6000K dual COB CCT" },
+  { pattern: /\bcct\b/i, expand: "CCT dual colour warm cool white LED COB strip driver" },
+  { pattern: /\brgb\b/i, expand: "RGB COB strip 24V 400 LED per meter price" },
+];
+
+function expandQuery(rawQuery) {
+  const q = String(rawQuery || "").trim();
+  if (!q) return q;
+  const wordCount = q.split(/\s+/).length;
+  // Already a detailed query — only light expansion
+  if (wordCount > 8) return q;
+  const expansions = [];
+  for (const { pattern, expand } of QUERY_EXPANSION_RULES) {
+    if (pattern.test(q)) {
+      expansions.push(expand);
+      if (expansions.length >= 4) break;
+    }
+  }
+  if (!expansions.length) return q;
+  return `${q} ${expansions.join(" ")}`;
+}
+
 const AUTO_MODE_CONFIDENCE_THRESHOLD = Number(process.env.AUTO_MODE_CONFIDENCE_THRESHOLD || 0.8);
 const AUTO_MODE_AMBIGUITY_DELTA = Number(process.env.AUTO_MODE_AMBIGUITY_DELTA || 0.15);
 
@@ -742,9 +830,14 @@ function detectRuleBasedAutoMode(message, history = []) {
   // - Should NOT trigger compliance: "201 price for 1000 pieces", "price for 202"
   // - Should trigger compliance: "Do you have CE certificate?", "export compliance for EU"
   const hasComplianceIntent = /\b(compliance|ce|ukca|ul|rohs|bis|iec|certificate|certification|hs\s*code|incoterm|export|customs|regulation|legal)\b/i.test(combined);
+  const isPricingQuery = /(price|pricing|cost|rate|moq|quantity|pcs|pieces|units|per\s*piece|\binr\b)/i.test(combined)
+    && !/\b(certificate|certification|certif|compliance|regulation|legal|export\s+control|customs\s+duty)\b/i.test(combined);
 
-  if (hasComplianceIntent) {
+  if (hasComplianceIntent && !isPricingQuery) {
     scores.compliance_assistant = Math.max(scores.compliance_assistant, 0.9);
+  } else if (hasComplianceIntent && isPricingQuery) {
+    // Mixed signal — slight compliance boost but let sales win if it also scored
+    scores.compliance_assistant = Math.max(scores.compliance_assistant, 0.5);
   }
 
   const hasSalesIntent = /(price|pricing|quote|quotation|moq|lead\s*time|bundle|pairing|compatible|recommend|quantity|sku|integration|odoo|shopify|woocommerce|amazon)/i.test(combined);
@@ -851,8 +944,32 @@ function buildInternalOdooHelpReply() {
 Tell me what product or requirement you have, and I'll guide you from there.`;
 }
 
+function buildGreetingReply() {
+  return `Hi! I'm the SmartHandicrafts product assistant 👋
+
+I can help you with:
+- LED driver pricing & specs (rechargeable & USB-powered)
+- Product comparisons and bundle recommendations
+- Compliance notes (CE, UKCA, UL, RoHS)
+- Export and shipping guidance
+
+What would you like to know? You can ask anything — even just "201 price" or "show me strip drivers".`;
+}
+
+function buildFallbackReply(message) {
+  return `I wasn't able to find specific information for: **"${String(message || "").trim()}"**
+
+Here are some things I can help with:
+- Product specs & pricing (e.g. "201 price", "battery specs")
+- Bundle recommendations (e.g. "LC set options")
+- Compliance questions (e.g. "CE certificate for 201")
+- Company info (e.g. "shipping policy")
+
+If you need further assistance, please contact us at **support@smarthandicrafts.com** or mention more details about your requirement.`;
+}
+
 const PRODUCT_BOT_EMBED_MODEL = process.env.PRODUCT_BOT_EMBED_MODEL || "text-embedding-004";
-const PRODUCT_BOT_TOP_K = Math.max(2, Number(process.env.PRODUCT_BOT_TOP_K || 6));
+const PRODUCT_BOT_TOP_K = Math.max(2, Number(process.env.PRODUCT_BOT_TOP_K || 8)); // Increased from 6 → 8 for better short-query retrieval
 
 const productKnowledgeCache = {
   raw: "",
@@ -1213,8 +1330,10 @@ async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
   const chunks = productKnowledgeCache.chunks || [];
   if (!chunks.length) return [];
 
-  const canonicalPricingQuery = buildPricingQueryCanonicalForm(query, chunks);
-  const effectiveQuery = canonicalPricingQuery ? `${query}\n${canonicalPricingQuery}` : query;
+  // Expand short/vague queries to improve retrieval for single-word inputs
+  const expandedQuery = expandQuery(query);
+  const canonicalPricingQuery = buildPricingQueryCanonicalForm(expandedQuery, chunks);
+  const effectiveQuery = canonicalPricingQuery ? `${expandedQuery}\n${canonicalPricingQuery}` : expandedQuery;
   const hints = extractQueryHints(effectiveQuery);
   const lexicalScored = chunks.map((chunk) => ({ chunk, lexicalScore: keywordScore(effectiveQuery, chunk) }));
   let vectorScores = null;
@@ -1357,6 +1476,27 @@ app.post("/api/product-bot", async (req, res) => {
     const requestedMode = String(req.body?.mode || "auto").trim();
     if (!message) return res.status(400).json({ error: "Missing message" });
 
+    // Instant greeting shortcut — no LLM call needed
+    if (/^(hi|hello|hey|hiya|howdy|greetings)\b[!?.]*$/i.test(message)) {
+      return res.json({
+        ok: true,
+        mode: "simple_chatbot",
+        mode_label: PRODUCT_BOT_MODES.simple_chatbot?.label || "Product Assistant",
+        mode_reason: "Greeting detected — instant reply.",
+        answer: buildGreetingReply(),
+        retrieval: { top_k: 0, strategy: "greeting_shortcut", embed_error: null, sources: [] }
+      });
+    }
+
+    // Short product-query detection: 1-4 word queries with product terms → route to sales
+    // e.g. "201", "batteries", "strip price", "3w cob"
+    const shortProductTerms = /\b(201|202|204|205|206|u[-.]?10[123]|as-b|as-u|battery|batteries|strip|cob|dob|lc\s*(set)?|filament|flame|fairy|lens|holder|cable|connector|switch|rechargeable|usb.*driver|3w|5w|0\.5w|2w|7w|12v|24v|rgb|cct)\b/i;
+    const wordCount = message.split(/\s+/).length;
+    if (wordCount <= 4 && shortProductTerms.test(message) && requestedMode === "auto") {
+      // Pre-route to b2b_sales_assistant — still goes through RAG retrieval below
+      req.body = { ...req.body, _shortProductDetected: true };
+    }
+
     const pendingClarification = getPendingModeClarification(history);
     const clarificationResolvedMode = pendingClarification && /\b(pricing|price|quote|sales|sku|moq|quantity)\b/i.test(message)
       ? "b2b_sales_assistant"
@@ -1366,7 +1506,9 @@ app.post("/api/product-bot", async (req, res) => {
 
     const autoDetection = clarificationResolvedMode
       ? { mode: clarificationResolvedMode, reason: `Resolved clarification toward ${clarificationResolvedMode}.`, confidence: 0.9, stage: "clarification" }
-      : await detectAutoMode(message, history);
+      : req.body?._shortProductDetected
+        ? { mode: "b2b_sales_assistant", reason: "Short product-term query pre-routed to sales.", confidence: 0.85, stage: "rules", scores: {} }
+        : await detectAutoMode(message, history);
 
     const routeScores = autoDetection.scores || detectRuleBasedAutoMode(message, history).scores;
     const sortedScores = Object.entries(routeScores).sort((a, b) => b[1] - a[1]);
@@ -1551,7 +1693,14 @@ Share quantity if you want exact tier pricing.`,
 
     const retrieved = await retrieveRelevantChunks(message, PRODUCT_BOT_TOP_K);
     if (!retrieved.length) {
-      return res.status(500).json({ error: "Knowledge index is empty. Expand product-knowledge.md content." });
+      return res.json({
+        ok: true,
+        mode: resolvedModeKey,
+        mode_label: mode.label,
+        mode_reason: "No relevant knowledge chunks found for this query.",
+        answer: buildFallbackReply(message),
+        retrieval: { top_k: 0, strategy: "fallback", embed_error: productKnowledgeCache.embedError, sources: [] }
+      });
     }
 
     const historyText = history
@@ -1629,7 +1778,7 @@ ${selfTrainingContext ? `${selfTrainingContext}
 ${historyText || "(none)"}
 
 USER QUESTION:
-${message}`;
+${message}${expandQuery(message) !== message ? `\n\n(Expanded context: ${expandQuery(message)})` : ""}`;
 
     const modelResult = await callProductBotModel(mode.system, prompt);
 
