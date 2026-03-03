@@ -2066,7 +2066,14 @@
 
         const answer = out.answer || 'No answer returned.';
         addBotMessage('assistant', answer);
-        botHistory.push({ role: 'user', content: message }, { role: 'assistant', content: answer });
+
+        // Preserve pending_mode_clarification on the assistant history entry so the
+        // backend's getPendingModeClarification() can find it in the next request.
+        const assistantEntry = { role: 'assistant', content: answer };
+        if (out.pending_mode_clarification) {
+          assistantEntry.pending_mode_clarification = out.pending_mode_clarification;
+        }
+        botHistory.push({ role: 'user', content: message }, assistantEntry);
         if (botHistory.length > 24) botHistory = botHistory.slice(-24);
         const label = out?.mode_label || modeLabelMap[out?.mode] || 'Auto-detect';
         const strategy = out?.retrieval?.strategy ? ` Retrieval: ${out.retrieval.strategy}.` : '';
