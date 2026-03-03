@@ -90,7 +90,16 @@ async function odooJsonRpc(service, method, args) {
   return data.result;
 }
 
-async function odooLogin() {
+// ===================== ODOO UID CACHE =====================
+// Caches the Odoo UID for 20 minutes so we don't do a fresh login on every bot message
+const odooUidCache = { uid: null, expiresAt: 0 };
+async function odooLoginCached() {
+  if (odooUidCache.uid && Date.now() < odooUidCache.expiresAt) return odooUidCache.uid;
+  const uid = await odooLogin();
+  odooUidCache.uid = uid;
+  odooUidCache.expiresAt = Date.now() + 20 * 60 * 1000; // 20 min TTL
+  return uid;
+}
   const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
   if (!uid) throw new Error("Odoo login failed. Check DB/username/api key.");
   return uid;
@@ -1642,11 +1651,22 @@ app.post("/api/product-bot", async (req, res) => {
         });
       }
 
-      const uid = await odooLogin();
-      const odooResult = await handleNaturalLanguageQuery(uid, message, {
-        role: req.body?.role,
-        user: req.body?.user || "product-bot"
-      });
+      const uid = await odooLoginCached();
+      let odooResult;
+      try {
+        odooResult = await handleNaturalLanguageQuery(uid, message, {
+          role: req.body?.role,
+          user: req.body?.user || "product-bot"
+        });
+      } catch (odooErr) {
+        // If login session expired, retry once with fresh login
+        odooUidCache.uid = null;
+        const freshUid = await odooLoginCached();
+        odooResult = await handleNaturalLanguageQuery(freshUid, message, {
+          role: req.body?.role,
+          user: req.body?.user || "product-bot"
+        });
+      }
 
       const answer = odooResult.summary || odooResult.message || "Processed your Odoo query.";
       recordRoutingTelemetry({
@@ -2451,10 +2471,10 @@ Return ONLY the JSON object, no explanation, no markdown.`;
   if (intent === "list_orders") {
     if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot view sales orders.` };
 
-    const domain = [];
-    if (customer_name) domain.push(["partner_id.name", "ilike", customer_name]);
+    // FIX: was wrapping domain in extra [] causing Odoo domain syntax error
+    const domain = customer_name ? [["partner_id.name", "ilike", customer_name]] : [];
     const rows = await odooExecute(uid, "sale.order", "search_read",
-      [domain.length ? [domain] : [[]], ["id", "name", "partner_id", "state", "amount_total", "invoice_status", "date_order"]],
+      [domain, ["id", "name", "partner_id", "state", "amount_total", "invoice_status", "date_order"]],
       { limit: safeLimit, order: "id desc" }
     );
 
@@ -2473,16 +2493,53 @@ Return ONLY the JSON object, no explanation, no markdown.`;
     };
   }
 
+  // FIX: list_products was declared in LLM prompt but had no execution branch — silent fallback
+  if (intent === "list_products") {
+    if (!roleGuard(role, "product")) return { intent: "forbidden", message: `Role '${role}' cannot view products.` };
+
+    const domain = customer_name ? [["display_name", "ilike", customer_name]] : [];
+    const rows = await odooExecute(uid, "product.product", "search_read",
+      [domain, ["id", "display_name", "default_code", "qty_available", "virtual_available", "list_price", "active"]],
+      { limit: safeLimit, order: "id desc" }
+    );
+
+    const lines = (rows || []).map((r) => {
+      const stock = Number(r.qty_available || 0);
+      const stockLabel = stock <= 0 ? "🔴 Out of stock" : stock <= 5 ? "🟡 Low stock" : "🟢 In stock";
+      return `• **${r.display_name}** | SKU: ${r.default_code || "—"} | ₹${Number(r.list_price || 0).toLocaleString("en-IN")} | On hand: ${stock} | ${stockLabel}`;
+    });
+
+    return {
+      intent: "list_products",
+      role,
+      rows,
+      summary: lines.length
+        ? `Found **${rows.length}** product(s)${customer_name ? ` matching **${customer_name}**` : ""}.\n\n${lines.join("\n")}`
+        : `No products found${customer_name ? ` matching **${customer_name}**` : ""}.`,
+      requested_by: queryUser
+    };
+  }
+
   if (intent === "kpi_summary") {
     const kpis = await computeKpis(uid);
     const summary = await generateOdooSummary(uid);
-    return { intent: "kpi_summary", role, summary: summary || JSON.stringify(kpis, null, 2), kpis, requested_by: queryUser };
+    const summaryText = [
+      `📊 **KPI Summary** (as of ${now().slice(0,10)})`,
+      `• New leads (24h): **${summary.new_leads_24h || 0}**`,
+      `• Unpaid invoices: **${summary.unpaid_invoices || 0}**`,
+      `• Low stock items: **${(summary.low_stock || []).length}**`,
+      `• Monthly revenue: ₹**${Number(kpis.monthly_revenue || 0).toLocaleString("en-IN")}**`,
+      `• Pipeline value: ₹**${Number(kpis.pipeline_value || 0).toLocaleString("en-IN")}**`,
+      kpis.top_customers?.length ? `\n**Top customers:**\n${kpis.top_customers.slice(0,5).map(c => `• ${c.name}: ₹${Number(c.revenue).toLocaleString("en-IN")}`).join("\n")}` : ""
+    ].filter(Boolean).join("\n");
+
+    return { intent: "kpi_summary", role, summary: summaryText, kpis, requested_by: queryUser };
   }
 
-  // Genuine fallback — LLM couldn't parse and regex couldn't either
+  // Genuine fallback
   return {
     intent: "fallback",
-    summary: "I wasn't sure what you're looking for. You can ask things like:\n• \"Show invoices for Acme Ltd\"\n• \"Unpaid bills in the last 30 days\"\n• \"Find customer Ramesh\"\n• \"Any delayed orders?\"\n• \"Sales orders this month\"",
+    summary: "I wasn't sure what you're looking for. You can ask things like:\n• \"Show invoices for Acme Ltd\"\n• \"Unpaid bills in the last 30 days\"\n• \"Find customer Ramesh\"\n• \"Any delayed orders?\"\n• \"Sales orders this month\"\n• \"Show products / inventory\"\n• \"Give me a KPI summary\"",
     message: "Could not infer intent."
   };
 }
