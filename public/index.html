@@ -1118,9 +1118,28 @@
       flex-direction: column;
       gap: 10px;
     }
-    .bot-msg { max-width: 88%; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
-    .bot-msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid rgba(91,143,255,.2); }
+    .bot-msg { max-width: 88%; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.55; }
+    .bot-msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid rgba(91,143,255,.2); white-space: pre-wrap; }
     .bot-msg.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); }
+    /* Markdown rendered inside assistant messages */
+    .bot-msg.assistant p { margin: 0 0 6px; }
+    .bot-msg.assistant p:last-child { margin-bottom: 0; }
+    .bot-msg.assistant strong { color: var(--text-primary); font-weight: 600; }
+    .bot-msg.assistant ul, .bot-msg.assistant ol { padding-left: 16px; margin: 4px 0 6px; }
+    .bot-msg.assistant li { margin-bottom: 3px; }
+    .bot-msg.assistant code { font-family: var(--mono); font-size: 12px; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+    .bot-msg.assistant pre { background: var(--surface-3); padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; }
+    .bot-msg.assistant pre code { background: none; padding: 0; }
+    /* Typing indicator */
+    .bot-typing { align-self: flex-start; display: flex; gap: 4px; align-items: center; padding: 10px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+    .bot-typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); animation: botdot 1.2s infinite ease-in-out; }
+    .bot-typing span:nth-child(2) { animation-delay: 0.2s; }
+    .bot-typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes botdot { 0%,80%,100% { transform: scale(0.7); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+    /* Quick-reply chips */
+    .bot-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 2px; align-self: flex-start; max-width: 88%; }
+    .bot-chip { font-size: 12px; padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border-strong); background: var(--surface-1); color: var(--accent); cursor: pointer; transition: background var(--transition), border-color var(--transition); white-space: nowrap; }
+    .bot-chip:hover { background: var(--accent-soft); border-color: var(--accent); }
     .bot-widget-input { border-top: 1px solid var(--border); padding: 10px; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
     .bot-widget-input textarea { min-height: 46px; max-height: 100px; resize: vertical; }
     .bot-widget-footer { padding: 0 10px 10px; font-size: 12px; color: var(--text-secondary); }
@@ -1320,6 +1339,8 @@
       .btn-sm { padding: 5px 10px; font-size: 11px; }
     }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
 </head>
 
 <body>
@@ -1335,7 +1356,7 @@
 
       <div class="nav-item active" data-page="debate">
         <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span class="nav-tooltip">AI Debate</span>
+        <span class="nav-tooltip">SMART HANDICRAFTS COMMAND CENTRE</span>
       </div>
 
       <div class="nav-item" data-page="labels">
@@ -2031,6 +2052,11 @@
     const botStatus = document.getElementById('botStatus');
     let botHistory = [];
 
+    // Configure marked for safe inline rendering
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({ breaks: true, gfm: true });
+    }
+
     const modeLabelMap = {
       simple_chatbot: 'Simple website chatbot',
       b2b_sales_assistant: 'Advanced B2B sales assistant',
@@ -2039,12 +2065,75 @@
       odoo_operations: 'Odoo operations assistant'
     };
 
-    function addBotMessage(role, text) {
+    function renderMarkdown(text) {
+      if (typeof marked === 'undefined') return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const raw = marked.parse(String(text || ''));
+      return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
+    }
+
+    function addBotMessage(role, text, chips = []) {
+      // Remove typing indicator if present
+      const existing = botMessages.querySelector('.bot-typing');
+      if (existing) existing.remove();
+
       const el = document.createElement('div');
       el.className = `bot-msg ${role}`;
-      el.textContent = text;
+      if (role === 'assistant') {
+        el.innerHTML = renderMarkdown(text);
+      } else {
+        el.textContent = text;
+      }
+      botMessages.appendChild(el);
+
+      // Quick-reply chips for suggested next actions
+      if (chips.length && role === 'assistant') {
+        const chipRow = document.createElement('div');
+        chipRow.className = 'bot-chips';
+        chips.forEach(chip => {
+          const btn = document.createElement('button');
+          btn.className = 'bot-chip';
+          btn.textContent = chip;
+          btn.addEventListener('click', () => {
+            botPrompt.value = chip;
+            sendBotMessage();
+          });
+          chipRow.appendChild(btn);
+        });
+        botMessages.appendChild(chipRow);
+      }
+
+      botMessages.scrollTop = botMessages.scrollHeight;
+    }
+
+    function showTypingIndicator() {
+      const existing = botMessages.querySelector('.bot-typing');
+      if (existing) return;
+      const el = document.createElement('div');
+      el.className = 'bot-typing';
+      el.innerHTML = '<span></span><span></span><span></span>';
       botMessages.appendChild(el);
       botMessages.scrollTop = botMessages.scrollHeight;
+    }
+
+    // Derive context-aware quick-reply chips from bot response
+    function deriveChips(out) {
+      const chips = [];
+      const intent = out?.odoo_result?.intent || '';
+      const mode = out?.mode || '';
+      if (intent === 'lookup_customer_invoice' || intent === 'list_unpaid_invoices') {
+        chips.push('Show unpaid invoices', 'Find customer');
+      } else if (intent === 'customer_lookup') {
+        chips.push('Show their invoices', 'Show their orders');
+      } else if (intent === 'list_orders' || intent === 'explain_order_delay') {
+        chips.push('Show delayed orders', 'Check invoices');
+      } else if (intent === 'kpi_summary') {
+        chips.push('Unpaid invoices', 'Low stock products', 'Show pipeline');
+      } else if (mode === 'b2b_sales_assistant') {
+        chips.push('Compare products', 'Pricing tiers', 'Bundle options');
+      } else if (mode === 'compliance_assistant') {
+        chips.push('CE certificate', 'Export compliance', 'RoHS status');
+      }
+      return chips.slice(0, 3); // max 3 chips
     }
 
     async function sendBotMessage() {
@@ -2052,6 +2141,7 @@
       if (!message) return;
       botPrompt.value = '';
       addBotMessage('user', message);
+      showTypingIndicator();
       botStatus.textContent = 'Thinking...';
       botSendBtn.disabled = true;
 
@@ -2065,10 +2155,9 @@
         if (!resp.ok) throw new Error(out.error || 'Failed to get response');
 
         const answer = out.answer || 'No answer returned.';
-        addBotMessage('assistant', answer);
+        const chips = deriveChips(out);
+        addBotMessage('assistant', answer, chips);
 
-        // Preserve pending_mode_clarification on the assistant history entry so the
-        // backend's getPendingModeClarification() can find it in the next request.
         const assistantEntry = { role: 'assistant', content: answer };
         if (out.pending_mode_clarification) {
           assistantEntry.pending_mode_clarification = out.pending_mode_clarification;
@@ -2076,13 +2165,14 @@
         botHistory.push({ role: 'user', content: message }, assistantEntry);
         if (botHistory.length > 24) botHistory = botHistory.slice(-24);
         const label = out?.mode_label || modeLabelMap[out?.mode] || 'Auto-detect';
-        const strategy = out?.retrieval?.strategy ? ` Retrieval: ${out.retrieval.strategy}.` : '';
-        botStatus.textContent = `Ready. Mode: ${label}.${strategy}`;
+        const strategy = out?.retrieval?.strategy ? ` · ${out.retrieval.strategy}` : '';
+        botStatus.textContent = `Mode: ${label}${strategy}`;
       } catch (e) {
-        addBotMessage('assistant', `Error: ${e.message}`);
-        botStatus.textContent = 'Error.';
+        addBotMessage('assistant', `⚠️ Error: ${e.message}`);
+        botStatus.textContent = 'Error. Try again.';
       } finally {
         botSendBtn.disabled = false;
+        botPrompt.focus();
       }
     }
 
