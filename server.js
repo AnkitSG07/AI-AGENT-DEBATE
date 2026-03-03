@@ -2298,14 +2298,21 @@ async function handleNaturalLanguageQuery(uid, text, options = {}) {
     };
   }
 
-  const directInvoiceLookup = /(invoice|bill)/i.test(q) && /\b(of|for|show|find|lookup|status|pdf)\b/i.test(q);
+  // Match: "invoices of X", "give me invoices of X", "show invoices for X", "get all bills of X", "invoice list of X"
+  const directInvoiceLookup = /(invoices?|bills?)/i.test(q);
   if (directInvoiceLookup) {
     if (!roleGuard(role, "invoice")) return { intent: "forbidden", message: `Role '${role}' cannot view invoices.` };
-    const customerMatch = text.match(/(?:invoice|bill)\s+(?:of|for)\s+([a-z0-9 .&-]+)/i);
-    const invoiceRefMatch = text.match(/(?:invoice|bill)\s*(?:number|no\.?|#|ref(?:erence)?)?\s*[:\- ]*([a-z0-9\/-]{3,})/i);
-    const customer = customerMatch?.[1]?.trim();
+
+    // Extract company name — tries several patterns in order of specificity
+    const customerMatch =
+      text.match(/(?:invoices?|bills?)\s+(?:of|for|from|belonging\s+to|related\s+to)\s+["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?/i) ||
+      text.match(/(?:of|for|from)\s+["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?\s+(?:invoices?|bills?)/i) ||
+      text.match(/(?:give\s+me|show\s+me?|get|fetch|list|find|display)\s+(?:all\s+)?(?:the\s+)?(?:invoices?|bills?)\s+(?:of|for|from)?\s*["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?/i);
+
+    const invoiceRefMatch = text.match(/(?:invoice|bill)\s*(?:number|no\.?|#|ref(?:erence)?)?\s*[:\- ]*([A-Za-z0-9\/-]{3,20})/i);
+    const customer = customerMatch?.[1]?.replace(/\s*(invoices?|bills?|please|now)$/i, "").trim();
     const invoiceRef = invoiceRefMatch?.[1]?.trim();
-    const domain = [["move_type", "=", "out_invoice"]];
+    const domain = [["move_type", "=", "out_invoice"], ["state", "=", "posted"]];
     if (customer) domain.push(["partner_id.name", "ilike", customer]);
     if (invoiceRef) domain.push(["name", "ilike", invoiceRef]);
 
@@ -2319,13 +2326,29 @@ async function handleNaturalLanguageQuery(uid, text, options = {}) {
 
     const summary = (rows || []).length
       ? `Found ${(rows || []).length} invoice(s)${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}.`
-      : `No invoices found${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}.`;
+      : `No invoices found${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}. Try checking the company name spelling.`;
+
+    // Build a human-readable list for the bot answer
+    const invoiceLines = (rows || []).map((row) => {
+      const name = row.name || `ID:${row.id}`;
+      const partner = Array.isArray(row.partner_id) ? row.partner_id[1] : (row.partner_id || "");
+      const total = Number(row.amount_total || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+      const due = Number(row.amount_residual || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+      const dueDate = row.invoice_date_due || "—";
+      const status = row.payment_state === "paid" ? "✅ Paid" : row.payment_state === "partial" ? "🔶 Partial" : "🔴 Unpaid";
+      return `• **${name}** | ${partner} | Total: ${total} | Due: ${due} | Due date: ${dueDate} | ${status}`;
+    });
+
+    const answer = (rows || []).length
+      ? `${summary}\n\n${invoiceLines.join("\n")}`
+      : summary;
 
     return {
       intent: "lookup_customer_invoice",
       role,
       rows,
-      summary,
+      summary: answer,
+      customer_searched: customer || null,
       suggested_next_action: (rows || []).length === 1
         ? "Use invoice id/name to generate or fetch invoice PDF via Odoo invoice print endpoint."
         : "Refine with invoice number/reference for a direct PDF retrieval.",
@@ -2336,7 +2359,7 @@ async function handleNaturalLanguageQuery(uid, text, options = {}) {
       })),
       requested_by: queryUser
     };
-  }  
+  }
 
   if (q.includes("delayed") && q.includes("order")) {
     if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot inspect sales orders.` };
