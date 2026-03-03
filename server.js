@@ -2275,147 +2275,216 @@ async function computeKpis(uid) {
 async function handleNaturalLanguageQuery(uid, text, options = {}) {
   const role = coerceRole(options.role);
   const queryUser = options.user || "unknown";
-  const q = String(text || "").toLowerCase();
-  const dayMatch = q.match(/last\s+(\d+)\s+days?/);
-  const days = dayMatch ? Number(dayMatch[1]) : 30;
 
-  if (q.includes("unpaid") && q.includes("invoice")) {
-    if (!roleGuard(role, "invoice")) return { intent: "forbidden", message: `Role '${role}' cannot view invoices.` };
-    const customerMatch = text.match(/for\s+([a-z0-9 .&-]+)/i);
-    const customer = customerMatch?.[1]?.trim();
-    const domain = [["move_type", "=", "out_invoice"], ["state", "=", "posted"], ["payment_state", "!=", "paid"], ["invoice_date", ">=", new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)]];
-    if (customer) domain.push(["partner_id.name", "ilike", customer]);
-    const rows = await odooExecute(uid, "account.move", "search_read", [domain, ["id", "name", "invoice_date_due", "amount_residual", "partner_id"]], { limit: 50, order: "invoice_date_due asc" });
-    const total = (rows || []).reduce((sum, row) => sum + Number(row.amount_residual || 0), 0);
-    return {
-      intent: "list_unpaid_invoices",
-      role,
-      steps: ["fetch_data", "summarize", "suggest_next_action"],
-      summary: `Found ${(rows || []).length} unpaid invoices totaling ${total.toFixed(2)}${customer ? ` for ${customer}` : ""}.`,
-      suggested_next_action: "Create follow-up activities for invoices due within 7 days or already overdue.",
-      rows,
-      requested_by: queryUser
+  // ── STEP 1: Use LLM to parse intent + extract entities from any free-form text ──
+  // This replaces all fragile regex branches. The LLM understands every possible
+  // phrasing: "show me Acme's bills", "do we have pending payments from XYZ?",
+  // "kya Ramesh ke invoices hain?", "get me overdue stuff", etc.
+  const intentParsePrompt = `You are an ERP query parser for an Odoo system. Parse the user's message and return ONLY a JSON object.
+
+User message: "${String(text || "").replace(/"/g, "'")}"
+
+Return JSON with these fields:
+{
+  "intent": one of: "list_invoices" | "list_unpaid_invoices" | "lookup_customer" | "list_orders" | "delayed_orders" | "list_products" | "kpi_summary" | "fallback",
+  "customer_name": string or null,
+  "invoice_ref": string or null,
+  "days": number (default 30, extract from "last N days" if mentioned),
+  "only_unpaid": boolean (true if user wants unpaid/pending/overdue/outstanding only),
+  "limit": number (default 20)
+}
+
+Intent rules:
+- "list_invoices" = any request to see/show/get/fetch invoices or bills for a company
+- "list_unpaid_invoices" = user specifically wants unpaid/pending/overdue/outstanding invoices
+- "lookup_customer" = find/search/show customer details or profile
+- "list_orders" = show/get sales orders or quotations
+- "delayed_orders" = asking about late/delayed/stuck/pending orders
+- "list_products" = asking about products, stock, inventory
+- "kpi_summary" = asking for summary, dashboard, overview, KPIs
+- "fallback" = cannot determine intent
+
+Return ONLY the JSON object, no explanation, no markdown.`;
+
+  let parsed = null;
+  try {
+    const llmResult = await callProductBotModel(
+      "You are a strict JSON-only ERP query parser. Output only valid JSON, no markdown, no explanation.",
+      intentParsePrompt
+    );
+    const raw = String(llmResult?.text || "").trim().replace(/^```json|```$/g, "").trim();
+    parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || "{}");
+  } catch {
+    // LLM parse failed — fall through to regex fallback below
+  }
+
+  // If LLM gave us nothing useful, use a lightweight regex fallback
+  if (!parsed?.intent || parsed.intent === "fallback") {
+    const q = String(text || "").toLowerCase();
+    const dayMatch = q.match(/last\s+(\d+)\s+days?/);
+    const days = dayMatch ? Number(dayMatch[1]) : 30;
+    const isUnpaid = /(unpaid|overdue|outstanding|pending\s+payment|not\s+paid)/i.test(q);
+    const hasInvoice = /(invoice|bill)/i.test(q);
+    const hasCustomer = /(customer|client|partner)/i.test(q);
+    const hasOrder = /(order|quotation|sale)/i.test(q);
+    const isDelayed = /(delay|late|stuck|pending|not\s+delivered)/i.test(q);
+
+    parsed = {
+      intent: isUnpaid && hasInvoice ? "list_unpaid_invoices"
+        : hasInvoice ? "list_invoices"
+        : hasCustomer ? "lookup_customer"
+        : isDelayed && hasOrder ? "delayed_orders"
+        : hasOrder ? "list_orders"
+        : "fallback",
+      customer_name: null,
+      invoice_ref: null,
+      days,
+      only_unpaid: isUnpaid,
+      limit: 20
     };
   }
 
-  // Match: "invoices of X", "give me invoices of X", "show invoices for X", "get all bills of X", "invoice list of X"
-  const directInvoiceLookup = /(invoices?|bills?)/i.test(q);
-  if (directInvoiceLookup) {
+  const { intent, customer_name, invoice_ref, days = 30, only_unpaid, limit = 20 } = parsed;
+  const safeLimit = Math.min(Number(limit) || 20, 100);
+
+  // ── STEP 2: Execute the right Odoo query based on parsed intent ──
+
+  if (intent === "list_invoices" || intent === "list_unpaid_invoices") {
     if (!roleGuard(role, "invoice")) return { intent: "forbidden", message: `Role '${role}' cannot view invoices.` };
 
-    // Extract company name — tries several patterns in order of specificity
-    const customerMatch =
-      text.match(/(?:invoices?|bills?)\s+(?:of|for|from|belonging\s+to|related\s+to)\s+["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?/i) ||
-      text.match(/(?:of|for|from)\s+["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?\s+(?:invoices?|bills?)/i) ||
-      text.match(/(?:give\s+me|show\s+me?|get|fetch|list|find|display)\s+(?:all\s+)?(?:the\s+)?(?:invoices?|bills?)\s+(?:of|for|from)?\s*["']?([A-Za-z0-9 .&,'/+-]{2,60})["']?/i);
-
-    const invoiceRefMatch = text.match(/(?:invoice|bill)\s*(?:number|no\.?|#|ref(?:erence)?)?\s*[:\- ]*([A-Za-z0-9\/-]{3,20})/i);
-    const customer = customerMatch?.[1]?.replace(/\s*(invoices?|bills?|please|now)$/i, "").trim();
-    const invoiceRef = invoiceRefMatch?.[1]?.trim();
     const domain = [["move_type", "=", "out_invoice"], ["state", "=", "posted"]];
-    if (customer) domain.push(["partner_id.name", "ilike", customer]);
-    if (invoiceRef) domain.push(["name", "ilike", invoiceRef]);
+    if (only_unpaid || intent === "list_unpaid_invoices") {
+      domain.push(["payment_state", "!=", "paid"]);
+      domain.push(["invoice_date", ">=", new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)]);
+    }
+    if (customer_name) domain.push(["partner_id.name", "ilike", customer_name]);
+    if (invoice_ref) domain.push(["name", "ilike", invoice_ref]);
 
     const rows = await odooExecute(
-      uid,
-      "account.move",
-      "search_read",
+      uid, "account.move", "search_read",
       [domain, ["id", "name", "partner_id", "payment_state", "amount_total", "amount_residual", "invoice_date_due"]],
-      { limit: 20, order: "invoice_date_due desc" }
+      { limit: safeLimit, order: "invoice_date_due desc" }
     );
 
-    const summary = (rows || []).length
-      ? `Found ${(rows || []).length} invoice(s)${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}.`
-      : `No invoices found${customer ? ` for ${customer}` : ""}${invoiceRef ? ` matching ${invoiceRef}` : ""}. Try checking the company name spelling.`;
+    const total = (rows || []).reduce((s, r) => s + Number(r.amount_residual || 0), 0);
+    const header = (rows || []).length
+      ? `Found **${rows.length}** invoice(s)${customer_name ? ` for **${customer_name}**` : ""}${only_unpaid ? " (unpaid/overdue)" : ""}.${only_unpaid ? ` Total outstanding: ₹${total.toFixed(0)}` : ""}`
+      : `No invoices found${customer_name ? ` for **${customer_name}**` : ""}. Try checking the company name spelling.`;
 
-    // Build a human-readable list for the bot answer
-    const invoiceLines = (rows || []).map((row) => {
-      const name = row.name || `ID:${row.id}`;
-      const partner = Array.isArray(row.partner_id) ? row.partner_id[1] : (row.partner_id || "");
-      const total = Number(row.amount_total || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
-      const due = Number(row.amount_residual || 0).toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
-      const dueDate = row.invoice_date_due || "—";
-      const status = row.payment_state === "paid" ? "✅ Paid" : row.payment_state === "partial" ? "🔶 Partial" : "🔴 Unpaid";
-      return `• **${name}** | ${partner} | Total: ${total} | Due: ${due} | Due date: ${dueDate} | ${status}`;
+    const lines = (rows || []).map((r) => {
+      const name = r.name || `ID:${r.id}`;
+      const partner = Array.isArray(r.partner_id) ? r.partner_id[1] : (r.partner_id || "");
+      const total = `₹${Number(r.amount_total || 0).toLocaleString("en-IN")}`;
+      const due = `₹${Number(r.amount_residual || 0).toLocaleString("en-IN")}`;
+      const dueDate = r.invoice_date_due || "—";
+      const status = r.payment_state === "paid" ? "✅ Paid" : r.payment_state === "partial" ? "🔶 Partial" : "🔴 Unpaid";
+      return `• **${name}** | ${partner} | Total: ${total} | Outstanding: ${due} | Due: ${dueDate} | ${status}`;
     });
 
-    const answer = (rows || []).length
-      ? `${summary}\n\n${invoiceLines.join("\n")}`
-      : summary;
-
     return {
-      intent: "lookup_customer_invoice",
+      intent: intent === "list_unpaid_invoices" ? "list_unpaid_invoices" : "lookup_customer_invoice",
       role,
       rows,
-      summary: answer,
-      customer_searched: customer || null,
-      suggested_next_action: (rows || []).length === 1
-        ? "Use invoice id/name to generate or fetch invoice PDF via Odoo invoice print endpoint."
-        : "Refine with invoice number/reference for a direct PDF retrieval.",
-      invoice_pdf_hint: (rows || []).map((row) => ({
-        id: row.id,
-        name: row.name,
-        endpoint_hint: `/web#id=${row.id}&model=account.move&view_type=form`
-      })),
+      summary: lines.length ? `${header}\n\n${lines.join("\n")}` : header,
+      customer_searched: customer_name || null,
+      suggested_next_action: "Use an invoice name/ID to fetch its PDF via the invoice endpoint.",
       requested_by: queryUser
     };
   }
 
-  if (q.includes("delayed") && q.includes("order")) {
-    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot inspect sales orders.` };
-    const rows = await odooExecute(uid, "sale.order", "search_read", [[["state", "in", ["sale", "done"]]], ["id", "name", "partner_id", "commitment_date", "invoice_status"]], { limit: 20, order: "id desc" });
-    const exceptions = await computeExceptionAlerts(uid);
-    return {
-      intent: "explain_order_delay",
-      role,
-      rows,
-      explanation: "Likely causes: stockout, supplier PO delay, or pending delivery validation. Cross-check with delayed shipments and stockouts.",
-      context: { stockouts: exceptions.stockouts.slice(0, 5), delayed_shipments: exceptions.delayed_shipments.slice(0, 5) }
-    };
-  }
-
-  // Customer lookup — matches "customer lookup", "find customer", "search customer", "customer info for X", "who is X" etc.
-  const isCustomerLookup = /\b(customer\s*(lookup|search|find|info|detail|profile)|find\s+customer|search\s+customer|who\s+is\s+customer|customer\s+by\s+name|look\s*up\s+customer)\b/i.test(q)
-    || (/\bcustomer\b/i.test(q) && /\b(find|search|look\s*up|show|get|fetch|who|detail|info|profile)\b/i.test(q));
-
-  if (isCustomerLookup) {
-    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot look up customer records.` };
-
-    // Extract customer name from patterns like "customer lookup for Acme", "find customer John", "who is Acme Corp"
-    const nameMatch = text.match(
-      /(?:for|of|named?|called?|:\s*)([A-Za-z0-9 .&,'-]{2,60})/i
-    ) || text.match(/(?:customer|who\s+is)\s+([A-Za-z0-9 .&,'-]{2,60})/i);
-    const customerName = nameMatch?.[1]?.trim();
+  if (intent === "lookup_customer") {
+    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot look up customers.` };
 
     const domain = [["customer_rank", ">", 0]];
-    if (customerName) domain.push(["name", "ilike", customerName]);
+    if (customer_name) domain.push(["name", "ilike", customer_name]);
 
     const rows = await odooExecute(
-      uid,
-      "res.partner",
-      "search_read",
-      [domain, ["id", "name", "email", "phone", "street", "city", "country_id", "vat", "customer_rank", "supplier_rank"]],
-      { limit: 20, order: "name asc" }
+      uid, "res.partner", "search_read",
+      [domain, ["id", "name", "email", "phone", "street", "city", "country_id", "vat", "total_invoiced"]],
+      { limit: safeLimit, order: "name asc" }
     );
 
-    const summary = (rows || []).length
-      ? `Found ${rows.length} customer(s)${customerName ? ` matching "${customerName}"` : ""}.`
-      : `No customers found${customerName ? ` matching "${customerName}"` : ""}. Try a broader name or check spelling.`;
+    const header = (rows || []).length
+      ? `Found **${rows.length}** customer(s)${customer_name ? ` matching **${customer_name}**` : ""}.`
+      : `No customers found${customer_name ? ` matching **${customer_name}**` : ""}. Try a partial name.`;
+
+    const lines = (rows || []).map((r) =>
+      `• **${r.name}** | ${r.email || "—"} | ${r.phone || "—"} | ${r.city || "—"} | Invoiced: ₹${Number(r.total_invoiced || 0).toLocaleString("en-IN")}`
+    );
 
     return {
       intent: "customer_lookup",
       role,
-      rows: rows || [],
-      summary,
-      customer_name_searched: customerName || null,
-      suggested_next_action: (rows || []).length === 1
-        ? "Use customer id to fetch open invoices, sale orders, or create a new quotation."
-        : "Refine with a more specific name or partial name for a closer match.",
+      rows,
+      summary: lines.length ? `${header}\n\n${lines.join("\n")}` : header,
+      customer_name_searched: customer_name || null,
+      suggested_next_action: rows.length === 1 ? "Use customer ID to fetch their invoices or sales orders." : "Refine name for a closer match.",
       requested_by: queryUser
     };
   }
 
-  return { intent: "fallback", message: "Could not infer intent. Try: unpaid invoices, delayed order, customer lookup." };
+  if (intent === "delayed_orders") {
+    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot inspect sales orders.` };
+
+    const domain = [["state", "in", ["sale", "done"]]];
+    if (customer_name) domain.push(["partner_id.name", "ilike", customer_name]);
+    const rows = await odooExecute(uid, "sale.order", "search_read",
+      [domain, ["id", "name", "partner_id", "commitment_date", "invoice_status", "amount_total"]],
+      { limit: safeLimit, order: "id desc" }
+    );
+    const exceptions = await computeExceptionAlerts(uid);
+
+    const lines = (rows || []).map((r) =>
+      `• **${r.name}** | ${Array.isArray(r.partner_id) ? r.partner_id[1] : ""} | ₹${Number(r.amount_total || 0).toLocaleString("en-IN")} | Due: ${r.commitment_date || "—"} | Invoice: ${r.invoice_status || "—"}`
+    );
+
+    return {
+      intent: "explain_order_delay",
+      role,
+      rows,
+      summary: `Found **${rows.length}** confirmed order(s)${customer_name ? ` for **${customer_name}**` : ""}.\n\n${lines.join("\n")}\n\n**Likely causes of delays:** stockout, supplier PO delay, or pending delivery validation.`,
+      context: { stockouts: exceptions.stockouts.slice(0, 5), delayed_shipments: exceptions.delayed_shipments.slice(0, 5) },
+      requested_by: queryUser
+    };
+  }
+
+  if (intent === "list_orders") {
+    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot view sales orders.` };
+
+    const domain = [];
+    if (customer_name) domain.push(["partner_id.name", "ilike", customer_name]);
+    const rows = await odooExecute(uid, "sale.order", "search_read",
+      [domain.length ? [domain] : [[]], ["id", "name", "partner_id", "state", "amount_total", "invoice_status", "date_order"]],
+      { limit: safeLimit, order: "id desc" }
+    );
+
+    const lines = (rows || []).map((r) =>
+      `• **${r.name}** | ${Array.isArray(r.partner_id) ? r.partner_id[1] : ""} | ₹${Number(r.amount_total || 0).toLocaleString("en-IN")} | ${r.state} | ${r.date_order?.slice(0, 10) || "—"}`
+    );
+
+    return {
+      intent: "list_orders",
+      role,
+      rows,
+      summary: lines.length
+        ? `Found **${rows.length}** order(s)${customer_name ? ` for **${customer_name}**` : ""}.\n\n${lines.join("\n")}`
+        : `No orders found${customer_name ? ` for **${customer_name}**` : ""}.`,
+      requested_by: queryUser
+    };
+  }
+
+  if (intent === "kpi_summary") {
+    const kpis = await computeKpis(uid);
+    const summary = await generateOdooSummary(uid);
+    return { intent: "kpi_summary", role, summary: summary || JSON.stringify(kpis, null, 2), kpis, requested_by: queryUser };
+  }
+
+  // Genuine fallback — LLM couldn't parse and regex couldn't either
+  return {
+    intent: "fallback",
+    summary: "I wasn't sure what you're looking for. You can ask things like:\n• \"Show invoices for Acme Ltd\"\n• \"Unpaid bills in the last 30 days\"\n• \"Find customer Ramesh\"\n• \"Any delayed orders?\"\n• \"Sales orders this month\"",
+    message: "Could not infer intent."
+  };
 }
 
 async function startWeeklyReportScheduler(config = {}) {
