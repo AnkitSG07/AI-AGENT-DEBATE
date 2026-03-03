@@ -1498,11 +1498,44 @@ app.post("/api/product-bot", async (req, res) => {
     }
 
     const pendingClarification = getPendingModeClarification(history);
-    const clarificationResolvedMode = pendingClarification && /\b(pricing|price|quote|sales|sku|moq|quantity)\b/i.test(message)
-      ? "b2b_sales_assistant"
-      : pendingClarification && /\b(compliance|certificate|ce|ukca|rohs|export|customs|legal)\b/i.test(message)
-        ? "compliance_assistant"
-        : null;
+
+    // Resolve clarification based on which modes were actually offered (dynamic, not hardcoded).
+    // pendingClarification.options contains the real top-2 mode keys from when the question was asked.
+    const clarificationResolvedMode = (() => {
+      if (!pendingClarification) return null;
+      const opts = Array.isArray(pendingClarification.options) ? pendingClarification.options : [];
+
+      // Per-mode keyword signals to detect user intent from their reply
+      const modeSignals = {
+        b2b_sales_assistant:  /\b(pricing|price|quote|quotation|sales|sku|moq|quantity|cost|product|buy|order)\b/i,
+        compliance_assistant: /\b(compliance|certificate|ce|ukca|rohs|bis|iec|export|customs|legal|certif|regulation)\b/i,
+        sales_automation:     /\b(automat|workflow|crm|lead|pipeline|handoff|trigger|task)\b/i,
+        odoo_operations:      /\b(odoo|erp|invoice|bill|inventory|stock|delivery|picking|sale\s*order|customer|vendor)\b/i,
+        simple_chatbot:       /\b(general|info|website|faq|other|simple|basic)\b/i
+      };
+
+      // Score each offered option against user's reply; pick the highest match
+      let bestMode = null;
+      let bestScore = 0;
+      for (const modeKey of opts) {
+        const signal = modeSignals[modeKey];
+        if (!signal) continue;
+        const matchCount = (message.match(signal) || []).length;
+        if (matchCount > bestScore) {
+          bestScore = matchCount;
+          bestMode = modeKey;
+        }
+      }
+
+      // If nothing matched by keyword but user used a number or simple "first"/"second"/"1"/"2",
+      // resolve positionally from the offered options list
+      if (!bestMode) {
+        if (/\b(first|1|one)\b/i.test(message) && opts[0]) return opts[0];
+        if (/\b(second|2|two)\b/i.test(message) && opts[1]) return opts[1];
+      }
+
+      return bestMode;
+    })();
 
     const autoDetection = clarificationResolvedMode
       ? { mode: clarificationResolvedMode, reason: `Resolved clarification toward ${clarificationResolvedMode}.`, confidence: 0.9, stage: "clarification" }
@@ -1524,15 +1557,33 @@ app.post("/api/product-bot", async (req, res) => {
         final_user_satisfaction_signal: req.body?.final_user_satisfaction_signal,
         route_feedback: req.body?.route_feedback || null
       });
+      // Build clarification prompt and options from the actual top-2 ambiguous modes,
+      // not hardcoded to sales vs compliance.
+      const ambigMode1 = sortedScores[0][0];
+      const ambigMode2 = sortedScores[1][0];
+      const ambigLabel1 = PRODUCT_BOT_MODES[ambigMode1]?.label || ambigMode1;
+      const ambigLabel2 = PRODUCT_BOT_MODES[ambigMode2]?.label || ambigMode2;
+
+      // Human-friendly short descriptions per mode for the clarification question
+      const modeClarificationHint = {
+        b2b_sales_assistant:  "pricing / product / sales details",
+        compliance_assistant: "compliance / certification / export details",
+        sales_automation:     "sales workflow automation",
+        odoo_operations:      "ERP / Odoo operations (invoices, orders, customers)",
+        simple_chatbot:       "general information"
+      };
+      const hint1 = modeClarificationHint[ambigMode1] || ambigLabel1;
+      const hint2 = modeClarificationHint[ambigMode2] || ambigLabel2;
+
       return res.json({
         ok: true,
         mode: autoDetection.mode,
         mode_label: PRODUCT_BOT_MODES[autoDetection.mode]?.label || "Auto-detect",
-        mode_reason: `Ambiguous routing between ${sortedScores[0][0]} and ${sortedScores[1][0]}; clarification requested.`,
-        answer: "Quick clarification: do you want pricing/sales details or compliance/certification details?",
+        mode_reason: `Ambiguous routing between ${ambigMode1} (${sortedScores[0][1].toFixed(2)}) and ${ambigMode2} (${sortedScores[1][1].toFixed(2)}); clarification requested.`,
+        answer: `Quick clarification — are you asking about **${hint1}** or **${hint2}**?`,
         pending_mode_clarification: {
           active: true,
-          options: ["b2b_sales_assistant", "compliance_assistant"],
+          options: [ambigMode1, ambigMode2],
           created_at: now()
         },
         retrieval: {
@@ -2297,6 +2348,47 @@ async function handleNaturalLanguageQuery(uid, text, options = {}) {
       rows,
       explanation: "Likely causes: stockout, supplier PO delay, or pending delivery validation. Cross-check with delayed shipments and stockouts.",
       context: { stockouts: exceptions.stockouts.slice(0, 5), delayed_shipments: exceptions.delayed_shipments.slice(0, 5) }
+    };
+  }
+
+  // Customer lookup — matches "customer lookup", "find customer", "search customer", "customer info for X", "who is X" etc.
+  const isCustomerLookup = /\b(customer\s*(lookup|search|find|info|detail|profile)|find\s+customer|search\s+customer|who\s+is\s+customer|customer\s+by\s+name|look\s*up\s+customer)\b/i.test(q)
+    || (/\bcustomer\b/i.test(q) && /\b(find|search|look\s*up|show|get|fetch|who|detail|info|profile)\b/i.test(q));
+
+  if (isCustomerLookup) {
+    if (!roleGuard(role, "sales")) return { intent: "forbidden", message: `Role '${role}' cannot look up customer records.` };
+
+    // Extract customer name from patterns like "customer lookup for Acme", "find customer John", "who is Acme Corp"
+    const nameMatch = text.match(
+      /(?:for|of|named?|called?|:\s*)([A-Za-z0-9 .&,'-]{2,60})/i
+    ) || text.match(/(?:customer|who\s+is)\s+([A-Za-z0-9 .&,'-]{2,60})/i);
+    const customerName = nameMatch?.[1]?.trim();
+
+    const domain = [["customer_rank", ">", 0]];
+    if (customerName) domain.push(["name", "ilike", customerName]);
+
+    const rows = await odooExecute(
+      uid,
+      "res.partner",
+      "search_read",
+      [domain, ["id", "name", "email", "phone", "street", "city", "country_id", "vat", "customer_rank", "supplier_rank"]],
+      { limit: 20, order: "name asc" }
+    );
+
+    const summary = (rows || []).length
+      ? `Found ${rows.length} customer(s)${customerName ? ` matching "${customerName}"` : ""}.`
+      : `No customers found${customerName ? ` matching "${customerName}"` : ""}. Try a broader name or check spelling.`;
+
+    return {
+      intent: "customer_lookup",
+      role,
+      rows: rows || [],
+      summary,
+      customer_name_searched: customerName || null,
+      suggested_next_action: (rows || []).length === 1
+        ? "Use customer id to fetch open invoices, sale orders, or create a new quotation."
+        : "Refine with a more specific name or partial name for a closer match.",
+      requested_by: queryUser
     };
   }
 
