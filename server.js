@@ -780,7 +780,7 @@ If the answer is missing, say you are not sure and ask the user to contact suppo
 Prioritize qualification, use-case mapping, integration fit, packaging, pricing guidance from knowledge,
 and end with a clear suggested next step (demo, pilot, quote, or technical call).
 Do not invent discounts or contractual terms.
-Do not ask for data that is already present in the user's latest message or chat history.
+Do not ask for data that is already present in the user's latest message or chat history.`
   },
   compliance_assistant: {
     label: "Export-grade compliance assistant",
