@@ -17,9 +17,45 @@ const profilePasswords = {
   Accounts: process.env.PROFILE_PASS_ACCOUNTS || "",
   SUDO: process.env.PROFILE_PASS_SUDO || ""
 };
+const PROFILE_SESSION_COOKIE = "profile_session";
+const PROFILE_SESSION_TTL_SECONDS = 2 * 60 * 60;
 
 function now() {
   return new Date().toISOString();
+}
+
+function parseCookies(req) {
+  const raw = req.headers?.cookie || "";
+  if (!raw) return {};
+  return raw.split(";").reduce((acc, piece) => {
+    const [k, ...rest] = piece.trim().split("=");
+    if (!k) return acc;
+    acc[k] = decodeURIComponent(rest.join("="));
+    return acc;
+  }, {});
+}
+
+function buildSessionCookie(profile) {
+  const payload = JSON.stringify({ profile, exp: Date.now() + PROFILE_SESSION_TTL_SECONDS * 1000 });
+  const encoded = Buffer.from(payload).toString("base64url");
+  return `${PROFILE_SESSION_COOKIE}=${encoded}; Max-Age=${PROFILE_SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax`;
+}
+
+function readProfileSession(req) {
+  try {
+    const cookies = parseCookies(req);
+    const token = cookies[PROFILE_SESSION_COOKIE];
+    if (!token) return null;
+
+    const parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+    const profile = String(parsed?.profile || "");
+    const exp = Number(parsed?.exp || 0);
+    if (!profile || !Object.prototype.hasOwnProperty.call(profilePasswords, profile)) return null;
+    if (!Number.isFinite(exp) || Date.now() >= exp) return null;
+    return { profile, exp };
+  } catch {
+    return null;
+  }
 }
 
 // ===================== AI CONFIG =====================
@@ -3636,7 +3672,14 @@ app.post("/api/profile-login", (req, res) => {
     return res.status(401).json({ ok: false, error: "Invalid password" });
   }
 
-  res.json({ ok: true, profile });
+  res.setHeader("Set-Cookie", buildSessionCookie(profile));
+  res.json({ ok: true, profile, sessionSeconds: PROFILE_SESSION_TTL_SECONDS });
+});
+
+app.get("/api/profile-session", (req, res) => {
+  const session = readProfileSession(req);
+  if (!session) return res.status(401).json({ ok: false, error: "No active session" });
+  res.json({ ok: true, profile: session.profile, expiresAt: new Date(session.exp).toISOString() });
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
