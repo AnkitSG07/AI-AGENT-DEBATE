@@ -88,6 +88,102 @@
       transition: background var(--transition), color var(--transition);
     }
 
+    body.auth-locked { overflow: hidden; }
+
+    .auth-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: color-mix(in srgb, var(--bg) 88%, #a8b3d8 12%);
+      transition: opacity var(--transition), visibility var(--transition);
+    }
+
+    .auth-gate.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+    .auth-card {
+      width: min(920px, 100%);
+      min-height: min(640px, calc(100vh - 64px));
+      background: var(--surface-0);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-float);
+      padding: clamp(26px, 4vw, 44px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 30px;
+    }
+
+    .auth-header { text-align: center; display: flex; flex-direction: column; gap: 8px; }
+    .auth-title { font-family: var(--display); font-size: clamp(28px, 3.8vw, 42px); line-height: 1.1; letter-spacing: -.02em; }
+    .auth-sub { color: var(--text-secondary); font-size: 14px; }
+
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+      align-items: start;
+    }
+
+    .profile-card {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 14px;
+      text-align: center;
+      cursor: pointer;
+      transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+      box-shadow: var(--shadow-card);
+    }
+
+    .profile-card:hover,
+    .profile-card.active {
+      border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+      transform: translateY(-2px) scale(1.05);
+      box-shadow: 0 10px 24px var(--accent-glow);
+    }
+
+    .profile-avatar {
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 12px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), #8ca9ff);
+    }
+
+    .profile-card[data-profile="Accounts"] .profile-avatar { background: linear-gradient(135deg, #3dd9b3, #27c2a1); }
+    .profile-card[data-profile="SUDO"] .profile-avatar { background: linear-gradient(135deg, #9f82ff, #6f57dd); }
+    .profile-name { font-weight: 600; }
+    .profile-role { color: var(--text-tertiary); font-size: 12px; }
+
+    .auth-form {
+      display: none;
+      max-width: 380px;
+      margin: 4px auto 0;
+      width: 100%;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      gap: 10px;
+    }
+
+    .auth-form.visible { display: grid; }
+    .auth-form label { font-size: 12px; color: var(--text-secondary); }
+    .auth-form input { width: 100%; border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; background: var(--surface-0); color: var(--text-primary); outline: none; }
+    .auth-msg { min-height: 18px; font-size: 12px; color: var(--danger); }
+
+    .app-shell { transition: filter var(--transition); }
+    body.auth-locked .app-shell { filter: blur(4px); pointer-events: none; user-select: none; }
+  
     [data-theme="dark"] body {
       background:
         radial-gradient(ellipse 900px 500px at 10% -5%, rgba(91,143,255,.12), transparent 60%),
@@ -1223,7 +1319,10 @@
     .bottom-nav-item:hover { background: var(--surface-1); }
 
     /* ─── RESPONSIVE ─── */
-    @media (max-width: 768px) {
+    @media (max-width: 768px)
+      .auth-card { min-height: auto; }
+      .profile-grid { grid-template-columns: 1fr; }
+    
       .mobile-nav-toggle { display: flex; }
       .bottom-nav { display: flex; }
 
@@ -1344,12 +1443,46 @@
 </head>
 
 <body>
+  <div class="auth-gate" id="authGate">
+    <div class="auth-card">
+      <div class="auth-header">
+        <h1 class="auth-title">Select your profile</h1>
+        <p class="auth-sub">Choose a user below, then enter the password to open SmartHandicrafts® Command Center.</p>
+      </div>
+
+      <div class="profile-grid" id="profileGrid">
+        <button type="button" class="profile-card" data-profile="Smart handicrafts">
+          <span class="profile-avatar">SH</span>
+          <div class="profile-name">Smart handicrafts</div>
+          <div class="profile-role">Business profile</div>
+        </button>
+        <button type="button" class="profile-card" data-profile="Accounts">
+          <span class="profile-avatar">AC</span>
+          <div class="profile-name">Accounts</div>
+          <div class="profile-role">Finance profile</div>
+        </button>
+        <button type="button" class="profile-card" data-profile="SUDO">
+          <span class="profile-avatar">SU</span>
+          <div class="profile-name">SUDO</div>
+          <div class="profile-role">Admin profile</div>
+        </button>
+      </div>
+
+      <form class="auth-form" id="authForm">
+        <label for="profilePassword" id="authPrompt">Password</label>
+        <input id="profilePassword" type="password" autocomplete="current-password" placeholder="Enter password" required />
+        <button type="submit" class="btn btn-primary">Sign in</button>
+        <div class="auth-msg" id="authMsg"></div>
+      </form>
+    </div>
+  </div>
+
   <div class="noise-overlay"></div>
 
   <!-- Sidebar overlay for mobile -->
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-  <div class="layout">
+  <div class="layout app-shell">
     <!-- ─── SIDEBAR ─── -->
     <aside class="sidebar">
       <div class="sidebar-logo">S</div>
@@ -1822,6 +1955,60 @@
 
   <script>
 
+    // ─── SIGN-IN GATE ───
+    const authGate = document.getElementById('authGate');
+    const profileGrid = document.getElementById('profileGrid');
+    const profileCards = profileGrid ? Array.from(profileGrid.querySelectorAll('.profile-card')) : [];
+    const authForm = document.getElementById('authForm');
+    const authPrompt = document.getElementById('authPrompt');
+    const profilePassword = document.getElementById('profilePassword');
+    const authMsg = document.getElementById('authMsg');
+    let selectedProfile = '';
+
+    function lockApp() { document.body.classList.add('auth-locked'); }
+    function unlockApp() {
+      document.body.classList.remove('auth-locked');
+      authGate?.classList.add('hidden');
+    }
+
+    function selectProfile(profileName) {
+      selectedProfile = profileName;
+      profileCards.forEach((card) => card.classList.toggle('active', card.dataset.profile === profileName));
+      if (authPrompt) authPrompt.textContent = `Password for ${profileName}`;
+      if (authForm) authForm.classList.add('visible');
+      if (authMsg) authMsg.textContent = '';
+      if (profilePassword) {
+        profilePassword.value = '';
+        profilePassword.focus();
+      }
+    }
+
+    lockApp();
+    profileCards.forEach((card) => {
+      card.addEventListener('click', () => selectProfile(card.dataset.profile || ''));
+    });
+
+    authForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!selectedProfile) {
+        authMsg.textContent = 'Please choose a profile first.';
+        return;
+      }
+      authMsg.textContent = 'Signing in…';
+      try {
+        const resp = await fetch('/api/profile-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profile: selectedProfile, password: profilePassword.value })
+        });
+        const out = await resp.json().catch(() => ({}));
+        if (!resp.ok || !out?.ok) throw new Error(out?.error || 'Invalid password');
+        unlockApp();
+      } catch (err) {
+        authMsg.textContent = err.message || 'Sign-in failed';
+      }
+    });
+  
     // ─── THEME ───
     const html = document.documentElement;
 
