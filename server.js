@@ -2331,6 +2331,19 @@ async function odooFetchReportPdf(reportName, docId) {
   return Buffer.from(arrayBuffer);
 }
 
+
+async function odooFetchReportPdfWithFallback(reportNames = [], docId) {
+  let lastErr = null;
+  for (const reportName of reportNames) {
+    try {
+      return await odooFetchReportPdf(reportName, docId);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("No report template could generate PDF.");
+}
+
 async function odooGetPickingsBySaleOrderId(soId) {
   const uid = await odooLogin();
   return await odooExecute(
@@ -3462,6 +3475,32 @@ app.get("/api/odoo/sale-order/:id/proforma-pdf", async (req, res) => {
     const pdf = await odooFetchReportPdf("sale.report_saleorder", id);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="SO-${id}-proforma.pdf"`);
+    return res.send(pdf);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+
+app.get("/api/odoo/dashboard-document/:docType/:id/pdf", async (req, res) => {
+  try {
+    const docType = String(req.params.docType || "").trim();
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid or missing document id." });
+
+    const reportByType = {
+      sale_order: ["sale.report_saleorder"],
+      invoice: ["account.report_invoice", "account.report_invoice_with_payments"],
+      delivery_order: ["stock.report_deliveryslip"]
+    };
+
+    const reportNames = reportByType[docType];
+    if (!reportNames) return res.status(400).json({ error: "Unsupported document type." });
+
+    const pdf = await odooFetchReportPdfWithFallback(reportNames, id);
+    const safeName = `${docType}-${id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
     return res.send(pdf);
   } catch (e) {
     return res.status(500).json({ error: e.message });
