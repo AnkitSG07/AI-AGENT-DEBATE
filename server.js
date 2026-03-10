@@ -2365,6 +2365,52 @@ async function odooSearchOrders({ query = "", state = "", limit = 50 }) {
   return orders || [];
 }
 
+async function odooSearchInvoices({ query = "", paymentState = "", moveState = "posted", limit = 50 }) {
+  const uid = await odooLogin();
+  const domain = [["move_type", "=", "out_invoice"]];
+  if (moveState) domain.push(["state", "=", moveState]);
+  if (paymentState) domain.push(["payment_state", "=", paymentState]);
+  if (query) {
+    domain.push("|");
+    domain.push("|");
+    domain.push(["name", "ilike", query]);
+    domain.push(["partner_id.name", "ilike", query]);
+    domain.push(["invoice_origin", "ilike", query]);
+  }
+
+  const rows = await odooExecute(
+    uid,
+    "account.move",
+    "search_read",
+    [domain, ["id", "name", "invoice_date", "invoice_date_due", "amount_total", "amount_residual", "payment_state", "partner_id"]],
+    { limit: Math.min(Number(limit) || 50, 100), order: "id desc" }
+  );
+  return rows || [];
+}
+
+async function odooSearchDeliveryOrders({ query = "", state = "", type = "outgoing", limit = 50 }) {
+  const uid = await odooLogin();
+  const domain = [];
+  if (state) domain.push(["state", "=", state]);
+  if (type) domain.push(["picking_type_code", "=", type]);
+  if (query) {
+    domain.push("|");
+    domain.push("|");
+    domain.push(["name", "ilike", query]);
+    domain.push(["origin", "ilike", query]);
+    domain.push(["partner_id.name", "ilike", query]);
+  }
+
+  const rows = await odooExecute(
+    uid,
+    "stock.picking",
+    "search_read",
+    [domain, ["id", "name", "origin", "scheduled_date", "state", "partner_id", "picking_type_code", "carrier_id"]],
+    { limit: Math.min(Number(limit) || 50, 100), order: "id desc" }
+  );
+  return rows || [];
+}
+
 function coerceRole(rawRole = "") {
   const role = String(rawRole || "").toLowerCase();
   if (["finance", "accounting"].includes(role)) return "finance";
@@ -3470,6 +3516,56 @@ app.get("/api/odoo/orders", async (req, res) => {
       state: r.state,
       customer: r.partner_id?.[1] || "",
       invoice_status: r.invoice_status || ""
+    }));
+
+    return res.json({ ok: true, rows: normalized });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/invoices", async (req, res) => {
+  try {
+    const query = String(req.query.query || "").trim();
+    const paymentState = String(req.query.payment_state || "").trim();
+    const moveState = String(req.query.move_state || "posted").trim();
+    const limit = Number(req.query.limit || 50);
+
+    const rows = await odooSearchInvoices({ query, paymentState, moveState, limit });
+    const normalized = rows.map((r) => ({
+      id: r.id,
+      ref: r.name,
+      invoice_date: r.invoice_date,
+      due_date: r.invoice_date_due,
+      amount_total: r.amount_total,
+      amount_residual: r.amount_residual,
+      payment_state: r.payment_state,
+      customer: r.partner_id?.[1] || ""
+    }));
+
+    return res.json({ ok: true, rows: normalized });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/odoo/delivery-orders", async (req, res) => {
+  try {
+    const query = String(req.query.query || "").trim();
+    const state = String(req.query.state || "").trim();
+    const type = String(req.query.type || "outgoing").trim();
+    const limit = Number(req.query.limit || 50);
+
+    const rows = await odooSearchDeliveryOrders({ query, state, type, limit });
+    const normalized = rows.map((r) => ({
+      id: r.id,
+      ref: r.name,
+      sale_ref: r.origin,
+      scheduled_date: r.scheduled_date,
+      state: r.state,
+      customer: r.partner_id?.[1] || "",
+      picking_type: r.picking_type_code,
+      carrier: r.carrier_id?.[1] || ""
     }));
 
     return res.json({ ok: true, rows: normalized });
