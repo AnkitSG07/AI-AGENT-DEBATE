@@ -1732,6 +1732,23 @@
       Dashboard
     </button>
   </nav>
+  <div class="modal-backdrop" id="docModalBack">
+    <div class="modal" style="width:min(960px,96vw)">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="docModalTitle">Document Preview</div>
+          <div class="modal-sub" id="docModalSub">View and download document PDF.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a class="btn btn-sm" id="docModalDownload" href="#" target="_blank" rel="noopener">Download PDF</a>
+          <button class="xbtn" id="closeDocModal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding:0;height:min(74vh,780px)">
+        <iframe id="docModalFrame" title="Document preview" style="width:100%;height:100%;border:0;background:var(--surface-0);"></iframe>
+      </div>
+    </div>
+  </div>
   <div class="modal-backdrop" id="editModalBack">
     <div class="modal">
       <div class="modal-header">
@@ -2236,6 +2253,9 @@
     const dashThead = document.getElementById('dashThead');  
     const editModalBack = document.getElementById('editModalBack'), closeEditModal = document.getElementById('closeEditModal');
     const saveEdits = document.getElementById('saveEdits'), resetEdits = document.getElementById('resetEdits');
+    const docModalBack = document.getElementById('docModalBack'), closeDocModal = document.getElementById('closeDocModal');
+    const docModalTitle = document.getElementById('docModalTitle'), docModalSub = document.getElementById('docModalSub');
+    const docModalDownload = document.getElementById('docModalDownload'), docModalFrame = document.getElementById('docModalFrame');    
     const edShipName = document.getElementById('edShipName'), edShipPhone = document.getElementById('edShipPhone'),
           edShipL1 = document.getElementById('edShipL1'), edShipL2 = document.getElementById('edShipL2'),
           edShipCity = document.getElementById('edShipCity'), edShipState = document.getElementById('edShipState'),
@@ -2475,6 +2495,47 @@
     function openModal() { editModalBack.classList.add('open'); }
     function closeModal() { editModalBack.classList.remove('open'); }
 
+    function openDocModal({ title, subtitle, pdfUrl }) {
+      if (!pdfUrl) return;
+      if (docModalTitle) docModalTitle.textContent = title || 'Document Preview';
+      if (docModalSub) docModalSub.textContent = subtitle || 'View and download document PDF.';
+      if (docModalDownload) docModalDownload.href = pdfUrl;
+      if (docModalFrame) docModalFrame.src = pdfUrl;
+      docModalBack?.classList.add('open');
+    }
+
+    function closeDocPreviewModal() {
+      docModalBack?.classList.remove('open');
+      if (docModalFrame) docModalFrame.src = 'about:blank';
+      if (docModalDownload) docModalDownload.href = '#';
+    }
+
+    function buildDashboardDocUrl(docType, docId) {
+      return `/api/odoo/dashboard-document/${encodeURIComponent(docType)}/${encodeURIComponent(String(docId || ''))}/pdf`;
+    }
+
+    function attachDashboardDocActions() {
+      dashTbody.querySelectorAll('[data-doc-view]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const docType = el.getAttribute('data-doc-type') || '';
+          const docId = el.getAttribute('data-doc-id') || '';
+          const docRef = el.getAttribute('data-doc-ref') || '';
+          if (!docType || !docId) return;
+          const docLabel = docType === 'sale_order' ? 'Sales Order' : docType === 'invoice' ? 'Invoice' : 'Delivery Out Order';
+          const pdfUrl = buildDashboardDocUrl(docType, docId);
+          openDocModal({ title: `${docLabel} ${docRef || ''}`.trim(), subtitle: `${docLabel} PDF preview`, pdfUrl });
+        });
+      });
+      dashTbody.querySelectorAll('[data-doc-download]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const docType = el.getAttribute('data-doc-type') || '';
+          const docId = el.getAttribute('data-doc-id') || '';
+          if (!docType || !docId) return;
+          window.open(buildDashboardDocUrl(docType, docId), '_blank');
+        });
+      });
+    }
+    
     function getSelectedOrder() {
       if (orders.length > 0) return orders.find(o => o.ref === selectedOrderKey) || orders[0];
       if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: getOrderId(loadedSaleOrder), preview: loadedSaleOrder.preview, overrides: singleOrderOverrides };
@@ -2512,6 +2573,8 @@
 
     closeEditModal?.addEventListener('click', closeModal);
     editModalBack?.addEventListener('click', (e) => { if (e.target === editModalBack) closeModal(); });
+    closeDocModal?.addEventListener('click', closeDocPreviewModal);
+    docModalBack?.addEventListener('click', (e) => { if (e.target === docModalBack) closeDocPreviewModal(); });
 
     resetEdits?.addEventListener('click', () => {
       const order = getSelectedOrder();
@@ -2630,7 +2693,11 @@
               <td>${esc(money(r.amount_total))}</td>
               <td>${esc(r.state || '-')}</td>
               <td>${esc(r.invoice_status || '-')}</td>
-              <td><button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button></td>
+              <td style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button>
+                <button class="btn btn-sm" data-doc-view data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
             </tr>`).join('');
         },
         attachActions() {
@@ -2641,12 +2708,13 @@
               btnFetchSO.click();
             });
           });
+          attachDashboardDocActions();
         }
       },
       invoices: {
         queryPlaceholder: 'Search by invoice ref or customer…',
-        headers: ['Invoice', 'Customer', 'Invoice Date', 'Due Date', 'Total', 'Residual', 'Payment'],
-        emptyCols: 7,
+        headers: ['Invoice', 'Customer', 'Invoice Date', 'Due Date', 'Total', 'Residual', 'Payment', 'Actions'],
+        emptyCols: 8,
         setupFilters() {
           dashPaymentState.innerHTML = `
             <option value="">All Payments</option>
@@ -2681,13 +2749,18 @@
               <td>${esc(money(r.amount_total))}</td>
               <td>${esc(money(r.amount_residual))}</td>
               <td>${esc(r.payment_state || '-')}</td>
+              <td style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-sm" data-doc-view data-doc-type="invoice" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="invoice" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
             </tr>`).join('');
-        }
+        },
+        attachActions() { attachDashboardDocActions(); }
       },
       delivery_orders: {
         queryPlaceholder: 'Search by delivery ref, SO ref, or customer…',
-        headers: ['Delivery Ref', 'Sales Order', 'Customer', 'Scheduled', 'State', 'Type', 'Carrier'],
-        emptyCols: 7,
+        headers: ['Delivery Ref', 'Sales Order', 'Customer', 'Scheduled', 'State', 'Type', 'Carrier', 'Actions'],
+        emptyCols: 8,
         setupFilters() {
           dashDeliveryState.innerHTML = `
             <option value="">All States</option>
@@ -2723,8 +2796,13 @@
               <td>${esc(r.state || '-')}</td>
               <td>${esc(r.picking_type || '-')}</td>
               <td>${esc(r.carrier || '-')}</td>
+              <td style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-sm" data-doc-view data-doc-type="delivery_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="delivery_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
             </tr>`).join('');
-        }
+        },
+        attachActions() { attachDashboardDocActions(); }
       }
     };
 
