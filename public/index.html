@@ -1517,6 +1517,10 @@
         <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <span class="nav-tooltip">Toggle Theme</span>
       </div>
+      <div class="nav-item" id="logoutNav" title="Log out">
+        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span class="nav-tooltip">Log Out</span>
+      </div>
     </aside>
 
     <!-- ─── MAIN ─── -->
@@ -1984,7 +1988,11 @@
       return activeProfile !== 'Accounts';
     }
   
-    function lockApp() { document.body.classList.add('auth-locked'); }
+    function lockApp() {
+      document.body.classList.add('auth-locked');
+      authGate?.classList.remove('hidden');
+    }
+
     function unlockApp() {
       document.body.classList.remove('auth-locked');
       authGate?.classList.add('hidden');
@@ -2027,6 +2035,27 @@
       }
     }
 
+
+    function resetProfileSelection() {
+      selectedProfile = '';
+      activeProfile = '';
+      profileCards.forEach((card) => card.classList.remove('active'));
+      if (authPrompt) authPrompt.textContent = 'Password';
+      if (authForm) authForm.classList.remove('visible');
+      if (authMsg) authMsg.textContent = '';
+      if (profilePassword) profilePassword.value = '';
+    }
+
+    async function logoutProfile() {
+      try {
+        await fetch('/api/profile-logout', { method: 'POST' });
+      } catch (_) {
+        // ignore and continue with local logout state
+      }
+      resetProfileSelection();
+      lockApp();
+    }
+  
     async function restoreProfileSession() {
       try {
         const resp = await fetch('/api/profile-session');
@@ -2124,7 +2153,8 @@
 
     document.getElementById('themeToggle').addEventListener('click', toggleTheme);
     document.getElementById('themeToggleNav').addEventListener('click', toggleTheme);
-
+    document.getElementById('logoutNav')?.addEventListener('click', logoutProfile);
+    
     // ─── NAV ───
     const navItems = document.querySelectorAll('.nav-item[data-page]');
     const pages = document.querySelectorAll('.page');
