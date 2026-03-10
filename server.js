@@ -3682,6 +3682,11 @@ app.get("/api/profile-session", (req, res) => {
   res.json({ ok: true, profile: session.profile, expiresAt: new Date(session.exp).toISOString() });
 });
 
+app.post("/api/profile-logout", (req, res) => {
+  res.setHeader("Set-Cookie", `${PROFILE_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+});
+
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
 
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
