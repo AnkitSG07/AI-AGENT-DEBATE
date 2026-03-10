@@ -1983,7 +1983,21 @@
       }
     }
 
-    lockApp();
+    async function restoreProfileSession() {
+      try {
+        const resp = await fetch('/api/profile-session');
+        const out = await resp.json().catch(() => ({}));
+        if (resp.ok && out?.ok) {
+          unlockApp();
+          return true;
+        }
+      } catch (_) {
+        // noop: user will sign in manually
+      }
+      lockApp();
+      return false;
+    }
+
     profileCards.forEach((card) => {
       card.addEventListener('click', () => selectProfile(card.dataset.profile || ''));
     });
@@ -2008,6 +2022,9 @@
         authMsg.textContent = err.message || 'Sign-in failed';
       }
     });
+
+    lockApp();
+    restoreProfileSession();
   
     // ─── THEME ───
     const html = document.documentElement;
