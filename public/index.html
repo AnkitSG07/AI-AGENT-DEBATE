@@ -1964,6 +1964,13 @@
     const profilePassword = document.getElementById('profilePassword');
     const authMsg = document.getElementById('authMsg');
     let selectedProfile = '';
+    let activeProfile = '';
+
+    const profilePageAccess = {
+      'Accounts': ['dashboard'],
+      'Smart handicrafts': ['labels', 'dashboard'],
+      'SUDO': ['debate', 'labels', 'dashboard']
+    };
 
     function lockApp() { document.body.classList.add('auth-locked'); }
     function unlockApp() {
@@ -1971,6 +1978,31 @@
       authGate?.classList.add('hidden');
     }
 
+    function getAllowedPages(profileName) {
+      const configured = profilePageAccess[profileName];
+      return Array.isArray(configured) && configured.length ? configured : ['debate', 'labels', 'dashboard'];
+    }
+
+    function applyProfileNavigation(profileName) {
+      const allowed = new Set(getAllowedPages(profileName));
+
+      document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+        const isAllowed = allowed.has(item.dataset.page);
+        item.style.display = isAllowed ? '' : 'none';
+      });
+
+      document.querySelectorAll('.bottom-nav-item[data-page]').forEach((item) => {
+        const isAllowed = allowed.has(item.dataset.page);
+        item.style.display = isAllowed ? '' : 'none';
+      });
+
+      const currentPage = document.querySelector('.page.active')?.id?.replace('page-', '');
+      if (!currentPage || !allowed.has(currentPage)) {
+        const fallbackPage = getAllowedPages(profileName)[0] || 'dashboard';
+        setActiveTab(fallbackPage);
+      }
+    }
+  
     function selectProfile(profileName) {
       selectedProfile = profileName;
       profileCards.forEach((card) => card.classList.toggle('active', card.dataset.profile === profileName));
@@ -1988,6 +2020,8 @@
         const resp = await fetch('/api/profile-session');
         const out = await resp.json().catch(() => ({}));
         if (resp.ok && out?.ok) {
+          activeProfile = out.profile || '';
+          applyProfileNavigation(activeProfile);
           unlockApp();
           return true;
         }
@@ -2017,6 +2051,8 @@
         });
         const out = await resp.json().catch(() => ({}));
         if (!resp.ok || !out?.ok) throw new Error(out?.error || 'Invalid password');
+        activeProfile = out.profile || selectedProfile;
+        applyProfileNavigation(activeProfile);  
         unlockApp();
       } catch (err) {
         authMsg.textContent = err.message || 'Sign-in failed';
