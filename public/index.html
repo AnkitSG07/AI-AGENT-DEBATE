@@ -1980,6 +1980,10 @@
       'SUDO': ['debate', 'labels', 'dashboard']
     };
 
+    function canOpenSalesOrderFromDashboard() {
+      return activeProfile !== 'Accounts';
+    }
+  
     function lockApp() { document.body.classList.add('auth-locked'); }
     function unlockApp() {
       document.body.classList.remove('auth-locked');
@@ -2942,7 +2946,7 @@
               <td>${esc(r.state || '-')}</td>
               <td>${esc(r.invoice_status || '-')}</td>
               <td style="display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button>
+                ${canOpenSalesOrderFromDashboard() ? `<button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button>` : ''}
                 <button class="btn btn-sm" data-doc-view data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
                 <button class="btn btn-sm" data-doc-download data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
               </td>
