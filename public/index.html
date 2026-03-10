@@ -98,7 +98,7 @@
       align-items: center;
       justify-content: center;
       padding: 24px;
-      background: color-mix(in srgb, var(--bg) 88%, #a8b3d8 12%);
+      background: linear-gradient(180deg, #f8fbff 0%, #eef3ff 100%);
       transition: opacity var(--transition), visibility var(--transition);
     }
 
@@ -107,10 +107,11 @@
     .auth-card {
       width: min(920px, 100%);
       min-height: min(640px, calc(100vh - 64px));
-      background: var(--surface-0);
-      border: 1px solid var(--border);
+      background: #ffffff;
+      border: 1px solid #d8e2f3;
       border-radius: var(--radius-xl);
-      box-shadow: var(--shadow-float);
+      box-shadow: 0 20px 45px rgba(17, 37, 78, 0.12);
+      color: #1b2640;
       padding: clamp(26px, 4vw, 44px);
       display: flex;
       flex-direction: column;
@@ -119,8 +120,14 @@
     }
 
     .auth-header { text-align: center; display: flex; flex-direction: column; gap: 8px; }
+    .auth-logo {
+      width: clamp(100px, 14vw, 140px);
+      height: auto;
+      margin: 0 auto 10px;
+      display: block;
+    }
     .auth-title { font-family: var(--display); font-size: clamp(28px, 3.8vw, 42px); line-height: 1.1; letter-spacing: -.02em; }
-    .auth-sub { color: var(--text-secondary); font-size: 14px; }
+    .auth-sub { color: #5f6f8e; font-size: 14px; }
 
     .profile-grid {
       display: grid;
@@ -130,8 +137,8 @@
     }
 
     .profile-card {
-      background: var(--surface-1);
-      border: 1px solid var(--border);
+      background: #f5f8ff;
+      border: 1px solid #dbe5f6;
       border-radius: var(--radius-lg);
       padding: 18px 14px;
       text-align: center;
@@ -162,23 +169,23 @@
     .profile-card[data-profile="Accounts"] .profile-avatar { background: linear-gradient(135deg, #3dd9b3, #27c2a1); }
     .profile-card[data-profile="SUDO"] .profile-avatar { background: linear-gradient(135deg, #9f82ff, #6f57dd); }
     .profile-name { font-weight: 600; }
-    .profile-role { color: var(--text-tertiary); font-size: 12px; }
+    .profile-role { color: #6f7f9c; font-size: 12px; }
 
     .auth-form {
       display: none;
       max-width: 380px;
       margin: 4px auto 0;
       width: 100%;
-      background: var(--surface-1);
-      border: 1px solid var(--border);
+      background: #f5f8ff;
+      border: 1px solid #dbe5f6;
       border-radius: var(--radius-md);
       padding: 14px;
       gap: 10px;
     }
 
     .auth-form.visible { display: grid; }
-    .auth-form label { font-size: 12px; color: var(--text-secondary); }
-    .auth-form input { width: 100%; border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; background: var(--surface-0); color: var(--text-primary); outline: none; }
+    .auth-form label { font-size: 12px; color: #5f6f8e; }
+    .auth-form input { width: 100%; border: 1px solid #cdd9ef; border-radius: 10px; padding: 10px 12px; background: #fff; color: #1b2640; outline: none; }
     .auth-msg { min-height: 18px; font-size: 12px; color: var(--danger); }
 
     .app-shell { transition: filter var(--transition); }
@@ -1446,6 +1453,7 @@
   <div class="auth-gate" id="authGate">
     <div class="auth-card">
       <div class="auth-header">
+        <img class="auth-logo" src="/images/logo (2).png" alt="Smart Handicrafts logo" />
         <h1 class="auth-title">Select your profile</h1>
         <p class="auth-sub">Choose a user below, then enter the password to open SmartHandicrafts® Command Center.</p>
       </div>
