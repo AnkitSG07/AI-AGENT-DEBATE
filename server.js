@@ -12,6 +12,12 @@ app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
 
+const profilePasswords = {
+  "Smart handicrafts": process.env.PROFILE_PASS_SMART_HANDICRAFTS || "",
+  Accounts: process.env.PROFILE_PASS_ACCOUNTS || "",
+  SUDO: process.env.PROFILE_PASS_SUDO || ""
+};
+
 function now() {
   return new Date().toISOString();
 }
@@ -3611,6 +3617,26 @@ app.get("/api/odoo/delivery-orders", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
+});
+
+app.post("/api/profile-login", (req, res) => {
+  const profile = String(req.body?.profile || "").trim();
+  const password = String(req.body?.password || "");
+  const expected = profilePasswords[profile];
+
+  if (!profile || !Object.prototype.hasOwnProperty.call(profilePasswords, profile)) {
+    return res.status(400).json({ ok: false, error: "Unknown profile" });
+  }
+
+  if (!expected) {
+    return res.status(503).json({ ok: false, error: `Password is not configured for ${profile}` });
+  }
+
+  if (password !== expected) {
+    return res.status(401).json({ ok: false, error: "Invalid password" });
+  }
+
+  res.json({ ok: true, profile });
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
