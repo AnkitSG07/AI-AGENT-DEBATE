@@ -1,0 +1,3196 @@
+<!doctype html>
+<html data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SmartHandicrafts®</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ─── TOKENS ─── */
+    :root {
+      --mono: 'IBM Plex Mono', ui-monospace, monospace;
+      --sans: 'Space Grotesk', system-ui, sans-serif;
+      --display: 'Space Grotesk', system-ui, sans-serif;
+      --transition: 0ms;
+    }
+
+    /* ─── DARK MODE (default) ─── */
+    [data-theme="dark"] {
+      --bg: #0A0A0A;
+      --surface-0: #111111;
+      --surface-1: #1A1A1A;
+      --surface-2: #222222;
+      --surface-3: #2E2E2E;
+      --border: #2A2A2A;
+      --border-strong: #3A3A3A;
+      --text-primary: #EAEAEA;
+      --text-secondary: #999999;
+      --text-tertiary: #555555;
+      --accent: #FF3300;
+      --accent-glow: rgba(255,51,0,.15);
+      --accent-soft: rgba(255,51,0,.08);
+      --teal: #00FF88;
+      --teal-soft: rgba(0,255,136,.06);
+      --warn: #FFB800;
+      --warn-soft: rgba(255,184,0,.06);
+      --danger: #FF3300;
+      --danger-soft: rgba(255,51,0,.08);
+      --ok: #00FF88;
+      --ok-soft: rgba(0,255,136,.06);
+    }
+
+    /* ─── LIGHT MODE ─── */
+    [data-theme="light"] {
+      --bg: #EAEAEA;
+      --surface-0: #FFFFFF;
+      --surface-1: #F2F2F2;
+      --surface-2: #E0E0E0;
+      --surface-3: #D0D0D0;
+      --border: #CCCCCC;
+      --border-strong: #999999;
+      --text-primary: #111111;
+      --text-secondary: #555555;
+      --text-tertiary: #888888;
+      --accent: #CC2900;
+      --accent-glow: rgba(204,41,0,.12);
+      --accent-soft: rgba(204,41,0,.06);
+      --teal: #007744;
+      --teal-soft: rgba(0,119,68,.06);
+      --warn: #AA7700;
+      --warn-soft: rgba(170,119,0,.06);
+      --danger: #CC2900;
+      --danger-soft: rgba(204,41,0,.06);
+      --ok: #007744;
+      --ok-soft: rgba(0,119,68,.06);
+    }
+
+    /* ─── RESET ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background: var(--bg);
+      min-height: 100vh;
+    }
+
+    body.auth-locked { overflow: hidden; }
+
+    /* ─── AUTH GATE ─── */
+    .auth-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-start;
+      padding: 0;
+      background: #0A0A0A;
+    }
+
+    .auth-gate.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+
+    .auth-card {
+      width: 50vw;
+      min-height: 70vh;
+      background: #EAEAEA;
+      border: 4px solid #111111;
+      border-radius: 0;
+      box-shadow: none;
+      color: #111111;
+      padding: clamp(30px, 4vw, 50px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 28px;
+    }
+
+    .auth-header { text-align: left; display: flex; flex-direction: column; gap: 10px; }
+    .auth-logo {
+      width: clamp(80px, 12vw, 120px);
+      height: auto;
+      margin: 0 0 10px;
+      display: block;
+      filter: grayscale(100%) contrast(1.2);
+    }
+    .auth-title {
+      font-family: var(--display);
+      font-size: clamp(28px, 4vw, 48px);
+      line-height: 1;
+      letter-spacing: -.03em;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .auth-sub { color: #555; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+      align-items: start;
+    }
+
+    .profile-card {
+      background: transparent;
+      border: 4px solid #111111;
+      border-radius: 0;
+      padding: 20px 14px;
+      text-align: left;
+      cursor: pointer;
+      box-shadow: none;
+      transition: none;
+    }
+
+    .profile-card:hover,
+    .profile-card.active {
+      background: #111111;
+      color: #EAEAEA;
+    }
+
+    .profile-card:hover .profile-name,
+    .profile-card.active .profile-name { color: #EAEAEA; }
+    .profile-card:hover .profile-role,
+    .profile-card.active .profile-role { color: #999; }
+
+    .profile-avatar {
+      width: 56px;
+      height: 56px;
+      margin: 0 0 12px;
+      border-radius: 0;
+      display: grid;
+      place-items: center;
+      color: #0A0A0A;
+      font-weight: 800;
+      font-family: var(--display);
+      font-size: 18px;
+      background: #FF3300;
+    }
+
+    .profile-card[data-profile="Accounts"] .profile-avatar { background: #00FF88; }
+    .profile-card[data-profile="SUDO"] .profile-avatar { background: #FFB800; }
+    .profile-name { font-weight: 700; font-family: var(--display); font-size: 15px; text-transform: uppercase; letter-spacing: -.01em; }
+    .profile-role { color: #777; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+
+    .auth-form {
+      display: none;
+      max-width: 380px;
+      margin: 4px 0 0;
+      width: 100%;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 0;
+      gap: 12px;
+    }
+
+    .auth-form.visible { display: grid; }
+    .auth-form label {
+      font-size: 11px;
+      color: #555;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 600;
+    }
+    .auth-form input {
+      width: 100%;
+      border: none;
+      border-bottom: 4px solid #111111;
+      border-radius: 0;
+      padding: 12px 0;
+      background: transparent;
+      color: #111111;
+      font-family: var(--mono);
+      font-size: 16px;
+      font-weight: 500;
+      outline: none;
+    }
+    .auth-form input:focus { border-bottom-color: #FF3300; }
+    .auth-form input::placeholder { color: #999; }
+    .auth-msg { min-height: 18px; font-size: 12px; color: #FF3300; font-family: var(--mono); }
+
+    .app-shell { transition: none; }
+    body.auth-locked .app-shell { filter: blur(4px); pointer-events: none; user-select: none; }
+
+    /* ─── LAYOUT ─── */
+    .layout {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ─── SIDEBAR ─── */
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      background: var(--surface-0);
+      border-right: 2px solid var(--border-strong);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 14px 0;
+      gap: 2px;
+      z-index: 50;
+    }
+
+    .sidebar-logo {
+      width: 36px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--display);
+      font-weight: 800;
+      font-size: 16px;
+      color: #0A0A0A;
+      margin-bottom: 20px;
+      flex-shrink: 0;
+      box-shadow: none;
+    }
+
+    .nav-item {
+      width: 40px;
+      height: 40px;
+      border-radius: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+      color: var(--text-tertiary);
+      transition: none;
+      border: 2px solid transparent;
+    }
+
+    .nav-item:hover { background: var(--accent); color: #0A0A0A; }
+
+    .nav-item.active {
+      background: var(--accent);
+      color: #0A0A0A;
+      border-color: var(--accent);
+    }
+
+    .nav-item svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter; }
+
+    .nav-tooltip {
+      position: absolute;
+      left: calc(100% + 8px);
+      top: 50%;
+      transform: translateY(-50%);
+      background: var(--text-primary);
+      color: var(--bg);
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      padding: 5px 10px;
+      border-radius: 0;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      border: 2px solid var(--text-primary);
+      box-shadow: none;
+      z-index: 100;
+    }
+
+    .nav-item:hover .nav-tooltip { opacity: 1; }
+
+    .sidebar-spacer { flex: 1; }
+
+    /* ─── MAIN CONTENT ─── */
+    .main { min-height: 100vh; overflow: hidden; }
+
+    /* ─── TOP BAR ─── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      background: var(--surface-0);
+      border-bottom: 2px solid var(--border-strong);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      z-index: 40;
+    }
+
+    .topbar-left {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .topbar-left-text {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .topbar-title {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -.02em;
+      text-transform: uppercase;
+    }
+
+    .topbar-sub {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ─── STATUS BADGE ─── */
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 0;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-1);
+      color: var(--text-secondary);
+    }
+
+    .status-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 0;
+      background: var(--teal);
+    }
+
+    /* ─── THEME TOGGLE ─── */
+    .theme-toggle {
+      width: 34px;
+      height: 34px;
+      border-radius: 0;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-1);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      transition: none;
+    }
+
+    .theme-toggle:hover { background: var(--accent); color: #0A0A0A; border-color: var(--accent); }
+    .theme-toggle svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter; }
+
+    [data-theme="dark"] .icon-moon { display: none; }
+    [data-theme="light"] .icon-sun { display: none; }
+
+    /* ─── PAGE ─── */
+    .page { display: none; padding: 24px; }
+    .page.active { display: block; }
+
+    /* ─── SECTION HEADER ─── */
+    .section-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      font-family: var(--display);
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -.03em;
+      text-transform: uppercase;
+    }
+
+    .section-sub {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      margin-top: 4px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+
+    /* ─── CARD ─── */
+    .card {
+      background: var(--surface-0);
+      border: 2px solid var(--border-strong);
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .card-inner { padding: 18px; }
+
+    .card-header {
+      padding: 14px 18px;
+      border-bottom: 2px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .card-title {
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+
+    /* ─── TABS ─── */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      background: var(--surface-1);
+      border: 2px solid var(--border-strong);
+      border-radius: 0;
+      padding: 0;
+      margin-bottom: 20px;
+    }
+
+    .tab-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 0;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-tertiary);
+      border: none;
+      border-right: 2px solid var(--border-strong);
+      transition: none;
+      user-select: none;
+      background: transparent;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .tab-btn:last-child { border-right: none; }
+
+    .tab-btn:hover { background: var(--surface-2); color: var(--text-primary); }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: #0A0A0A;
+      border-color: var(--accent);
+    }
+
+    .tab-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 0;
+      background: var(--text-tertiary);
+    }
+
+    .tab-btn.active .tab-dot { background: #0A0A0A; }
+
+    /* ─── INPUTS ─── */
+    input[type="text"],
+    input[type="number"],
+    input[type="tel"],
+    select,
+    textarea {
+      background: var(--surface-1);
+      border: 2px solid var(--border-strong);
+      border-radius: 0;
+      color: var(--text-primary);
+      font-family: var(--mono);
+      font-size: 13px;
+      outline: none;
+      padding: 8px 10px;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    input[type="tel"]:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: none;
+      background: var(--surface-0);
+    }
+
+    select { cursor: pointer; }
+    input[type="number"] { width: 100px; }
+    input[type="checkbox"] { accent-color: var(--accent); transform: scale(1.2); cursor: pointer; }
+
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    /* ─── BUTTONS ─── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 14px;
+      border-radius: 0;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-1);
+      color: var(--text-primary);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: none;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .btn:hover { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
+    .btn:active { transform: none; }
+    .btn:disabled { opacity: .3; cursor: not-allowed; pointer-events: none; }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0A0A0A;
+      box-shadow: none;
+      font-weight: 800;
+    }
+
+    .btn-primary:hover { background: #0A0A0A; color: var(--accent); border-color: var(--accent); }
+
+    .btn-danger {
+      background: transparent;
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .btn-danger:hover { background: var(--danger); color: #0A0A0A; }
+
+    .btn-ok {
+      background: transparent;
+      border-color: var(--ok);
+      color: var(--ok);
+    }
+
+    .btn-ok:hover { background: var(--ok); color: #0A0A0A; }
+
+    .btn-sm { padding: 5px 10px; font-size: 10px; }
+    .btn-icon { padding: 8px; }
+
+    /* ─── STATUS ROW ─── */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-family: var(--mono);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 0;
+      background: var(--accent);
+      display: none;
+      flex-shrink: 0;
+      animation: pulse 1.3s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(.85); opacity: .7; }
+      50% { transform: scale(1.1); opacity: 1; }
+    }
+
+    /* ─── ROW FLEX ─── */
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .gap-8 { gap: 8px; }
+    .gap-12 { gap: 12px; }
+    .items-center { align-items: center; }
+    .label-field { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 11px; font-weight: 600; font-family: var(--mono); text-transform: uppercase; letter-spacing: .3px; }
+
+    .preview-note-wrap { padding: 0 16px 10px; }
+    .preview-note { font-size: 12px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); }
+    .preview-note.is-collapsed {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .preview-note-toggle {
+      margin-top: 6px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--mono);
+      text-transform: uppercase;
+    }
+    .preview-note-toggle:hover { text-decoration: none; background: var(--accent); color: #0A0A0A; padding: 2px 6px; }
+
+    /* ─── AGENT DEBATE GRID ─── */
+    .debate-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      margin-top: 20px;
+    }
+
+    @media(min-width: 900px) { .debate-grid { grid-template-columns: repeat(3, 1fr); } }
+
+    .agent-card {
+      border-radius: 0;
+      background: var(--surface-0);
+      border: 2px solid var(--border-strong);
+      box-shadow: none;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 320px;
+    }
+
+    .agent-header {
+      padding: 12px 14px;
+      border-bottom: 2px solid var(--border-strong);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .agent-name {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      letter-spacing: -.01em;
+    }
+
+    .agent-pill {
+      font-size: 10px;
+      font-weight: 700;
+      font-family: var(--mono);
+      color: var(--text-tertiary);
+      background: var(--surface-2);
+      border: 2px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 0;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .agent-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--display);
+      font-size: 13px;
+      font-weight: 800;
+      color: #0A0A0A;
+      flex-shrink: 0;
+    }
+
+    .av-a { background: #FF3300; }
+    .av-b { background: #FFB800; }
+    .av-c { background: #00FF88; }
+
+    .thinking-indicator {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--warn);
+      font-weight: 700;
+      font-family: var(--mono);
+      text-transform: uppercase;
+    }
+
+    .mini-dots { display: inline-flex; gap: 3px; align-items: center; }
+    .mini-dots span {
+      width: 4px; height: 4px; border-radius: 0; background: var(--warn);
+      animation: bounce .9s infinite;
+    }
+    .mini-dots span:nth-child(2) { animation-delay: .12s; }
+    .mini-dots span:nth-child(3) { animation-delay: .24s; }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    .agent-feed {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      scroll-behavior: smooth;
+    }
+
+    .bubble {
+      background: var(--surface-1);
+      border: 2px solid var(--border);
+      border-radius: 0;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      font-family: var(--mono);
+      animation: fadeSlideIn .15s ease;
+    }
+
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .bubble-meta {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-tertiary);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+
+    /* ─── FINAL BOX ─── */
+    .final-card {
+      margin-top: 20px;
+      border-radius: 0;
+      background: var(--surface-0);
+      border: 4px solid var(--accent);
+      box-shadow: none;
+      overflow: hidden;
+      animation: fadeSlideIn .2s ease;
+    }
+
+    .final-header {
+      padding: 14px 18px;
+      border-bottom: 2px solid var(--border-strong);
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .final-header .agent-name { color: #0A0A0A; }
+    .final-header div[style] { color: #0A0A0A; }
+
+    .final-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 800;
+      color: #0A0A0A;
+      background: rgba(0,0,0,.15);
+      border: 2px solid rgba(0,0,0,.2);
+      padding: 3px 10px;
+      border-radius: 0;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-family: var(--mono);
+    }
+
+    .final-text {
+      padding: 18px;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      color: var(--text-primary);
+      font-family: var(--mono);
+    }
+
+    /* ─── LABELS / SHIPPING ─── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    @media(min-width: 900px) { .two-col { grid-template-columns: 1.15fr .85fr; } }
+
+    /* ─── INSET BOX ─── */
+    .inset {
+      background: var(--surface-1);
+      border: 2px solid var(--border);
+      border-radius: 0;
+      padding: 14px;
+    }
+
+    .inset-title {
+      font-family: var(--display);
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+
+    .inset-title .icon-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 0;
+      background: var(--accent-soft);
+      border: 2px solid var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .inset-title .icon-badge svg { width: 13px; height: 13px; stroke: var(--accent); fill: none; stroke-width: 2; stroke-linecap: square; }
+
+    .hint-text { font-size: 11px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; font-family: var(--mono); }
+
+    /* ─── DIVIDER ─── */
+    .divider { height: 2px; background: var(--border-strong); margin: 14px 0; }
+
+    /* ─── ORDER CHIP ─── */
+    .order-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 0;
+      border: 2px solid var(--border);
+      background: var(--surface-0);
+      margin-top: 8px;
+      cursor: pointer;
+      transition: none;
+    }
+
+    .order-chip:hover { border-color: var(--text-primary); background: var(--surface-1); }
+    .order-chip.selected { border-color: var(--accent); background: var(--accent-soft); }
+
+    .order-chip-ref {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .order-chip-meta { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; font-family: var(--mono); text-transform: uppercase; }
+
+    .override-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--ok);
+      background: transparent;
+      border: 2px solid var(--ok);
+      padding: 1px 6px;
+      border-radius: 0;
+      font-family: var(--mono);
+      text-transform: uppercase;
+    }
+
+    /* ─── PREVIEW CARD ─── */
+    .preview-card {
+      border-radius: 0;
+      border: 2px solid var(--border);
+      background: var(--surface-1);
+      overflow: hidden;
+      margin-top: 14px;
+    }
+
+    .preview-header {
+      padding: 12px 16px;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .kv-grid {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 6px 12px;
+      font-size: 12px;
+      padding: 14px 16px;
+      font-family: var(--mono);
+    }
+
+    .kv-key { color: var(--text-tertiary); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+    .kv-val { color: var(--text-primary); word-break: break-word; }
+
+    .data-section-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent);
+      padding: 10px 16px 4px;
+      border-top: 2px solid var(--border);
+    }
+
+    .items-list {
+      max-height: 200px;
+      overflow-y: auto;
+      margin: 0 16px 14px;
+      border: 2px solid var(--border);
+      border-radius: 0;
+      background: var(--surface-0);
+    }
+
+    .item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-family: var(--mono);
+    }
+
+    .item-row:last-child { border-bottom: none; }
+
+    .qty-pill {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-tertiary);
+      border: 2px solid var(--border);
+      border-radius: 0;
+      padding: 2px 6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      text-transform: uppercase;
+    }
+
+    /* ─── TABLE ─── */
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      white-space: nowrap;
+      border-bottom: 2px solid var(--accent);
+      background: var(--surface-1);
+    }
+
+    tbody tr {
+      background: transparent;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tbody tr:hover { background: var(--accent-soft); }
+
+    td {
+      padding: 10px 12px;
+      color: var(--text-secondary);
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    td:first-child {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    td:last-child {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    a { color: var(--accent); text-decoration: none; font-weight: 600; }
+    a:hover { background: var(--accent); color: #0A0A0A; padding: 1px 4px; }
+
+    /* ─── MODAL ─── */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 200;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: min(960px, 100%);
+      max-height: 90vh;
+      overflow-y: auto;
+      background: var(--surface-0);
+      border: 4px solid var(--accent);
+      border-radius: 0;
+      box-shadow: none;
+      animation: modalIn .1s ease;
+    }
+
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 2px solid var(--border-strong);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      background: var(--surface-0);
+      z-index: 5;
+    }
+
+    .modal-title {
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      letter-spacing: -.02em;
+    }
+
+    .modal-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; font-family: var(--mono); }
+
+    .xbtn {
+      width: 32px;
+      height: 32px;
+      border-radius: 0;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-1);
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 16px;
+      font-family: var(--mono);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: none;
+    }
+
+    .xbtn:hover { background: var(--accent); color: #0A0A0A; border-color: var(--accent); }
+
+    .modal-body { padding: 18px 20px; }
+
+    .editor-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    @media(min-width: 700px) { .editor-grid { grid-template-columns: 1fr 1fr; } }
+
+    .editor-section {
+      background: var(--surface-1);
+      border: 2px solid var(--border);
+      border-radius: 0;
+      padding: 16px;
+    }
+
+    .editor-section-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .form-row label {
+      font-size: 10px;
+      color: var(--text-tertiary);
+      font-weight: 700;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .form-row input { width: 100%; }
+
+    /* ─── CHIPS ─── */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 0;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-2);
+      color: var(--text-secondary);
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    /* ─── SCROLLBAR ─── */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 0; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    /* ─── EMPTY STATE ─── */
+    .empty-state {
+      padding: 28px;
+      text-align: center;
+      color: var(--text-tertiary);
+      font-size: 12px;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+
+    .empty-state svg { width: 36px; height: 36px; stroke: var(--text-tertiary); fill: none; stroke-width: 1.5; margin-bottom: 10px; opacity: .4; }
+
+    /* ─── ENDPOINT PILLS ─── */
+    .endpoint-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+    .endpoint-pill {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--accent);
+      background: var(--accent-soft);
+      border: 2px solid var(--accent);
+      padding: 2px 8px;
+      border-radius: 0;
+      text-transform: none;
+    }
+
+    /* ─── DASHBOARD ─── */
+    .search-bar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .search-bar input { flex: 1; min-width: 200px; }
+
+    /* ─── MUTED TEXT ─── */
+    .muted { color: var(--text-secondary); }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+
+    /* ─── BOT LAUNCHER ─── */
+    .bot-launcher {
+      position: fixed;
+      left: auto;
+      right: 22px;
+      bottom: 22px;
+      width: 56px;
+      height: 56px;
+      border: 0;
+      border-radius: 0;
+      background: var(--accent);
+      color: #0A0A0A;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: none;
+      cursor: pointer;
+      z-index: 1200;
+    }
+    .bot-launcher:hover { background: #0A0A0A; color: var(--accent); border: 2px solid var(--accent); }
+
+    .bot-widget {
+      position: fixed;
+      left: auto;
+      right: 22px;
+      bottom: 92px;
+      width: min(360px, calc(100vw - 30px));
+      height: min(540px, calc(100vh - 130px));
+      background: var(--surface-0);
+      border: 4px solid var(--accent);
+      border-radius: 0;
+      box-shadow: none;
+      z-index: 1200;
+      display: none;
+      overflow: hidden;
+    }
+    .bot-widget.open { display: flex; flex-direction: column; }
+    .bot-widget-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 2px solid var(--border-strong);
+      font-weight: 800;
+      font-family: var(--display);
+      text-transform: uppercase;
+      font-size: 13px;
+    }
+    .bot-messages {
+      flex: 1;
+      overflow: auto;
+      padding: 10px;
+      background: var(--surface-1);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .bot-msg { max-width: 88%; padding: 10px 12px; border-radius: 0; font-size: 12px; line-height: 1.55; font-family: var(--mono); border: 2px solid var(--border); }
+    .bot-msg.user { align-self: flex-end; background: var(--accent-soft); border-color: var(--accent); white-space: pre-wrap; }
+    .bot-msg.assistant { align-self: flex-start; background: var(--surface-2); }
+    .bot-msg.assistant p { margin: 0 0 6px; }
+    .bot-msg.assistant p:last-child { margin-bottom: 0; }
+    .bot-msg.assistant strong { color: var(--text-primary); font-weight: 700; }
+    .bot-msg.assistant ul, .bot-msg.assistant ol { padding-left: 16px; margin: 4px 0 6px; }
+    .bot-msg.assistant li { margin-bottom: 3px; }
+    .bot-msg.assistant code { font-family: var(--mono); font-size: 11px; background: var(--surface-3); padding: 1px 4px; border-radius: 0; }
+    .bot-msg.assistant pre { background: var(--surface-3); padding: 8px; border-radius: 0; overflow-x: auto; margin: 6px 0; border: 2px solid var(--border); }
+    .bot-msg.assistant pre code { background: none; padding: 0; }
+    .bot-typing { align-self: flex-start; display: flex; gap: 4px; align-items: center; padding: 10px 14px; background: var(--surface-2); border: 2px solid var(--border); border-radius: 0; }
+    .bot-typing span { width: 6px; height: 6px; border-radius: 0; background: var(--text-tertiary); animation: botdot 1.2s infinite ease-in-out; }
+    .bot-typing span:nth-child(2) { animation-delay: 0.2s; }
+    .bot-typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes botdot { 0%,80%,100% { transform: scale(0.7); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+    .bot-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0 2px; align-self: flex-start; max-width: 88%; }
+    .bot-chip { font-size: 10px; padding: 3px 8px; border-radius: 0; border: 2px solid var(--border-strong); background: var(--surface-1); color: var(--accent); cursor: pointer; font-family: var(--mono); font-weight: 700; text-transform: uppercase; transition: none; white-space: nowrap; }
+    .bot-chip:hover { background: var(--accent); color: #0A0A0A; border-color: var(--accent); }
+    .bot-widget-input { border-top: 2px solid var(--border-strong); padding: 8px; display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+    .bot-widget-input textarea { min-height: 46px; max-height: 100px; resize: vertical; }
+    .bot-widget-footer { padding: 0 8px 8px; font-size: 10px; color: var(--text-tertiary); font-family: var(--mono); text-transform: uppercase; letter-spacing: .3px; }
+
+    /* ─── NOISE OVERLAY ─── */
+    [data-theme="dark"] .noise-overlay {
+      display: none; /* removed for brutalist clarity */
+    }
+
+    /* ─── MOBILE NAV TOGGLE ─── */
+    .mobile-nav-toggle {
+      display: none;
+      width: 38px;
+      height: 38px;
+      border-radius: 0;
+      border: 2px solid var(--border-strong);
+      background: var(--surface-1);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-primary);
+      flex-shrink: 0;
+      transition: none;
+    }
+    .mobile-nav-toggle svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: square; }
+    .mobile-nav-toggle:hover { background: var(--accent); color: #0A0A0A; }
+
+    /* ─── SIDEBAR OVERLAY (mobile) ─── */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 45;
+    }
+    .sidebar-overlay.open { display: block; }
+
+    /* ─── BOTTOM NAV (mobile) ─── */
+    .bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 60px;
+      background: var(--surface-0);
+      border-top: 2px solid var(--border-strong);
+      z-index: 50;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 4px;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .bottom-nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 6px 14px;
+      border-radius: 0;
+      cursor: pointer;
+      color: var(--text-tertiary);
+      transition: none;
+      font-size: 9px;
+      font-weight: 800;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border: none;
+      background: transparent;
+      min-width: 56px;
+    }
+
+    .bottom-nav-item svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter; }
+    .bottom-nav-item.active { color: var(--accent); }
+    .bottom-nav-item:hover { background: var(--surface-1); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 768px) {
+      .auth-card { width: 100%; min-height: auto; }
+      .auth-gate { align-items: center; }
+      .profile-grid { grid-template-columns: 1fr; }
+
+      .mobile-nav-toggle { display: flex; }
+      .bottom-nav { display: flex; }
+
+      .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        width: 200px;
+        padding: 14px 10px;
+        transform: translateX(-100%);
+        transition: transform 0.15s ease;
+        z-index: 60;
+        align-items: flex-start;
+        gap: 2px;
+      }
+
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-logo { margin-bottom: 12px; }
+
+      .nav-item {
+        width: 100%;
+        justify-content: flex-start;
+        padding: 0 10px;
+        gap: 10px;
+      }
+
+      .nav-tooltip {
+        position: static;
+        transform: none;
+        opacity: 1;
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-primary);
+        pointer-events: none;
+      }
+
+      .layout { grid-template-columns: 1fr; }
+      .main { min-height: 100vh; }
+
+      .topbar { padding: 0 12px; gap: 8px; }
+      .topbar-title { font-size: 12px; }
+      .topbar-sub { display: none; }
+      .status-badge { display: none; }
+
+      .page { padding: 14px 12px 76px; }
+
+      .section-header { flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 14px; }
+      .section-title { font-size: 16px; }
+
+      .tab-bar { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+      .tab-bar::-webkit-scrollbar { display: none; }
+      .tab-btn { white-space: nowrap; flex-shrink: 0; padding: 8px 10px; font-size: 10px; }
+
+      .flex.flex-wrap.gap-12.items-center > div[style*="margin-left:auto"] {
+        margin-left: 0 !important;
+        width: 100%;
+        justify-content: flex-end;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      input[type="tel"],
+      select {
+        width: 100%;
+        max-width: 100% !important;
+      }
+
+      input[type="number"] { width: 80px; }
+      .label-field { flex-wrap: wrap; }
+
+      .card-inner { padding: 12px; }
+      .card-header { padding: 10px 12px; flex-wrap: wrap; gap: 6px; }
+
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      td, th { white-space: nowrap; }
+
+      .two-col { grid-template-columns: 1fr !important; }
+
+      .debate-grid { gap: 0; }
+      .agent-card { min-height: 220px; }
+
+      .modal { width: 100%; max-height: 95vh; border-radius: 0; }
+      .modal-backdrop { align-items: flex-end; padding: 0; }
+      .modal-body { padding: 14px; }
+      .modal-header { padding: 12px 14px; }
+      .editor-grid { grid-template-columns: 1fr !important; }
+      .form-row { grid-template-columns: 70px 1fr; }
+
+      .bot-launcher { left: auto; right: 14px; bottom: 72px; }
+      .bot-widget { left: auto; right: 14px; bottom: 140px; width: calc(100vw - 28px); }
+
+      #soRef { width: 100% !important; }
+
+      .search-bar { flex-direction: column; align-items: stretch; }
+      .search-bar input { max-width: 100% !important; }
+
+      .kv-grid { grid-template-columns: 80px 1fr; }
+      .preview-header { flex-direction: column; align-items: flex-start; }
+    }
+
+    @media (max-width: 480px) {
+      .topbar { padding: 0 8px; height: 50px; }
+      .page { padding: 10px 8px 76px; }
+      .section-title { font-size: 14px; }
+      .tab-btn { padding: 6px 8px; font-size: 9px; }
+      .btn { padding: 6px 10px; font-size: 10px; }
+      .btn-sm { padding: 4px 8px; font-size: 9px; }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+</head>
+
+<body>
+  <div class="auth-gate" id="authGate">
+    <div class="auth-card">
+      <div class="auth-header">
+        <img class="auth-logo" src="/images/logo (2).png" alt="Smart Handicrafts logo" />
+        <h1 class="auth-title">Select your profile</h1>
+        <p class="auth-sub">Choose a user below, then enter the password to open SmartHandicrafts® Command Center.</p>
+      </div>
+
+      <div class="profile-grid" id="profileGrid">
+        <button type="button" class="profile-card" data-profile="Smart handicrafts">
+          <span class="profile-avatar">SH</span>
+          <div class="profile-name">Smart handicrafts</div>
+          <div class="profile-role">Business profile</div>
+        </button>
+        <button type="button" class="profile-card" data-profile="Accounts">
+          <span class="profile-avatar">AC</span>
+          <div class="profile-name">Accounts</div>
+          <div class="profile-role">Finance profile</div>
+        </button>
+        <button type="button" class="profile-card" data-profile="SUDO">
+          <span class="profile-avatar">SU</span>
+          <div class="profile-name">SUDO</div>
+          <div class="profile-role">Admin profile</div>
+        </button>
+      </div>
+
+      <form class="auth-form" id="authForm">
+        <label for="profilePassword" id="authPrompt">PASSWORD</label>
+        <input id="profilePassword" type="password" autocomplete="current-password" required />
+        <button type="submit" class="btn btn-primary" style="width:100%;height:60px;font-size:14px;letter-spacing:2px">AUTHENTICATE</button>
+        <div class="auth-msg" id="authMsg"></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="noise-overlay"></div>
+
+  <!-- Sidebar overlay for mobile -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <div class="layout app-shell">
+    <!-- ─── SIDEBAR ─── -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">S</div>
+
+      <div class="nav-item active" data-page="debate">
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="nav-tooltip">AI Debate</span>
+      </div>
+
+      <div class="nav-item" data-page="labels">
+        <svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        <span class="nav-tooltip">Shipping Labels</span>
+      </div>
+
+      <div class="nav-item" data-page="dashboard">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span class="nav-tooltip">Order Dashboard</span>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+
+      <div class="nav-item" id="themeToggleNav" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span class="nav-tooltip">Toggle Theme</span>
+      </div>
+      <div class="nav-item" id="logoutNav" title="Log out">
+        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span class="nav-tooltip">Log Out</span>
+      </div>
+    </aside>
+
+    <!-- ─── MAIN ─── -->
+    <div class="main">
+      <!-- TOP BAR -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="mobile-nav-toggle" id="mobileNavToggle" aria-label="Open navigation">
+            <svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div class="topbar-left-text">
+            <div class="topbar-title" id="topbar-title">AI Agent Debate</div>
+            <div class="topbar-sub" id="topbar-sub">Multi-agent reasoning with Gemini · Llama · Gemma</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="status-badge">
+            <span class="dot"></span>
+            SMART HANDICRAFTS
+          </div>
+          <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+            <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- ═══════════════ PAGE: DEBATE ═══════════════ -->
+      <section class="page active" id="page-debate">
+        <div class="section-header">
+          <div>
+            <div class="section-title">AI Agent Debate</div>
+            <div class="section-sub">Pit multiple AI agents against each other — a judge synthesizes the final answer.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-inner">
+            <textarea id="prompt" placeholder="ENTER YOUR QUESTION OR TOPIC FOR THE AGENTS TO DEBATE…"></textarea>
+
+            <div class="flex flex-wrap gap-12 items-center mt-12">
+              <div class="label-field">
+                Rounds
+                <input id="rounds" type="number" min="1" max="6" value="1" style="width:80px">
+                <span style="font-size:10px;color:var(--text-tertiary);font-family:var(--mono)">× 3 TURNS</span>
+              </div>
+
+              <label class="label-field">
+                <input id="showDebate" type="checkbox" checked>
+                Show debate
+              </label>
+
+              <div style="margin-left:auto;display:flex;gap:6px">
+                <button id="clearBtn" class="btn btn-sm">Clear</button>
+                <button id="stopBtn" class="btn btn-danger btn-sm" disabled>Stop</button>
+                <button id="runBtn" class="btn btn-primary">
+                  <svg style="width:14px;height:14px;stroke:#0A0A0A;fill:none;stroke-width:2;stroke-linecap:square;stroke-linejoin:miter" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  Run Debate
+                </button>
+              </div>
+            </div>
+
+            <div class="status-row">
+              <span class="pulse-dot" id="dot"></span>
+              <span id="statusText" style="font-size:12px">READY.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent columns -->
+        <div class="debate-grid" id="grid" style="display:none">
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Gemini</div>
+                <div class="agent-pill">Agent A</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-gemini">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-a">G</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-gemini"></div>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Llama</div>
+                <div class="agent-pill">Agent B</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-llama">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-b">L</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-llama"></div>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-header">
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div class="agent-name">Gemma</div>
+                <div class="agent-pill">Agent C</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="thinking-indicator" id="think-gemma">
+                  Thinking <span class="mini-dots"><span></span><span></span><span></span></span>
+                </div>
+                <div class="agent-avatar av-c">Gm</div>
+              </div>
+            </div>
+            <div class="agent-feed" id="feed-gemma"></div>
+          </div>
+        </div>
+
+        <!-- Final Answer -->
+        <div class="final-card" id="finalBox" style="display:none">
+          <div class="final-header">
+            <div>
+              <div class="agent-name">Final Answer</div>
+              <div style="font-size:11px;color:#0A0A0A;margin-top:3px;font-family:var(--mono)">Judge (Gemini) synthesizes the debate into one answer.</div>
+            </div>
+            <div class="final-label">
+              <svg style="width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              Judge
+            </div>
+          </div>
+          <div class="final-text" id="finalText"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ PAGE: LABELS ═══════════════ -->
+      <section class="page" id="page-labels">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Shipping Labels</div>
+            <div class="section-sub">Fetch orders from Odoo → edit addresses if needed → generate printable PDF labels.</div>
+          </div>
+          <div class="chip">
+            <svg style="width:11px;height:11px;stroke:var(--teal);fill:none;stroke-width:2;stroke-linecap:square" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Odoo Connected
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:0">
+          <div class="card-header">
+            <div class="card-title">Create / Fetch Label</div>
+          </div>
+          <div class="card-inner">
+            <div class="flex flex-wrap gap-12 items-center">
+              <div class="label-field">
+                Sales Order Ref
+                <input id="soRef" type="text" placeholder="e.g. S00241" style="width:200px">
+              </div>
+              <button class="btn" id="btnFetchSO">Fetch from Odoo</button>
+              <button class="btn" id="btnAddOrder">Add Order</button>
+              <div class="label-field">
+                Ship From
+                <select id="shipFromSelect" style="min-width:200px"><option value="">Default (env)</option></select>
+              </div>
+              <label class="label-field" style="margin-left:auto">
+                <input type="checkbox" id="bigBoxToggle"> Full A4 per label
+              </label>
+              <button class="btn btn-primary" id="btnGenerateLabel" disabled>Generate PDF</button>
+            </div>
+
+            <div class="status-row">
+              <span class="pulse-dot" id="labelDot"></span>
+              <span id="labelStatus" class="muted">READY.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="two-col">
+          <!-- LEFT COL -->
+          <div style="display:flex;flex-direction:column;gap:0">
+            <!-- Orders list -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Orders Added</div>
+                <span style="font-size:10px;color:var(--text-tertiary);font-family:var(--mono);text-transform:uppercase">max 4 per page</span>
+              </div>
+              <div class="card-inner">
+                <div class="hint-text">Add 1–4 Sales Orders. PDF auto-grids labels on A4. More than 4 continues on next page.</div>
+                <div id="ordersList" class="mt-12">
+                  <div class="empty-state" style="padding:20px">
+                    <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <div>No orders added yet. Add 1–4 orders to create multi-label PDF.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Preview card -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Order Preview</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <button class="btn btn-sm" id="btnOpenEditor" disabled>Edit Label</button>
+                  <button class="btn btn-sm" id="btnInvoicePdf" disabled>Invoice</button>
+                  <button class="btn btn-sm" id="btnPackingPdf" disabled>Packing Slip</button>
+                  <button class="btn btn-sm" id="btnProformaPdf" disabled>Proforma</button>
+                  <button class="btn btn-sm" id="btnLoadPickings" disabled>Deliveries</button>
+                  <button class="btn btn-sm" id="btnLoadFulfillment" disabled>Fulfillment</button>
+                </div>
+              </div>
+
+              <div id="previewEmpty" style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:12px;font-family:var(--mono);text-transform:uppercase">No order loaded.</div>
+
+              <div id="previewBody" style="display:none">
+                <div class="kv-grid">
+                  <div class="kv-key">SO Ref</div><div class="kv-val" id="pvRef">-</div>
+                  <div class="kv-key">Status</div><div class="kv-val" id="pvState">-</div>
+                  <div class="kv-key">Date</div><div class="kv-val" id="pvDate">-</div>
+                  <div class="kv-key">Total</div><div class="kv-val" id="pvTotal">-</div>
+                  <div class="kv-key">Payment</div><div class="kv-val" id="pvPayment">-</div>
+                  <div class="kv-key">Shipping</div><div class="kv-val" id="pvShippingMethod">-</div>
+                </div>
+
+                <div class="data-section-title">Ship To</div>
+                <div class="kv-grid" style="padding-top:0">
+                  <div class="kv-key">Name</div><div class="kv-val" id="pvName">-</div>
+                  <div class="kv-key">Phone</div><div class="kv-val" id="pvPhone">-</div>
+                  <div class="kv-key">Email</div><div class="kv-val" id="pvEmail">-</div>
+                  <div class="kv-key">Address</div><div class="kv-val" id="pvAddr">-</div>
+                </div>
+
+                <div class="data-section-title">Bill To</div>
+                <div class="kv-grid" style="padding-top:0">
+                  <div class="kv-key">Name</div><div class="kv-val" id="pvBillName">-</div>
+                  <div class="kv-key">Phone</div><div class="kv-val" id="pvBillPhone">-</div>
+                  <div class="kv-key">Address</div><div class="kv-val" id="pvBillAddr">-</div>
+                  <div class="kv-key">GST/VAT</div><div class="kv-val" id="pvBillVat">-</div>
+                </div>
+
+                <div class="data-section-title">Notes</div>
+                <div class="preview-note-wrap">
+                  <div class="preview-note is-collapsed" id="pvNote">-</div>
+                  <button class="preview-note-toggle" id="pvNoteToggle" type="button" style="display:none">View more</button>
+                </div>
+
+                <div class="data-section-title">Items</div>
+                <div class="items-list" id="pvItems"></div>
+
+                <div class="data-section-title">Delivery Orders</div>
+                <div class="items-list" id="pvPickings"><div class="item-row" style="color:var(--text-tertiary)">Click "Deliveries" to load.</div></div>
+
+                <div class="data-section-title">Fulfillment</div>
+                <div class="items-list" id="pvFulfillment" style="margin-bottom:16px"><div class="item-row" style="color:var(--text-tertiary)">Click "Fulfillment" to load stock status.</div></div>
+
+                <pre id="soPreview" style="display:none"></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT COL -->
+          <div>
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Generated Labels</div>
+              </div>
+              <div class="card-inner">
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;font-family:var(--mono)">All labels created by the backend. Download PDF to print.</div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Ref</th><th>Carrier</th><th>Created</th><th>Download</th></tr>
+                    </thead>
+                    <tbody id="labelsTbody">
+                      <tr><td colspan="4" class="muted" style="text-align:center;padding:20px">No labels yet.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="endpoint-list">
+                  <span class="endpoint-pill">/api/odoo/sale-order</span>
+                  <span class="endpoint-pill">/api/labels</span>
+                  <span class="endpoint-pill">/api/labels/generate</span>
+                  <span class="endpoint-pill">/api/labels/generate-batch</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ PAGE: DASHBOARD ═══════════════ -->
+      <section class="page" id="page-dashboard">
+        <div class="section-header">
+          <div>
+            <div class="section-title">Order Dashboard</div>
+            <div class="section-sub">SmartHandicrafts® — Browse and manage all Sales Orders from Odoo.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Search Orders</div>
+          </div>
+          <div class="card-inner">
+            <div class="tab-bar" id="dashTabBar" style="margin-bottom:12px">
+              <button class="tab-btn active" data-dash-tab="sale_orders" type="button">
+                <span class="tab-dot"></span> Sales Orders
+              </button>
+              <button class="tab-btn" data-dash-tab="invoices" type="button">
+                <span class="tab-dot"></span> Invoices
+              </button>
+              <button class="tab-btn" data-dash-tab="delivery_orders" type="button">
+                <span class="tab-dot"></span> Delivery Out Orders
+              </button>
+            </div>
+            <div class="search-bar">
+              <input id="dashQuery" type="text" placeholder="Search by SO ref or customer…" style="max-width:300px">
+              <select id="dashState"></select>
+              <select id="dashDeliveryState" style="display:none"></select>
+              <select id="dashPaymentState" style="display:none"></select>
+              <select id="dashInvoiceState" style="display:none"></select>
+              <select id="dashMoveState" style="display:none"></select>
+              <select id="dashType" style="display:none">
+                <option value="outgoing">Outgoing</option>
+                <option value="incoming">Incoming</option>
+              </select>
+              <button class="btn btn-primary" id="btnDashSearch">Search</button>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead id="dashThead"></thead>
+                <tbody id="dashTbody"><tr><td colspan="7" class="muted" style="text-align:center;padding:20px">No rows.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ─── BOTTOM NAV (mobile) ─── -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bottom-nav-item active" data-page="debate">
+      <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Debate
+    </button>
+    <button class="bottom-nav-item" data-page="labels">
+      <svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+      Labels
+    </button>
+    <button class="bottom-nav-item" data-page="dashboard">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+  </nav>
+  <div class="modal-backdrop" id="docModalBack">
+    <div class="modal" style="width:min(960px,96vw)">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="docModalTitle">Document Preview</div>
+          <div class="modal-sub" id="docModalSub">View and download document PDF.</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <a class="btn btn-sm" id="docModalDownload" href="#" target="_blank" rel="noopener">Download PDF</a>
+          <button class="xbtn" id="closeDocModal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding:0;height:min(74vh,780px)">
+        <iframe id="docModalFrame" title="Document preview" style="width:100%;height:100%;border:0;background:var(--surface-0);"></iframe>
+      </div>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="editModalBack">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Edit Label Overrides</div>
+          <div class="modal-sub">This does NOT change Odoo — it only fixes the PDF label output.</div>
+        </div>
+        <button class="xbtn" id="closeEditModal">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="editor-grid">
+          <div class="editor-section">
+            <div class="editor-section-title">Ship To — Recipient</div>
+            <div class="form-row"><label>Name</label><input id="edShipName" type="text" placeholder="Recipient Name"></div>
+            <div class="form-row"><label>Phone</label><input id="edShipPhone" type="tel" placeholder="Recipient Phone"></div>
+            <div class="form-row"><label>Line 1</label><input id="edShipL1" type="text" placeholder="House / Street"></div>
+            <div class="form-row"><label>Line 2</label><input id="edShipL2" type="text" placeholder="Area / Landmark"></div>
+            <div class="form-row"><label>City</label><input id="edShipCity" type="text" placeholder="City"></div>
+            <div class="form-row"><label>State</label><input id="edShipState" type="text" placeholder="State"></div>
+            <div class="form-row"><label>PIN</label><input id="edShipPin" type="text" placeholder="Pincode"></div>
+            <div class="form-row"><label>Country</label><input id="edShipCountry" type="text" placeholder="Country"></div>
+          </div>
+
+          <div class="editor-section">
+            <div class="editor-section-title">From — Sender</div>
+            <div class="form-row"><label>Name</label><input id="edFromName" type="text" placeholder="Sender Name"></div>
+            <div class="form-row"><label>Phone</label><input id="edFromPhone" type="tel" placeholder="Sender Phone"></div>
+            <div class="form-row"><label>Line 1</label><input id="edFromL1" type="text" placeholder="Address Line 1"></div>
+            <div class="form-row"><label>Line 2</label><input id="edFromL2" type="text" placeholder="Address Line 2"></div>
+            <div class="form-row"><label>City</label><input id="edFromCity" type="text" placeholder="City"></div>
+            <div class="form-row"><label>State</label><input id="edFromState" type="text" placeholder="State"></div>
+            <div class="form-row"><label>PIN</label><input id="edFromPin" type="text" placeholder="Pincode"></div>
+            <div class="form-row"><label>Country</label><input id="edFromCountry" type="text" placeholder="Country"></div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+          <button class="btn" id="resetEdits">Reset</button>
+          <button class="btn btn-ok" id="saveEdits">Save Overrides</button>
+        </div>
+
+        <div class="hint-text" style="margin-top:10px;text-align:right">
+          Tip: Add 2–4 orders, save overrides for each order, then generate batch PDF.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button id="botLauncher" class="bot-launcher" title="Ask AI">
+    <svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:square;stroke-linejoin:miter"><path d="M12 2a3 3 0 0 0-3 3v1H7a2 2 0 0 0-2 2v5a7 7 0 0 0 14 0V8a2 2 0 0 0-2-2h-2V5a3 3 0 0 0-3-3z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 16c.8.7 1.8 1 3 1s2.2-.3 3-1"/></svg>
+  </button>
+
+  <section id="botWidget" class="bot-widget" aria-label="Ask AI widget">
+    <div class="bot-widget-header">
+      <div style="display:flex;align-items:center;gap:8px"><span>Ask AI</span><span class="hint-text">Auto mode</span></div>
+      <button id="botCloseBtn" class="btn btn-sm">✕</button>
+    </div>
+    <div id="botMessages" class="bot-messages">
+      <div class="bot-msg assistant">Hi! I can answer questions from your company product knowledge base.</div>
+    </div>
+    <div class="bot-widget-input">
+      <textarea id="botPrompt" placeholder="Message Ask AI..."></textarea>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button id="botSendBtn" class="btn btn-primary btn-sm">Send</button>
+        <button id="botClearBtn" class="btn btn-sm">Clear</button>
+      </div>
+    </div>
+    <div id="botStatus" class="bot-widget-footer">Ready. Auto mode is on.</div>
+  </section>
+
+  <script>
+
+    // ─── SIGN-IN GATE ───
+    const authGate = document.getElementById('authGate');
+    const profileGrid = document.getElementById('profileGrid');
+    const profileCards = profileGrid ? Array.from(profileGrid.querySelectorAll('.profile-card')) : [];
+    const authForm = document.getElementById('authForm');
+    const authPrompt = document.getElementById('authPrompt');
+    const profilePassword = document.getElementById('profilePassword');
+    const authMsg = document.getElementById('authMsg');
+    let selectedProfile = '';
+    let activeProfile = '';
+
+    const profilePageAccess = {
+      'Accounts': ['dashboard'],
+      'Smart handicrafts': ['labels', 'dashboard'],
+      'SUDO': ['debate', 'labels', 'dashboard']
+    };
+
+    function canOpenSalesOrderFromDashboard() {
+      return activeProfile !== 'Accounts';
+    }
+  
+    function lockApp() {
+      document.body.classList.add('auth-locked');
+      authGate?.classList.remove('hidden');
+    }
+
+    function unlockApp() {
+      document.body.classList.remove('auth-locked');
+      authGate?.classList.add('hidden');
+    }
+
+    function getAllowedPages(profileName) {
+      const configured = profilePageAccess[profileName];
+      return Array.isArray(configured) && configured.length ? configured : ['debate', 'labels', 'dashboard'];
+    }
+
+    function applyProfileNavigation(profileName) {
+      const allowed = new Set(getAllowedPages(profileName));
+
+      document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+        const isAllowed = allowed.has(item.dataset.page);
+        item.style.display = isAllowed ? '' : 'none';
+      });
+
+      document.querySelectorAll('.bottom-nav-item[data-page]').forEach((item) => {
+        const isAllowed = allowed.has(item.dataset.page);
+        item.style.display = isAllowed ? '' : 'none';
+      });
+
+      const currentPage = document.querySelector('.page.active')?.id?.replace('page-', '');
+      if (!currentPage || !allowed.has(currentPage)) {
+        const fallbackPage = getAllowedPages(profileName)[0] || 'dashboard';
+        setActiveTab(fallbackPage);
+      }
+    }
+  
+    function selectProfile(profileName) {
+      selectedProfile = profileName;
+      profileCards.forEach((card) => card.classList.toggle('active', card.dataset.profile === profileName));
+      if (authPrompt) authPrompt.textContent = `PASSWORD FOR ${profileName.toUpperCase()}`;
+      if (authForm) authForm.classList.add('visible');
+      if (authMsg) authMsg.textContent = '';
+      if (profilePassword) {
+        profilePassword.value = '';
+        profilePassword.focus();
+      }
+    }
+
+
+    function resetProfileSelection() {
+      selectedProfile = '';
+      activeProfile = '';
+      profileCards.forEach((card) => card.classList.remove('active'));
+      if (authPrompt) authPrompt.textContent = 'PASSWORD';
+      if (authForm) authForm.classList.remove('visible');
+      if (authMsg) authMsg.textContent = '';
+      if (profilePassword) profilePassword.value = '';
+    }
+
+    async function logoutProfile() {
+      try {
+        await fetch('/api/profile-logout', { method: 'POST' });
+      } catch (_) {
+        // ignore and continue with local logout state
+      }
+      resetProfileSelection();
+      lockApp();
+    }
+  
+    async function restoreProfileSession() {
+      try {
+        const resp = await fetch('/api/profile-session');
+        const out = await resp.json().catch(() => ({}));
+        if (resp.ok && out?.ok) {
+          activeProfile = out.profile || '';
+          applyProfileNavigation(activeProfile);
+          unlockApp();
+          return true;
+        }
+      } catch (_) {
+        // noop: user will sign in manually
+      }
+      lockApp();
+      return false;
+    }
+
+    profileCards.forEach((card) => {
+      card.addEventListener('click', () => selectProfile(card.dataset.profile || ''));
+    });
+
+    authForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!selectedProfile) {
+        authMsg.textContent = 'Please choose a profile first.';
+        return;
+      }
+      authMsg.textContent = 'Signing in…';
+      try {
+        const resp = await fetch('/api/profile-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profile: selectedProfile, password: profilePassword.value })
+        });
+        const out = await resp.json().catch(() => ({}));
+        if (!resp.ok || !out?.ok) throw new Error(out?.error || 'Invalid password');
+        activeProfile = out.profile || selectedProfile;
+        applyProfileNavigation(activeProfile);  
+        unlockApp();
+      } catch (err) {
+        authMsg.textContent = err.message || 'Sign-in failed';
+      }
+    });
+
+    lockApp();
+    restoreProfileSession();
+  
+    // ─── THEME ───
+    const html = document.documentElement;
+
+    function getTimeBasedTheme() {
+      const hour = new Date().getHours();
+      return (hour >= 6 && hour < 19) ? 'light' : 'dark';
+    }
+
+    function applyTheme(theme) {
+      html.dataset.theme = theme;
+    }
+
+    function toggleTheme() {
+      const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+      localStorage.setItem('theme-override', next);
+      localStorage.setItem('theme-override-ts', Date.now().toString());
+    }
+
+    const savedOverride = localStorage.getItem('theme-override');
+    const savedOverrideTs = parseInt(localStorage.getItem('theme-override-ts') || '0', 10);
+    const overrideAge = Date.now() - savedOverrideTs;
+    const OVERRIDE_TTL = 2 * 60 * 60 * 1000;
+
+    if (savedOverride && overrideAge < OVERRIDE_TTL) {
+      applyTheme(savedOverride);
+    } else {
+      localStorage.removeItem('theme-override');
+      localStorage.removeItem('theme-override-ts');
+      applyTheme(getTimeBasedTheme());
+    }
+
+    setInterval(() => {
+      const activeOverride = localStorage.getItem('theme-override');
+      const ts = parseInt(localStorage.getItem('theme-override-ts') || '0', 10);
+      if (activeOverride && (Date.now() - ts) < OVERRIDE_TTL) return;
+      applyTheme(getTimeBasedTheme());
+    }, 60_000);
+
+    document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+    document.getElementById('themeToggleNav').addEventListener('click', toggleTheme);
+    document.getElementById('logoutNav')?.addEventListener('click', logoutProfile);
+    
+    // ─── NAV ───
+    const navItems = document.querySelectorAll('.nav-item[data-page]');
+    const pages = document.querySelectorAll('.page');
+    const topbarTitle = document.getElementById('topbar-title');
+    const topbarSub = document.getElementById('topbar-sub');
+
+    const pageInfo = {
+      debate: { title: 'AI Agent Debate', sub: 'Multi-agent reasoning with Gemini · Llama · Gemma' },
+      labels: { title: 'Shipping Labels', sub: 'Fetch from Odoo · Edit addresses · Generate PDF labels' },
+      dashboard: { title: 'Order Dashboard', sub: 'SmartHandicrafts® — Browse and manage all Sales Orders' }
+    };
+
+    function setPage(name) {
+      navItems.forEach(n => n.classList.toggle('active', n.dataset.page === name));
+      pages.forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
+      if (pageInfo[name]) {
+        topbarTitle.textContent = pageInfo[name].title;
+        topbarSub.textContent = pageInfo[name].sub;
+      }
+    }
+
+    navItems.forEach(n => n.addEventListener('click', () => setPage(n.dataset.page)));
+
+    // ─── MOBILE NAV ───
+    const mobileNavToggle = document.getElementById('mobileNavToggle');
+    const sidebar = document.querySelector('.sidebar');
+    const sidebarOverlay = document.getElementById('sidebarOverlay');
+    const bottomNav = document.getElementById('bottomNav');
+    const bottomNavItems = bottomNav ? bottomNav.querySelectorAll('.bottom-nav-item') : [];
+
+    function openSidebar() {
+      sidebar.classList.add('open');
+      sidebarOverlay.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSidebar() {
+      sidebar.classList.remove('open');
+      sidebarOverlay.classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    mobileNavToggle?.addEventListener('click', () => {
+      sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+    });
+
+    sidebarOverlay?.addEventListener('click', closeSidebar);
+
+    navItems.forEach(n => n.addEventListener('click', () => {
+      if (window.innerWidth <= 768) closeSidebar();
+    }));
+
+    function syncBottomNav(name) {
+      bottomNavItems.forEach(b => b.classList.toggle('active', b.dataset.page === name));
+    }
+
+    bottomNavItems.forEach(b => b.addEventListener('click', () => {
+      setPage(b.dataset.page);
+      syncBottomNav(b.dataset.page);
+    }));
+
+    navItems.forEach(n => {
+      n.replaceWith(n.cloneNode(true));
+    });
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => {
+      n.addEventListener('click', () => {
+        setPage(n.dataset.page);
+        syncBottomNav(n.dataset.page);
+        if (window.innerWidth <= 768) closeSidebar();
+      });
+    });
+
+    function setActiveTab(name) {
+      setPage(name);
+      syncBottomNav(name);
+    }
+
+    // ─── UTILS ───
+    function esc(s) {
+      return (s || '').replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;' }[m]));
+    }
+
+    function money(v) {
+      if (v == null) return '-';
+      try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(Number(v)); }
+      catch { return String(v); }
+    }
+
+    function fmtAddr(ship) {
+      if (!ship) return '-';
+      return [ship.line1, ship.line2, [ship.city, ship.state, ship.pin].filter(Boolean).join(', '), ship.country].filter(Boolean).join(', ');
+    }
+
+    // ─── DEBATE ───
+    const runBtn = document.getElementById('runBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const promptEl = document.getElementById('prompt');
+    const roundsEl = document.getElementById('rounds');
+    const showDebateEl = document.getElementById('showDebate');
+    const statusText = document.getElementById('statusText');
+    const dot = document.getElementById('dot');
+    const grid = document.getElementById('grid');
+    const finalBox = document.getElementById('finalBox');
+    const finalText = document.getElementById('finalText');
+
+    const feeds = { Gemini: document.getElementById('feed-gemini'), Llama: document.getElementById('feed-llama'), Gemma: document.getElementById('feed-gemma') };
+    const thinking = { Gemini: document.getElementById('think-gemini'), Llama: document.getElementById('think-llama'), Gemma: document.getElementById('think-gemma') };
+
+    let abortController = null;
+
+    function setStatus(msg, spinning = false) {
+      statusText.textContent = msg || '';
+      dot.style.display = spinning ? 'inline-block' : 'none';
+    }
+
+    function showThinking(agentName) {
+      Object.values(thinking).forEach(x => x.style.display = 'none');
+      if (thinking[agentName]) thinking[agentName].style.display = 'flex';
+    }
+
+    function clearThinking() { Object.values(thinking).forEach(x => x.style.display = 'none'); }
+
+    function resetDebate() {
+      grid.style.display = 'none';
+      finalBox.style.display = 'none';
+      finalText.textContent = '';
+      Object.values(feeds).forEach(f => f.innerHTML = '');
+      clearThinking();
+      setStatus('Ready.', false);
+    }
+
+    function addBubble(agent, content, time) {
+      if (!feeds[agent]) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'bubble';
+      const t = time ? new Date(time).toLocaleString() : '';
+      wrap.innerHTML = `<div class="bubble-meta"><span>${esc(agent)}</span><span>${esc(t)}</span></div><div>${esc(content)}</div>`;
+      feeds[agent].appendChild(wrap);
+      feeds[agent].scrollTop = feeds[agent].scrollHeight;
+    }
+
+    clearBtn.addEventListener('click', () => { promptEl.value = ''; resetDebate(); });
+    stopBtn.addEventListener('click', () => { if (abortController) abortController.abort(); });
+
+    runBtn.addEventListener('click', async () => {
+      const prompt = promptEl.value.trim();
+      const rounds = Number(roundsEl.value || 1);
+      const showDebate = !!showDebateEl.checked;
+      if (!prompt) return alert('Please enter a prompt.');
+      resetDebate();
+      runBtn.disabled = true;
+      stopBtn.disabled = false;
+      abortController = new AbortController();
+      setStatus('Starting debate…', true);
+      grid.style.display = showDebate ? 'grid' : 'none';
+
+      try {
+        const resp = await fetch('/api/debate-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, rounds, showDebate }),
+          signal: abortController.signal
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let msg;
+            try { msg = JSON.parse(line); } catch { continue; }
+            if (msg.type === 'status') { setStatus(msg.message || 'Working…', true); const name = (msg.message || '').replace('Thinking...', '').trim(); if (name) showThinking(name); }
+            if (msg.type === 'turn') { clearThinking(); if (showDebate) addBubble(msg.agent, msg.content || '', msg.time); }
+            if (msg.type === 'final') { clearThinking(); finalBox.style.display = 'block'; finalText.textContent = msg.content || ''; setStatus('Done.', false); }
+            if (msg.type === 'error') { clearThinking(); setStatus('Error: ' + (msg.message || 'Unknown'), false); }
+            if (msg.type === 'done') { clearThinking(); setStatus('Done.', false); }
+          }
+        }
+      } catch (e) {
+        setStatus(e.name === 'AbortError' ? 'Stopped.' : 'Error: ' + e.message, false);
+      } finally {
+        runBtn.disabled = false;
+        stopBtn.disabled = true;
+        abortController = null;
+      }
+    });
+    // ─── PRODUCT BOT (FLOATING WIDGET) ───
+    const botLauncher = document.getElementById('botLauncher');
+    const botWidget = document.getElementById('botWidget');
+    const botCloseBtn = document.getElementById('botCloseBtn');
+    const botMessages = document.getElementById('botMessages');
+    const botPrompt = document.getElementById('botPrompt');
+    const botSendBtn = document.getElementById('botSendBtn');
+    const botClearBtn = document.getElementById('botClearBtn');
+    const botStatus = document.getElementById('botStatus');
+    let botHistory = [];
+
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({ breaks: true, gfm: true });
+    }
+
+    const modeLabelMap = {
+      simple_chatbot: 'Simple website chatbot',
+      b2b_sales_assistant: 'Advanced B2B sales assistant',
+      compliance_assistant: 'Export-grade compliance assistant',
+      sales_automation: 'Full AI sales automation system',
+      odoo_operations: 'Odoo operations assistant'
+    };
+
+    function renderMarkdown(text) {
+      if (typeof marked === 'undefined') return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const raw = marked.parse(String(text || ''));
+      return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(raw) : raw;
+    }
+
+    function addBotMessage(role, text, chips = []) {
+      const existing = botMessages.querySelector('.bot-typing');
+      if (existing) existing.remove();
+
+      const el = document.createElement('div');
+      el.className = `bot-msg ${role}`;
+      if (role === 'assistant') {
+        el.innerHTML = renderMarkdown(text);
+      } else {
+        el.textContent = text;
+      }
+      botMessages.appendChild(el);
+
+      if (chips.length && role === 'assistant') {
+        const chipRow = document.createElement('div');
+        chipRow.className = 'bot-chips';
+        chips.forEach(chip => {
+          const btn = document.createElement('button');
+          btn.className = 'bot-chip';
+          btn.textContent = chip;
+          btn.addEventListener('click', () => {
+            botPrompt.value = chip;
+            sendBotMessage();
+          });
+          chipRow.appendChild(btn);
+        });
+        botMessages.appendChild(chipRow);
+      }
+
+      botMessages.scrollTop = botMessages.scrollHeight;
+    }
+
+    function showTypingIndicator() {
+      const existing = botMessages.querySelector('.bot-typing');
+      if (existing) return;
+      const el = document.createElement('div');
+      el.className = 'bot-typing';
+      el.innerHTML = '<span></span><span></span><span></span>';
+      botMessages.appendChild(el);
+      botMessages.scrollTop = botMessages.scrollHeight;
+    }
+
+    function deriveChips(out) {
+      const chips = [];
+      const intent = out?.odoo_result?.intent || '';
+      const mode = out?.mode || '';
+      if (intent === 'lookup_customer_invoice' || intent === 'list_unpaid_invoices') {
+        chips.push('Show unpaid invoices', 'Find customer');
+      } else if (intent === 'lookup_sale_order') {
+        chips.push('Show recent orders', 'Find customer');
+      } else if (mode === 'odoo_operations') {
+        chips.push('List recent orders', 'Show unpaid invoices', 'Check stock');
+      } else if (mode === 'b2b_sales_assistant' || mode === 'sales_automation') {
+        chips.push('Tell me about your products', 'Request a quote');
+      }
+      return chips.slice(0, 3);
+    }
+
+    async function sendBotMessage() {
+      const msg = (botPrompt.value || '').trim();
+      if (!msg) return;
+      botPrompt.value = '';
+      addBotMessage('user', msg);
+      botHistory.push({ role: 'user', content: msg });
+      showTypingIndicator();
+      botStatus.textContent = 'Thinking…';
+
+      try {
+        const resp = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, history: botHistory.slice(-20) })
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const reply = out.reply || out.message || JSON.stringify(out);
+        const chips = deriveChips(out);
+        addBotMessage('assistant', reply, chips);
+        botHistory.push({ role: 'assistant', content: reply });
+        botStatus.textContent = out.mode ? `Mode: ${modeLabelMap[out.mode] || out.mode}` : 'Ready. Auto mode is on.';
+      } catch (e) {
+        addBotMessage('assistant', 'Error: ' + e.message);
+        botStatus.textContent = 'Error occurred.';
+      }
+    }
+
+    botLauncher?.addEventListener('click', () => {
+      botWidget.classList.toggle('open');
+    });
+
+    botCloseBtn?.addEventListener('click', () => {
+      botWidget.classList.remove('open');
+    });
+
+    botSendBtn?.addEventListener('click', sendBotMessage);
+
+    botPrompt?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBotMessage();
+      }
+    });
+
+    botClearBtn?.addEventListener('click', () => {
+      botHistory = [];
+      botMessages.innerHTML = '<div class="bot-msg assistant">Hi! I can answer questions from your company product knowledge base.</div>';
+      botStatus.textContent = 'Ready. Auto mode is on.';
+    });
+
+    // ─── LABELS ───
+    const soRefEl = document.getElementById('soRef');
+    const btnFetchSO = document.getElementById('btnFetchSO');
+    const btnAddOrder = document.getElementById('btnAddOrder');
+    const btnGenerateLabel = document.getElementById('btnGenerateLabel');
+    const shipFromSelect = document.getElementById('shipFromSelect');
+    const labelStatus = document.getElementById('labelStatus');
+    const labelDot = document.getElementById('labelDot');
+    const labelsTbody = document.getElementById('labelsTbody');
+    const bigBoxToggle = document.getElementById('bigBoxToggle');
+    const ordersListEl = document.getElementById('ordersList');
+    const previewEmpty = document.getElementById('previewEmpty');
+    const previewBody = document.getElementById('previewBody');
+    const soPreviewRaw = document.getElementById('soPreview');
+    const pvRef = document.getElementById('pvRef'), pvState = document.getElementById('pvState'),
+          pvDate = document.getElementById('pvDate'), pvTotal = document.getElementById('pvTotal'),
+          pvPayment = document.getElementById('pvPayment'), pvShippingMethod = document.getElementById('pvShippingMethod'),
+          pvName = document.getElementById('pvName'), pvPhone = document.getElementById('pvPhone'),
+          pvEmail = document.getElementById('pvEmail'), pvAddr = document.getElementById('pvAddr'),
+          pvBillName = document.getElementById('pvBillName'), pvBillPhone = document.getElementById('pvBillPhone'),
+          pvBillAddr = document.getElementById('pvBillAddr'), pvBillVat = document.getElementById('pvBillVat'),
+          pvNote = document.getElementById('pvNote'), pvNoteToggle = document.getElementById('pvNoteToggle'), pvPickings = document.getElementById('pvPickings'),
+          pvFulfillment = document.getElementById('pvFulfillment'), pvItems = document.getElementById('pvItems');
+    const btnOpenEditor = document.getElementById('btnOpenEditor');
+    const btnInvoicePdf = document.getElementById('btnInvoicePdf'), btnPackingPdf = document.getElementById('btnPackingPdf');
+    const btnProformaPdf = document.getElementById('btnProformaPdf'), btnLoadPickings = document.getElementById('btnLoadPickings');
+    const btnLoadFulfillment = document.getElementById('btnLoadFulfillment');
+    const dashQuery = document.getElementById('dashQuery'), dashState = document.getElementById('dashState');
+    const dashDeliveryState = document.getElementById('dashDeliveryState'), dashPaymentState = document.getElementById('dashPaymentState');
+    const dashInvoiceState = document.getElementById('dashInvoiceState'), dashMoveState = document.getElementById('dashMoveState');
+    const dashType = document.getElementById('dashType'), dashTabBar = document.getElementById('dashTabBar');
+    const btnDashSearch = document.getElementById('btnDashSearch'), dashTbody = document.getElementById('dashTbody');
+    const dashThead = document.getElementById('dashThead');  
+    const editModalBack = document.getElementById('editModalBack'), closeEditModal = document.getElementById('closeEditModal');
+    const saveEdits = document.getElementById('saveEdits'), resetEdits = document.getElementById('resetEdits');
+    const docModalBack = document.getElementById('docModalBack'), closeDocModal = document.getElementById('closeDocModal');
+    const docModalTitle = document.getElementById('docModalTitle'), docModalSub = document.getElementById('docModalSub');
+    const docModalDownload = document.getElementById('docModalDownload'), docModalFrame = document.getElementById('docModalFrame');    
+    const edShipName = document.getElementById('edShipName'), edShipPhone = document.getElementById('edShipPhone'),
+          edShipL1 = document.getElementById('edShipL1'), edShipL2 = document.getElementById('edShipL2'),
+          edShipCity = document.getElementById('edShipCity'), edShipState = document.getElementById('edShipState'),
+          edShipPin = document.getElementById('edShipPin'), edShipCountry = document.getElementById('edShipCountry');
+    const edFromName = document.getElementById('edFromName'), edFromPhone = document.getElementById('edFromPhone'),
+          edFromL1 = document.getElementById('edFromL1'), edFromL2 = document.getElementById('edFromL2'),
+          edFromCity = document.getElementById('edFromCity'), edFromState = document.getElementById('edFromState'),
+          edFromPin = document.getElementById('edFromPin'), edFromCountry = document.getElementById('edFromCountry');
+
+    let loadedSaleOrder = null, singleOrderOverrides = null, selectedOrderKey = null, orders = [], shipFromOptions = [];
+
+    async function loadShipFromOptions() {
+      try {
+        const resp = await fetch('/api/odoo/ship-from-options');
+        if (!resp.ok) return;
+        const out = await resp.json();
+        shipFromOptions = out.options || [];
+        shipFromSelect.innerHTML = `<option value="">Default (env)</option>` + shipFromOptions.map((o, i) => `<option value="${i}">${esc(o.label || `Warehouse ${i+1}`)}</option>`).join('');
+      } catch {}
+    }
+
+    function setLabelStatus(msg, spinning = false) {
+      labelStatus.textContent = msg || '';
+      labelDot.style.display = spinning ? 'inline-block' : 'none';
+    }
+
+    function applyOverridesToPreview(preview, overrides) {
+      if (!overrides) return preview;
+      const out = JSON.parse(JSON.stringify(preview));
+      out.ship_to = { ...(out.ship_to || {}), ...(overrides.ship_to || {}) };
+      out.from = { ...(out.from || {}), ...(overrides.from || {}) };
+      return out;
+    }
+
+    function getOrderId(order) {
+      return order?.sale_order_id || order?.preview?.id || order?.id || null;
+    }
+
+    function cleanPreviewNote(rawNote) {
+      const source = String(rawNote || '').trim();
+      if (!source) return '-';
+      const withBreaks = source
+        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+        .replace(/<\s*\/\s*div\s*>/gi, '\n')
+        .replace(/<\s*div[^>]*>/gi, '');
+      const decoded = new DOMParser().parseFromString(withBreaks, 'text/html').documentElement.textContent || withBreaks;
+      const normalized = decoded
+        .replace(/\r\n?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .split('\n')
+        .map(line => line.trim())
+        .join('\n')
+        .trim();
+      return normalized || '-';
+    }
+
+    function renderPreviewNote(noteValue) {
+      pvNote.textContent = cleanPreviewNote(noteValue);
+      pvNote.classList.add('is-collapsed');
+      pvNoteToggle.textContent = 'View more';
+      requestAnimationFrame(() => {
+        const hasOverflow = pvNote.scrollHeight > pvNote.clientHeight + 2;
+        pvNoteToggle.style.display = hasOverflow ? 'inline-block' : 'none';
+      });
+    }
+
+    function renderPreview(order) {
+      if (!order?.preview) {
+        previewEmpty.style.display = 'block';
+        previewBody.style.display = 'none';
+        btnOpenEditor.disabled = true;
+        [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = true);
+        return;
+      }
+      const p = applyOverridesToPreview(order.preview, order.overrides);
+      loadedSaleOrder = { ref: order.ref || p.ref, sale_order_id: getOrderId(order), preview: order.preview, overrides: order.overrides || null };
+      previewEmpty.style.display = 'none';
+      previewBody.style.display = 'block';
+      btnOpenEditor.disabled = false;
+      [btnInvoicePdf, btnPackingPdf, btnProformaPdf, btnLoadPickings, btnLoadFulfillment].forEach(b => b.disabled = false);
+      pvRef.textContent = p.ref || '-';
+      pvState.textContent = p.state || '-';
+      pvDate.textContent = p.date_order ? new Date(p.date_order).toLocaleString() : '-';
+      pvTotal.textContent = money(p.amount_total);
+      pvPayment.textContent = p.payment_status || p.invoice_status || '-';
+      pvShippingMethod.textContent = p.shipping_method || '-';
+      pvName.textContent = p.ship_to?.name || '-';
+      pvPhone.textContent = p.ship_to?.phone || '-';
+      pvEmail.textContent = p.ship_to?.email || '-';
+      pvAddr.textContent = fmtAddr(p.ship_to) || '-';
+      pvBillName.textContent = p.bill_to?.name || '-';
+      pvBillPhone.textContent = p.bill_to?.phone || '-';
+      pvBillAddr.textContent = fmtAddr(p.bill_to) || '-';
+      pvBillVat.textContent = p.bill_to?.vat || '-';
+      renderPreviewNote(p.note);
+      const items = p.items || [];
+      pvItems.innerHTML = !items.length
+        ? `<div class="item-row" style="color:var(--text-tertiary)">No items found.</div>`
+        : items.map(it => `<div class="item-row"><div style="flex:1">${esc(it.name || it.product_name || '')}</div><div class="qty-pill">Qty: ${esc(String(it.qty ?? ''))}</div></div>`).join('');
+      pvPickings.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Click "Deliveries" to load.</div>`;
+      pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Click "Fulfillment" to load stock status.</div>`;
+      soPreviewRaw.textContent = JSON.stringify(p, null, 2);
+    }
+
+    pvNoteToggle.addEventListener('click', () => {
+      const collapsed = pvNote.classList.toggle('is-collapsed');
+      pvNoteToggle.textContent = collapsed ? 'View more' : 'View less';
+    });
+
+    async function fetchSO(ref) {
+      const resp = await fetch(`/api/odoo/sale-order?ref=${encodeURIComponent(ref)}`);
+      if (!resp.ok) throw new Error(await resp.text());
+      return await resp.json();
+    }
+
+    function renderOrders() {
+      if (orders.length === 0) {
+        ordersListEl.innerHTML = `<div class="empty-state" style="padding:16px"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><div>No orders added yet.</div></div>`;
+        btnGenerateLabel.disabled = !loadedSaleOrder;
+        return;
+      }
+      ordersListEl.innerHTML = orders.map((o, idx) => {
+        const active = o.ref === selectedOrderKey;
+        return `<div class="order-chip${active ? ' selected' : ''}" >
+          <div>
+            <div class="order-chip-ref">${esc(o.ref)}</div>
+            <div class="order-chip-meta">SO ID: ${esc(String(o.sale_order_id || '-'))} ${o.overrides ? '<span class="override-tag">✓ Overrides saved</span>' : ''}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button class="btn btn-sm" data-select="${idx}">${active ? 'Selected' : 'Select'}</button>
+            <button class="btn btn-sm btn-danger" data-remove="${idx}">Remove</button>
+          </div>
+        </div>`;
+      }).join('');
+
+      ordersListEl.querySelectorAll('[data-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.getAttribute('data-remove'));
+          const removed = orders.splice(i, 1)[0];
+          if (removed?.ref === selectedOrderKey) selectedOrderKey = orders[0]?.ref || null;
+          renderOrders();
+          renderPreview(orders.find(x => x.ref === selectedOrderKey) || null);
+        });
+      });
+
+      ordersListEl.querySelectorAll('[data-select]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.getAttribute('data-select'));
+          selectedOrderKey = orders[i].ref;
+          renderOrders();
+          renderPreview(orders[i]);
+        });
+      });
+
+      btnGenerateLabel.disabled = false;
+    }
+
+    function renderLabels(labels) {
+      if (!labels || labels.length === 0) {
+        labelsTbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-tertiary)">No labels yet.</td></tr>`;
+        return;
+      }
+      labelsTbody.innerHTML = labels.map(l => `
+        <tr>
+          <td>${esc(l.sale_order_ref || l.id || '-')}</td>
+          <td>${esc(l.carrier || '-')}</td>
+          <td>${l.created_at ? esc(new Date(l.created_at).toLocaleString()) : '-'}</td>
+          <td>${l.label_url ? `<a href="${esc(l.label_url)}" target="_blank">PDF ↗</a>` : '<span style="color:var(--text-tertiary)">-</span>'}</td>
+        </tr>`).join('');
+    }
+
+    async function refreshLabelsTable() {
+      try { const lab = await fetch('/api/labels'); renderLabels(lab.ok ? await lab.json() : []); }
+      catch { renderLabels([]); }
+    }
+
+    btnFetchSO?.addEventListener('click', async () => {
+      const ref = (soRefEl.value || '').trim();
+      if (!ref) return alert('Enter Sales Order reference (e.g. S00241)');
+      setLabelStatus('Fetching Sales Order from Odoo…', true);
+      try {
+        const data = await fetchSO(ref);
+        singleOrderOverrides = null;
+        selectedOrderKey = data.ref;
+        renderPreview({ ref: data.ref, sale_order_id: data.id, preview: data, overrides: null });
+        setLabelStatus('Sales Order loaded. You can Edit Label or Add Order.', false);
+        btnGenerateLabel.disabled = false;
+        await refreshLabelsTable();
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); renderPreview(null); }
+    });
+
+    btnAddOrder?.addEventListener('click', async () => {
+      const ref = (soRefEl.value || '').trim();
+      if (!ref) return alert('Enter Sales Order reference then click Add Order');
+      if (orders.find(o => o.ref === ref)) return alert('This order is already added.');
+      if (orders.length >= 4) return alert('Max 4 orders per page. Remove one or generate another PDF.');
+      setLabelStatus('Adding order…', true);
+      try {
+        const so = await fetchSO(ref);
+        orders.push({ ref: so.ref, sale_order_id: so.id, preview: so, overrides: null });
+        selectedOrderKey = so.ref;
+        renderOrders();
+        renderPreview(orders[orders.length - 1]);
+        setLabelStatus(`Added ${so.ref}.`, false);
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); }
+    });
+
+    function getActiveOrderPayload(order) {
+      return { ref: order.ref, overrides: order.overrides || undefined };
+    }
+  
+    btnGenerateLabel?.addEventListener('click', async () => {
+      const bigBox = !!bigBoxToggle?.checked;
+      const layout = bigBox ? 'FULL' : 'AUTO';
+      setLabelStatus('Generating label PDF…', true);
+      btnGenerateLabel.disabled = true;
+      try {
+        let resp, out;
+        if (orders.length > 0) {
+          resp = await fetch('/api/labels/generate-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orders: orders.map(getActiveOrderPayload), layout }) });
+          if (!resp.ok) throw new Error(await resp.text());
+          out = await resp.json();
+        } else {
+          const saleOrderId = getOrderId(loadedSaleOrder);
+          if (!saleOrderId) throw new Error('Fetch an order or add orders first.');
+          resp = await fetch('/api/labels/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sale_order_id: saleOrderId, overrides: singleOrderOverrides || undefined, layout }) });
+          if (!resp.ok) throw new Error(await resp.text());
+          out = await resp.json();
+        }
+        setLabelStatus('Label PDF created ✅', false);
+        btnGenerateLabel.disabled = false;
+        await refreshLabelsTable();
+        if (out?.label_url) window.open(out.label_url, '_blank');
+      } catch (e) { setLabelStatus('Error: ' + e.message, false); btnGenerateLabel.disabled = false; }
+    });
+
+    function openModal() { editModalBack.classList.add('open'); }
+    function closeModal() { editModalBack.classList.remove('open'); }
+
+    function openDocModal({ title, subtitle, pdfUrl }) {
+      if (!pdfUrl) return;
+      if (docModalTitle) docModalTitle.textContent = title || 'Document Preview';
+      if (docModalSub) docModalSub.textContent = subtitle || 'View and download document PDF.';
+      if (docModalDownload) docModalDownload.href = pdfUrl;
+      if (docModalFrame) docModalFrame.src = pdfUrl;
+      docModalBack?.classList.add('open');
+    }
+
+    function closeDocPreviewModal() {
+      docModalBack?.classList.remove('open');
+      if (docModalFrame) docModalFrame.src = 'about:blank';
+      if (docModalDownload) docModalDownload.href = '#';
+    }
+
+    function buildDashboardDocUrl(docType, docId) {
+      return `/api/odoo/dashboard-document/${encodeURIComponent(docType)}/${encodeURIComponent(String(docId || ''))}/pdf`;
+    }
+
+    function attachDashboardDocActions() {
+      dashTbody.querySelectorAll('[data-doc-view]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const docType = el.getAttribute('data-doc-type') || '';
+          const docId = el.getAttribute('data-doc-id') || '';
+          const docRef = el.getAttribute('data-doc-ref') || '';
+          if (!docType || !docId) return;
+          const docLabel = docType === 'sale_order' ? 'Sales Order' : docType === 'invoice' ? 'Invoice' : 'Delivery Out Order';
+          const pdfUrl = buildDashboardDocUrl(docType, docId);
+          openDocModal({ title: `${docLabel} ${docRef || ''}`.trim(), subtitle: `${docLabel} PDF preview`, pdfUrl });
+        });
+      });
+      dashTbody.querySelectorAll('[data-doc-download]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const docType = el.getAttribute('data-doc-type') || '';
+          const docId = el.getAttribute('data-doc-id') || '';
+          if (!docType || !docId) return;
+          window.open(buildDashboardDocUrl(docType, docId), '_blank');
+        });
+      });
+    }
+    
+    function getSelectedOrder() {
+      if (orders.length > 0) return orders.find(o => o.ref === selectedOrderKey) || orders[0];
+      if (loadedSaleOrder?.ref) return { ref: loadedSaleOrder.ref, sale_order_id: getOrderId(loadedSaleOrder), preview: loadedSaleOrder.preview, overrides: singleOrderOverrides };
+      return null;
+    }
+
+    function fillEditorFromOrder(order) {
+      const base = order?.preview || {};
+      const ship = { ...(base.ship_to || {}), ...((order?.overrides?.ship_to) || {}) };
+      const from = { ...(base.from || {}), ...((order?.overrides?.from) || {}) };
+      edShipName.value = ship.name || ''; edShipPhone.value = ship.phone || '';
+      edShipL1.value = ship.line1 || ''; edShipL2.value = ship.line2 || '';
+      edShipCity.value = ship.city || ''; edShipState.value = ship.state || '';
+      edShipPin.value = ship.pin || ''; edShipCountry.value = ship.country || '';
+      edFromName.value = from.name || ''; edFromPhone.value = from.phone || '';
+      edFromL1.value = from.line1 || ''; edFromL2.value = from.line2 || '';
+      edFromCity.value = from.city || ''; edFromState.value = from.state || '';
+      edFromPin.value = from.pin || ''; edFromCountry.value = from.country || '';
+    }
+
+    function readEditorOverrides() {
+      const clean = (v) => (v || '').trim();
+      return {
+        ship_to: { name: clean(edShipName.value), phone: clean(edShipPhone.value), line1: clean(edShipL1.value), line2: clean(edShipL2.value), city: clean(edShipCity.value), state: clean(edShipState.value), pin: clean(edShipPin.value), country: clean(edShipCountry.value) },
+        from: { name: clean(edFromName.value), phone: clean(edFromPhone.value), line1: clean(edFromL1.value), line2: clean(edFromL2.value), city: clean(edFromCity.value), state: clean(edFromState.value), pin: clean(edFromPin.value), country: clean(edFromCountry.value) }
+      };
+    }
+
+    btnOpenEditor?.addEventListener('click', () => {
+      const order = getSelectedOrder();
+      if (!order) return alert('Fetch or add an order first.');
+      fillEditorFromOrder(order);
+      openModal();
+    });
+
+    closeEditModal?.addEventListener('click', closeModal);
+    editModalBack?.addEventListener('click', (e) => { if (e.target === editModalBack) closeModal(); });
+    closeDocModal?.addEventListener('click', closeDocPreviewModal);
+    docModalBack?.addEventListener('click', (e) => { if (e.target === docModalBack) closeDocPreviewModal(); });
+
+    resetEdits?.addEventListener('click', () => {
+      const order = getSelectedOrder();
+      if (!order) return;
+      const base = order.preview || {};
+      const ship = base.ship_to || {}, from = base.from || {};
+      edShipName.value = ship.name || ''; edShipPhone.value = ship.phone || '';
+      edShipL1.value = ship.line1 || ''; edShipL2.value = ship.line2 || '';
+      edShipCity.value = ship.city || ''; edShipState.value = ship.state || '';
+      edShipPin.value = ship.pin || ''; edShipCountry.value = ship.country || '';
+      edFromName.value = from.name || ''; edFromPhone.value = from.phone || '';
+      edFromL1.value = from.line1 || ''; edFromL2.value = from.line2 || '';
+      edFromCity.value = from.city || ''; edFromState.value = from.state || '';
+      edFromPin.value = from.pin || ''; edFromCountry.value = from.country || '';
+    });
+
+    saveEdits?.addEventListener('click', () => {
+      const order = getSelectedOrder();
+      if (!order) return;
+      const overrides = readEditorOverrides();
+      const prune = (obj) => { const out = {}; Object.keys(obj).forEach(k => { if (obj[k]) out[k] = obj[k]; }); return out; };
+      const pruned = { ship_to: prune(overrides.ship_to), from: prune(overrides.from) };
+      const hasAny = Object.keys(pruned.ship_to).length || Object.keys(pruned.from).length;
+      if (orders.length > 0) {
+        const idx = orders.findIndex(o => o.ref === order.ref);
+        if (idx >= 0) { orders[idx].overrides = hasAny ? pruned : null; selectedOrderKey = orders[idx].ref; renderOrders(); renderPreview(orders[idx]); }
+      } else {
+        singleOrderOverrides = hasAny ? pruned : null;
+        renderPreview({ ref: order.ref, sale_order_id: order.sale_order_id, preview: order.preview, overrides: singleOrderOverrides });
+
+      }
+      closeModal();
+      setLabelStatus('Overrides saved for selected order ✅', false);
+    });
+
+    function openSOReport(type) {
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
+      const map = { invoice: `/api/odoo/sale-order/${saleOrderId}/invoice-pdf`, packing: `/api/odoo/sale-order/${saleOrderId}/packing-slip-pdf`, proforma: `/api/odoo/sale-order/${saleOrderId}/proforma-pdf` };
+
+      const url = map[type];
+      if (url) window.open(url, '_blank');
+    }
+
+    btnInvoicePdf?.addEventListener('click', () => openSOReport('invoice'));
+    btnPackingPdf?.addEventListener('click', () => openSOReport('packing'));
+    btnProformaPdf?.addEventListener('click', () => openSOReport('proforma'));
+
+    btnLoadPickings?.addEventListener('click', async () => {
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
+
+      pvPickings.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
+      try {
+        const resp = await fetch(`/api/odoo/sale-order/${saleOrderId}/pickings`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.pickings || [];
+        pvPickings.innerHTML = !rows.length
+          ? `<div class="item-row" style="color:var(--text-tertiary)">No delivery orders found.</div>`
+          : rows.map(r => `<div class="item-row"><div style="flex:1">${esc(r.name || '-')} · ${esc(r.state || '-')}</div><button class="btn btn-sm" data-validate-picking="${r.id}">Validate</button></div>`).join('');
+        pvPickings.querySelectorAll('[data-validate-picking]').forEach(el => {
+          el.addEventListener('click', async () => {
+            const vr = await fetch(`/api/odoo/picking/${el.getAttribute('data-validate-picking')}/validate`, { method: 'POST' });
+            alert(vr.ok ? 'Picking validated' : await vr.text());
+          });
+        });
+      } catch (e) { pvPickings.innerHTML = `<div class="item-row" style="color:var(--danger)">Error: ${esc(e.message)}</div>`; }
+    });
+
+    btnLoadFulfillment?.addEventListener('click', async () => {
+      const saleOrderId = getOrderId(loadedSaleOrder);
+      if (!saleOrderId) return;
+      pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--text-tertiary)">Loading…</div>`;
+      try {
+        const resp = await fetch(`/api/odoo/sale-order/${saleOrderId}/fulfillment`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.rows || [];
+        pvFulfillment.innerHTML = !rows.length
+          ? `<div class="item-row" style="color:var(--text-tertiary)">No fulfillment data.</div>`
+          : rows.map(r => `<div class="item-row"><div style="flex:1">${esc(r.product_name || '-')}</div><div class="qty-pill">Ord ${esc(String(r.ordered_qty))} / OnHand ${esc(String(r.on_hand_qty))} / Fcst ${esc(String(r.forecast_qty))}${r.backorder_warning ? ' ⚠️' : ''}</div></div>`).join('');
+      } catch (e) { pvFulfillment.innerHTML = `<div class="item-row" style="color:var(--danger)">Error: ${esc(e.message)}</div>`; }
+    });
+
+    // ─── DASHBOARD ───
+    const dashboardConfigs = {
+      sale_orders: {
+        queryPlaceholder: 'Search by SO ref or customer…',
+        headers: ['Ref', 'Customer', 'Date', 'Total', 'Status', 'Payment', 'Actions'],
+        emptyCols: 7,
+        setupFilters() {
+          dashState.innerHTML = `
+            <option value="">All States</option>
+            <option value="draft">Quotation</option>
+            <option value="sale">Sales Order</option>
+            <option value="done">Locked</option>`;
+          dashState.style.display = '';
+          dashDeliveryState.style.display = 'none';
+          dashPaymentState.style.display = 'none';
+          dashInvoiceState.style.display = 'none';
+          dashMoveState.style.display = 'none';
+          dashType.style.display = 'none';
+        },
+        buildUrl() {
+          const q = encodeURIComponent((dashQuery.value || '').trim());
+          const st = encodeURIComponent((dashState.value || '').trim());
+          return `/api/odoo/orders?query=${q}&state=${st}`;
+        },
+        renderRows(rows) {
+          return rows.map(r => `
+            <tr>
+              <td>${esc(r.ref || '-')}</td>
+              <td>${esc(r.customer || '-')}</td>
+              <td>${esc(r.date_order || '-')}</td>
+              <td>${esc(money(r.amount_total))}</td>
+              <td>${esc(r.state || '-')}</td>
+              <td>${esc(r.invoice_status || '-')}</td>
+              <td style="display:flex;gap:6px;flex-wrap:wrap">
+                ${canOpenSalesOrderFromDashboard() ? `<button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button>` : ''}
+                <button class="btn btn-sm" data-doc-view data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
+            </tr>`).join('');
+        },
+        attachActions() {
+          dashTbody.querySelectorAll('[data-open-so]').forEach(el => {
+            el.addEventListener('click', async () => {
+              soRefEl.value = el.getAttribute('data-open-so') || '';
+              setActiveTab('labels');
+              btnFetchSO.click();
+            });
+          });
+          attachDashboardDocActions();
+        }
+      },
+      invoices: {
+        queryPlaceholder: 'Search by invoice ref or customer…',
+        headers: ['Invoice', 'Customer', 'Invoice Date', 'Due Date', 'Total', 'Residual', 'Payment', 'Actions'],
+        emptyCols: 8,
+        setupFilters() {
+          dashPaymentState.innerHTML = `
+            <option value="">All Payments</option>
+            <option value="not_paid">Not Paid</option>
+            <option value="in_payment">In Payment</option>
+            <option value="paid">Paid</option>
+            <option value="partial">Partial</option>`;
+          dashMoveState.innerHTML = `
+            <option value="posted">Posted</option>
+            <option value="draft">Draft</option>
+            <option value="cancel">Cancelled</option>`;
+          dashState.style.display = 'none';
+          dashDeliveryState.style.display = 'none';
+          dashInvoiceState.style.display = 'none';
+          dashType.style.display = 'none';
+          dashPaymentState.style.display = '';
+          dashMoveState.style.display = '';
+        },
+        buildUrl() {
+          const q = encodeURIComponent((dashQuery.value || '').trim());
+          const paymentState = encodeURIComponent((dashPaymentState.value || '').trim());
+          const moveState = encodeURIComponent((dashMoveState.value || '').trim());
+          return `/api/odoo/invoices?query=${q}&payment_state=${paymentState}&move_state=${moveState}`;
+        },
+        renderRows(rows) {
+          return rows.map(r => `
+            <tr>
+              <td>${esc(r.ref || '-')}</td>
+              <td>${esc(r.customer || '-')}</td>
+              <td>${esc(r.invoice_date || '-')}</td>
+              <td>${esc(r.due_date || '-')}</td>
+              <td>${esc(money(r.amount_total))}</td>
+              <td>${esc(money(r.amount_residual))}</td>
+              <td>${esc(r.payment_state || '-')}</td>
+              <td style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn btn-sm" data-doc-view data-doc-type="invoice" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="invoice" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
+            </tr>`).join('');
+        },
+        attachActions() { attachDashboardDocActions(); }
+      },
+      delivery_orders: {
+        queryPlaceholder: 'Search by delivery ref, SO ref, or customer…',
+        headers: ['Delivery Ref', 'Sales Order', 'Customer', 'Scheduled', 'State', 'Type', 'Carrier', 'Actions'],
+        emptyCols: 8,
+        setupFilters() {
+          dashDeliveryState.innerHTML = `
+            <option value="">All States</option>
+            <option value="draft">Draft</option>
+            <option value="waiting">Waiting</option>
+            <option value="confirmed">Waiting Another Operation</option>
+            <option value="assigned">Ready</option>
+            <option value="done">Done</option>
+            <option value="cancel">Cancelled</option>`;
+          dashInvoiceState.innerHTML = `
+            <option value="out_invoice">Customer Invoice</option>
+            <option value="out_refund">Customer Credit Note</option>`;
+          dashState.style.display = 'none';
+          dashPaymentState.style.display = 'none';
+          dashMoveState.style.display = 'none';
+          dashInvoiceState.style.display = 'none';
+          dashDeliveryState.style.display = '';
+          dashType.style.display = '';
+        },
+        buildUrl() {
+          const q = encodeURIComponent((dashQuery.value || '').trim());
+          const state = encodeURIComponent((dashDeliveryState.value || '').trim());
+          const type = encodeURIComponent((dashType.value || '').trim());
+          return `/api/odoo/delivery-orders?query=${q}&state=${state}&type=${type}`;
+        },
+        renderRows(rows) {
+          return rows.map(r => `
+            <tr>
+              <td>${esc(r.ref || '-')}</td>
+              <td>${esc(r.sale_ref || '-')}</td>
+              <td>${esc(r.customer || '-')}</td>
+              <td>${esc(r.scheduled_date || '-')}</td>
+              <td>${esc(r.state || '-')}</td>
+              <td>${esc(r.picking_type || '-')}</td>
+              <td>${esc(r.carrier || '-')}</td>
+              <td style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn btn-sm" data-doc-view data-doc-type="delivery_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
+                <button class="btn btn-sm" data-doc-download data-doc-type="delivery_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
+              </td>
+            </tr>`).join('');
+        },
+        attachActions() { attachDashboardDocActions(); }
+      }
+    };
+
+    let currentDashboardTab = 'sale_orders';
+
+    function renderDashboardHeader() {
+      const cfg = dashboardConfigs[currentDashboardTab];
+      dashThead.innerHTML = `<tr>${cfg.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr>`;
+    }
+
+    function setDashboardTab(tab) {
+      currentDashboardTab = dashboardConfigs[tab] ? tab : 'sale_orders';
+      dashTabBar?.querySelectorAll('[data-dash-tab]').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-dash-tab') === currentDashboardTab);
+      });
+      const cfg = dashboardConfigs[currentDashboardTab];
+      dashQuery.placeholder = cfg.queryPlaceholder;
+      cfg.setupFilters();
+      renderDashboardHeader();
+      loadDashboard();
+    }
+
+    async function loadDashboard() {
+      const cfg = dashboardConfigs[currentDashboardTab] || dashboardConfigs.sale_orders;
+      dashTbody.innerHTML = `<tr><td colspan="${cfg.emptyCols}" style="text-align:center;padding:20px;color:var(--text-tertiary)">Loading…</td></tr>`;
+      try {
+        const resp = await fetch(cfg.buildUrl());
+        if (!resp.ok) throw new Error(await resp.text());
+        const out = await resp.json();
+        const rows = out.rows || [];
+        if (!rows.length) { dashTbody.innerHTML = `<tr><td colspan="${cfg.emptyCols}" style="text-align:center;padding:20px;color:var(--text-tertiary)">No rows.</td></tr>`; return; }
+        dashTbody.innerHTML = cfg.renderRows(rows);
+        cfg.attachActions?.();
+      } catch (e) { dashTbody.innerHTML = `<tr><td colspan="${cfg.emptyCols}" style="text-align:center;padding:20px;color:var(--danger)">Error: ${esc(e.message)}</td></tr>`; }
+    }
+
+    btnDashSearch?.addEventListener('click', loadDashboard);
+    dashTabBar?.querySelectorAll('[data-dash-tab]').forEach(btn => {
+      btn.addEventListener('click', () => setDashboardTab(btn.getAttribute('data-dash-tab') || 'sale_orders'));
+    });
+
+    shipFromSelect?.addEventListener('change', () => {
+      const idx = Number(shipFromSelect.value);
+      if (Number.isNaN(idx) || !shipFromOptions[idx]) return;
+      const from = shipFromOptions[idx].from || {};
+      if (orders.length > 0) {
+        const order = orders.find(o => o.ref === selectedOrderKey) || orders[0];
+        if (order) {
+          order.overrides = order.overrides || { ship_to: {}, from: {} };
+          order.overrides.from = { ...(order.overrides.from || {}), ...from };
+          renderOrders();
+          renderPreview(order);
+        }
+      }
+    });
+
+    // ─── INIT ───
+    renderOrders();
+    renderPreview(null);
+    refreshLabelsTable();
+    setDashboardTab('sale_orders');
+    loadShipFromOptions();
+  </script>
+</body>
+</html>
