@@ -2899,6 +2899,65 @@ function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
     .slice(0, 12);
 }
 
+function extractNumbersFromText(text) {
+  return Array.from(new Set(String(text || "").match(/\b\d{2,4}\b/g) || []));
+}
+
+function findLiveProductsByNumber(text, liveProducts = [], max = 8) {
+  const nums = extractNumbersFromText(text);
+  if (!nums.length) return [];
+
+  return (liveProducts || [])
+    .filter((p) => {
+      const haystack = [
+        p.name,
+        p.sku,
+        Array.isArray(p.variantSkus) ? p.variantSkus.join(" ") : "",
+        Array.isArray(p.variantNames) ? p.variantNames.join(" ") : "",
+        p.description
+      ].filter(Boolean).join(" ").toLowerCase();
+
+      return nums.some((num) => new RegExp(`(^|[^0-9])${num}([^0-9]|$)`).test(haystack));
+    })
+    .slice(0, max);
+}
+
+function hasLiveProductMention(text, liveProducts = []) {
+  const q = String(text || "").toLowerCase();
+
+  return (liveProducts || []).some((p) => {
+    const skus = [
+      p.sku,
+      ...(Array.isArray(p.variantSkus) ? p.variantSkus : [])
+    ].filter(Boolean).map((x) => String(x).toLowerCase());
+
+    if (skus.some((sku) => sku && q.includes(sku))) return true;
+
+    const name = String(p.name || "").toLowerCase();
+    if (name && name.length > 5 && q.includes(name)) return true;
+
+    return false;
+  });
+}
+
+function buildLiveProductCorrectionAnswer(question, liveMatches = []) {
+  if (!liveMatches.length) return "";
+
+  const lines = liveMatches.map((p) => {
+    const sku = p.sku || (Array.isArray(p.variantSkus) ? p.variantSkus[0] : "") || "";
+    return `${sku ? `${sku} - ` : ""}${p.name}${p.price ? ` (₹${p.price})` : ""}`;
+  });
+
+  return [
+    "You are right, this product is listed live on the website.",
+    "",
+    "I found:",
+    lines.join("\n"),
+    "",
+    "For 205 specifically, please check the exact SKU prefix. AS-U generally means USB-powered, while AS-B generally means battery/rechargeable. So if the live SKU is AS-U-205-LSD, treat it as a USB strip LED driver, not a rechargeable driver. If you want a rechargeable strip driver, we should verify whether the AS-B version is live."
+  ].join("\n");
+}
+
 function buildAvailableProductSummary(liveProducts = [], max = 12) {
   const rows = (liveProducts || [])
     .filter((p) => p.name)
@@ -2985,6 +3044,10 @@ function scoreLiveProductForKitAi(product, searchText) {
       if (sku && q.includes(String(sku).toLowerCase())) score += 30;
     }
   }
+
+  // strip driver exact 205 boost
+  if (/\b205\b/.test(q) && /205/.test(haystack)) score += 45;
+  if (/strip/.test(q) && /strip|lsd/.test(haystack)) score += 20;
 
   return score;
 }
@@ -3154,6 +3217,10 @@ Answer style:
 - Do not show alternatives unless the user asks for options.
 - Do not recommend duplicates already in the active kit.
 - Do not invent products. Recommend only live products from the provided live product list.
+- If user mentions a product number like 205, 204, 103, 201, or 202, match it against live product names and live SKUs before saying it is not listed.
+- Do not say a product is not live if any live product name or SKU contains that number.
+- Explain exact SKU prefix: AS-U usually indicates USB-powered and AS-B usually indicates battery/rechargeable. Do not call AS-U-205-LSD rechargeable unless an approved rule says so.
+- If user says "there is 205", acknowledge the live matching 205 product and clarify whether it is USB or rechargeable based on the exact SKU.
 - For a normal rechargeable single-colour table lamp with AS-B-201-SLD already selected, your default expert choice is 3W COB LED, 2600mAh 18650 battery and JST wire, unless user asks for higher brightness.
 - Use 5W only if the user asks for more brightness or can manage heat.
 - If the user says "why", explain the practical reason in human language: heat, runtime, brightness, safety, assembly simplicity.
@@ -3263,14 +3330,26 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     // Fast backend guardrail: do not return fake SKU recommendations.
     if (fakeSkus.length) {
-      answer = [
-        "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
-        "",
-        "Closest live products available for checking:",
-        buildAvailableProductSummary(relevantLiveProducts, 8),
-        "",
-        "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
-      ].join("\n");
+      const liveNumberMatches = findLiveProductsByNumber(
+        `${safeQuestion}\n${answer}\n${fakeSkus.join(" ")}`,
+        liveProducts,
+        8
+      );
+
+      const liveCorrectionAnswer = buildLiveProductCorrectionAnswer(safeQuestion, liveNumberMatches);
+
+      if (liveCorrectionAnswer) {
+        answer = liveCorrectionAnswer;
+      } else {
+        answer = [
+          "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
+          "",
+          "Closest live products available for checking:",
+          buildAvailableProductSummary(relevantLiveProducts, 8),
+          "",
+          "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
+        ].join("\n");
+      }
 
       recommendedProducts = [];
     }
