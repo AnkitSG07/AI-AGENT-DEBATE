@@ -2255,7 +2255,10 @@ const AI_TRAINING_RULES_TTL_MS = Number(process.env.AI_TRAINING_RULES_TTL_MS || 
 const AI_TRAINING_RULES_LIMIT = Math.max(20, Number(process.env.AI_TRAINING_RULES_LIMIT || 120));
 
 function normalizeOdooSelection(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
 }
 
 function formatApprovedRulesForPrompt(rules = []) {
@@ -2315,7 +2318,6 @@ async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
       AI_TRAINING_MODEL,
       "search_read",
       [[
-        [AI_TRAINING_FIELDS.status, "=", "approved"],
         [AI_TRAINING_FIELDS.active, "=", true]
       ], fields],
       {
@@ -2338,7 +2340,17 @@ async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
         approved_by: String(row[AI_TRAINING_FIELDS.approvedBy] || "").trim(),
         approved_date: String(row[AI_TRAINING_FIELDS.approvedDate] || "").trim()
       }))
-      .filter((rule) => rule.rule_text);
+      .filter((rule) => {
+        return (
+          rule.rule_text &&
+          (
+            rule.status === "approved" ||
+            rule.status === "approve" ||
+            rule.status === "done" ||
+            rule.status === "active"
+          )
+        );
+      });
 
     aiTrainingRulesCache.rules = rules;
     aiTrainingRulesCache.fetchedAt = Date.now();
@@ -2361,9 +2373,24 @@ async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
   }
 }
 
+function selectionVariants(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return [raw];
+
+  const lower = raw.toLowerCase();
+  const title = lower.charAt(0).toUpperCase() + lower.slice(1);
+
+  return Array.from(new Set([
+    raw,
+    lower,
+    title,
+    raw.toUpperCase()
+  ]));
+}
+
 async function createOdooAiTrainingRule({
   ruleText,
-  status = "pending",
+  status = "Pending",
   source = "public",
   category = "general",
   relatedSku = "",
@@ -2397,7 +2424,39 @@ async function createOdooAiTrainingRule({
     payload[AI_TRAINING_FIELDS.approvedDate] = approvedDate;
   }
 
-  const id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [payload]);
+  let id = null;
+  let lastError = null;
+
+  const statusOptions = selectionVariants(status);
+  const sourceOptions = selectionVariants(source);
+  const categoryOptions = selectionVariants(category);
+
+  for (const statusValue of statusOptions) {
+    for (const sourceValue of sourceOptions) {
+      for (const categoryValue of categoryOptions) {
+        try {
+          const attemptPayload = {
+            ...payload,
+            [AI_TRAINING_FIELDS.status]: statusValue,
+            [AI_TRAINING_FIELDS.source]: sourceValue,
+            [AI_TRAINING_FIELDS.category]: categoryValue
+          };
+
+          id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [attemptPayload]);
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (id) break;
+    }
+    if (id) break;
+  }
+
+  if (!id) {
+    throw lastError || new Error("Could not create Odoo AI training rule.");
+  }
+
   aiTrainingRulesCache.fetchedAt = 0;
 
   return { ok: true, id };
@@ -3252,7 +3311,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
 
     const result = await createOdooAiTrainingRule({
       ruleText,
-      status: "pending",
+      status: "Pending",
       source: "public",
       category,
       relatedSku,
@@ -3264,7 +3323,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
-      status: "pending",
+      status: "Pending",
       message: "Feedback saved for Smart Handicrafts review."
     });
   } catch (error) {
@@ -3298,7 +3357,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
 
     const result = await createOdooAiTrainingRule({
       ruleText,
-      status: "approved",
+      status: "Approved",
       source: "admin",
       category,
       relatedSku,
@@ -3312,7 +3371,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
-      status: "approved",
+      status: "Approved",
       message: "Approved training rule saved."
     });
   } catch (error) {
