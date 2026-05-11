@@ -2227,6 +2227,182 @@ ${message}${expandQuery(message) !== message ? `\n\n(Expanded context: ${expandQ
 });
 
 
+
+
+// ===================== ODOO AI TRAINING RULES =====================
+const AI_TRAINING_MODEL = process.env.AI_TRAINING_MODEL || "x_ai_training";
+
+const AI_TRAINING_FIELDS = {
+  ruleText: process.env.AI_TRAINING_FIELD_RULE_TEXT || "x_studio_rule_text",
+  status: process.env.AI_TRAINING_FIELD_STATUS || "x_studio_status",
+  source: process.env.AI_TRAINING_FIELD_SOURCE || "x_studio_source",
+  category: process.env.AI_TRAINING_FIELD_CATEGORY || "x_studio_category",
+  relatedSku: process.env.AI_TRAINING_FIELD_RELATED_SKU || "x_studio_related_sku",
+  pageUrl: process.env.AI_TRAINING_FIELD_PAGE_URL || "x_studio_page_url",
+  userMessage: process.env.AI_TRAINING_FIELD_USER_MESSAGE || "x_studio_user_message",
+  approvedBy: process.env.AI_TRAINING_FIELD_APPROVED_BY || "x_studio_approved_by",
+  approvedDate: process.env.AI_TRAINING_FIELD_APPROVED_DATE || "x_studio_approved_date",
+  active: process.env.AI_TRAINING_FIELD_ACTIVE || "x_studio_active"
+};
+
+const aiTrainingRulesCache = {
+  rules: [],
+  fetchedAt: 0,
+  error: null
+};
+
+const AI_TRAINING_RULES_TTL_MS = Number(process.env.AI_TRAINING_RULES_TTL_MS || 2 * 60 * 1000);
+const AI_TRAINING_RULES_LIMIT = Math.max(20, Number(process.env.AI_TRAINING_RULES_LIMIT || 120));
+
+function normalizeOdooSelection(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function formatApprovedRulesForPrompt(rules = []) {
+  if (!rules.length) return "No approved Smart Handicrafts training rules are available yet.";
+
+  return rules
+    .map((rule, index) => {
+      const sku = rule.related_sku ? ` SKU: ${rule.related_sku}.` : "";
+      const category = rule.category ? ` Category: ${rule.category}.` : "";
+      return `${index + 1}. ${rule.rule_text}${sku}${category}`;
+    })
+    .join("\n");
+}
+
+async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
+  if (!odooConfigured) {
+    return {
+      ok: false,
+      rules: [],
+      error: "Odoo is not configured."
+    };
+  }
+
+  const cacheValid =
+    !force &&
+    Date.now() - aiTrainingRulesCache.fetchedAt < AI_TRAINING_RULES_TTL_MS;
+
+  if (cacheValid) {
+    return {
+      ok: true,
+      rules: aiTrainingRulesCache.rules,
+      cached: true,
+      error: aiTrainingRulesCache.error
+    };
+  }
+
+  try {
+    const uid = await odooLoginCached();
+
+    const fields = [
+      "id",
+      "display_name",
+      AI_TRAINING_FIELDS.ruleText,
+      AI_TRAINING_FIELDS.status,
+      AI_TRAINING_FIELDS.source,
+      AI_TRAINING_FIELDS.category,
+      AI_TRAINING_FIELDS.relatedSku,
+      AI_TRAINING_FIELDS.pageUrl,
+      AI_TRAINING_FIELDS.userMessage,
+      AI_TRAINING_FIELDS.approvedBy,
+      AI_TRAINING_FIELDS.approvedDate,
+      AI_TRAINING_FIELDS.active
+    ];
+
+    const rows = await odooExecute(
+      uid,
+      AI_TRAINING_MODEL,
+      "search_read",
+      [[
+        [AI_TRAINING_FIELDS.status, "=", "approved"],
+        [AI_TRAINING_FIELDS.active, "=", true]
+      ], fields],
+      {
+        limit: AI_TRAINING_RULES_LIMIT,
+        order: "write_date desc, id desc"
+      }
+    );
+
+    const rules = (rows || [])
+      .map((row) => ({
+        id: row.id,
+        name: row.display_name || "",
+        rule_text: String(row[AI_TRAINING_FIELDS.ruleText] || "").trim(),
+        status: normalizeOdooSelection(row[AI_TRAINING_FIELDS.status]),
+        source: normalizeOdooSelection(row[AI_TRAINING_FIELDS.source]),
+        category: String(row[AI_TRAINING_FIELDS.category] || "").trim(),
+        related_sku: String(row[AI_TRAINING_FIELDS.relatedSku] || "").trim(),
+        page_url: String(row[AI_TRAINING_FIELDS.pageUrl] || "").trim(),
+        user_message: String(row[AI_TRAINING_FIELDS.userMessage] || "").trim(),
+        approved_by: String(row[AI_TRAINING_FIELDS.approvedBy] || "").trim(),
+        approved_date: String(row[AI_TRAINING_FIELDS.approvedDate] || "").trim()
+      }))
+      .filter((rule) => rule.rule_text);
+
+    aiTrainingRulesCache.rules = rules;
+    aiTrainingRulesCache.fetchedAt = Date.now();
+    aiTrainingRulesCache.error = null;
+
+    return {
+      ok: true,
+      rules,
+      cached: false,
+      error: null
+    };
+  } catch (error) {
+    aiTrainingRulesCache.error = String(error?.message || error || "Unknown Odoo AI rules error");
+
+    return {
+      ok: false,
+      rules: [],
+      error: aiTrainingRulesCache.error
+    };
+  }
+}
+
+async function createOdooAiTrainingRule({
+  ruleText,
+  status = "pending",
+  source = "public",
+  category = "general",
+  relatedSku = "",
+  pageUrl = "",
+  userMessage = "",
+  approvedBy = "",
+  approvedDate = null,
+  active = true
+} = {}) {
+  if (!odooConfigured) throw new Error("Odoo is not configured.");
+
+  const safeRuleText = String(ruleText || "").trim();
+  if (!safeRuleText) throw new Error("Rule text is required.");
+
+  const uid = await odooLoginCached();
+
+  const payload = {
+    x_name: safeRuleText.slice(0, 80),
+    [AI_TRAINING_FIELDS.ruleText]: safeRuleText,
+    [AI_TRAINING_FIELDS.status]: status,
+    [AI_TRAINING_FIELDS.source]: source,
+    [AI_TRAINING_FIELDS.category]: category,
+    [AI_TRAINING_FIELDS.relatedSku]: relatedSku || "",
+    [AI_TRAINING_FIELDS.pageUrl]: pageUrl || "",
+    [AI_TRAINING_FIELDS.userMessage]: userMessage || "",
+    [AI_TRAINING_FIELDS.approvedBy]: approvedBy || "",
+    [AI_TRAINING_FIELDS.active]: !!active
+  };
+
+  if (approvedDate) {
+    payload[AI_TRAINING_FIELDS.approvedDate] = approvedDate;
+  }
+
+  const id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [payload]);
+  aiTrainingRulesCache.fetchedAt = 0;
+
+  return { ok: true, id };
+}
+
 // ===================== LIVE ODOO WEBSITE PRODUCTS FOR KIT AI =====================
 const liveOdooProductsCache = {
   products: [],
@@ -2845,6 +3021,10 @@ app.post("/kit-ai-chat", async (req, res) => {
     const liveProductResult = await getLiveOdooWebsiteProducts();
     const liveProducts = liveProductResult.products || [];
 
+    const approvedRulesResult = await getApprovedOdooAiTrainingRules();
+    const approvedRules = approvedRulesResult.rules || [];
+    const approvedRulesPrompt = formatApprovedRulesForPrompt(approvedRules);
+
     if (!liveProductResult.ok || !liveProducts.length) {
       return res.json({
         ok: true,
@@ -2919,8 +3099,6 @@ Answer style:
 - Use 5W only if the user asks for more brightness or can manage heat.
 - If the user says "why", explain the practical reason in human language: heat, runtime, brightness, safety, assembly simplicity.
 - If the user says "add it", "add these", "add all", "yes add", "add to kit", or "add to cart", the frontend will add the selected products automatically.
-- Never claim that items were added to the kit. The frontend will handle adding items and will show the result.
-- If the user reports items were not added, apologise and explain that the item must be visible in the kit builder product list for automatic adding.
 - For bulk/custom requirements, suggest Smart Handicrafts verification.
 - Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
@@ -2951,6 +3129,11 @@ Rules for recommended_products:
 - If recommended_products is not empty, the answer should naturally ask whether to add all of them to the active kit or cart.
 - The frontend will not show product cards, so the answer itself must be understandable.
 
+APPROVED SMART HANDICRAFTS TRAINING RULES:
+${approvedRulesPrompt}
+
+These approved rules override general assumptions. Use them whenever relevant, especially for compatibility decisions.
+
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
 
@@ -2974,6 +3157,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     const result = await genAI.models.generateContent({
       model: KIT_AI_MODEL,
+      approved_rules_count: approvedRules.length,
+      approved_rules_cached: !!approvedRulesResult.cached,
       contents: prompt
     });
 
@@ -3048,6 +3233,110 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     return res.status(500).json({
       ok: false,
       error: "AI assistant failed to respond"
+    });
+  }
+});
+
+
+
+// ===================== KIT AI TRAINING RULE ROUTES =====================
+app.post("/kit-ai-feedback", async (req, res) => {
+  try {
+    const {
+      ruleText,
+      userMessage,
+      pageUrl,
+      relatedSku = "",
+      category = "general"
+    } = req.body || {};
+
+    const result = await createOdooAiTrainingRule({
+      ruleText,
+      status: "pending",
+      source: "public",
+      category,
+      relatedSku,
+      pageUrl,
+      userMessage,
+      active: true
+    });
+
+    return res.json({
+      ok: true,
+      id: result.id,
+      status: "pending",
+      message: "Feedback saved for Smart Handicrafts review."
+    });
+  } catch (error) {
+    console.error("Kit AI feedback error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Could not save feedback."
+    });
+  }
+});
+
+app.post("/kit-ai-admin-train", async (req, res) => {
+  try {
+    const {
+      adminKey,
+      ruleText,
+      relatedSku = "",
+      category = "general",
+      pageUrl = "",
+      userMessage = "",
+      approvedBy = "admin"
+    } = req.body || {};
+
+    const expectedKey = process.env.TRAINING_ADMIN_KEY || "";
+    if (!expectedKey || adminKey !== expectedKey) {
+      return res.status(401).json({
+        ok: false,
+        error: "Unauthorized"
+      });
+    }
+
+    const result = await createOdooAiTrainingRule({
+      ruleText,
+      status: "approved",
+      source: "admin",
+      category,
+      relatedSku,
+      pageUrl,
+      userMessage,
+      approvedBy,
+      approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
+      active: true
+    });
+
+    return res.json({
+      ok: true,
+      id: result.id,
+      status: "approved",
+      message: "Approved training rule saved."
+    });
+  } catch (error) {
+    console.error("Kit AI admin train error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Could not save admin training rule."
+    });
+  }
+});
+
+app.get("/kit-ai-approved-rules", async (req, res) => {
+  try {
+    const result = await getApprovedOdooAiTrainingRules({ force: true });
+    return res.json({
+      ok: result.ok,
+      count: result.rules.length,
+      rules: result.rules,
+      error: result.error || null
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: String(error?.message || error)
     });
   }
 });
