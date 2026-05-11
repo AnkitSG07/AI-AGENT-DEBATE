@@ -3119,6 +3119,42 @@ function compactChatHistory(history = []) {
 }
 
 
+
+
+function parseBackendAdminTrainCommand(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw.toLowerCase().startsWith("/train")) return null;
+
+  const rest = raw.replace(/^\/train\s*/i, "").trim();
+  const parts = rest.split("|").map((x) => x.trim());
+
+  if (parts.length >= 2) {
+    return {
+      adminKey: parts[0] || "",
+      ruleText: parts[1] || "",
+      relatedSku: parts[2] || "",
+      category: parts[3] || "general"
+    };
+  }
+
+  const firstSpace = rest.indexOf(" ");
+  if (firstSpace === -1) {
+    return {
+      adminKey: "",
+      ruleText: "",
+      relatedSku: "",
+      category: "general"
+    };
+  }
+
+  return {
+    adminKey: rest.slice(0, firstSpace).trim(),
+    ruleText: rest.slice(firstSpace + 1).trim(),
+    relatedSku: "",
+    category: "general"
+  };
+}
+
 app.post("/kit-ai-chat", async (req, res) => {
   try {
     const { question, pageContext, kitContext, history } = req.body || {};
@@ -3138,6 +3174,48 @@ app.post("/kit-ai-chat", async (req, res) => {
     }
 
     const safeQuestion = String(question).trim();
+
+    // Backend fallback: allow admin training even if the embed code did not intercept /train.
+    const backendTrainCommand = parseBackendAdminTrainCommand(safeQuestion);
+    if (backendTrainCommand) {
+      const expectedKey = process.env.TRAINING_ADMIN_KEY || "";
+
+      if (!expectedKey || backendTrainCommand.adminKey !== expectedKey) {
+        return res.status(401).json({
+          ok: false,
+          answer: "Admin training key is incorrect, so I did not save this as an approved rule.",
+          error: "Unauthorized"
+        });
+      }
+
+      if (!backendTrainCommand.ruleText) {
+        return res.status(400).json({
+          ok: false,
+          answer: "Training rule text is missing. Use: /train YOUR_SECRET_KEY | approved rule text | optional SKU | optional category",
+          error: "Training rule text is missing"
+        });
+      }
+
+      const result = await createOdooAiTrainingRule({
+        ruleText: backendTrainCommand.ruleText,
+        status: "Approved",
+        source: "admin",
+        category: backendTrainCommand.category || "general",
+        relatedSku: backendTrainCommand.relatedSku || "",
+        pageUrl: pageContext?.pageUrl || "",
+        userMessage: safeQuestion,
+        approvedBy: "admin",
+        approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
+        active: true
+      });
+
+      return res.json({
+        ok: true,
+        answer: "Approved rule saved. I’ll use this rule in future kit suggestions after the rules cache refreshes.",
+        training_rule_id: result.id,
+        status: "Approved"
+      });
+    }
 
     // Fast path: Odoo products are cached after the first fetch.
     const liveProductResult = await getLiveOdooWebsiteProducts();
