@@ -2523,6 +2523,78 @@ function buildLiveProductsForPrompt(liveProducts = []) {
   }));
 }
 
+function stripMarkdownForCustomer(text) {
+  return String(text || "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^#+\s*/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseKitAiJsonResponse(rawText) {
+  const text = String(rawText || "").trim();
+
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch {}
+  }
+
+  return {
+    answer: text,
+    recommended_products: []
+  };
+}
+
+function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
+  const liveSkuSet = getLiveSkuSet(liveProducts);
+  const liveBySku = new Map();
+  const liveByName = new Map();
+
+  (liveProducts || []).forEach((p) => {
+    const allSkus = [
+      String(p.sku || "").trim(),
+      ...(Array.isArray(p.variantSkus) ? p.variantSkus : [])
+    ].filter(Boolean);
+
+    allSkus.forEach((sku) => liveBySku.set(sku, p));
+    liveByName.set(String(p.name || "").trim().toLowerCase(), p);
+  });
+
+  return (Array.isArray(products) ? products : [])
+    .map((item) => {
+      const sku = String(item?.sku || "").trim();
+      const name = String(item?.name || "").trim();
+      const qty = Math.max(1, Math.min(500, Number(item?.qty || 1)));
+      const reason = stripMarkdownForCustomer(item?.reason || "");
+
+      let live = null;
+      if (sku && liveSkuSet.has(sku)) live = liveBySku.get(sku);
+      if (!live && name) live = liveByName.get(name.toLowerCase());
+
+      if (!live) return null;
+
+      const finalSku = sku || live.sku || (Array.isArray(live.variantSkus) ? live.variantSkus[0] : "") || "";
+
+      return {
+        name: live.name || name,
+        sku: finalSku,
+        qty,
+        reason,
+        type: String(item?.type || "").trim()
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
 function buildAvailableProductSummary(liveProducts = [], max = 12) {
   const rows = (liveProducts || [])
     .filter((p) => p.name)
@@ -2741,11 +2813,28 @@ CRITICAL PRODUCT RULES:
 
 Answer style:
 - Short, practical, and product-expert style.
+- Plain text only. Do NOT use Markdown. Do NOT use **bold**, bullet symbols, headings, tables, or code formatting in the answer.
 - Give 1 best option or 2 closest live options only.
 - If compatibility is uncertain, ask only for the missing details: voltage, wattage, LED type, battery requirement, and dimming requirement.
 - Do not promise final compliance; final lamp compliance depends on complete lamp design/testing.
 - Do not say "as an AI language model".
 - Do not expose internal logic.
+
+Return format:
+Return ONLY valid JSON. No markdown, no explanation outside JSON.
+{
+  "answer": "clean customer-facing answer in plain text",
+  "recommended_products": [
+    {
+      "name": "exact live product name",
+      "sku": "exact live SKU if available",
+      "qty": 1,
+      "type": "driver | led | battery | wire | accessory",
+      "reason": "short reason"
+    }
+  ]
+}
+Only include products that the user can add to the active kit. If no addable product is suitable, use an empty recommended_products array.
 
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
@@ -2764,13 +2853,27 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       contents: prompt
     });
 
-    let answer =
+    const rawText =
       result.text?.trim() ||
-      "I could not generate an answer right now.";
+      JSON.stringify({
+        answer: "I could not generate an answer right now.",
+        recommended_products: []
+      });
+
+    const parsedResponse = parseKitAiJsonResponse(rawText);
+
+    let answer = stripMarkdownForCustomer(
+      parsedResponse.answer || rawText || "I could not generate an answer right now."
+    );
+
+    let recommendedProducts = normalizeKitAiRecommendedProducts(
+      parsedResponse.recommended_products || [],
+      liveProducts
+    );
 
     const fakeSkus = getFakeSkusFromAnswer(answer, liveProducts);
 
-    // Fast backend guardrail: do not run a second Gemini call. Return a safe deterministic correction.
+    // Fast backend guardrail: do not return fake SKU recommendations.
     if (fakeSkus.length) {
       answer = [
         "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
@@ -2780,11 +2883,14 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
         "",
         "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
       ].join("\n");
+
+      recommendedProducts = [];
     }
 
     return res.json({
       ok: true,
       answer,
+      recommended_products: recommendedProducts,
       live_products_available: true,
       live_products_count: liveProducts.length,
       prompt_products_count: relevantLiveProducts.length,
