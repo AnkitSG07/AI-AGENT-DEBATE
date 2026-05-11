@@ -3121,37 +3121,17 @@ function compactChatHistory(history = []) {
 
 
 
-function parseBackendAdminTrainCommand(text = "") {
+function parseBackendAutoTrainCommand(text = "") {
   const raw = String(text || "").trim();
   if (!raw.toLowerCase().startsWith("/train")) return null;
 
   const rest = raw.replace(/^\/train\s*/i, "").trim();
-  const parts = rest.split("|").map((x) => x.trim());
-
-  if (parts.length >= 2) {
-    return {
-      adminKey: parts[0] || "",
-      ruleText: parts[1] || "",
-      relatedSku: parts[2] || "",
-      category: parts[3] || "general"
-    };
-  }
-
-  const firstSpace = rest.indexOf(" ");
-  if (firstSpace === -1) {
-    return {
-      adminKey: "",
-      ruleText: "",
-      relatedSku: "",
-      category: "general"
-    };
-  }
+  const parts = rest.split("|").map((x) => x.trim()).filter(Boolean);
 
   return {
-    adminKey: rest.slice(0, firstSpace).trim(),
-    ruleText: rest.slice(firstSpace + 1).trim(),
-    relatedSku: "",
-    category: "general"
+    ruleText: parts[0] || rest,
+    relatedSku: parts[1] || "",
+    category: parts[2] || "general"
   };
 }
 
@@ -3175,36 +3155,27 @@ app.post("/kit-ai-chat", async (req, res) => {
 
     const safeQuestion = String(question).trim();
 
-    // Backend fallback: allow admin training even if the embed code did not intercept /train.
-    const backendTrainCommand = parseBackendAdminTrainCommand(safeQuestion);
-    if (backendTrainCommand) {
-      const expectedKey = process.env.TRAINING_ADMIN_KEY || "";
-
-      if (!expectedKey || backendTrainCommand.adminKey !== expectedKey) {
-        return res.status(401).json({
-          ok: false,
-          answer: "Admin training key is incorrect, so I did not save this as an approved rule.",
-          error: "Unauthorized"
-        });
-      }
-
-      if (!backendTrainCommand.ruleText) {
-        return res.status(400).json({
-          ok: false,
-          answer: "Training rule text is missing. Use: /train YOUR_SECRET_KEY | approved rule text | optional SKU | optional category",
-          error: "Training rule text is missing"
+    // Auto-approved training command.
+    // Only people who know /train can use this; approved rules are saved directly in Odoo.
+    const autoTrainCommand = parseBackendAutoTrainCommand(safeQuestion);
+    if (autoTrainCommand) {
+      if (!autoTrainCommand.ruleText) {
+        return res.json({
+          ok: true,
+          answer: "Write the rule after /train and I’ll save it as an approved Smart Handicrafts rule.",
+          status: "Approved"
         });
       }
 
       const result = await createOdooAiTrainingRule({
-        ruleText: backendTrainCommand.ruleText,
+        ruleText: autoTrainCommand.ruleText,
         status: "Approved",
         source: "admin",
-        category: backendTrainCommand.category || "general",
-        relatedSku: backendTrainCommand.relatedSku || "",
+        category: autoTrainCommand.category || "general",
+        relatedSku: autoTrainCommand.relatedSku || "",
         pageUrl: pageContext?.pageUrl || "",
         userMessage: safeQuestion,
-        approvedBy: "admin",
+        approvedBy: "chat-train",
         approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
         active: true
       });
@@ -3456,6 +3427,48 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
 
 // ===================== KIT AI TRAINING RULE ROUTES =====================
+
+
+// Auto-approved chat training route. Hidden command route used by /train in the embed.
+app.post("/kit-ai-train", async (req, res) => {
+  try {
+    const {
+      ruleText,
+      relatedSku = "",
+      category = "general",
+      pageUrl = "",
+      userMessage = "",
+      approvedBy = "chat-train"
+    } = req.body || {};
+
+    const result = await createOdooAiTrainingRule({
+      ruleText,
+      status: "Approved",
+      source: "admin",
+      category,
+      relatedSku,
+      pageUrl,
+      userMessage,
+      approvedBy,
+      approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
+      active: true
+    });
+
+    return res.json({
+      ok: true,
+      id: result.id,
+      status: "Approved",
+      message: "Approved training rule saved."
+    });
+  } catch (error) {
+    console.error("Kit AI auto train error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Could not save approved training rule."
+    });
+  }
+});
+
 app.post("/kit-ai-feedback", async (req, res) => {
   try {
     const {
