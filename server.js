@@ -2577,16 +2577,14 @@ ${answer}
 
     // Final backend guardrail. Do not return fake SKU recommendations.
     if (fakeSkus.length) {
-      answer =
-        "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.
-
-" +
-        "Closest live products available for checking:
-" +
-        buildAvailableProductSummary(liveProducts, 10) +
-        "
-
-Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified.";
+      answer = [
+        "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
+        "",
+        "Closest live products available for checking:",
+        buildAvailableProductSummary(liveProducts, 10),
+        "",
+        "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
+      ].join("\n");
     }
 
     return res.json({
