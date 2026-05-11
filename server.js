@@ -2533,6 +2533,18 @@ function stripMarkdownForCustomer(text) {
     .trim();
 }
 
+
+function improveNaturalKitAnswer(answer) {
+  return String(answer || "")
+    .replace(/To complete this kit, we recommend adding the following:?/gi, "I would add these exact items to complete it:")
+    .replace(/To complete your kit, we recommend adding the following:?/gi, "I would add these exact items to complete it:")
+    .replace(/consider adding the following:?/gi, "I would choose these exact items:")
+    .replace(/your active kit is currently incomplete,?\s*/gi, "")
+    .replace(/the following:\s*$/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function parseKitAiJsonResponse(rawText) {
   const text = String(rawText || "").trim();
 
@@ -2649,7 +2661,7 @@ function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
       };
     })
     .filter(Boolean)
-    .slice(0, 8);
+    .slice(0, 12);
 }
 
 function buildAvailableProductSummary(liveProducts = [], max = 12) {
@@ -2802,9 +2814,9 @@ function compactKitAiContext(kitContext = {}) {
 
 function compactChatHistory(history = []) {
   if (!Array.isArray(history)) return [];
-  return history.slice(-4).map((item) => ({
+  return history.slice(-8).map((item) => ({
     role: item.role || item.agent || "user",
-    text: String(item.text || item.content || "").slice(0, 500)
+    text: String(item.text || item.content || "").slice(0, 900)
   }));
 }
 
@@ -2881,52 +2893,61 @@ CRITICAL PRODUCT RULES:
 - Do not create variants such as "-12V", "-20W", "Pro", "Plus", "Max", etc. unless that exact SKU/name is in the live list.
 
 Answer style:
-- Talk naturally like a Smart Handicrafts technical sales engineer.
-- Reply to anything naturally, not like fixed FAQ or fed replies.
-- Plain text only. Do NOT use Markdown. Do NOT use **bold**, bullet symbols, headings, tables, or code formatting.
-- Use short human paragraphs.
-- First understand what the user wants.
-- Then check the active kit and mention what is already selected.
-- Do not repeat the same sentence pattern every time.
-- Do not start every answer with "To complete your kit".
-- If a suitable driver is already selected, say clearly that you would keep it and would not add another driver.
-- If the user asks "you tell", "you choose", "which one", "according to you", or similar, make one clear expert decision instead of listing choices.
-- Explain why you are choosing a part, like heat, runtime, brightness, safety, or simplicity.
-- For a normal rechargeable single-colour table lamp with AS-B-201-SLD selected, prefer a 3W COB for balanced brightness, better runtime and lower heat unless the user asks for more brightness.
-- Use 5W only when the user wants higher brightness and can manage heat.
-- Use 2600mAh 18650 battery as the standard balanced battery.
-- Use JST wire when needed for connection.
-- Suggest touch sensor only when it is actually needed for the user's expected control method.
-- Do not recommend duplicate items already in the active kit.
-- If products are selected by you, end with a natural question like: "Should I add these to your active kit?" or "Should I add these to cart?"
-- If the user says add it, add these, add all, yes add, add to kit, or add to cart, the frontend will add the selected items automatically.
-- For bulk/custom requirements, suggest verification by Smart Handicrafts.
-- Do not promise final compliance; final lamp compliance depends on complete lamp design/testing.
+- Talk naturally like a helpful expert assistant, not like a form, script, FAQ, or product catalogue.
+- Read the user's exact message first and respond to that specific message.
+- Vary your wording. Do not repeat the same opening, same driver sentence, or same "missing parts" sentence.
+- Match the user's tone. If the user is casual, be casual but professional. If the user is technical, be technical.
+- For greetings, reply like a person: short greeting plus one helpful question. Do not explain the active kit.
+- For unclear messages, ask one useful clarification or make a sensible assumption from active kit context.
+- For direct requests like "make a lamp", "complete kit", "you tell", or "choose", make a real recommendation, not a generic explanation.
+- Think before replying:
+  1. What is the user actually asking right now?
+  2. What is already selected in the active kit?
+  3. Should I keep the selected parts or change them?
+  4. What complete set would I personally choose for this use case?
+  5. What should happen next?
+- If a suitable driver is already selected, do not make the whole answer about the driver. Mention it briefly only if useful.
+- Do not say "your active kit is currently incomplete" unless it is necessary. Say it naturally, like "we just need to add the LED, battery and wire now."
+- Do not say "consider adding the following", "we recommend adding the following", or "to complete your kit" repeatedly.
+- Use plain text only. No Markdown, no **bold**, no bullets, no tables, no code formatting.
+- Use short paragraphs, like a real ChatGPT-style reply.
+- If products are selected by you, name all chosen items naturally in the answer and ask: "Should I add all these to your active kit?"
+- Do not show alternatives unless the user asks for options.
+- Do not recommend duplicates already in the active kit.
+- Do not invent products. Recommend only live products from the provided live product list.
+- For a normal rechargeable single-colour table lamp with AS-B-201-SLD already selected, your default expert choice is 3W COB LED, 2600mAh 18650 battery and JST wire, unless user asks for higher brightness.
+- Use 5W only if the user asks for more brightness or can manage heat.
+- If the user says "why", explain the practical reason in human language: heat, runtime, brightness, safety, assembly simplicity.
+- If the user says "add it", "add these", "add all", "yes add", "add to kit", or "add to cart", the frontend will add the selected products automatically.
+- For bulk/custom requirements, suggest Smart Handicrafts verification.
+- Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
 - Do not expose internal logic.
 
 Return format:
 Return ONLY valid JSON. No markdown, no explanation outside JSON.
 {
-  "answer": "clean customer-facing natural answer in plain text",
+  "answer": "natural customer-facing answer in plain text",
   "recommended_products": [
     {
       "name": "exact live product name",
       "sku": "exact live SKU if available",
       "qty": 1,
-      "type": "driver | led | battery | wire | accessory",
+      "type": "driver | led | battery | wire | connector | holder | sensor | accessory",
       "reason": "short internal reason"
     }
   ],
   "action_offer": "active_kit | cart | none"
 }
 Rules for recommended_products:
-- Include only products that should be added automatically if the user says add it.
+- Only include recommended_products when you have made a final decision and the user can say "add it".
+- If the user is only greeting, asking a general question, or asking about something already selected, use an empty recommended_products array.
+- If the user asks to build/complete/suggest a kit, include all final missing/addable products needed to complete the kit at once.
 - Do not include products already selected in the active kit.
-- If the user asks you to choose, include only the final selected items, not alternatives.
-- If no addable product is suitable, use an empty recommended_products array.
-- Do not talk like product cards; the frontend will not show cards.
-- If recommended_products is not empty, the answer should ask whether to add them to the active kit or cart.
+- Do not include a driver if a suitable driver is already selected.
+- Do not include alternatives. Choose one final path.
+- If recommended_products is not empty, the answer should naturally ask whether to add all of them to the active kit or cart.
+- The frontend will not show product cards, so the answer itself must be understandable.
 
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
@@ -2963,9 +2984,9 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     const parsedResponse = parseKitAiJsonResponse(rawText);
 
-    let answer = stripMarkdownForCustomer(
+    let answer = improveNaturalKitAnswer(stripMarkdownForCustomer(
       parsedResponse.answer || rawText || "I could not generate an answer right now."
-    );
+    ));
 
     let recommendedProducts = normalizeKitAiRecommendedProducts(
       parsedResponse.recommended_products || [],
@@ -2989,7 +3010,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
         if (seenTypes.has(bucket)) return false;
         seenTypes.add(bucket);
         return true;
-      }).slice(0, 4);
+      }).slice(0, 8);
     }
 
     const fakeSkus = getFakeSkusFromAnswer(answer, liveProducts);
