@@ -2549,8 +2549,65 @@ function parseKitAiJsonResponse(rawText) {
 
   return {
     answer: text,
-    recommended_products: []
+    recommended_products: [],
+    action_offer: "none"
   };
+}
+
+function compactTextForMatch(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getActiveKitTextForMatch(kitContext = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  return compactTextForMatch([
+    snapshot.selectedDriver || "",
+    ...(Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems : []),
+    snapshot.completionMessage || "",
+    snapshot.reviewStatus || "",
+    snapshot.warning || ""
+  ].join(" "));
+}
+
+function productAlreadyInActiveKit(product = {}, kitContext = {}) {
+  const activeText = getActiveKitTextForMatch(kitContext);
+  if (!activeText) return false;
+
+  const sku = compactTextForMatch(product.sku || "");
+  const name = compactTextForMatch(product.name || "");
+
+  if (sku && activeText.includes(sku)) return true;
+
+  if (name) {
+    const tokens = name.split(" ").filter((t) => t.length >= 3);
+    if (tokens.length) {
+      const hits = tokens.filter((t) => activeText.includes(t)).length;
+      if (hits >= Math.min(3, tokens.length)) return true;
+    }
+  }
+
+  return false;
+}
+
+function filterAlreadyActiveRecommendations(products = [], kitContext = {}) {
+  return (products || []).filter((p) => !productAlreadyInActiveKit(p, kitContext));
+}
+
+function userWantsAiToChoose(question = "") {
+  const q = compactTextForMatch(question);
+  return (
+    q.includes("you tell") ||
+    q.includes("you choose") ||
+    q.includes("choose according") ||
+    q.includes("which one to add") ||
+    q.includes("best one") ||
+    q.includes("select for me") ||
+    q.includes("recommend final")
+  );
 }
 
 function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
@@ -2824,18 +2881,25 @@ CRITICAL PRODUCT RULES:
 - Do not create variants such as "-12V", "-20W", "Pro", "Plus", "Max", etc. unless that exact SKU/name is in the live list.
 
 Answer style:
-- Sound like a Smart Handicrafts technical sales engineer, not a generic support chatbot.
-- Short, practical, and product-expert style.
-- Plain text only. Do NOT use Markdown. Do NOT use **bold**, bullet symbols, headings, tables, or code formatting in the answer.
-- Do not start by saying "To complete your kit" unless the user clearly asked what is missing.
-- First acknowledge the user's current active kit state using the Current kit/page context.
-- If a driver is already selected in active kit, explicitly mention it first. Example: "You already have AS-B-201-SLD selected in your active kit, which is suitable for a rechargeable single-colour table lamp."
-- If the user says they need to make a table lamp and a compatible driver is already active, do not recommend another driver unless they ask for a different lamp or different driver.
-- If the user wants another lamp/new kit, say that they should save the current kit first, then you can suggest another complete kit.
-- If the active kit is incomplete, explain what core parts are still needed: LED, battery, JST wire/accessories.
-- Do not recommend duplicate items already in active kit.
-- Give 1 best option or 2 closest live options only.
-- If compatibility is uncertain, ask only for the missing details: voltage, wattage, LED type, battery requirement, and dimming requirement.
+- Talk naturally like a Smart Handicrafts technical sales engineer.
+- Reply to anything naturally, not like fixed FAQ or fed replies.
+- Plain text only. Do NOT use Markdown. Do NOT use **bold**, bullet symbols, headings, tables, or code formatting.
+- Use short human paragraphs.
+- First understand what the user wants.
+- Then check the active kit and mention what is already selected.
+- Do not repeat the same sentence pattern every time.
+- Do not start every answer with "To complete your kit".
+- If a suitable driver is already selected, say clearly that you would keep it and would not add another driver.
+- If the user asks "you tell", "you choose", "which one", "according to you", or similar, make one clear expert decision instead of listing choices.
+- Explain why you are choosing a part, like heat, runtime, brightness, safety, or simplicity.
+- For a normal rechargeable single-colour table lamp with AS-B-201-SLD selected, prefer a 3W COB for balanced brightness, better runtime and lower heat unless the user asks for more brightness.
+- Use 5W only when the user wants higher brightness and can manage heat.
+- Use 2600mAh 18650 battery as the standard balanced battery.
+- Use JST wire when needed for connection.
+- Suggest touch sensor only when it is actually needed for the user's expected control method.
+- Do not recommend duplicate items already in the active kit.
+- If products are selected by you, end with a natural question like: "Should I add these to your active kit?" or "Should I add these to cart?"
+- If the user says add it, add these, add all, yes add, add to kit, or add to cart, the frontend will add the selected items automatically.
 - For bulk/custom requirements, suggest verification by Smart Handicrafts.
 - Do not promise final compliance; final lamp compliance depends on complete lamp design/testing.
 - Do not say "as an AI language model".
@@ -2844,18 +2908,25 @@ Answer style:
 Return format:
 Return ONLY valid JSON. No markdown, no explanation outside JSON.
 {
-  "answer": "clean customer-facing answer in plain text. Mention current active kit/driver first when available.",
+  "answer": "clean customer-facing natural answer in plain text",
   "recommended_products": [
     {
       "name": "exact live product name",
       "sku": "exact live SKU if available",
       "qty": 1,
       "type": "driver | led | battery | wire | accessory",
-      "reason": "short reason"
+      "reason": "short internal reason"
     }
-  ]
+  ],
+  "action_offer": "active_kit | cart | none"
 }
-Only include products that the user can add to the active kit. If no addable product is suitable, use an empty recommended_products array.
+Rules for recommended_products:
+- Include only products that should be added automatically if the user says add it.
+- Do not include products already selected in the active kit.
+- If the user asks you to choose, include only the final selected items, not alternatives.
+- If no addable product is suitable, use an empty recommended_products array.
+- Do not talk like product cards; the frontend will not show cards.
+- If recommended_products is not empty, the answer should ask whether to add them to the active kit or cart.
 
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
@@ -2869,6 +2940,8 @@ Context interpretation rules:
 - The "kit.completionMessage" and "kit.coreStatus" indicate missing core parts.
 - If the user gives a broad intent such as "need to make a table lamp", answer like a guided kit builder: acknowledge current selection first, then suggest only missing parts.
 - Recommended_products should include only missing/addable products, not products already in the active kit.
+- When the user asks you to choose, recommended_products should contain only your final selected items, not multiple alternatives in the same category.
+- Do not include an add card for the driver if that driver is already selected in kit.selectedDriver.
 
 User question:
 ${safeQuestion}
@@ -2899,6 +2972,26 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       liveProducts
     );
 
+    recommendedProducts = filterAlreadyActiveRecommendations(recommendedProducts, kitContext || {});
+
+    if (userWantsAiToChoose(safeQuestion)) {
+      const seenTypes = new Set();
+      recommendedProducts = recommendedProducts.filter((p) => {
+        const type = compactTextForMatch(p.type || p.name || "");
+        const bucket =
+          type.includes("led") || type.includes("cob") || type.includes("strip") ? "led" :
+          type.includes("battery") || type.includes("18650") ? "battery" :
+          type.includes("wire") || type.includes("jst") || type.includes("connector") ? "wire" :
+          type.includes("touch") || type.includes("sensor") ? "touch" :
+          type.includes("driver") ? "driver" :
+          type || "other";
+
+        if (seenTypes.has(bucket)) return false;
+        seenTypes.add(bucket);
+        return true;
+      }).slice(0, 4);
+    }
+
     const fakeSkus = getFakeSkusFromAnswer(answer, liveProducts);
 
     // Fast backend guardrail: do not return fake SKU recommendations.
@@ -2919,6 +3012,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       ok: true,
       answer,
       recommended_products: recommendedProducts,
+      action_offer: parsedResponse.action_offer || (recommendedProducts.length ? "active_kit" : "none"),
       live_products_available: true,
       live_products_count: liveProducts.length,
       prompt_products_count: relevantLiveProducts.length,
