@@ -2,7 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 
 dotenv.config();
 
@@ -2254,6 +2254,131 @@ const aiTrainingRulesCache = {
 const AI_TRAINING_RULES_TTL_MS = Number(process.env.AI_TRAINING_RULES_TTL_MS || 2 * 60 * 1000);
 const AI_TRAINING_RULES_LIMIT = Math.max(20, Number(process.env.AI_TRAINING_RULES_LIMIT || 120));
 
+
+// Local fallback training store.
+// This prevents /kit-ai-train from failing with 500 when the Odoo custom model/fields
+// are missing or when Render cannot reach Odoo. On Render free, this file is not a
+// permanent database, but it keeps the current running instance working.
+const AI_TRAINING_LOCAL_PATH = process.env.AI_TRAINING_LOCAL_PATH || "./data/kit-ai-training-rules.json";
+const localAiTrainingRules = [];
+
+async function loadLocalAiTrainingRules() {
+  try {
+    if (localAiTrainingRules.length) return localAiTrainingRules;
+    const raw = await readFile(AI_TRAINING_LOCAL_PATH, "utf8");
+    const parsed = JSON.parse(raw || "[]");
+    if (Array.isArray(parsed)) {
+      localAiTrainingRules.splice(0, localAiTrainingRules.length, ...parsed);
+    }
+  } catch {
+    // No local file yet. This is okay.
+  }
+  return localAiTrainingRules;
+}
+
+async function persistLocalAiTrainingRules() {
+  try {
+    const dir = AI_TRAINING_LOCAL_PATH.split("/").slice(0, -1).join("/");
+    if (dir) await mkdir(dir, { recursive: true });
+    await writeFile(AI_TRAINING_LOCAL_PATH, JSON.stringify(localAiTrainingRules, null, 2), "utf8");
+  } catch (error) {
+    console.error("Local AI training persist error:", error);
+  }
+}
+
+async function createLocalAiTrainingRule({
+  ruleText,
+  status = "Approved",
+  source = "local_fallback",
+  category = "general",
+  relatedSku = "",
+  pageUrl = "",
+  userMessage = "",
+  approvedBy = "chat-train",
+  approvedDate = null,
+  active = true
+} = {}) {
+  const safeRuleText = String(ruleText || "").trim();
+  if (!safeRuleText) throw new Error("Rule text is required.");
+
+  await loadLocalAiTrainingRules();
+
+  const existing = localAiTrainingRules.find((r) => String(r.rule_text || "").trim().toLowerCase() === safeRuleText.toLowerCase());
+  if (existing) {
+    existing.status = status;
+    existing.active = !!active;
+    existing.updated_at = now();
+    await persistLocalAiTrainingRules();
+    aiTrainingRulesCache.fetchedAt = 0;
+    return { ok: true, id: existing.id, storage: "local", duplicate: true };
+  }
+
+  const row = {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: safeRuleText.slice(0, 80),
+    rule_text: safeRuleText,
+    status,
+    source,
+    category,
+    related_sku: relatedSku || "",
+    page_url: pageUrl || "",
+    user_message: userMessage || "",
+    approved_by: approvedBy || "",
+    approved_date: approvedDate || now(),
+    active: !!active,
+    created_at: now()
+  };
+
+  localAiTrainingRules.unshift(row);
+  if (localAiTrainingRules.length > AI_TRAINING_RULES_LIMIT) {
+    localAiTrainingRules.splice(AI_TRAINING_RULES_LIMIT);
+  }
+
+  await persistLocalAiTrainingRules();
+  aiTrainingRulesCache.fetchedAt = 0;
+  return { ok: true, id: row.id, storage: "local" };
+}
+
+function normalizeLocalAiTrainingRule(row) {
+  return {
+    id: row.id,
+    name: row.name || "",
+    rule_text: String(row.rule_text || row.ruleText || "").trim(),
+    status: normalizeOdooSelection(row.status || "approved"),
+    source: normalizeOdooSelection(row.source || "local_fallback"),
+    category: String(row.category || "general").trim(),
+    related_sku: String(row.related_sku || row.relatedSku || "").trim(),
+    page_url: String(row.page_url || row.pageUrl || "").trim(),
+    user_message: String(row.user_message || row.userMessage || "").trim(),
+    approved_by: String(row.approved_by || row.approvedBy || "").trim(),
+    approved_date: String(row.approved_date || row.approvedDate || "").trim()
+  };
+}
+
+async function getApprovedLocalAiTrainingRules() {
+  const rows = await loadLocalAiTrainingRules();
+  return rows
+    .map(normalizeLocalAiTrainingRule)
+    .filter((rule) => rule.rule_text && ["approved", "approve", "done", "active"].includes(rule.status))
+    .slice(0, AI_TRAINING_RULES_LIMIT);
+}
+
+async function createAiTrainingRuleSafe(payload = {}) {
+  try {
+    if (odooConfigured) {
+      const result = await createOdooAiTrainingRule(payload);
+      return { ...result, storage: "odoo" };
+    }
+    return await createLocalAiTrainingRule({ ...payload, source: payload.source || "local_no_odoo" });
+  } catch (error) {
+    console.error("Odoo AI training save failed; using local fallback:", error?.message || error);
+    return await createLocalAiTrainingRule({
+      ...payload,
+      source: payload.source || "local_fallback"
+    });
+  }
+}
+
 function normalizeOdooSelection(value) {
   return String(value || "")
     .trim()
@@ -2275,10 +2400,16 @@ function formatApprovedRulesForPrompt(rules = []) {
 
 async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
   if (!odooConfigured) {
+    const localRules = await getApprovedLocalAiTrainingRules();
+    aiTrainingRulesCache.rules = localRules;
+    aiTrainingRulesCache.fetchedAt = Date.now();
+    aiTrainingRulesCache.error = "Odoo is not configured. Using local fallback rules.";
     return {
-      ok: false,
-      rules: [],
-      error: "Odoo is not configured."
+      ok: true,
+      rules: localRules,
+      cached: false,
+      error: aiTrainingRulesCache.error,
+      storage: "local"
     };
   }
 
@@ -2352,23 +2483,35 @@ async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
         );
       });
 
-    aiTrainingRulesCache.rules = rules;
+    const localRules = await getApprovedLocalAiTrainingRules();
+    const mergedRules = [...rules, ...localRules].filter((rule, index, arr) => {
+      const key = String(rule.rule_text || "").trim().toLowerCase();
+      return key && arr.findIndex((x) => String(x.rule_text || "").trim().toLowerCase() === key) === index;
+    });
+
+    aiTrainingRulesCache.rules = mergedRules;
     aiTrainingRulesCache.fetchedAt = Date.now();
     aiTrainingRulesCache.error = null;
 
     return {
       ok: true,
-      rules,
+      rules: mergedRules,
       cached: false,
-      error: null
+      error: null,
+      storage: localRules.length ? "odoo+local" : "odoo"
     };
   } catch (error) {
     aiTrainingRulesCache.error = String(error?.message || error || "Unknown Odoo AI rules error");
+    const localRules = await getApprovedLocalAiTrainingRules();
+    aiTrainingRulesCache.rules = localRules;
+    aiTrainingRulesCache.fetchedAt = Date.now();
 
     return {
-      ok: false,
-      rules: [],
-      error: aiTrainingRulesCache.error
+      ok: true,
+      rules: localRules,
+      cached: false,
+      error: `Odoo AI rules failed. Using local fallback rules. ${aiTrainingRulesCache.error}`,
+      storage: "local"
     };
   }
 }
@@ -3167,7 +3310,7 @@ app.post("/kit-ai-chat", async (req, res) => {
         });
       }
 
-      const result = await createOdooAiTrainingRule({
+      const result = await createAiTrainingRuleSafe({
         ruleText: autoTrainCommand.ruleText,
         status: "Approved",
         source: "admin",
@@ -3441,7 +3584,7 @@ app.post("/kit-ai-train", async (req, res) => {
       approvedBy = "chat-train"
     } = req.body || {};
 
-    const result = await createOdooAiTrainingRule({
+    const result = await createAiTrainingRuleSafe({
       ruleText,
       status: "Approved",
       source: "admin",
@@ -3457,8 +3600,9 @@ app.post("/kit-ai-train", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
+      storage: result.storage || "odoo",
       status: "Approved",
-      message: "Approved training rule saved."
+      message: result.storage === "local" ? "Approved training rule saved in local fallback memory." : "Approved training rule saved."
     });
   } catch (error) {
     console.error("Kit AI auto train error:", error);
@@ -3479,7 +3623,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
       category = "general"
     } = req.body || {};
 
-    const result = await createOdooAiTrainingRule({
+    const result = await createAiTrainingRuleSafe({
       ruleText,
       status: "Pending",
       source: "public",
@@ -3493,8 +3637,9 @@ app.post("/kit-ai-feedback", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
+      storage: result.storage || "odoo",
       status: "Pending",
-      message: "Feedback saved for Smart Handicrafts review."
+      message: result.storage === "local" ? "Feedback saved in local fallback memory." : "Feedback saved for Smart Handicrafts review."
     });
   } catch (error) {
     console.error("Kit AI feedback error:", error);
@@ -3525,7 +3670,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
       });
     }
 
-    const result = await createOdooAiTrainingRule({
+    const result = await createAiTrainingRuleSafe({
       ruleText,
       status: "Approved",
       source: "admin",
@@ -3541,8 +3686,9 @@ app.post("/kit-ai-admin-train", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
+      storage: result.storage || "odoo",
       status: "Approved",
-      message: "Approved training rule saved."
+      message: result.storage === "local" ? "Approved training rule saved in local fallback memory." : "Approved training rule saved."
     });
   } catch (error) {
     console.error("Kit AI admin train error:", error);
