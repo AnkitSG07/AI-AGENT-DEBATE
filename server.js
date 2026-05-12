@@ -3774,6 +3774,83 @@ function findDefault201StarterKitLiveProducts(liveProducts = [], kitContext = {}
   return deduped;
 }
 
+function isKitAiSelected202Context(kitContext = {}, question = "") {
+  const selectedDriverText = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").toLowerCase();
+  const q = String(question || "").toLowerCase();
+
+  return (
+    selectedDriverText.includes("202") ||
+    selectedDriverText.includes("as-b-202") ||
+    /\b202\b/.test(q)
+  );
+}
+
+function findDefault202CompletionLiveProducts(liveProducts = [], kitContext = {}, question = "") {
+  if (!isKitAiSelected202Context(kitContext, question)) return [];
+
+  const dualLed3w = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+    exclude: [/\b(strip|lsd|12v|24v)\b/i],
+    prefer: [/\bsh-cob-3d\b/i, /\bled\s*-?\s*cree\s*3\s*w\s*dual\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+    exclude: [/\b(strip|lsd|12v|24v)\b/i],
+    prefer: [/\bsh-cob-3d\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+  });
+
+  const battery2600Sleeve = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i],
+    prefer: [/\bsleeve\b/i, /\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+  });
+
+  const fallbackBattery = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\b2600\b/i, /\bsleeve\b/i, /\b18650\b/i, /\bmah\b/i],
+    exclude: [/\b5200\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\b2600\b/i, /\bsleeve\b/i, /\b18650\b/i, /\bmah\b/i],
+    exclude: [/\b5200\b/i]
+  });
+
+  const battery = battery2600Sleeve || fallbackBattery;
+
+  const jstWire = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+    exclude: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\bledwire\b/i, /\bdual\s*side\b/i, /\b2\s*pin\b/i, /\bwire\b/i]
+  });
+
+  const ordered = [dualLed3w, battery, jstWire].filter(Boolean);
+  const deduped = [];
+  const seen = new Set();
+
+  for (const product of ordered) {
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(product);
+  }
+
+  return deduped;
+}
+
+function build202CompletionOverrideAnswer(products = []) {
+  const labels = (products || []).map((p) => {
+    const sku = String(p?.sku || "").trim();
+    const name = String(p?.name || "").trim();
+    return sku ? `${name} (${sku})` : name;
+  }).filter(Boolean);
+
+  if (!labels.length) return "";
+
+  return [
+    "For your selected DRIVER- 202 DUAL LED DRIVER, I would add these live matching kit items:",
+    labels.join(", ") + ".",
+    "This is the cleaner standard path for a 202 rechargeable dual-LED kit. Should I add all these to your active kit?"
+  ].join("\n\n");
+}
+
 function build201StarterKitOverrideAnswer(products = []) {
   const labels = (products || []).map((p) => {
     const sku = String(p?.sku || "").trim();
@@ -4134,10 +4211,11 @@ function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageC
     });
 
     const starterLiveProducts = findDefault201StarterKitLiveProducts(liveProducts, kitContext, question);
+    const completion202LiveProducts = findDefault202CompletionLiveProducts(liveProducts, kitContext, question);
     const merged = [];
     const seen = new Set();
 
-    for (const product of [...starterLiveProducts, ...balanced]) {
+    for (const product of [...starterLiveProducts, ...completion202LiveProducts, ...balanced]) {
       if (!product) continue;
       const key = `${String(product.sku || "").toLowerCase()}|${String(product.name || "").toLowerCase()}`;
       if (seen.has(key)) continue;
@@ -4182,6 +4260,12 @@ function compactKitAiContext(kitContext = {}, question = "") {
   return {
     selectedApplication: snapshot.selectedApplication || "",
     selectedDriver: snapshot.selectedDriver || "",
+    selectedDriverSupportedProductIds: Array.isArray(snapshot.selectedDriverSupportedProductIds)
+      ? snapshot.selectedDriverSupportedProductIds.slice(0, 30)
+      : [],
+    selectedDriverRecommendedProductIds: Array.isArray(snapshot.selectedDriverRecommendedProductIds)
+      ? snapshot.selectedDriverRecommendedProductIds.slice(0, 20)
+      : [],
     activeKitItems: Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.slice(0, 12) : [],
     ...(includeSavedKits && Array.isArray(snapshot.savedKits)
       ? { savedKits: snapshot.savedKits.slice(0, 4) }
@@ -4492,6 +4576,11 @@ app.post("/kit-ai-chat", async (req, res) => {
         ? findDefault201StarterKitLiveProducts(liveProducts, kitContext || {}, safeQuestion)
         : [];
 
+    const deterministic202CompletionLiveProducts =
+      isKitAiStarterOrCompletionQuestion(safeQuestion) || isKitAiSelected202Context(kitContext || {}, safeQuestion)
+        ? findDefault202CompletionLiveProducts(liveProducts, kitContext || {}, safeQuestion)
+        : [];
+
     const deterministicDirectAddActions =
       findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {});
 
@@ -4590,6 +4679,7 @@ Answer style:
 - If the user explicitly asks to ADD, REMOVE, DELETE, SWITCH, CHANGE, or REPLACE an item in the active kit in the current message, use active_kit_actions so the frontend can actually update the active kit.
 - If the user says "add 3W LED", "add battery", "add JST wire", or names another exact part to add, do not merely offer to add it later. Return the matching live product in active_kit_actions immediately.
 - For a starter-kit or complete-kit question where DRIVER - 201 is already selected, prefer the live 3W COB LED, live 2600mAh/18650 battery option if present, and live JST wire option if present. Put these into recommended_products when they are live.
+- For a completion question where DRIVER - 202 is selected, prefer the live 3W dual LED, live 2600mAh/18650 sleeve battery option if present, and live 2-pin/JST wire option if present. Do not jump to a 5200mAh battery unless the user explicitly asks for very high runtime or a higher-power strip/DOB case.
 - For bulk/custom requirements, suggest Smart Handicrafts verification.
 - Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
@@ -4673,6 +4763,11 @@ ${JSON.stringify({
     sku: p.sku || "",
     price: p.price || 0
   })),
+  deterministic202CompletionCandidates: deterministic202CompletionLiveProducts.map((p) => ({
+    name: p.name || "",
+    sku: p.sku || "",
+    price: p.price || 0
+  })),
   deterministicDirectAddCandidates: deterministicDirectAddActions.map((a) => ({
     action: a.action,
     name: a.name,
@@ -4686,6 +4781,8 @@ ${JSON.stringify({
 Context interpretation rules:
 - The "kit.selectedDriver" field is the active selected driver. Treat it as already selected by the user.
 - The "kit.activeKitItems" field contains items already present in the active kit. Do not recommend duplicates.
+- The "kit.selectedDriverSupportedProductIds" field is the Kit Builder's internal compatibility list for the selected driver. Treat it as a strong signal for what the builder can actually add for that selected driver.
+- The "kit.selectedDriverRecommendedProductIds" field is the Kit Builder's preferred default set for that selected driver. Use it to avoid suggesting live but builder-incompatible parts.
 - The "kit.completionMessage" and "kit.coreStatus" indicate missing core parts.
 - If the user gives a broad intent such as "need to make a table lamp", answer like a guided kit builder: acknowledge current selection first, then suggest only missing parts.
 - If the user gives a creative form-factor concept such as "notebook lamp", "gift lamp", "lighting inside a bottle", or asks about placement/integration, treat it as both an implementation question and a kit-building question.
@@ -4864,7 +4961,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     if (
       isKitAiStarterOrCompletionQuestion(safeQuestion) &&
       deterministic201StarterLiveProducts.length &&
-      recommendedProducts.length === 0
+      !isKitAiSelected202Context(kitContext || {}, safeQuestion)
     ) {
       recommendedProducts = normalizeKitAiRecommendedProducts(
         deterministic201StarterLiveProducts.map((product) => ({
@@ -4879,6 +4976,26 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
       const overrideAnswer = build201StarterKitOverrideAnswer(recommendedProducts);
       if (overrideAnswer) answer = overrideAnswer;
+    }
+
+    if (
+      isKitAiSelected202Context(kitContext || {}, safeQuestion) &&
+      deterministic202CompletionLiveProducts.length &&
+      isKitAiStarterOrCompletionQuestion(safeQuestion)
+    ) {
+      recommendedProducts = normalizeKitAiRecommendedProducts(
+        deterministic202CompletionLiveProducts.map((product) => ({
+          name: product.name || "",
+          sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+          qty: 1,
+          type: getKitAiIntegrationProductBucket(product),
+          reason: "Live completion item for the selected 202 driver."
+        })),
+        liveProducts
+      );
+
+      const overrideAnswer202 = build202CompletionOverrideAnswer(recommendedProducts);
+      if (overrideAnswer202) answer = overrideAnswer202;
     }
 
     if (
@@ -4985,6 +5102,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       reference_image_used: !!normalizedLampReferenceImage,
       prior_reference_image_summary_used: !!priorLampReferenceSummary,
       deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
+      deterministic_202_completion_candidates_count: deterministic202CompletionLiveProducts.length,
       deterministic_direct_add_candidates_count: deterministicDirectAddActions.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
