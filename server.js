@@ -2373,25 +2373,40 @@ async function getApprovedOdooAiTrainingRules({ force = false } = {}) {
   }
 }
 
-function selectionVariants(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return [raw];
+function canonicalTrainingSelection(kind, value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
 
-  const lower = raw.toLowerCase();
-  const title = lower.charAt(0).toUpperCase() + lower.slice(1);
+  const maps = {
+    status: {
+      approved: "approved",
+      approve: "approved",
+      pending: "pending",
+      rejected: "rejected",
+      reject: "rejected"
+    },
+    source: {
+      admin: "admin",
+      public: "public"
+    },
+    category: {
+      compatibility: "compatibility",
+      product_rule: "product_rule",
+      productrule: "product_rule",
+      pricing: "pricing",
+      policy: "policy",
+      general: "general"
+    }
+  };
 
-  return Array.from(new Set([
-    raw,
-    lower,
-    title,
-    raw.toUpperCase()
-  ]));
+  return maps[kind]?.[normalized] || normalized || (kind === "category" ? "general" : "");
 }
-
 async function createOdooAiTrainingRule({
   ruleText,
-  status = "Pending",
-  source = "public",
+  status = "approved",
+  source = "admin",
   category = "general",
   relatedSku = "",
   pageUrl = "",
@@ -2407,16 +2422,20 @@ async function createOdooAiTrainingRule({
 
   const uid = await odooLoginCached();
 
+  const safeStatus = canonicalTrainingSelection("status", status) || "approved";
+  const safeSource = canonicalTrainingSelection("source", source) || "admin";
+  const safeCategory = canonicalTrainingSelection("category", category) || "general";
+
   const payload = {
     x_name: safeRuleText.slice(0, 80),
     [AI_TRAINING_FIELDS.ruleText]: safeRuleText,
-    [AI_TRAINING_FIELDS.status]: status,
-    [AI_TRAINING_FIELDS.source]: source,
-    [AI_TRAINING_FIELDS.category]: category,
-    [AI_TRAINING_FIELDS.relatedSku]: relatedSku || "",
-    [AI_TRAINING_FIELDS.pageUrl]: pageUrl || "",
-    [AI_TRAINING_FIELDS.userMessage]: userMessage || "",
-    [AI_TRAINING_FIELDS.approvedBy]: approvedBy || "",
+    [AI_TRAINING_FIELDS.status]: safeStatus,
+    [AI_TRAINING_FIELDS.source]: safeSource,
+    [AI_TRAINING_FIELDS.category]: safeCategory,
+    [AI_TRAINING_FIELDS.relatedSku]: String(relatedSku || "").trim(),
+    [AI_TRAINING_FIELDS.pageUrl]: String(pageUrl || "").trim(),
+    [AI_TRAINING_FIELDS.userMessage]: String(userMessage || "").trim(),
+    [AI_TRAINING_FIELDS.approvedBy]: String(approvedBy || "").trim(),
     [AI_TRAINING_FIELDS.active]: !!active
   };
 
@@ -2424,42 +2443,16 @@ async function createOdooAiTrainingRule({
     payload[AI_TRAINING_FIELDS.approvedDate] = approvedDate;
   }
 
-  let id = null;
-  let lastError = null;
-
-  const statusOptions = selectionVariants(status);
-  const sourceOptions = selectionVariants(source);
-  const categoryOptions = selectionVariants(category);
-
-  for (const statusValue of statusOptions) {
-    for (const sourceValue of sourceOptions) {
-      for (const categoryValue of categoryOptions) {
-        try {
-          const attemptPayload = {
-            ...payload,
-            [AI_TRAINING_FIELDS.status]: statusValue,
-            [AI_TRAINING_FIELDS.source]: sourceValue,
-            [AI_TRAINING_FIELDS.category]: categoryValue
-          };
-
-          id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [attemptPayload]);
-          break;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      if (id) break;
-    }
-    if (id) break;
+  try {
+    const id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [payload]);
+    aiTrainingRulesCache.fetchedAt = 0;
+    return { ok: true, id };
+  } catch (error) {
+    throw new Error(
+      `Odoo AI training create failed: ${String(error?.message || error || "Unknown error")} ` +
+      `(status=${safeStatus}, source=${safeSource}, category=${safeCategory})`
+    );
   }
-
-  if (!id) {
-    throw lastError || new Error("Could not create Odoo AI training rule.");
-  }
-
-  aiTrainingRulesCache.fetchedAt = 0;
-
-  return { ok: true, id };
 }
 
 // ===================== LIVE ODOO WEBSITE PRODUCTS FOR KIT AI =====================
@@ -3224,13 +3217,13 @@ app.post("/kit-ai-chat", async (req, res) => {
         return res.json({
           ok: true,
           answer: "Write the rule after /train and I’ll save it as an approved Smart Handicrafts rule.",
-          status: "Approved"
+          status: "approved"
         });
       }
 
       const result = await createOdooAiTrainingRule({
         ruleText: autoTrainCommand.ruleText,
-        status: "Approved",
+        status: "approved",
         source: "admin",
         category: autoTrainCommand.category || "general",
         relatedSku: autoTrainCommand.relatedSku || "",
@@ -3245,7 +3238,7 @@ app.post("/kit-ai-chat", async (req, res) => {
         ok: true,
         answer: "Approved rule saved. I’ll use this rule in future kit suggestions after the rules cache refreshes.",
         training_rule_id: result.id,
-        status: "Approved"
+        status: "approved"
       });
     }
 
@@ -3506,7 +3499,7 @@ app.post("/kit-ai-train", async (req, res) => {
 
     const result = await createOdooAiTrainingRule({
       ruleText,
-      status: "Approved",
+      status: "approved",
       source: "admin",
       category,
       relatedSku,
@@ -3520,14 +3513,15 @@ app.post("/kit-ai-train", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
-      status: "Approved",
+      status: "approved",
       message: "Approved training rule saved."
     });
   } catch (error) {
     console.error("Kit AI auto train error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Could not save approved training rule."
+      error: "Could not save approved training rule.",
+      detail: String(error?.message || error || "")
     });
   }
 });
@@ -3544,7 +3538,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
 
     const result = await createOdooAiTrainingRule({
       ruleText,
-      status: "Pending",
+      status: "pending",
       source: "public",
       category,
       relatedSku,
@@ -3556,7 +3550,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
-      status: "Pending",
+      status: "pending",
       message: "Feedback saved for Smart Handicrafts review."
     });
   } catch (error) {
@@ -3590,7 +3584,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
 
     const result = await createOdooAiTrainingRule({
       ruleText,
-      status: "Approved",
+      status: "approved",
       source: "admin",
       category,
       relatedSku,
@@ -3604,7 +3598,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
     return res.json({
       ok: true,
       id: result.id,
-      status: "Approved",
+      status: "approved",
       message: "Approved training rule saved."
     });
   } catch (error) {
