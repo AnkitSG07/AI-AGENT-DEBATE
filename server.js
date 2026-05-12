@@ -3287,6 +3287,85 @@ function compactChatHistory(history = []) {
 
 
 
+
+// ===================== KIT AI SSE STREAM HELPERS =====================
+// Streams only the customer-facing "answer" text while Gemini is still
+// generating the structured JSON response. The final event always contains
+// the fully parsed/validated final payload used by the existing frontend.
+function setupKitAiSse(res) {
+  res.status(200);
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+}
+
+function sendKitAiSse(res, eventName, payload) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: ${eventName}\n`);
+  res.write(`data: ${JSON.stringify(payload || {})}\n\n`);
+}
+
+function getGeminiChunkText(chunk) {
+  return typeof chunk?.text === "string" ? chunk.text : "";
+}
+
+function extractPartialKitAiJsonStringField(rawText = "", fieldName = "answer") {
+  const raw = String(rawText || "");
+  const fieldPattern = new RegExp(`"${fieldName}"\\s*:\\s*"`, "i");
+  const match = fieldPattern.exec(raw);
+  if (!match) return { value: "", complete: false };
+
+  let i = match.index + match[0].length;
+  let value = "";
+  let escaping = false;
+
+  while (i < raw.length) {
+    const ch = raw[i];
+
+    if (escaping) {
+      if (ch === "n") value += "\n";
+      else if (ch === "r") value += "\r";
+      else if (ch === "t") value += "\t";
+      else if (ch === "b") value += "\b";
+      else if (ch === "f") value += "\f";
+      else if (ch === '"') value += '"';
+      else if (ch === "\\") value += "\\";
+      else if (ch === "/") value += "/";
+      else if (ch === "u") {
+        const hex = raw.slice(i + 1, i + 5);
+        if (/^[0-9a-f]{4}$/i.test(hex)) {
+          value += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else {
+          return { value, complete: false };
+        }
+      } else {
+        value += ch;
+      }
+      escaping = false;
+      i += 1;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escaping = true;
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      return { value, complete: true };
+    }
+
+    value += ch;
+    i += 1;
+  }
+
+  return { value, complete: false };
+}
+
 function parseBackendAutoTrainCommand(text = "") {
   const raw = String(text || "").trim();
   if (!raw.toLowerCase().startsWith("/train")) return null;
@@ -3304,6 +3383,7 @@ function parseBackendAutoTrainCommand(text = "") {
 app.post("/kit-ai-chat", async (req, res) => {
   try {
     const { question, pageContext, kitContext, history } = req.body || {};
+    const wantsStream = String(req.headers.accept || "").toLowerCase().includes("text/event-stream") || req.body?.stream === true;
 
     if (!question || !String(question).trim()) {
       return res.status(400).json({
@@ -3498,19 +3578,50 @@ ${safeQuestion}
 Answer using only LIVE ODOO WEBSITE PRODUCTS.
 `;
 
-    const result = await genAI.models.generateContent({
-      model: KIT_AI_MODEL,
-      approved_rules_count: approvedRules.length,
-      approved_rules_cached: !!approvedRulesResult.cached,
-      contents: prompt
-    });
+    let rawText = "";
+    let streamedAnswerText = "";
 
-    const rawText =
-      result.text?.trim() ||
-      JSON.stringify({
-        answer: "I could not generate an answer right now.",
-        recommended_products: []
+    if (wantsStream) {
+      setupKitAiSse(res);
+      sendKitAiSse(res, "status", { message: "Kit Expert is preparing the answer..." });
+
+      const stream = await genAI.models.generateContentStream({
+        model: KIT_AI_MODEL,
+        approved_rules_count: approvedRules.length,
+        approved_rules_cached: !!approvedRulesResult.cached,
+        contents: prompt
       });
+
+      for await (const chunk of stream) {
+        const chunkText = getGeminiChunkText(chunk);
+        if (!chunkText) continue;
+
+        rawText += chunkText;
+
+        // Gemini is still producing JSON. Extract only the progressively-growing
+        // customer-facing answer field so the chat does not display raw JSON.
+        const partialAnswer = extractPartialKitAiJsonStringField(rawText, "answer").value;
+        if (partialAnswer.length > streamedAnswerText.length) {
+          const delta = partialAnswer.slice(streamedAnswerText.length);
+          streamedAnswerText = partialAnswer;
+          sendKitAiSse(res, "delta", { text: delta });
+        }
+      }
+    } else {
+      const result = await genAI.models.generateContent({
+        model: KIT_AI_MODEL,
+        approved_rules_count: approvedRules.length,
+        approved_rules_cached: !!approvedRulesResult.cached,
+        contents: prompt
+      });
+
+      rawText = result.text?.trim() || "";
+    }
+
+    rawText = rawText.trim() || JSON.stringify({
+      answer: "I could not generate an answer right now.",
+      recommended_products: []
+    });
 
     const parsedResponse = parseKitAiJsonResponse(rawText);
 
@@ -3571,7 +3682,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       recommendedProducts = [];
     }
 
-    return res.json({
+    const finalPayload = {
       ok: true,
       answer,
       recommended_products: recommendedProducts,
@@ -3581,9 +3692,28 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       prompt_products_count: relevantLiveProducts.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
-    });
+    };
+
+    if (wantsStream) {
+      // The final event replaces any streamed preview text if guardrails or
+      // answer cleanup adjusted the final wording.
+      sendKitAiSse(res, "final", finalPayload);
+      res.end();
+      return;
+    }
+
+    return res.json(finalPayload);
   } catch (error) {
     console.error("Kit AI error:", error);
+
+    if (res.headersSent) {
+      sendKitAiSse(res, "error", {
+        ok: false,
+        error: "AI assistant failed to respond"
+      });
+      res.end();
+      return;
+    }
 
     return res.status(500).json({
       ok: false,
