@@ -2403,11 +2403,100 @@ function canonicalTrainingSelection(kind, value) {
 
   return maps[kind]?.[normalized] || normalized || (kind === "category" ? "general" : "");
 }
+const aiTrainingSelectionCache = {
+  fetchedAt: 0,
+  values: null
+};
+
+const AI_TRAINING_SELECTION_TTL_MS = Number(
+  process.env.AI_TRAINING_SELECTION_TTL_MS || 10 * 60 * 1000
+);
+
+function normalizeSelectionCompare(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+}
+
+async function getAiTrainingSelectionValues({ force = false } = {}) {
+  const cacheValid =
+    !force &&
+    aiTrainingSelectionCache.values &&
+    Date.now() - aiTrainingSelectionCache.fetchedAt < AI_TRAINING_SELECTION_TTL_MS;
+
+  if (cacheValid) {
+    return aiTrainingSelectionCache.values;
+  }
+
+  const uid = await odooLoginCached();
+
+  const fieldsMeta = await odooExecute(
+    uid,
+    AI_TRAINING_MODEL,
+    "fields_get",
+    [[
+      AI_TRAINING_FIELDS.status,
+      AI_TRAINING_FIELDS.source,
+      AI_TRAINING_FIELDS.category
+    ]],
+    {
+      attributes: ["selection", "string", "type"]
+    }
+  );
+
+  function readSelection(fieldName) {
+    const raw = fieldsMeta?.[fieldName]?.selection || [];
+    return raw.map((item) => ({
+      value: Array.isArray(item) ? String(item[0] ?? "") : "",
+      label: Array.isArray(item) ? String(item[1] ?? "") : ""
+    })).filter((item) => item.value);
+  }
+
+  const values = {
+    status: readSelection(AI_TRAINING_FIELDS.status),
+    source: readSelection(AI_TRAINING_FIELDS.source),
+    category: readSelection(AI_TRAINING_FIELDS.category)
+  };
+
+  aiTrainingSelectionCache.values = values;
+  aiTrainingSelectionCache.fetchedAt = Date.now();
+
+  return values;
+}
+
+function chooseOdooSelectionValue(options = [], desired, fallbackCandidates = []) {
+  if (!Array.isArray(options) || !options.length) return String(desired || "").trim();
+
+  const candidates = [
+    desired,
+    ...fallbackCandidates
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeSelectionCompare(candidate);
+
+    const exactByValue = options.find(
+      (option) => normalizeSelectionCompare(option.value) === normalizedCandidate
+    );
+    if (exactByValue) return exactByValue.value;
+
+    const exactByLabel = options.find(
+      (option) => normalizeSelectionCompare(option.label) === normalizedCandidate
+    );
+    if (exactByLabel) return exactByLabel.value;
+  }
+
+  return options[0].value;
+}
+
 async function createOdooAiTrainingRule({
   ruleText,
   status = "approved",
   source = "admin",
-  category = "general",
+  category = "compatibility",
   relatedSku = "",
   pageUrl = "",
   userMessage = "",
@@ -2421,10 +2510,25 @@ async function createOdooAiTrainingRule({
   if (!safeRuleText) throw new Error("Rule text is required.");
 
   const uid = await odooLoginCached();
+  const selectionValues = await getAiTrainingSelectionValues();
 
-  const safeStatus = canonicalTrainingSelection("status", status) || "approved";
-  const safeSource = canonicalTrainingSelection("source", source) || "admin";
-  const safeCategory = canonicalTrainingSelection("category", category) || "general";
+  const safeStatus = chooseOdooSelectionValue(
+    selectionValues.status,
+    status,
+    ["approved", "Approved", "APPROVED"]
+  );
+
+  const safeSource = chooseOdooSelectionValue(
+    selectionValues.source,
+    source,
+    ["admin", "Admin", "ADMIN"]
+  );
+
+  const safeCategory = chooseOdooSelectionValue(
+    selectionValues.category,
+    category,
+    ["compatibility", "Compatibility", "COMPATIBILITY", "general", "General"]
+  );
 
   const payload = {
     x_name: safeRuleText.slice(0, 80),
@@ -2446,7 +2550,15 @@ async function createOdooAiTrainingRule({
   try {
     const id = await odooExecute(uid, AI_TRAINING_MODEL, "create", [payload]);
     aiTrainingRulesCache.fetchedAt = 0;
-    return { ok: true, id };
+    return {
+      ok: true,
+      id,
+      savedSelectionValues: {
+        status: safeStatus,
+        source: safeSource,
+        category: safeCategory
+      }
+    };
   } catch (error) {
     throw new Error(
       `Odoo AI training create failed: ${String(error?.message || error || "Unknown error")} ` +
@@ -3225,7 +3337,7 @@ app.post("/kit-ai-chat", async (req, res) => {
         ruleText: autoTrainCommand.ruleText,
         status: "approved",
         source: "admin",
-        category: autoTrainCommand.category || "general",
+        category: autoTrainCommand.category || "compatibility",
         relatedSku: autoTrainCommand.relatedSku || "",
         pageUrl: pageContext?.pageUrl || "",
         userMessage: safeQuestion,
@@ -3491,7 +3603,7 @@ app.post("/kit-ai-train", async (req, res) => {
     const {
       ruleText,
       relatedSku = "",
-      category = "general",
+      category = "compatibility",
       pageUrl = "",
       userMessage = "",
       approvedBy = "chat-train"
@@ -3533,7 +3645,7 @@ app.post("/kit-ai-feedback", async (req, res) => {
       userMessage,
       pageUrl,
       relatedSku = "",
-      category = "general"
+      category = "compatibility"
     } = req.body || {};
 
     const result = await createOdooAiTrainingRule({
@@ -3568,7 +3680,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
       adminKey,
       ruleText,
       relatedSku = "",
-      category = "general",
+      category = "compatibility",
       pageUrl = "",
       userMessage = "",
       approvedBy = "admin"
@@ -3606,6 +3718,23 @@ app.post("/kit-ai-admin-train", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Could not save admin training rule."
+    });
+  }
+});
+
+
+
+app.get("/kit-ai-training-selection-values", async (req, res) => {
+  try {
+    const values = await getAiTrainingSelectionValues({ force: true });
+    return res.json({
+      ok: true,
+      values
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: String(error?.message || error || "")
     });
   }
 });
