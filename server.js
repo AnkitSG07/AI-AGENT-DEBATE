@@ -3457,6 +3457,74 @@ function getGeminiChunkText(chunk) {
   return typeof chunk?.text === "string" ? chunk.text : "";
 }
 
+function sleepKitAi(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableKitAiGeminiError(error) {
+  const text = String(
+    error?.message ||
+    error?.cause ||
+    error ||
+    ""
+  ).toLowerCase();
+
+  return (
+    text.includes("503") ||
+    text.includes("502") ||
+    text.includes("504") ||
+    text.includes("service unavailable") ||
+    text.includes("unavailable") ||
+    text.includes("exception parsing response") ||
+    text.includes("overloaded") ||
+    text.includes("temporarily") ||
+    text.includes("deadline exceeded") ||
+    text.includes("internal")
+  );
+}
+
+async function generateKitAiNonStreamingWithRetry({
+  prompt,
+  approvedRulesCount,
+  approvedRulesCached,
+  maxAttempts = 2,
+  res = null
+}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (attempt > 1 && res) {
+        sendKitAiSse(res, "status", {
+          message: "Gemini is busy. Retrying the final answer..."
+        });
+      }
+
+      const result = await genAI.models.generateContent({
+        model: KIT_AI_MODEL,
+        approved_rules_count: approvedRulesCount,
+        approved_rules_cached: approvedRulesCached,
+        contents: prompt,
+        config: buildKitAiGeminiConfig()
+      });
+
+      return result;
+    } catch (error) {
+      lastError = error;
+
+      const canRetry =
+        attempt < maxAttempts &&
+        isRetryableKitAiGeminiError(error);
+
+      if (!canRetry) throw error;
+
+      await sleepKitAi(650 * attempt);
+    }
+  }
+
+  throw lastError || new Error("Gemini non-streaming generation failed.");
+}
+
 function extractPartialKitAiJsonStringField(rawText = "", fieldName = "answer") {
   const raw = String(rawText || "");
   const fieldPattern = new RegExp(`"${fieldName}"\\s*:\\s*"`, "i");
@@ -3738,50 +3806,103 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       setupKitAiSse(res);
       sendKitAiSse(res, "status", { message: "Kit Expert is preparing the answer..." });
 
-      const stream = await genAI.models.generateContentStream({
-        model: KIT_AI_MODEL,
-        approved_rules_count: relevantApprovedRules.length,
-        approved_rules_cached: !!approvedRulesResult.cached,
-        contents: prompt,
-        config: buildKitAiGeminiConfig()
-      });
+      let streamingError = null;
+      const MAX_STREAM_ATTEMPTS = 2;
 
-      for await (const chunk of stream) {
-        const chunkText = getGeminiChunkText(chunk);
-        if (!chunkText) continue;
+      for (let attempt = 1; attempt <= MAX_STREAM_ATTEMPTS; attempt += 1) {
+        try {
+          if (attempt > 1) {
+            sendKitAiSse(res, "status", {
+              message: "Gemini stream was temporarily unavailable. Retrying..."
+            });
+            await sleepKitAi(650 * (attempt - 1));
+          }
 
-        rawText += chunkText;
-
-        // Gemini is still producing JSON. Extract only the progressively-growing
-        // customer-facing answer field so the chat does not display raw JSON.
-        const partialAnswerState = extractPartialKitAiJsonStringField(rawText, "answer");
-        const partialAnswer = partialAnswerState.value;
-
-        if (partialAnswer.length > streamedAnswerText.length) {
-          const delta = partialAnswer.slice(streamedAnswerText.length);
-          streamedAnswerText = partialAnswer;
-          sendKitAiSse(res, "delta", { text: delta });
-        }
-
-        /*
-          The visible answer can finish before Gemini finishes the remaining JSON
-          fields such as recommended_products/action_offer. Tell the frontend so
-          it can show a clear "finalising" state instead of looking stuck.
-        */
-        if (partialAnswerState.complete && !streamedAnswerCompleted) {
-          streamedAnswerCompleted = true;
-          sendKitAiSse(res, "answer_complete", {
-            message: "Answer written. Finalising the product check..."
+          const stream = await genAI.models.generateContentStream({
+            model: KIT_AI_MODEL,
+            approved_rules_count: relevantApprovedRules.length,
+            approved_rules_cached: !!approvedRulesResult.cached,
+            contents: prompt,
+            config: buildKitAiGeminiConfig()
           });
+
+          for await (const chunk of stream) {
+            const chunkText = getGeminiChunkText(chunk);
+            if (!chunkText) continue;
+
+            rawText += chunkText;
+
+            // Gemini is still producing JSON. Extract only the progressively-growing
+            // customer-facing answer field so the chat does not display raw JSON.
+            const partialAnswerState = extractPartialKitAiJsonStringField(rawText, "answer");
+            const partialAnswer = partialAnswerState.value;
+
+            if (partialAnswer.length > streamedAnswerText.length) {
+              const delta = partialAnswer.slice(streamedAnswerText.length);
+              streamedAnswerText = partialAnswer;
+              sendKitAiSse(res, "delta", { text: delta });
+            }
+
+            /*
+              The visible answer can finish before Gemini finishes the remaining JSON
+              fields such as recommended_products/action_offer. Tell the frontend so
+              it can show a clear "finalising" state instead of looking stuck.
+            */
+            if (partialAnswerState.complete && !streamedAnswerCompleted) {
+              streamedAnswerCompleted = true;
+              sendKitAiSse(res, "answer_complete", {
+                message: "Answer written. Finalising the product check..."
+              });
+            }
+          }
+
+          streamingError = null;
+          break;
+        } catch (error) {
+          streamingError = error;
+
+          const canRetryStreaming =
+            attempt < MAX_STREAM_ATTEMPTS &&
+            isRetryableKitAiGeminiError(error) &&
+            !String(streamedAnswerText || "").trim();
+
+          if (!canRetryStreaming) break;
         }
       }
+
+      /*
+        Production safety:
+        If Gemini streaming fails with 503 / parsing-stream / temporary errors,
+        fall back to normal Gemini generation instead of showing an error to the user.
+        The visitor may receive the final answer all at once, but the answer still arrives.
+      */
+      if (streamingError) {
+        if (!isRetryableKitAiGeminiError(streamingError)) {
+          throw streamingError;
+        }
+
+        console.warn("Kit AI streaming failed; falling back to non-streaming Gemini generation:", streamingError);
+
+        sendKitAiSse(res, "status", {
+          message: "Live typing is temporarily unavailable. Finishing the answer..."
+        });
+
+        const fallbackResult = await generateKitAiNonStreamingWithRetry({
+          prompt,
+          approvedRulesCount: relevantApprovedRules.length,
+          approvedRulesCached: !!approvedRulesResult.cached,
+          maxAttempts: 2,
+          res
+        });
+
+        rawText = fallbackResult.text?.trim() || "";
+      }
     } else {
-      const result = await genAI.models.generateContent({
-        model: KIT_AI_MODEL,
-        approved_rules_count: relevantApprovedRules.length,
-        approved_rules_cached: !!approvedRulesResult.cached,
-        contents: prompt,
-        config: buildKitAiGeminiConfig()
+      const result = await generateKitAiNonStreamingWithRetry({
+        prompt,
+        approvedRulesCount: relevantApprovedRules.length,
+        approvedRulesCached: !!approvedRulesResult.cached,
+        maxAttempts: 2
       });
 
       rawText = result.text?.trim() || "";
