@@ -3666,6 +3666,37 @@ function findBestLiveProductBySignals(liveProducts = [], { must = [], prefer = [
   return rows[0]?.product || null;
 }
 
+function kitAiProductTitleSkuText(product = {}) {
+  return [
+    product?.name || "",
+    product?.sku || "",
+    ...(Array.isArray(product?.variantSkus) ? product.variantSkus : []),
+    ...(Array.isArray(product?.variantNames) ? product.variantNames : [])
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function findBestLiveProductByTitleSkuSignals(liveProducts = [], { must = [], prefer = [], exclude = [] } = {}) {
+  const rows = (liveProducts || [])
+    .map((product) => {
+      const text = kitAiProductTitleSkuText(product);
+      if (!text) return null;
+      if ((exclude || []).some((pattern) => pattern.test(text))) return null;
+      if ((must || []).some((pattern) => !pattern.test(text))) return null;
+
+      let score = 0;
+      for (const pattern of prefer || []) {
+        if (pattern.test(text)) score += 10;
+      }
+      score += String(product?.sku || "").trim() ? 2 : 0;
+      score += String(product?.name || "").trim() ? 1 : 0;
+      return { product, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return rows[0]?.product || null;
+}
+
 function isKitAiStarterOrCompletionQuestion(question = "") {
   const q = String(question || "").toLowerCase();
   return (
@@ -3694,23 +3725,53 @@ function findDefault201StarterKitLiveProducts(liveProducts = [], kitContext = {}
 
   if (!is201Context) return [];
 
-  const led3w = findBestLiveProductBySignals(liveProducts, {
+  const led3w = findBestLiveProductByTitleSkuSignals(liveProducts, {
     must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
-    exclude: [/\b(strip|lsd)\b/i],
-    prefer: [/\bcob\b/i, /\bcree\b/i]
+    exclude: [/\b(strip|lsd|12v|24v)\b/i],
+    prefer: [/\bled\s*-?\s*cree\s*cob\s*3\s*w\b/i, /\bcob\b/i, /\bcree\b/i, /\bsh-cob-3\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+    exclude: [/\b(strip|lsd|12v|24v)\b/i],
+    prefer: [/\bcob\b/i, /\bcree\b/i, /\bsh-cob-3\b/i]
   });
 
-  const battery = findBestLiveProductBySignals(liveProducts, {
+  // For DRIVER-201 starter kit, prefer the 2600mAh sleeved battery where it is live.
+  // Do not accidentally pick an unrelated battery just because it contains generic "battery" wording.
+  const battery2600Sleeve = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i],
+    prefer: [/\bsleeve\b/i, /\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+  });
+
+  const fallbackBattery = findBestLiveProductByTitleSkuSignals(liveProducts, {
     must: [/\b(battery|18650|cell)\b/i],
-    prefer: [/\b2600\b/i, /\b18650\b/i, /\bmah\b/i]
+    prefer: [/\b2600\b/i, /\bsleeve\b/i, /\b18650\b/i, /\bmah\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\b2600\b/i, /\bsleeve\b/i, /\b18650\b/i, /\bmah\b/i]
   });
 
-  const jstWire = findBestLiveProductBySignals(liveProducts, {
-    must: [/\bjst\b/i],
-    prefer: [/\bwire\b/i, /\bcable\b/i, /\bconnector\b/i]
+  const battery = battery2600Sleeve || fallbackBattery;
+
+  // Restrict JST wire matching to visible product title/SKU/variant names.
+  // Battery descriptions often mention JST, which previously caused a battery to be mistaken for a JST wire.
+  const jstWire = findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+    exclude: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\bdual\s*side\b/i, /\bledwire\b/i, /\bwire\b/i, /\bcable\b/i, /\bconnector\b/i]
   });
 
-  return [led3w, battery, jstWire].filter(Boolean);
+  const ordered = [led3w, battery, jstWire].filter(Boolean);
+  const deduped = [];
+  const seen = new Set();
+
+  for (const product of ordered) {
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(product);
+  }
+
+  return deduped;
 }
 
 function build201StarterKitOverrideAnswer(products = []) {
@@ -3753,10 +3814,14 @@ function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], 
 
   if (/\b3\s*w\b|\b3w\b/i.test(q) && /\bled\b|\bcob\b/i.test(q)) {
     pushAdd(
-      findBestLiveProductBySignals(liveProducts, {
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
         must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
-        exclude: [/\b(strip|lsd)\b/i],
-        prefer: [/\bcob\b/i, /\bcree\b/i]
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bled\s*-?\s*cree\s*cob\s*3\s*w\b/i, /\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
+      }) || findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
       }),
       "User explicitly asked to add a 3W LED."
     );
@@ -3810,7 +3875,7 @@ function buildDirectAddOverrideAnswer(actions = []) {
   if (!first) return "";
   const label = first.sku ? `${first.name} (${first.sku})` : first.name;
   if (!label) return "";
-  return `Done — I’m adding ${label} to your active kit now.`;
+  return `I’m adding ${label} to your active kit now.`;
 }
 
 function answerInvitesAddAll(answer = "") {
@@ -4575,7 +4640,7 @@ Rules for active_kit_actions:
 - If the user asks to switch drivers, use an "add" action for the new live driver; the frontend will select that driver and the kit builder should replace the prior active driver.
 - If the user asks to replace a non-driver item, you may include one "remove" action for the old item and one "add" action for the new exact live product.
 - Do not use active_kit_actions for a general recommendation or when you are only asking "Should I add these?".
-- When active_kit_actions are present, answer naturally that you are updating the active kit; the frontend will report the actual success/failure after execution.
+- When active_kit_actions are present, say that you are updating or switching the active kit now. Do not claim that the change has already finished successfully; the frontend will report the actual success/failure after execution.
 
 Rules for image_summary:
 - If a new reference image is attached this turn, create a compact plain-text summary focused on visible structure relevant to lamp integration.
