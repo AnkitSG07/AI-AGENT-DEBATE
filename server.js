@@ -3282,6 +3282,7 @@ function parseKitAiJsonResponse(rawText) {
       .replace(/Acknowledge the user[\s\S]*?Ask for missing technical details only if needed\./gi, "")
       .trim() || "I could not generate an answer right now.",
     recommended_products: [],
+    active_kit_actions: [],
     action_offer: "none"
   };
 }
@@ -3382,6 +3383,61 @@ function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
     })
     .filter(Boolean)
     .slice(0, 12);
+}
+
+function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitContext = {}) {
+  const normalized = [];
+  const source = Array.isArray(actions) ? actions : [];
+  const activeKitText = getActiveKitTextForMatch(kitContext);
+
+  for (const rawAction of source) {
+    const action = String(rawAction?.action || "").trim().toLowerCase();
+    if (!["add", "remove"].includes(action)) continue;
+
+    if (action === "add") {
+      const candidate = normalizeKitAiRecommendedProducts([rawAction], liveProducts)[0];
+      if (!candidate) continue;
+      normalized.push({
+        action: "add",
+        name: candidate.name,
+        sku: candidate.sku,
+        qty: candidate.qty,
+        type: candidate.type,
+        reason: stripMarkdownForCustomer(rawAction?.reason || candidate.reason || "")
+      });
+      continue;
+    }
+
+    // Remove actions target items that are already in the active kit.
+    // We preserve the AI's user-facing target name/SKU so the frontend can locate the row.
+    const name = stripMarkdownForCustomer(rawAction?.name || rawAction?.target || "").slice(0, 220);
+    const sku = String(rawAction?.sku || "").trim().slice(0, 120);
+    const type = String(rawAction?.type || "").trim().slice(0, 80);
+    const reason = stripMarkdownForCustomer(rawAction?.reason || "").slice(0, 220);
+
+    if (!name && !sku) continue;
+
+    const query = compactTextForMatch(`${sku} ${name}`);
+    const mayExistInActiveKit =
+      !activeKitText ||
+      (query && query.split(" ").some((token) => token.length >= 3 && activeKitText.includes(token)));
+
+    if (!mayExistInActiveKit) {
+      // Keep it anyway because active kit text can be compact/incomplete in the page snapshot.
+      // The frontend performs the final DOM check and reports success/failure honestly.
+    }
+
+    normalized.push({
+      action: "remove",
+      name,
+      sku,
+      qty: 1,
+      type,
+      reason
+    });
+  }
+
+  return normalized.slice(0, 12);
 }
 
 function extractNumbersFromText(text) {
@@ -4211,7 +4267,8 @@ Answer style:
 - For a normal rechargeable single-colour table lamp with AS-B-201-SLD already selected, your default expert choice is 3W COB LED, 2600mAh 18650 battery and JST wire, unless user asks for higher brightness.
 - Use 5W only if the user asks for more brightness or can manage heat.
 - If the user says "why", explain the practical reason in human language: heat, runtime, brightness, safety, assembly simplicity.
-- If the user says "add it", "add these", "add all", "yes add", "add to kit", or "add to cart", the frontend will add the selected products automatically.
+- If the user says "add it", "add these", "add all", "yes add", "add to kit", or "add to cart" after you already proposed recommended products, the frontend can add those selected products automatically.
+- If the user explicitly asks to ADD, REMOVE, DELETE, SWITCH, CHANGE, or REPLACE an item in the active kit in the current message, use active_kit_actions so the frontend can actually update the active kit.
 - For bulk/custom requirements, suggest Smart Handicrafts verification.
 - Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
@@ -4233,6 +4290,16 @@ Do not output multiple JSON objects.
       "reason": "short internal reason"
     }
   ],
+  "active_kit_actions": [
+    {
+      "action": "add | remove",
+      "name": "for add: exact live product name; for remove: active-kit item name if known",
+      "sku": "for add: exact live SKU if available; for remove: matching SKU if visible in active kit",
+      "qty": 1,
+      "type": "driver | led | battery | wire | connector | holder | sensor | accessory",
+      "reason": "short reason"
+    }
+  ],
   "action_offer": "active_kit | cart | none"
 }
 Rules for recommended_products:
@@ -4244,6 +4311,15 @@ Rules for recommended_products:
 - Do not include alternatives. Choose one final path.
 - If recommended_products is not empty, the answer should naturally ask whether to add all of them to the active kit or cart.
 - The frontend will not show product cards, so the answer itself must be understandable.
+
+Rules for active_kit_actions:
+- Use active_kit_actions ONLY when the user explicitly asks to change the active kit now, such as "add this battery", "remove the current battery", "delete the JST wire", "switch to 202", "replace 201 with 202", or "add the 3W LED".
+- For "add" actions, include only exact products available in LIVE ODOO WEBSITE PRODUCTS. Do not invent SKUs or names.
+- For "remove" actions, target an item that appears to be in kit.selectedDriver or kit.activeKitItems. Use the most recognizable item name/SKU from the active kit context.
+- If the user asks to switch drivers, use an "add" action for the new live driver; the frontend will select that driver and the kit builder should replace the prior active driver.
+- If the user asks to replace a non-driver item, you may include one "remove" action for the old item and one "add" action for the new exact live product.
+- Do not use active_kit_actions for a general recommendation or when you are only asking "Should I add these?".
+- When active_kit_actions are present, answer naturally that you are updating the active kit; the frontend will report the actual success/failure after execution.
 
 Rules for image_summary:
 - If a new reference image is attached this turn, create a compact plain-text summary focused on visible structure relevant to lamp integration.
@@ -4280,6 +4356,7 @@ Context interpretation rules:
 - Recommended_products should include only missing/addable products, not products already in the active kit.
 - When the user asks you to choose, recommended_products should contain only your final selected items, not multiple alternatives in the same category.
 - Do not include an add card for the driver if that driver is already selected in kit.selectedDriver.
+- If the user explicitly asks to mutate the active kit, use active_kit_actions rather than only explaining what to do.
 
 User question:
 ${safeQuestion}
@@ -4441,6 +4518,12 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     recommendedProducts = filterAlreadyActiveRecommendations(recommendedProducts, kitContext || {});
 
+    const activeKitActions = normalizeKitAiActiveKitActions(
+      parsedResponse.active_kit_actions || [],
+      liveProducts,
+      kitContext || {}
+    );
+
     if (userWantsAiToChoose(safeQuestion)) {
       const seenTypes = new Set();
       recommendedProducts = recommendedProducts.filter((p) => {
@@ -4504,6 +4587,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       image_summary: returnedLampReferenceImageSummary,
       image_analyzed_this_turn: !!normalizedLampReferenceImage,
       recommended_products: recommendedProducts,
+      active_kit_actions: activeKitActions,
       action_offer: parsedResponse.action_offer || (recommendedProducts.length ? "active_kit" : "none"),
       live_products_available: true,
       live_products_count: liveProducts.length,
