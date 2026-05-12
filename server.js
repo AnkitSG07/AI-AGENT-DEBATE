@@ -2261,14 +2261,107 @@ function normalizeOdooSelection(value) {
     .replace(/\s+/g, "_");
 }
 
+function tokenizeKitAiRuleSearchText(value = "") {
+  return Array.from(
+    new Set(
+      String(value || "")
+        .toLowerCase()
+        .match(/[a-z0-9-]{3,}/g) || []
+    )
+  );
+}
+
+function buildKitAiRulesSearchText({ question, pageContext, kitContext } = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  return [
+    question || "",
+    pageContext?.pageTitle || "",
+    pageContext?.h1 || "",
+    snapshot.selectedApplication || "",
+    snapshot.selectedDriver || "",
+    Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.join(" ") : "",
+    snapshot.completionMessage || "",
+    snapshot.warning || ""
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function scoreApprovedRuleForKitAi(rule = {}, searchText = "") {
+  const haystack = [
+    rule.rule_text || "",
+    rule.related_sku || "",
+    rule.category || "",
+    rule.user_message || ""
+  ].join(" ").toLowerCase();
+
+  if (!haystack) return 0;
+
+  let score = 0;
+  const q = String(searchText || "").toLowerCase();
+  const relatedSku = String(rule.related_sku || "").trim().toLowerCase();
+
+  if (relatedSku && q.includes(relatedSku)) score += 120;
+
+  const ruleNums = Array.from(haystack.matchAll(/\b\d{2,4}\b/g)).map((m) => m[0]);
+  const queryNums = new Set(Array.from(q.matchAll(/\b\d{2,4}\b/g)).map((m) => m[0]));
+  for (const num of ruleNums) {
+    if (queryNums.has(num)) score += 55;
+  }
+
+  const tokens = tokenizeKitAiRuleSearchText(q).slice(0, 50);
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += token.length > 4 ? 5 : 2;
+  }
+
+  if (/\bdual|two leds?|2 leds?|3 colour|3 color\b/i.test(q) && /\bdual|two leds?|2 leds?|3 colour|3 color\b/i.test(haystack)) {
+    score += 18;
+  }
+
+  if (/\bstrip|204|205|lsd\b/i.test(q) && /\bstrip|204|205|lsd\b/i.test(haystack)) {
+    score += 18;
+  }
+
+  if (/\bbattery|recharge|fast charg\b/i.test(q) && /\bbattery|recharge|fast charg\b/i.test(haystack)) {
+    score += 12;
+  }
+
+  return score;
+}
+
+function selectRelevantApprovedRulesForKitAi(rules = [], { question, pageContext, kitContext } = {}) {
+  const sourceRules = Array.isArray(rules) ? rules : [];
+  if (!sourceRules.length) return [];
+
+  const searchText = buildKitAiRulesSearchText({ question, pageContext, kitContext });
+
+  const scored = sourceRules
+    .map((rule) => ({
+      rule,
+      score: scoreApprovedRuleForKitAi(rule, searchText)
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const relevant = scored
+    .filter((row) => row.score > 0)
+    .slice(0, KIT_AI_MAX_RELEVANT_RULES)
+    .map((row) => row.rule);
+
+  if (relevant.length) return relevant;
+
+  // Small safety fallback: keep a few newest general rules, not the whole training store.
+  return sourceRules
+    .filter((rule) => !String(rule.related_sku || "").trim())
+    .slice(0, Math.min(3, KIT_AI_MAX_RELEVANT_RULES));
+}
+
 function formatApprovedRulesForPrompt(rules = []) {
-  if (!rules.length) return "No approved Smart Handicrafts training rules are available yet.";
+  if (!rules.length) return "No directly relevant approved Smart Handicrafts training rules were matched for this question.";
 
   return rules
+    .slice(0, KIT_AI_MAX_RELEVANT_RULES)
     .map((rule, index) => {
       const sku = rule.related_sku ? ` SKU: ${rule.related_sku}.` : "";
       const category = rule.category ? ` Category: ${rule.category}.` : "";
-      return `${index + 1}. ${rule.rule_text}${sku}${category}`;
+      return `${index + 1}. ${String(rule.rule_text || "").trim().slice(0, 520)}${sku}${category}`;
     })
     .join("\n");
 }
@@ -2851,15 +2944,46 @@ function getFakeSkusFromAnswer(answer, liveProducts = []) {
   return mentioned.filter((sku) => !liveSkus.has(sku));
 }
 
+function kitAiUserAskedAboutSpecificProduct(question = "") {
+  const q = String(question || "");
+  return (
+    /\bAS-[A-Z]-[A-Z0-9-]+\b/i.test(q) ||
+    /\b(?:DRIVER|KIT)\s*[-–—]?\s*(?:101|102|103|201|202|203|204|205|206)\b/i.test(q) ||
+    /\b(?:101|102|103|201|202|203|204|205|206)\s*(?:driver|kit|sku|product)?\b/i.test(q)
+  );
+}
+
+function removeUnsupportedSkuMentionsFromAnswer(answer = "", fakeSkus = []) {
+  let clean = String(answer || "");
+
+  (Array.isArray(fakeSkus) ? fakeSkus : []).forEach((sku) => {
+    const escaped = String(sku || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!escaped) return;
+    clean = clean.replace(new RegExp(`\\b${escaped}\\b`, "g"), "the suitable live option");
+  });
+
+  return clean
+    .replace(/\bthe suitable live option\s+\(\s*the suitable live option\s*\)/gi, "the suitable live option")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .trim();
+}
+
+function compactKitAiProductDescription(value = "") {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, KIT_AI_PRODUCT_DESCRIPTION_CHARS);
+}
+
 function buildLiveProductsForPrompt(liveProducts = []) {
   return (liveProducts || []).map((p) => ({
     name: p.name,
     sku: p.sku || "",
-    variantSkus: Array.isArray(p.variantSkus) ? p.variantSkus.slice(0, 8) : [],
-    variantNames: Array.isArray(p.variantNames) ? p.variantNames.slice(0, 5) : [],
+    variantSkus: Array.isArray(p.variantSkus) ? p.variantSkus.slice(0, 4) : [],
     price: p.price || 0,
-    url: p.url || "",
-    description: p.description || ""
+    description: compactKitAiProductDescription(p.description || "")
   }));
 }
 
@@ -3139,7 +3263,26 @@ function buildAvailableProductSummary(liveProducts = [], max = 12) {
 
 
 const KIT_AI_MODEL = process.env.KIT_AI_MODEL || GEMINI_MODEL;
-const KIT_AI_MAX_PROMPT_PRODUCTS = Math.max(8, Number(process.env.KIT_AI_MAX_PROMPT_PRODUCTS || 28));
+const KIT_AI_MAX_PROMPT_PRODUCTS = Math.max(6, Number(process.env.KIT_AI_MAX_PROMPT_PRODUCTS || 12));
+const KIT_AI_MAX_RELEVANT_RULES = Math.max(2, Number(process.env.KIT_AI_MAX_RELEVANT_RULES || 8));
+const KIT_AI_THINKING_BUDGET = Math.max(0, Number(process.env.KIT_AI_THINKING_BUDGET || 0));
+const KIT_AI_PRODUCT_DESCRIPTION_CHARS = Math.max(80, Number(process.env.KIT_AI_PRODUCT_DESCRIPTION_CHARS || 220));
+
+function buildKitAiGeminiConfig() {
+  const config = {
+    temperature: 0.35
+  };
+
+  // Gemini 2.5 Flash supports disabling thinking with thinkingBudget: 0.
+  // Keep this conditional so a future KIT_AI_MODEL switch does not break requests.
+  if (/gemini-2\.5-(?:flash|flash-lite)/i.test(String(KIT_AI_MODEL || ""))) {
+    config.thinkingConfig = {
+      thinkingBudget: KIT_AI_THINKING_BUDGET
+    };
+  }
+
+  return config;
+}
 
 function getProductSearchText(product = {}) {
   return [
@@ -3247,22 +3390,25 @@ function compactKitAiPageContext(pageContext = {}) {
     pageTitle: pageContext.pageTitle || "",
     pageUrl: pageContext.pageUrl || "",
     h1: pageContext.h1 || "",
-    productTitle: pageContext.productTitle || "",
-    metaDescription: String(pageContext.metaDescription || "").slice(0, 300),
+    metaDescription: String(pageContext.metaDescription || "").slice(0, 180),
     selectedVisibleItems: Array.isArray(pageContext.selectedVisibleItems)
-      ? pageContext.selectedVisibleItems.slice(0, 12)
-      : [],
-    visiblePageText: String(pageContext.visiblePageText || "").replace(/\s+/g, " ").slice(0, 1200)
+      ? pageContext.selectedVisibleItems.slice(0, 6)
+      : []
   };
 }
 
-function compactKitAiContext(kitContext = {}) {
+function compactKitAiContext(kitContext = {}, question = "") {
   const snapshot = kitContext.kitBuilderSnapshot || {};
+  const q = String(question || "").toLowerCase();
+  const includeSavedKits = /\bsaved\b|\bprevious kit\b|\bmy kits\b|\bkit list\b/i.test(q);
+
   return {
     selectedApplication: snapshot.selectedApplication || "",
     selectedDriver: snapshot.selectedDriver || "",
-    activeKitItems: Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.slice(0, 18) : [],
-    savedKits: Array.isArray(snapshot.savedKits) ? snapshot.savedKits.slice(0, 8) : [],
+    activeKitItems: Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.slice(0, 12) : [],
+    ...(includeSavedKits && Array.isArray(snapshot.savedKits)
+      ? { savedKits: snapshot.savedKits.slice(0, 4) }
+      : {}),
     currentLoad: snapshot.currentLoad || "",
     currentRuntime: snapshot.currentRuntime || "",
     currentPrice: snapshot.currentPrice || "",
@@ -3271,16 +3417,16 @@ function compactKitAiContext(kitContext = {}) {
     completionMessage: snapshot.completionMessage || "",
     coreStatus: snapshot.coreStatus || {},
     selectedItemsFromPage: Array.isArray(kitContext.selectedItemsFromPage)
-      ? kitContext.selectedItemsFromPage.slice(0, 20)
+      ? kitContext.selectedItemsFromPage.slice(0, 8)
       : []
   };
 }
 
 function compactChatHistory(history = []) {
   if (!Array.isArray(history)) return [];
-  return history.slice(-8).map((item) => ({
+  return history.slice(-4).map((item) => ({
     role: item.role || item.agent || "user",
-    text: String(item.text || item.content || "").slice(0, 900)
+    text: String(item.text || item.content || "").replace(/\s+/g, " ").slice(0, 420)
   }));
 }
 
@@ -3440,7 +3586,12 @@ app.post("/kit-ai-chat", async (req, res) => {
 
     const approvedRulesResult = await getApprovedOdooAiTrainingRules();
     const approvedRules = approvedRulesResult.rules || [];
-    const approvedRulesPrompt = formatApprovedRulesForPrompt(approvedRules);
+    const relevantApprovedRules = selectRelevantApprovedRulesForKitAi(approvedRules, {
+      question: safeQuestion,
+      pageContext,
+      kitContext
+    });
+    const approvedRulesPrompt = formatApprovedRulesForPrompt(relevantApprovedRules);
 
     if (!liveProductResult.ok || !liveProducts.length) {
       return res.json({
@@ -3461,7 +3612,7 @@ app.post("/kit-ai-chat", async (req, res) => {
 
     const liveProductsForPrompt = buildLiveProductsForPrompt(relevantLiveProducts);
     const compactPage = compactKitAiPageContext(pageContext || {});
-    const compactKit = compactKitAiContext(kitContext || {});
+    const compactKit = compactKitAiContext(kitContext || {}, safeQuestion);
     const compactHistory = compactChatHistory(history || []);
 
     const prompt = `
@@ -3508,6 +3659,7 @@ Answer style:
 - Do not say "consider adding the following", "we recommend adding the following", or "to complete your kit" repeatedly.
 - Use plain text only. No Markdown, no **bold**, no bullets, no tables, no code formatting.
 - Use short paragraphs, like a real ChatGPT-style reply.
+- Usually keep the customer-facing answer under 120 words unless the user explicitly asks for a detailed comparison or technical breakdown.
 - If products are selected by you, name all chosen items naturally in the answer and ask: "Should I add all these to your active kit?"
 - Do not show alternatives unless the user asks for options.
 - Do not recommend duplicates already in the active kit.
@@ -3580,6 +3732,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     let rawText = "";
     let streamedAnswerText = "";
+    let streamedAnswerCompleted = false;
 
     if (wantsStream) {
       setupKitAiSse(res);
@@ -3587,9 +3740,10 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
       const stream = await genAI.models.generateContentStream({
         model: KIT_AI_MODEL,
-        approved_rules_count: approvedRules.length,
+        approved_rules_count: relevantApprovedRules.length,
         approved_rules_cached: !!approvedRulesResult.cached,
-        contents: prompt
+        contents: prompt,
+        config: buildKitAiGeminiConfig()
       });
 
       for await (const chunk of stream) {
@@ -3600,19 +3754,34 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
         // Gemini is still producing JSON. Extract only the progressively-growing
         // customer-facing answer field so the chat does not display raw JSON.
-        const partialAnswer = extractPartialKitAiJsonStringField(rawText, "answer").value;
+        const partialAnswerState = extractPartialKitAiJsonStringField(rawText, "answer");
+        const partialAnswer = partialAnswerState.value;
+
         if (partialAnswer.length > streamedAnswerText.length) {
           const delta = partialAnswer.slice(streamedAnswerText.length);
           streamedAnswerText = partialAnswer;
           sendKitAiSse(res, "delta", { text: delta });
         }
+
+        /*
+          The visible answer can finish before Gemini finishes the remaining JSON
+          fields such as recommended_products/action_offer. Tell the frontend so
+          it can show a clear "finalising" state instead of looking stuck.
+        */
+        if (partialAnswerState.complete && !streamedAnswerCompleted) {
+          streamedAnswerCompleted = true;
+          sendKitAiSse(res, "answer_complete", {
+            message: "Answer written. Finalising the product check..."
+          });
+        }
       }
     } else {
       const result = await genAI.models.generateContent({
         model: KIT_AI_MODEL,
-        approved_rules_count: approvedRules.length,
+        approved_rules_count: relevantApprovedRules.length,
         approved_rules_cached: !!approvedRulesResult.cached,
-        contents: prompt
+        contents: prompt,
+        config: buildKitAiGeminiConfig()
       });
 
       rawText = result.text?.trim() || "";
@@ -3675,28 +3844,39 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     // Fast backend guardrail: do not return fake SKU recommendations.
     if (fakeSkus.length) {
-      const liveNumberMatches = findLiveProductsByNumber(
-        `${safeQuestion}\n${answer}\n${fakeSkus.join(" ")}`,
-        liveProducts,
-        8
-      );
-
-      const liveCorrectionAnswer = buildLiveProductCorrectionAnswer(safeQuestion, liveNumberMatches);
-
-      if (liveCorrectionAnswer) {
-        answer = liveCorrectionAnswer;
-      } else {
-        answer = [
-          "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
-          "",
-          "Closest live products available for checking:",
-          buildAvailableProductSummary(relevantLiveProducts, 8),
-          "",
-          "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
-        ].join("\n");
-      }
-
       recommendedProducts = [];
+
+      /*
+        Only switch into the product-number correction reply when the USER
+        actually asked about a specific product/SKU. Previously, a stray SKU
+        hallucination inside Gemini's answer could overwrite an unrelated
+        question such as "Rechargeable or USB?" with a random 205-style reply.
+      */
+      if (kitAiUserAskedAboutSpecificProduct(safeQuestion)) {
+        const liveNumberMatches = findLiveProductsByNumber(
+          `${safeQuestion}\n${answer}\n${fakeSkus.join(" ")}`,
+          liveProducts,
+          8
+        );
+
+        const liveCorrectionAnswer = buildLiveProductCorrectionAnswer(safeQuestion, liveNumberMatches);
+
+        if (liveCorrectionAnswer) {
+          answer = liveCorrectionAnswer;
+        } else {
+          answer = [
+            "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
+            "",
+            "Closest live products available for checking:",
+            buildAvailableProductSummary(relevantLiveProducts, 8),
+            "",
+            "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
+          ].join("\n");
+        }
+      } else {
+        // Preserve the real answer for general questions, but remove unsupported SKU tokens.
+        answer = removeUnsupportedSkuMentionsFromAnswer(answer, fakeSkus);
+      }
     }
 
     const finalPayload = {
@@ -3707,6 +3887,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       live_products_available: true,
       live_products_count: liveProducts.length,
       prompt_products_count: relevantLiveProducts.length,
+      prompt_rules_count: relevantApprovedRules.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
