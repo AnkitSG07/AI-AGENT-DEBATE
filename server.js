@@ -3625,8 +3625,25 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     const parsedResponse = parseKitAiJsonResponse(rawText);
 
+    /*
+      Streaming safety:
+      During SSE streaming, Gemini may already provide a complete customer-facing
+      "answer" text before the final JSON wrapper is perfectly parseable.
+      In that case, never overwrite the visible streamed reply with the generic
+      parser fallback. Keep the actual streamed answer as the final answer.
+    */
+    const parsedAnswerText = String(parsedResponse?.answer || "").trim();
+    const parserReturnedGenericFallback =
+      !parsedAnswerText ||
+      parsedAnswerText === "I could not generate an answer right now.";
+
+    const safeAnswerSource =
+      wantsStream && parserReturnedGenericFallback && String(streamedAnswerText || "").trim()
+        ? String(streamedAnswerText || "").trim()
+        : (parsedResponse.answer || rawText || "I could not generate an answer right now.");
+
     let answer = improveNaturalKitAnswer(stripMarkdownForCustomer(
-      parsedResponse.answer || rawText || "I could not generate an answer right now."
+      safeAnswerSource
     ));
 
     let recommendedProducts = normalizeKitAiRecommendedProducts(
