@@ -3813,6 +3813,60 @@ function buildDirectAddOverrideAnswer(actions = []) {
   return `Done — I’m adding ${label} to your active kit now.`;
 }
 
+function answerInvitesAddAll(answer = "") {
+  const text = String(answer || "").toLowerCase();
+  return (
+    /\bshould i add\b/i.test(text) ||
+    /\badd all\b/i.test(text) ||
+    /\badd (all|these|them)\b/i.test(text) ||
+    /\bactive kit\b/i.test(text) && /\badd\b/i.test(text)
+  );
+}
+
+function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = [], kitContext = {}) {
+  const text = String(answer || "").toLowerCase();
+  if (!text || !answerInvitesAddAll(text)) return [];
+
+  const matched = [];
+  const seen = new Set();
+
+  for (const product of liveProducts || []) {
+    const skuCandidates = [
+      String(product?.sku || "").trim(),
+      ...(Array.isArray(product?.variantSkus) ? product.variantSkus : [])
+    ].filter(Boolean);
+
+    const name = String(product?.name || "").trim();
+    const nameLower = name.toLowerCase();
+
+    const hasSkuMention = skuCandidates.some((sku) => {
+      const s = String(sku || "").trim().toLowerCase();
+      return s && text.includes(s);
+    });
+
+    const hasExactNameMention = nameLower && nameLower.length >= 6 && text.includes(nameLower);
+
+    if (!hasSkuMention && !hasExactNameMention) continue;
+
+    const key = `${String(product?.sku || "").toLowerCase()}|${nameLower}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    matched.push({
+      name: product.name || "",
+      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+      qty: 1,
+      type: getKitAiIntegrationProductBucket(product),
+      reason: "Recovered from the customer-facing recommendation text after streaming."
+    });
+  }
+
+  return filterAlreadyActiveRecommendations(
+    normalizeKitAiRecommendedProducts(matched, liveProducts),
+    kitContext || {}
+  ).slice(0, 12);
+}
+
 function scoreLiveProductForKitAi(product, searchText) {
   const haystack = getProductSearchText(product);
   if (!haystack) return 0;
@@ -4775,6 +4829,21 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
       const directAddAnswer = buildDirectAddOverrideAnswer(activeKitActions);
       if (directAddAnswer) answer = directAddAnswer;
+    }
+
+    if (
+      recommendedProducts.length === 0 &&
+      answerInvitesAddAll(answer)
+    ) {
+      const recoveredRecommendedProducts = recoverLiveRecommendedProductsFromAnswer(
+        answer,
+        liveProducts,
+        kitContext || {}
+      );
+
+      if (recoveredRecommendedProducts.length) {
+        recommendedProducts = recoveredRecommendedProducts;
+      }
     }
 
     if (userWantsAiToChoose(safeQuestion)) {
