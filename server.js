@@ -102,6 +102,15 @@ const JUDGE_OR_MODEL = process.env.OR_MODEL_JUDGE || process.env.OR_MODEL_DEBATE
 const PRODUCT_KNOWLEDGE_PATH = process.env.PRODUCT_KNOWLEDGE_PATH || "./product-knowledge.md";
 const PRODUCT_BOT_FALLBACK_CONTEXT = process.env.PRODUCT_BOT_CONTEXT || "";
 
+// Dedicated Smart Handicrafts physical integration knowledge for the Kit Expert.
+// Keep this separate from general product knowledge so the AI only receives it
+// when a customer is asking about lamp structure, placement, assembly, or fitting.
+const KIT_INTEGRATION_KNOWLEDGE_PATH =
+  process.env.KIT_INTEGRATION_KNOWLEDGE_PATH ||
+  "./smart-handicrafts-integration-master-knowledge.txt";
+const KIT_INTEGRATION_FALLBACK_CONTEXT =
+  process.env.KIT_INTEGRATION_KNOWLEDGE_CONTEXT || "";
+
 // ===================== ODOO CONFIG =====================
 const ODOO_URL = process.env.ODOO_URL;
 const ODOO_DB = process.env.ODOO_DB;
@@ -1148,6 +1157,13 @@ const productKnowledgeCache = {
   pricingCatalog: new Map()
 };
 
+const kitIntegrationKnowledgeCache = {
+  raw: "",
+  chunks: [],
+  error: null,
+  loadedAt: 0
+};
+
 const SELF_TRAINING_ENABLED = String(process.env.BOT_SELF_TRAINING || process.env.PRODUCT_BOT_SELF_TRAINING || "true").toLowerCase() !== "false";
 const SELF_TRAINING_MAX_EXAMPLES = Math.max(10, Number(process.env.BOT_SELF_TRAINING_MAX || process.env.PRODUCT_BOT_SELF_TRAINING_MAX || 500));
 const SELF_TRAINING_PROMPT_EXAMPLES = Math.max(1, Number(process.env.BOT_SELF_TRAINING_PROMPT_EXAMPLES || process.env.PRODUCT_BOT_SELF_TRAINING_PROMPT_EXAMPLES || 4));
@@ -1356,6 +1372,185 @@ async function readProductKnowledge() {
   } catch {
     return PRODUCT_BOT_FALLBACK_CONTEXT.trim();
   }
+}
+
+async function readKitIntegrationKnowledge() {
+  try {
+    const text = await readFile(KIT_INTEGRATION_KNOWLEDGE_PATH, "utf8");
+    return String(text || "").trim();
+  } catch {
+    return String(KIT_INTEGRATION_FALLBACK_CONTEXT || "").trim();
+  }
+}
+
+function splitKitIntegrationKnowledgeIntoChunks(text = "") {
+  const raw = normalizeText(text);
+  if (!raw) return [];
+
+  const lines = raw.split("\n");
+  const chunks = [];
+  let currentTitle = "Smart Handicrafts Integration Overview";
+  let buffer = [];
+
+  const pushBodyAsChunks = () => {
+    const body = normalizeText(buffer.join("\n"));
+    buffer = [];
+    if (!body) return;
+
+    const maxLen = 1900;
+    if (body.length <= maxLen) {
+      chunks.push({ title: currentTitle, content: body });
+      return;
+    }
+
+    let part = 1;
+    let index = 0;
+    while (index < body.length) {
+      const slice = body.slice(index, index + maxLen);
+      chunks.push({
+        title: `${currentTitle} — Part ${part}`,
+        content: normalizeText(slice)
+      });
+      index += maxLen;
+      part += 1;
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = String(line || "").trim();
+
+    // The master document uses SECTION XX: ... headings and separator lines.
+    const sectionHeading = trimmed.match(/^SECTION\s+\d+\s*:\s*(.+)$/i);
+    const markdownHeading = trimmed.match(/^#{1,4}\s+(.+)$/);
+    const isSeparator = /^[-=]{10,}$/.test(trimmed);
+
+    if (isSeparator) continue;
+
+    if (sectionHeading || markdownHeading) {
+      pushBodyAsChunks();
+      currentTitle = String((sectionHeading || markdownHeading)[1] || "").trim() || currentTitle;
+      continue;
+    }
+
+    buffer.push(line);
+  }
+
+  pushBodyAsChunks();
+
+  return chunks.filter((chunk) => chunk.content && chunk.content.length > 40);
+}
+
+async function ensureKitIntegrationKnowledgeIndex() {
+  const raw = normalizeText(await readKitIntegrationKnowledge());
+  if (!raw) {
+    kitIntegrationKnowledgeCache.raw = "";
+    kitIntegrationKnowledgeCache.chunks = [];
+    kitIntegrationKnowledgeCache.error = "No integration knowledge file found.";
+    return;
+  }
+
+  if (kitIntegrationKnowledgeCache.raw === raw && kitIntegrationKnowledgeCache.chunks.length) {
+    return;
+  }
+
+  kitIntegrationKnowledgeCache.raw = raw;
+  kitIntegrationKnowledgeCache.chunks = splitKitIntegrationKnowledgeIntoChunks(raw);
+  kitIntegrationKnowledgeCache.error = null;
+  kitIntegrationKnowledgeCache.loadedAt = Date.now();
+}
+
+function buildKitIntegrationRetrievalQuery({ question, pageContext, kitContext } = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  return [
+    question || "",
+    pageContext?.pageTitle || "",
+    pageContext?.h1 || "",
+    snapshot.selectedApplication || "",
+    snapshot.selectedDriver || "",
+    Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.join(" ") : "",
+    snapshot.completionMessage || "",
+    snapshot.warning || ""
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function scoreKitIntegrationChunk(chunk = {}, query = "") {
+  const haystack = `${chunk.title || ""}\n${chunk.content || ""}`.toLowerCase();
+  const q = String(query || "").toLowerCase();
+  if (!haystack || !q) return 0;
+
+  let score = 0;
+  const queryTokens = Array.from(new Set(tokenize(q))).slice(0, 80);
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) score += token.length >= 5 ? 3 : 1;
+  }
+
+  const boosts = [
+    [/\b(usb|usb-c|101|102|103|directly powered|no battery)\b/i, /\b(usb|usb-c|101|102|103|directly powered|no battery)\b/i, 28],
+    [/\b(recharge|rechargeable|battery|201|202|204|205|206)\b/i, /\b(recharge|rechargeable|battery|201|202|204|205|206)\b/i, 18],
+    [/\b(strip|edge|perimeter|outline|curve|contour|204|205|103)\b/i, /\b(strip|edge|perimeter|outline|curve|contour|204|205|103)\b/i, 28],
+    [/\b(dual|two led|two leds|2 led|2 leds|two light|202|102)\b/i, /\b(dual|two led|two leds|2 led|2 leds|two light|202|102)\b/i, 22],
+    [/\b(floor lamp|dob|206|large head|top touch)\b/i, /\b(floor lamp|dob|206|large head|top touch)\b/i, 28],
+    [/\b(panel mount|charging port|usb port|power port|charging access|hidden port)\b/i, /\b(panel mount|charging port|usb port|power port|charging access|hidden port)\b/i, 24],
+    [/\b(touch|metal body|gasket|insulation|touch point|touch wire)\b/i, /\b(touch|metal body|gasket|insulation|touch point|touch wire)\b/i, 24],
+    [/\b(holder|shade|rod|nipple|ring|threaded|spacer|brass pipe)\b/i, /\b(holder|shade|rod|nipple|ring|threaded|spacer|brass pipe)\b/i, 18],
+    [/\b(battery holder|sleeve battery|cavity|base space|compact base)\b/i, /\b(battery holder|sleeve battery|cavity|base space|compact base)\b/i, 20],
+    [/\b(notebook|book|gift|christmas|creative|sculpture|decorative object)\b/i, /\b(notebook|book|gift|christmas|creative|sculpture|decorative object|unusual product ideas)\b/i, 30],
+    [/\b(where|how)\b.{0,40}\b(place|fit|integrate|mount|install|route|hide)\b/i, /\b(place|fit|integrate|mount|install|route|hide|placement)\b/i, 20]
+  ];
+
+  for (const [queryPattern, chunkPattern, boost] of boosts) {
+    if (queryPattern.test(q) && chunkPattern.test(haystack)) score += boost;
+  }
+
+  return score;
+}
+
+async function retrieveRelevantKitIntegrationChunks({
+  question,
+  pageContext,
+  kitContext,
+  integrationConsultingMode = false,
+  topK = 4
+} = {}) {
+  const shouldRetrieve =
+    integrationConsultingMode ||
+    /\b(integrat|place|placement|mount|fit|hide|route|wiring|charging port|touch point|panel mount|lamp concept|notebook|christmas|gift|floor lamp|wall sconce|shade|rod|battery holder)\b/i.test(
+      String(question || "")
+    );
+
+  if (!shouldRetrieve) return [];
+
+  await ensureKitIntegrationKnowledgeIndex();
+  const chunks = kitIntegrationKnowledgeCache.chunks || [];
+  if (!chunks.length) return [];
+
+  const query = buildKitIntegrationRetrievalQuery({ question, pageContext, kitContext });
+
+  const ranked = chunks
+    .map((chunk) => ({ chunk, score: scoreKitIntegrationChunk(chunk, query) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(6, Number(topK || 4))))
+    .map((row) => row.chunk);
+
+  return ranked;
+}
+
+function formatKitIntegrationChunksForPrompt(chunks = []) {
+  if (!Array.isArray(chunks) || !chunks.length) {
+    return "No special physical integration knowledge chunks were needed for this request.";
+  }
+
+  return chunks
+    .map((chunk, index) => {
+      const title = String(chunk?.title || "Integration note").trim();
+      const content = String(chunk?.content || "").trim().slice(0, 1900);
+      return `Integration Knowledge ${index + 1}: ${title}\n${content}`;
+    })
+    .join("\n\n---\n\n");
 }
 
 async function ensureKnowledgeIndex(knowledgeText) {
@@ -3267,6 +3462,10 @@ const KIT_AI_MAX_PROMPT_PRODUCTS = Math.max(6, Number(process.env.KIT_AI_MAX_PRO
 const KIT_AI_MAX_RELEVANT_RULES = Math.max(2, Number(process.env.KIT_AI_MAX_RELEVANT_RULES || 8));
 const KIT_AI_THINKING_BUDGET = Math.max(0, Number(process.env.KIT_AI_THINKING_BUDGET || 0));
 const KIT_AI_PRODUCT_DESCRIPTION_CHARS = Math.max(80, Number(process.env.KIT_AI_PRODUCT_DESCRIPTION_CHARS || 220));
+const KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS = Math.max(
+  KIT_AI_MAX_PROMPT_PRODUCTS,
+  Number(process.env.KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS || 14)
+);
 
 function buildKitAiGeminiConfig() {
   const config = {
@@ -3361,6 +3560,136 @@ function scoreLiveProductForKitAi(product, searchText) {
   return score;
 }
 
+
+function isKitAiIntegrationConceptQuestion(question = "", pageContext = {}, kitContext = {}) {
+  const q = [
+    question || "",
+    pageContext?.pageTitle || "",
+    pageContext?.h1 || "",
+    kitContext?.kitBuilderSnapshot?.selectedApplication || ""
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  const hasLampOrObjectIntent =
+    /\b(lamp|light|lighting|illuminat|glow|backlit|inside|interior|embedded|implement|integrat|fit|place|placement|mount|install|hide|route|wire|wiring|charging port|touch sensor)\b/i.test(q);
+
+  const hasCreativeOrPhysicalForm =
+    /\b(make|build|create|design|develop|gift|christmas|decorative|custom|prototype|concept|notebook|book|box|bottle|jar|frame|photo frame|statue|idol|wooden|ceramic|stone|metal|acrylic|wall art|panel|thin|slim|flat|inside it)\b/i.test(q);
+
+  const explicitPlacementQuestion =
+    /\b(where|how)\b.{0,40}\b(place|put|fit|mount|integrate|install|hide|route|position)\b/i.test(q) ||
+    /\b(led|battery|driver|pcb|charging port|usb|touch sensor|wire|jst)\b.{0,40}\b(where|placement|position|inside|fit)\b/i.test(q);
+
+  return explicitPlacementQuestion || (hasLampOrObjectIntent && hasCreativeOrPhysicalForm);
+}
+
+function getKitAiIntegrationProductBucket(product = {}) {
+  const text = getProductSearchText(product);
+  if (!text) return "other";
+
+  if (/\b(strip|lsd|linear|cob strip|flexible)\b/i.test(text)) return "strip";
+  if (/\b(driver|sld|dld|dob|module)\b/i.test(text)) return "driver";
+  if (/\b(battery|18650|mah|cell)\b/i.test(text)) return "battery";
+  if (/\b(jst|wire|cable|connector|harness)\b/i.test(text)) return "wire";
+  if (/\b(touch sensor|sensor|touch)\b/i.test(text)) return "sensor";
+  if (/\b(cob|led|filament|flame)\b/i.test(text)) return "led";
+  if (/\b(holder|enclosure|panel mount|mount)\b/i.test(text)) return "accessory";
+  return "other";
+}
+
+function matchActiveSelectedDriverProduct(liveProducts = [], kitContext = {}) {
+  const selectedDriver = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").toLowerCase();
+  if (!selectedDriver) return null;
+
+  return (liveProducts || []).find((product) => {
+    const haystack = getProductSearchText(product);
+    if (!haystack) return false;
+
+    const sku = String(product?.sku || "").toLowerCase();
+    if (sku && selectedDriver.includes(sku)) return true;
+
+    const variantSkus = Array.isArray(product?.variantSkus) ? product.variantSkus : [];
+    if (variantSkus.some((v) => v && selectedDriver.includes(String(v).toLowerCase()))) return true;
+
+    const name = String(product?.name || "").toLowerCase();
+    if (name && selectedDriver.includes(name)) return true;
+
+    const selectedNums = Array.from(selectedDriver.matchAll(/\b\d{2,4}\b/g)).map((m) => m[0]);
+    return selectedNums.some((num) => new RegExp(`(^|[^0-9])${num}([^0-9]|$)`).test(haystack));
+  }) || null;
+}
+
+function buildBalancedIntegrationProductPromptSet(liveProducts = [], scored = [], { question, pageContext, kitContext } = {}) {
+  const searchText = buildKitAiSearchText({ question, pageContext, kitContext });
+  const sortedRows = Array.isArray(scored) && scored.length
+    ? scored
+    : (liveProducts || [])
+        .map((product) => ({ product, score: scoreLiveProductForKitAi(product, searchText) }))
+        .sort((a, b) => b.score - a.score);
+
+  const output = [];
+  const seen = new Set();
+
+  function addProduct(product) {
+    if (!product) return false;
+    const key = [
+      String(product.sku || "").trim().toLowerCase(),
+      String(product.name || "").trim().toLowerCase()
+    ].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    output.push(product);
+    return true;
+  }
+
+  // Preserve the active selected driver when one exists.
+  addProduct(matchActiveSelectedDriverProduct(liveProducts, kitContext));
+
+  const bucketLimits = {
+    driver: 3,
+    led: 3,
+    strip: 2,
+    battery: 2,
+    wire: 2,
+    sensor: 1,
+    accessory: 1,
+    other: 1
+  };
+
+  const bucketCounts = {};
+
+  for (const row of sortedRows) {
+    if (output.length >= KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS) break;
+
+    const product = row?.product;
+    const bucket = getKitAiIntegrationProductBucket(product);
+    const limit = bucketLimits[bucket] ?? 1;
+    const count = bucketCounts[bucket] || 0;
+
+    if (count >= limit) continue;
+
+    if (addProduct(product)) {
+      bucketCounts[bucket] = count + 1;
+    }
+  }
+
+  // If scoring was too narrow, fill missing key buckets from the live catalogue.
+  const mustHaveBuckets = ["driver", "led", "strip", "battery", "wire"];
+  for (const wantedBucket of mustHaveBuckets) {
+    if (output.length >= KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS) break;
+    if ((bucketCounts[wantedBucket] || 0) > 0) continue;
+
+    const fallbackProduct = (liveProducts || []).find(
+      (product) => getKitAiIntegrationProductBucket(product) === wantedBucket
+    );
+
+    if (addProduct(fallbackProduct)) {
+      bucketCounts[wantedBucket] = 1;
+    }
+  }
+
+  return output.slice(0, KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS);
+}
+
 function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageContext, kitContext } = {}) {
   const searchText = buildKitAiSearchText({ question, pageContext, kitContext });
 
@@ -3370,6 +3699,14 @@ function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageC
       score: scoreLiveProductForKitAi(product, searchText)
     }))
     .sort((a, b) => b.score - a.score);
+
+  if (isKitAiIntegrationConceptQuestion(question, pageContext, kitContext)) {
+    return buildBalancedIntegrationProductPromptSet(liveProducts, scored, {
+      question,
+      pageContext,
+      kitContext
+    });
+  }
 
   const relevant = scored
     .filter((row) => row.score > 0)
@@ -3671,7 +4008,11 @@ app.post("/kit-ai-chat", async (req, res) => {
       });
     }
 
+    const integrationConsultingMode = isKitAiIntegrationConceptQuestion(safeQuestion, pageContext, kitContext);
+
     // Speed optimization: send only relevant live products to Gemini, not the full website catalogue.
+    // For creative lamp/integration questions, send a balanced compact set across drivers, LEDs/strips,
+    // batteries and wiring so Gemini does not falsely assume only one unrelated product is available.
     const relevantLiveProducts = selectRelevantLiveProductsForKitAi(liveProducts, {
       question: safeQuestion,
       pageContext,
@@ -3683,6 +4024,15 @@ app.post("/kit-ai-chat", async (req, res) => {
     const compactKit = compactKitAiContext(kitContext || {}, safeQuestion);
     const compactHistory = compactChatHistory(history || []);
 
+    const relevantIntegrationKnowledgeChunks = await retrieveRelevantKitIntegrationChunks({
+      question: safeQuestion,
+      pageContext,
+      kitContext,
+      integrationConsultingMode,
+      topK: 4
+    });
+    const integrationKnowledgePrompt = formatKitIntegrationChunksForPrompt(relevantIntegrationKnowledgeChunks);
+
     const prompt = `
 You are Smart Handicrafts® Kit Expert.
 
@@ -3690,23 +4040,43 @@ You are not a generic chatbot. You are a technical product assistant and sales e
 
 Your job is to help artisans, exporters, manufacturers, lighting brands, and OEM buyers build correct kits using live Smart Handicrafts website products only.
 
+You are also a practical lamp integration consultant. When the user describes a lamp concept, object, gift idea, enclosure, or asks how to place electronics inside a design, help them translate that idea into a practical lighting layout before jumping to products.
+
 Always respond in this order:
 1. Acknowledge the user’s requirement.
-2. Check and mention the current active kit/selected driver if available.
-3. Explain whether the active kit is suitable.
-4. Identify missing core parts.
-5. Suggest only missing/addable live products.
-6. Ask for missing technical details only if needed.
+2. If this is a lamp concept or integration question, briefly explain the likely lighting layout and how the electronics could sit inside the object.
+3. Check and mention the current active kit/selected driver if available and relevant.
+4. Explain whether the active kit is suitable.
+5. Identify missing core parts.
+6. Suggest only missing/addable live products when enough information exists.
+7. Ask for missing technical details only if needed.
 
 CRITICAL PRODUCT RULES:
 - You may ONLY recommend products from the LIVE ODOO WEBSITE PRODUCTS list below.
 - Do NOT invent SKU names.
 - Do NOT invent product names.
 - Do NOT suggest any product that is not present in LIVE ODOO WEBSITE PRODUCTS.
-- If the required exact product is not available in the live list, say: "This exact product is not currently listed live on the website."
-- If there is no suitable live product, do not force a recommendation.
+- If the user asks for a specific product and that exact product is not available in the live list, say: "This exact product is not currently listed live on the website."
+- If there is no suitable live product for a final recommendation, do not force a recommendation. For lamp-concept or integration questions, still provide practical design/placement guidance and explain what must be verified.
 - Mention SKU only when the SKU exists in LIVE ODOO WEBSITE PRODUCTS.
 - Do not create variants such as "-12V", "-20W", "Pro", "Plus", "Max", etc. unless that exact SKU/name is in the live list.
+
+INTEGRATION CONSULTING RULES:
+- For creative lamp concepts such as notebook lamps, gift lamps, wooden lamps, ceramic lamps, stone lamps, bottle lamps, backlit panels, decorative objects, or custom housings, first give a practical implementation direction instead of immediately saying the project cannot be built.
+- Help the user think about internal placement of the light source, driver PCB, battery, USB-C charging port, touch sensor, and wire routing.
+- Explain likely placement in simple practical terms:
+  - LED/light source: where it should sit to create focused light, edge glow, or even diffused glow.
+  - Battery: preferably in a thicker/base/back/spine cavity where it is protected and serviceable.
+  - Driver PCB: near the battery/charging side with access for wiring and future service.
+  - Charging port: on a clean rear, lower-side, base, or spine edge where it is easy to plug in.
+  - Touch sensor: on an intuitive outer touch area, only if the lamp material and thickness allow reliable touch sensing.
+  - JST wires: route through protected channels, avoid sharp bends, pinch points, and visible wire shadows behind translucent surfaces.
+- Mention diffusion and heat naturally when relevant. Thin, sealed, or decorative enclosures may need softer distributed light and thermal caution; do not force high-power LEDs into tight cavities.
+- General mechanical placement guidance may be provided even if the exact final product choice still needs dimensions or material confirmation.
+- If live products shown to you are not enough to finalise an exact electronics kit, do not tell the user the creative project is impossible. Give the likely design direction, state what must be verified, and ask for the specific missing detail.
+- Ask for only the most useful missing inputs, usually 1 to 3 of: approximate dimensions, material, desired light effect, expected runtime, portability, or a sketch/photo.
+- If the user asks "how should I place it" or "how to integrate it", prioritise placement/integration guidance over selling a product.
+- If the user asks for a complete product recommendation and enough detail exists, combine the integration guidance with a final Smart Handicrafts kit recommendation.
 
 Answer style:
 - Talk naturally like a helpful expert assistant, not like a form, script, FAQ, or product catalogue.
@@ -3716,6 +4086,8 @@ Answer style:
 - For greetings, reply like a person: short greeting plus one helpful question. Do not explain the active kit.
 - For unclear messages, ask one useful clarification or make a sensible assumption from active kit context.
 - For direct requests like "make a lamp", "complete kit", "you tell", or "choose", make a real recommendation, not a generic explanation.
+- For conceptual design questions, answer like a Smart Handicrafts technical consultant: explain the likely lighting approach and physical integration before the product decision.
+- Never reply to a creative lamp concept with only "not possible" or "no compatible live products" unless the user explicitly requires a purchase-ready exact kit and the live list truly cannot support it.
 - Think before replying:
   1. What is the user actually asking right now?
   2. What is already selected in the active kit?
@@ -3727,7 +4099,7 @@ Answer style:
 - Do not say "consider adding the following", "we recommend adding the following", or "to complete your kit" repeatedly.
 - Use plain text only. No Markdown, no **bold**, no bullets, no tables, no code formatting.
 - Use short paragraphs, like a real ChatGPT-style reply.
-- Usually keep the customer-facing answer under 120 words unless the user explicitly asks for a detailed comparison or technical breakdown.
+- Usually keep the customer-facing answer under 120 words unless the user explicitly asks for a detailed comparison, technical breakdown, or integration/placement guidance that genuinely needs a little more explanation.
 - If products are selected by you, name all chosen items naturally in the answer and ask: "Should I add all these to your active kit?"
 - Do not show alternatives unless the user asks for options.
 - Do not recommend duplicates already in the active kit.
@@ -3777,17 +4149,27 @@ ${approvedRulesPrompt}
 
 These approved rules override general assumptions. Use them whenever relevant, especially for compatibility decisions.
 
+RELEVANT SMART HANDICRAFTS PHYSICAL INTEGRATION KNOWLEDGE:
+${integrationKnowledgePrompt}
+
+How to use the integration knowledge:
+- Treat these chunks as official Smart Handicrafts guidance for physical placement, assembly, cavities, battery/USB logic, charging access, touch point planning, holders, rods, diffusers, and integration examples.
+- Product recommendations must still come only from LIVE ODOO WEBSITE PRODUCTS.
+- For mechanical suggestions beyond fixed product facts, you may reason practically, but do not invent new Smart Handicrafts specifications or unsupported electrical compatibility.
+
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
 
 Current kit/page context:
-${JSON.stringify({ page: compactPage, kit: compactKit, history: compactHistory }, null, 2)}
+${JSON.stringify({ integrationConsultingMode, page: compactPage, kit: compactKit, history: compactHistory }, null, 2)}
 
 Context interpretation rules:
 - The "kit.selectedDriver" field is the active selected driver. Treat it as already selected by the user.
 - The "kit.activeKitItems" field contains items already present in the active kit. Do not recommend duplicates.
 - The "kit.completionMessage" and "kit.coreStatus" indicate missing core parts.
 - If the user gives a broad intent such as "need to make a table lamp", answer like a guided kit builder: acknowledge current selection first, then suggest only missing parts.
+- If the user gives a creative form-factor concept such as "notebook lamp", "gift lamp", "lighting inside a bottle", or asks about placement/integration, treat it as both an implementation question and a kit-building question.
+- For concept/integration questions, do not treat the live product list as the only thing worth saying. Use it to control product recommendations, but still give useful placement, light-distribution, heat, and assembly guidance.
 - Recommended_products should include only missing/addable products, not products already in the active kit.
 - When the user asks you to choose, recommended_products should contain only your final selected items, not multiple alternatives in the same category.
 - Do not include an add card for the driver if that driver is already selected in kit.selectedDriver.
@@ -4009,6 +4391,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       live_products_count: liveProducts.length,
       prompt_products_count: relevantLiveProducts.length,
       prompt_rules_count: relevantApprovedRules.length,
+      prompt_integration_chunks_count: relevantIntegrationKnowledgeChunks.length,
+      integration_consulting_mode: integrationConsultingMode,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
