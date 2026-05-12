@@ -3639,6 +3639,180 @@ function buildKitAiSearchText({ question, pageContext, kitContext } = {}) {
   return `${question || ""}\n${JSON.stringify(compactContext)}`.toLowerCase();
 }
 
+
+function kitAiProductHaystack(product = {}) {
+  return getProductSearchText(product);
+}
+
+function findBestLiveProductBySignals(liveProducts = [], { must = [], prefer = [], exclude = [] } = {}) {
+  const rows = (liveProducts || [])
+    .map((product) => {
+      const text = kitAiProductHaystack(product);
+      if (!text) return null;
+      if ((exclude || []).some((pattern) => pattern.test(text))) return null;
+      if ((must || []).some((pattern) => !pattern.test(text))) return null;
+
+      let score = 0;
+      for (const pattern of prefer || []) {
+        if (pattern.test(text)) score += 10;
+      }
+      score += String(product?.sku || "").trim() ? 2 : 0;
+      score += String(product?.name || "").trim() ? 1 : 0;
+      return { product, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return rows[0]?.product || null;
+}
+
+function isKitAiStarterOrCompletionQuestion(question = "") {
+  const q = String(question || "").toLowerCase();
+  return (
+    /\b(starter kit|best starter|suggest the best|suggest.*kit|complete.*kit|complete my kit|missing parts?|what should i add|what to add|build.*kit|make.*kit)\b/i.test(q) ||
+    /\b(choose|recommend)\b.{0,50}\b(kit|parts|items)\b/i.test(q)
+  );
+}
+
+function isKitAiExplicitDirectAddQuestion(question = "") {
+  const q = String(question || "").toLowerCase().trim();
+  return (
+    /\b(add|put|include|select)\b/i.test(q) &&
+    /\b(led|3w|5w|battery|18650|2600|jst|wire|driver|201|202|204|205|206|101|102|103)\b/i.test(q) &&
+    !/\b(add all|add them|add these|add those|add recommended|add suggested)\b/i.test(q)
+  );
+}
+
+function findDefault201StarterKitLiveProducts(liveProducts = [], kitContext = {}, question = "") {
+  const selectedDriverText = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").toLowerCase();
+  const q = String(question || "").toLowerCase();
+
+  const is201Context =
+    selectedDriverText.includes("201") ||
+    selectedDriverText.includes("as-b-201") ||
+    /\b201\b/.test(q);
+
+  if (!is201Context) return [];
+
+  const led3w = findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+    exclude: [/\b(strip|lsd)\b/i],
+    prefer: [/\bcob\b/i, /\bcree\b/i]
+  });
+
+  const battery = findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i],
+    prefer: [/\b2600\b/i, /\b18650\b/i, /\bmah\b/i]
+  });
+
+  const jstWire = findBestLiveProductBySignals(liveProducts, {
+    must: [/\bjst\b/i],
+    prefer: [/\bwire\b/i, /\bcable\b/i, /\bconnector\b/i]
+  });
+
+  return [led3w, battery, jstWire].filter(Boolean);
+}
+
+function build201StarterKitOverrideAnswer(products = []) {
+  const labels = (products || []).map((p) => {
+    const sku = String(p?.sku || "").trim();
+    const name = String(p?.name || "").trim();
+    return sku ? `${name} (${sku})` : name;
+  }).filter(Boolean);
+
+  if (!labels.length) return "";
+
+  return [
+    "For a solid starter setup around your selected DRIVER - 201 Rechargeable 1 Color, I would add these live kit items:",
+    labels.join(", ") + ".",
+    "This gives you the core LED, battery, and connection pieces needed to move toward a usable rechargeable lamp kit. Should I add all these to your active kit?"
+  ].join("\n\n");
+}
+
+function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], kitContext = {}) {
+  const q = String(question || "").toLowerCase();
+  if (!isKitAiExplicitDirectAddQuestion(q)) return [];
+
+  const actions = [];
+  const seen = new Set();
+
+  function pushAdd(product, reason = "") {
+    if (!product) return;
+    const key = `${String(product.sku || "").toLowerCase()}|${String(product.name || "").toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    actions.push({
+      action: "add",
+      name: product.name || "",
+      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+      qty: 1,
+      type: getKitAiIntegrationProductBucket(product),
+      reason
+    });
+  }
+
+  if (/\b3\s*w\b|\b3w\b/i.test(q) && /\bled\b|\bcob\b/i.test(q)) {
+    pushAdd(
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd)\b/i],
+        prefer: [/\bcob\b/i, /\bcree\b/i]
+      }),
+      "User explicitly asked to add a 3W LED."
+    );
+  } else if (/\b5\s*w\b|\b5w\b/i.test(q) && /\bled\b|\bcob\b/i.test(q)) {
+    pushAdd(
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i],
+        exclude: [/\b(strip|lsd)\b/i],
+        prefer: [/\bcob\b/i, /\bcree\b/i]
+      }),
+      "User explicitly asked to add a 5W LED."
+    );
+  }
+
+  if (/\b(battery|18650|2600)\b/i.test(q)) {
+    pushAdd(
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i],
+        prefer: [/\b2600\b/i, /\b18650\b/i, /\bmah\b/i]
+      }),
+      "User explicitly asked to add a battery."
+    );
+  }
+
+  if (/\b(jst|wire)\b/i.test(q)) {
+    pushAdd(
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\bjst\b/i],
+        prefer: [/\bwire\b/i, /\bcable\b/i, /\bconnector\b/i]
+      }),
+      "User explicitly asked to add a JST wire."
+    );
+  }
+
+  const driverNumber = (q.match(/\b(101|102|103|201|202|204|205|206)\b/) || [])[1];
+  if (driverNumber && /\b(driver|switch|replace|select|add)\b/i.test(q)) {
+    pushAdd(
+      findBestLiveProductBySignals(liveProducts, {
+        must: [new RegExp(`(^|[^0-9])${driverNumber}([^0-9]|$)`, "i")],
+        prefer: [/\bdriver\b/i, /\bmodule\b/i, /\bdob\b/i]
+      }),
+      `User explicitly asked for driver ${driverNumber}.`
+    );
+  }
+
+  return actions.slice(0, 4);
+}
+
+function buildDirectAddOverrideAnswer(actions = []) {
+  const first = actions?.[0];
+  if (!first) return "";
+  const label = first.sku ? `${first.name} (${first.sku})` : first.name;
+  if (!label) return "";
+  return `Done — I’m adding ${label} to your active kit now.`;
+}
+
 function scoreLiveProductForKitAi(product, searchText) {
   const haystack = getProductSearchText(product);
   if (!haystack) return 0;
@@ -3829,12 +4003,30 @@ function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageC
     }))
     .sort((a, b) => b.score - a.score);
 
-  if (isKitAiIntegrationConceptQuestion(question, pageContext, kitContext)) {
-    return buildBalancedIntegrationProductPromptSet(liveProducts, scored, {
+  if (
+    isKitAiIntegrationConceptQuestion(question, pageContext, kitContext) ||
+    isKitAiStarterOrCompletionQuestion(question) ||
+    isKitAiExplicitDirectAddQuestion(question)
+  ) {
+    const balanced = buildBalancedIntegrationProductPromptSet(liveProducts, scored, {
       question,
       pageContext,
       kitContext
     });
+
+    const starterLiveProducts = findDefault201StarterKitLiveProducts(liveProducts, kitContext, question);
+    const merged = [];
+    const seen = new Set();
+
+    for (const product of [...starterLiveProducts, ...balanced]) {
+      if (!product) continue;
+      const key = `${String(product.sku || "").toLowerCase()}|${String(product.name || "").toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(product);
+    }
+
+    return merged.slice(0, KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS);
   }
 
   const relevant = scored
@@ -4176,6 +4368,14 @@ app.post("/kit-ai-chat", async (req, res) => {
     });
     const integrationKnowledgePrompt = formatKitIntegrationChunksForPrompt(relevantIntegrationKnowledgeChunks);
 
+    const deterministic201StarterLiveProducts =
+      isKitAiStarterOrCompletionQuestion(safeQuestion)
+        ? findDefault201StarterKitLiveProducts(liveProducts, kitContext || {}, safeQuestion)
+        : [];
+
+    const deterministicDirectAddActions =
+      findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {});
+
     const lampReferencePromptContext = {
       imageAttachedThisTurn: !!normalizedLampReferenceImage,
       priorReferenceImageSummary: priorLampReferenceSummary || ""
@@ -4269,6 +4469,8 @@ Answer style:
 - If the user says "why", explain the practical reason in human language: heat, runtime, brightness, safety, assembly simplicity.
 - If the user says "add it", "add these", "add all", "yes add", "add to kit", or "add to cart" after you already proposed recommended products, the frontend can add those selected products automatically.
 - If the user explicitly asks to ADD, REMOVE, DELETE, SWITCH, CHANGE, or REPLACE an item in the active kit in the current message, use active_kit_actions so the frontend can actually update the active kit.
+- If the user says "add 3W LED", "add battery", "add JST wire", or names another exact part to add, do not merely offer to add it later. Return the matching live product in active_kit_actions immediately.
+- For a starter-kit or complete-kit question where DRIVER - 201 is already selected, prefer the live 3W COB LED, live 2600mAh/18650 battery option if present, and live JST wire option if present. Put these into recommended_products when they are live.
 - For bulk/custom requirements, suggest Smart Handicrafts verification.
 - Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
@@ -4344,7 +4546,23 @@ LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
 
 Current kit/page context:
-${JSON.stringify({ integrationConsultingMode, lampReference: lampReferencePromptContext, page: compactPage, kit: compactKit, history: compactHistory }, null, 2)}
+${JSON.stringify({
+  integrationConsultingMode,
+  lampReference: lampReferencePromptContext,
+  deterministicLiveStarterCandidates: deterministic201StarterLiveProducts.map((p) => ({
+    name: p.name || "",
+    sku: p.sku || "",
+    price: p.price || 0
+  })),
+  deterministicDirectAddCandidates: deterministicDirectAddActions.map((a) => ({
+    action: a.action,
+    name: a.name,
+    sku: a.sku
+  })),
+  page: compactPage,
+  kit: compactKit,
+  history: compactHistory
+}, null, 2)}
 
 Context interpretation rules:
 - The "kit.selectedDriver" field is the active selected driver. Treat it as already selected by the user.
@@ -4518,11 +4736,46 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     recommendedProducts = filterAlreadyActiveRecommendations(recommendedProducts, kitContext || {});
 
-    const activeKitActions = normalizeKitAiActiveKitActions(
+    let activeKitActions = normalizeKitAiActiveKitActions(
       parsedResponse.active_kit_actions || [],
       liveProducts,
       kitContext || {}
     );
+
+    if (
+      isKitAiStarterOrCompletionQuestion(safeQuestion) &&
+      deterministic201StarterLiveProducts.length &&
+      recommendedProducts.length === 0
+    ) {
+      recommendedProducts = normalizeKitAiRecommendedProducts(
+        deterministic201StarterLiveProducts.map((product) => ({
+          name: product.name || "",
+          sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+          qty: 1,
+          type: getKitAiIntegrationProductBucket(product),
+          reason: "Live starter-kit item for the selected 201 driver."
+        })),
+        liveProducts
+      );
+
+      const overrideAnswer = build201StarterKitOverrideAnswer(recommendedProducts);
+      if (overrideAnswer) answer = overrideAnswer;
+    }
+
+    if (
+      isKitAiExplicitDirectAddQuestion(safeQuestion) &&
+      deterministicDirectAddActions.length &&
+      activeKitActions.length === 0
+    ) {
+      activeKitActions = normalizeKitAiActiveKitActions(
+        deterministicDirectAddActions,
+        liveProducts,
+        kitContext || {}
+      );
+
+      const directAddAnswer = buildDirectAddOverrideAnswer(activeKitActions);
+      if (directAddAnswer) answer = directAddAnswer;
+    }
 
     if (userWantsAiToChoose(safeQuestion)) {
       const seenTypes = new Set();
@@ -4597,6 +4850,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       integration_consulting_mode: integrationConsultingMode,
       reference_image_used: !!normalizedLampReferenceImage,
       prior_reference_image_summary_used: !!priorLampReferenceSummary,
+      deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
+      deterministic_direct_add_candidates_count: deterministicDirectAddActions.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
