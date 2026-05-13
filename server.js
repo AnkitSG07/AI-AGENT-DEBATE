@@ -4031,6 +4031,20 @@ function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = []
   const matched = [];
   const seen = new Set();
 
+  function pushRecovered(product, qty = 1, reason = "Recovered from the customer-facing recommendation text after streaming.") {
+    if (!product) return;
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    matched.push({
+      name: product.name || "",
+      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+      qty: Math.max(1, Number(qty || 1)),
+      type: getKitAiIntegrationProductBucket(product),
+      reason
+    });
+  }
+
   for (const product of liveProducts || []) {
     const skuCandidates = [
       String(product?.sku || "").trim(),
@@ -4048,87 +4062,92 @@ function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = []
     const hasExactNameMention = nameLower && nameLower.length >= 6 && text.includes(nameLower);
 
     if (!hasSkuMention && !hasExactNameMention) continue;
-
-    const key = `${String(product?.sku || "").toLowerCase()}|${nameLower}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    matched.push({
-      name: product.name || "",
-      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
-      qty: 1,
-      type: getKitAiIntegrationProductBucket(product),
-      reason: "Recovered from the customer-facing recommendation text after streaming."
-    });
+    pushRecovered(product, 1);
   }
 
-  return filterAlreadyActiveRecommendations(
+  /*
+    Repair generic assistant wording such as:
+    "Should I add the 2600mAh 18650 battery and JST wire?"
+
+    Earlier this did not reconstruct recommended_products because no exact live SKU/name
+    appeared in the visible answer. That caused a later plain "yes" to be sent back to Gemini
+    instead of adding the actual live kit items.
+  */
+  const selectedDriverText = compactTextForMatch(kitContext?.kitBuilderSnapshot?.selectedDriver || "");
+  const isDualDriverContext = selectedDriverText.includes("202") || selectedDriverText.includes("102");
+
+  if (/\b(battery|18650|2600\s*mah|2600mah)\b/i.test(text)) {
+    const preferred2600Sleeve =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
+        prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
+        prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      }) ||
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i],
+        prefer: [/\bsleeve\b/i, /\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      });
+
+    pushRecovered(preferred2600Sleeve, 1, "Recovered preferred 2600mAh sleeve battery from the add-confirmation wording.");
+  }
+
+  if (/\b(jst|wire|ledwire|connector)\b/i.test(text)) {
+    const preferredJst =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+        exclude: [/\b(battery|18650|cell)\b/i],
+        prefer: [/\bledwire\b/i, /\bdual\s*side\b/i, /\b2\s*pin\b/i, /\bwire\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+        exclude: [/\b(battery|18650|cell)\b/i],
+        prefer: [/\bledwire\b/i, /\bdual\s*side\b/i, /\b2\s*pin\b/i, /\bwire\b/i]
+      });
+
+    pushRecovered(preferredJst, isDualDriverContext ? 2 : 1, "Recovered JST wire from the add-confirmation wording.");
+  }
+
+  if (/\b(3\s*w|3w)\b/i.test(text) && /\b(dual|warm[-\s]?cool|warm cool|cct)\b/i.test(text)) {
+    const dual3w =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bsh-cob-3d\b/i, /\bled\s*-?\s*cree\s*3\s*w\s*dual\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bsh-cob-3d\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+      });
+
+    pushRecovered(dual3w, 1, "Recovered dual 3W LED from the add-confirmation wording.");
+  }
+
+  if (/\b(3\s*w|3w)\b/i.test(text) && /\b(cob|led)\b/i.test(text) && !/\b(dual|warm[-\s]?cool|warm cool|cct)\b/i.test(text)) {
+    const single3w =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+        prefer: [/\bled\s*-?\s*cree\s*cob\s*3\s*w\b/i, /\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+        prefer: [/\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
+      });
+
+    pushRecovered(single3w, 1, "Recovered single 3W LED from the add-confirmation wording.");
+  }
+
+  const normalized = filterAlreadyActiveRecommendations(
     normalizeKitAiRecommendedProducts(matched, liveProducts),
     kitContext || {}
-  ).slice(0, 12);
-}
+  );
 
-function buildKitAiAlternativeProducts(primaryProducts = [], liveProducts = [], kitContext = {}) {
-  const primaries = Array.isArray(primaryProducts) ? primaryProducts : [];
-  if (!primaries.length) return [];
-
-  const alternatives = [];
-  const seen = new Set();
-
-  function pushAlternative(primary, alternative, note) {
-    if (!primary || !alternative) return;
-    const key = `${String(primary.sku || primary.name || "").toLowerCase()}|${String(alternative.sku || alternative.name || "").toLowerCase()}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    alternatives.push({
-      for_name: primary.name || "",
-      for_sku: primary.sku || "",
-      name: alternative.name || "",
-      sku: alternative.sku || (Array.isArray(alternative.variantSkus) ? alternative.variantSkus[0] : "") || "",
-      note: note || ""
-    });
-  }
-
-  for (const primary of primaries) {
-    const text = compactTextForMatch(`${primary?.sku || ""} ${primary?.name || ""}`);
-
-    if (text.includes("battery") || text.includes("18650") || text.includes("mah")) {
-      const altNoSleeve2600 = findBestLiveProductByTitleSkuSignals(liveProducts, {
-        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without sleeve|no sleeve|nosleeve)\b/i],
-        prefer: [/\b18650\b/i, /\bmah\b/i]
-      }) || findBestLiveProductBySignals(liveProducts, {
-        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without sleeve|no sleeve|nosleeve)\b/i],
-        prefer: [/\b18650\b/i, /\bmah\b/i]
-      });
-
-      if (altNoSleeve2600 && compactTextForMatch(altNoSleeve2600.name) !== compactTextForMatch(primary.name)) {
-        pushAlternative(primary, altNoSleeve2600, "Alternative 2600mAh option; a holder may be required.");
-      }
-      continue;
-    }
-
-    if (isKitAiDualLedProduct(primary) && (text.includes("3w") || text.includes("3 w"))) {
-      const altDual5w = findBestLiveProductByTitleSkuSignals(liveProducts, {
-        must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
-        exclude: [/\b(strip|lsd)\b/i],
-        prefer: [/\bdual\b/i, /\bcob\b/i]
-      });
-      if (altDual5w) pushAlternative(primary, altDual5w, "Higher-brightness dual LED option, subject to final load confirmation.");
-      continue;
-    }
-
-    if ((text.includes("led") || text.includes("cob")) && (text.includes("3w") || text.includes("3 w")) && !isKitAiDualLedProduct(primary)) {
-      const altSingle5w = findBestLiveProductByTitleSkuSignals(liveProducts, {
-        must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i],
-        exclude: [/\b(strip|lsd|dual|cct)\b/i],
-        prefer: [/\bcob\b/i, /\bcree\b/i]
-      });
-      if (altSingle5w) pushAlternative(primary, altSingle5w, "Higher-brightness single LED option, subject to driver/load confirmation.");
-      continue;
-    }
-  }
-
-  return alternatives.slice(0, 6);
+  return enforceKitAiDualLedWireQuantity(normalized, kitContext || {}).slice(0, 12);
 }
 
 function scoreLiveProductForKitAi(product, searchText) {
@@ -4853,6 +4872,7 @@ Rules for active_kit_actions:
 - If the user asks to switch drivers, use an "add" action for the new live driver; the frontend will select that driver and the kit builder should replace the prior active driver.
 - If the user asks to replace a non-driver item, you may include one "remove" action for the old item and one "add" action for the new exact live product.
 - Do not use active_kit_actions for a general recommendation or when you are only asking "Should I add these?".
+- Whenever you ask "Should I add..." or otherwise offer to add recommended items, use exact live product names and SKUs in the answer and populate recommended_products. Do not mention only generic phrases such as "a 2600mAh battery" without identifying the exact live product.
 - When active_kit_actions are present, say that you are updating or switching the active kit now. Do not claim that the change has already finished successfully; the frontend will report the actual success/failure after execution.
 
 Rules for image_summary:
