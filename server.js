@@ -3355,35 +3355,65 @@ function userWantsAiToChoose(question = "") {
 
 const KIT_AI_BUILDER_SKU_MAP = Object.freeze({
   "AS-B-201-SLD": { builder_driver_id: "201" },
+  "AS-B-201-SLD-LC": { builder_driver_id: "201-lc" },
   "AS-B-201-LC": { builder_driver_id: "201-lc" },
   "AS-B-202-DLD": { builder_driver_id: "202" },
+  "AS-B-202-DLD-LC": { builder_driver_id: "202-lc" },
   "AS-B-202-LC": { builder_driver_id: "202-lc" },
   "AS-U-101-SLD": { builder_driver_id: "101" },
   "AS-U-102-DLD": { builder_driver_id: "102" },
   "AS-U-103-LSD": { builder_driver_id: "103" },
   "AS-B-204-LSD": { builder_driver_id: "204" },
+
   // Smart Handicrafts approved rule: 205 is the fast-charging rechargeable strip LED driver,
   // even though the current live SKU prefix is AS-U.
   "AS-U-205-LSD": { builder_driver_id: "205" },
   "AS-B-205-LSD": { builder_driver_id: "205" },
+
+  "AS-B-206-55-DLD": { builder_driver_id: "206-55" },
+  "AS-B-206-75-DLD": { builder_driver_id: "206-75" },
+  "AS-B-206-115-DLD": { builder_driver_id: "206-115" },
+
+  "SH-COB-20-2W": { builder_product_id: "2w-led" },
+  "SH-COB-2W-35": { builder_product_id: "2w-35mm" },
   "SH-COB-3": { builder_product_id: "3w-single" },
   "SH-COB-5": { builder_product_id: "5w-single" },
   "SH-COB-3D": { builder_product_id: "3w-dual" },
   "SH-COB-5D": { builder_product_id: "5w-dual" },
+  "SH-COB-21-DLD": { builder_product_id: "cob-50mm-3color" },
+
   "SH-BAT-26S": { builder_product_id: "battery-2600-sleeve" },
   "SH-BAT-26-WS": { builder_product_id: "battery-2600-nosleeve" },
   "SH-BAT-1200": { builder_product_id: "battery-1200" },
-  "SH-BAT-1200-S": { builder_product_id: "battery-1200" },
+
+  /*
+    Do NOT map SH-BAT-1200-S to battery-1200.
+    The builder's battery-1200 card is the WITHOUT-SLEEVE path, while SH-BAT-1200-S
+    is a distinct sleeve SKU in Odoo. Leaving it unmapped prevents wrong-product auto-add.
+  */
+
   "SH-BAT-1800": { builder_product_id: "battery-1800" },
   "SH-BAT-5000": { builder_product_id: "battery-5200" },
   "SH-18650-BAT-H": { builder_product_id: "battery-holder" },
+
+  "SH-C-ENC": { builder_product_id: "usb-c-enclosure" },
+  "SH-LNS-C": { builder_product_id: "lens-clear" },
+  "SH-LNS-F": { builder_product_id: "lens-frosted" },
+
+  /*
+    SH-USB-PMC-B appears in the export for more than one black connector label,
+    so it must NOT be treated as an unambiguous SKU-only add target.
+    Exact product-name matching below decides plain-black vs with-indicator safely.
+  */
+  "SH-USB-PMC-B-S": { builder_product_id: "usb-panel-snapfit" },
+
   "LEDWIRE": { builder_product_id: "jst-2pin" }
 });
 
 const KIT_AI_BUILDER_NAME_HINTS = Object.freeze([
-  { pattern: /\b201\b.*\b(rechargeable|1\s*color|single)\b/i, mapped: { builder_driver_id: "201" } },
+  { pattern: /\b201\b.*\b(rechargeable|1\s*color|single)\b(?!.*\blc\b)/i, mapped: { builder_driver_id: "201" } },
   { pattern: /\b201\b.*\blc\b/i, mapped: { builder_driver_id: "201-lc" } },
-  { pattern: /\b202\b.*\b(dual|3\s*color)\b/i, mapped: { builder_driver_id: "202" } },
+  { pattern: /\b202\b.*\b(dual|3\s*color)\b(?!.*\blc\b)/i, mapped: { builder_driver_id: "202" } },
   { pattern: /\b202\b.*\blc\b/i, mapped: { builder_driver_id: "202-lc" } },
   { pattern: /\b101\b.*\busb\b/i, mapped: { builder_driver_id: "101" } },
   { pattern: /\b102\b.*\busb\b/i, mapped: { builder_driver_id: "102" } },
@@ -3393,16 +3423,44 @@ const KIT_AI_BUILDER_NAME_HINTS = Object.freeze([
   { pattern: /\b206\b.*\b55\s*mm\b/i, mapped: { builder_driver_id: "206-55" } },
   { pattern: /\b206\b.*\b75\s*mm\b/i, mapped: { builder_driver_id: "206-75" } },
   { pattern: /\b206\b.*\b115\s*mm\b/i, mapped: { builder_driver_id: "206-115" } },
+
+  { pattern: /\b2\s*w\b.*\b20\s*mm\b/i, mapped: { builder_product_id: "2w-led" } },
+  { pattern: /\b2\s*w\b.*\b35\s*mm\b/i, mapped: { builder_product_id: "2w-35mm" } },
   { pattern: /\b3\s*w\b.*\b(cob|led)\b(?!.*\bdual\b)/i, mapped: { builder_product_id: "3w-single" } },
   { pattern: /\b5\s*w\b.*\b(cob|led)\b(?!.*\bdual\b)/i, mapped: { builder_product_id: "5w-single" } },
   { pattern: /\b3\s*w\b.*\b(dual|warm[-\s]?cool|cct)\b/i, mapped: { builder_product_id: "3w-dual" } },
   { pattern: /\b5\s*w\b.*\b(dual|warm[-\s]?cool|cct)\b/i, mapped: { builder_product_id: "5w-dual" } },
-  { pattern: /\b2600\b.*\b(with\s+sleeve|sleeve)\b/i, mapped: { builder_product_id: "battery-2600-sleeve" } },
+  { pattern: /\b(cob|led)\b.*\b50\s*mm\b.*\b3\s*color\b/i, mapped: { builder_product_id: "cob-50mm-3color" } },
+
+  { pattern: /\bcob\s*led\s*strip\b.*\b3\s*mm\b.*\b400\b.*\b12\s*v\b/i, mapped: { builder_product_id: "12v-strip-3mm" } },
+  { pattern: /\bcob\s*led\s*strip\b.*\b5\s*mm\b.*\b400\b.*\b12\s*v\b/i, mapped: { builder_product_id: "12v-strip-5mm" } },
+  { pattern: /\bcob\s*led\s*strip\b.*\b8\s*mm\b.*\b320\b.*\b12\s*v\b/i, mapped: { builder_product_id: "12v-strip-8mm" } },
+  { pattern: /\bcob\s*led\s*strip\b.*\b8\s*mm\b.*\b320\b.*\b24\s*v\b/i, mapped: { builder_product_id: "24v-strip-8mm" } },
+  { pattern: /\bcob\s*led\s*strip\b.*\bcct\b.*\b10\s*mm\b.*\b12\s*v\b/i, mapped: { builder_product_id: "cct-strip-10mm-12v" } },
+
+  { pattern: /\b2600\b.*\b(with\s+sleeve|sleeve)\b(?!.*\bwithout\b)/i, mapped: { builder_product_id: "battery-2600-sleeve" } },
   { pattern: /\b2600\b.*\b(without\s+sleeve|no\s+sleeve)\b/i, mapped: { builder_product_id: "battery-2600-nosleeve" } },
+  { pattern: /\b1200\b.*\b(without\s+sleeve|no\s+sleeve)\b/i, mapped: { builder_product_id: "battery-1200" } },
+  { pattern: /\b1800\b.*\b(sleeve|battery)\b/i, mapped: { builder_product_id: "battery-1800" } },
   { pattern: /\b5200\b.*\bbms\b/i, mapped: { builder_product_id: "battery-5200-bms" } },
-  { pattern: /\b5200\b.*\bbattery\b/i, mapped: { builder_product_id: "battery-5200" } },
+  { pattern: /\b5200\b.*\bbattery\b(?!.*\bbms\b)/i, mapped: { builder_product_id: "battery-5200" } },
   { pattern: /\b18650\b.*\bholder\b/i, mapped: { builder_product_id: "battery-holder" } },
-  { pattern: /\bjst\b.*\b(wire|cable)\b/i, mapped: { builder_product_id: "jst-2pin" } }
+
+  { pattern: /\b3\s*pin\b.*\bjst\b|\bjst\b.*\b3\s*pin\b/i, mapped: { builder_product_id: "jst-3pin" } },
+  { pattern: /\bjst\b.*\b(wire|cable)\b/i, mapped: { builder_product_id: "jst-2pin" } },
+  { pattern: /\blug\s*wire\b.*\b10\s*cm\b/i, mapped: { builder_product_id: "lug-wire" } },
+  { pattern: /\btouch\s*sensor\b.*\bgold\b/i, mapped: { builder_product_id: "touch-sensor" } },
+
+  /*
+    Order matters: specific USB panel-mount variants must match before the generic black connector.
+  */
+  { pattern: /\busb\s*panel\s*mount\s*connector\s*black\s*with\s*indicator\b/i, mapped: { builder_product_id: "usb-panel-indicator" } },
+  { pattern: /\busb\s*panel\s*mount\s*connector\s*black\b.*\bsnap\s*fit\b|\busb\s*panel\s*mount\s*connector\s*black\s*\(snap\s*fit\)/i, mapped: { builder_product_id: "usb-panel-snapfit" } },
+  { pattern: /\busb\s*panel\s*mount\s*connector\s*black\b(?!.*\bindicator\b)(?!.*\bsnap\s*fit\b)/i, mapped: { builder_product_id: "usb-panel-black" } },
+
+  { pattern: /\busb\s*c\s*enclosure\b/i, mapped: { builder_product_id: "usb-c-enclosure" } },
+  { pattern: /\blens\b.*\bclear\b/i, mapped: { builder_product_id: "lens-clear" } },
+  { pattern: /\blens\b.*\bfrosted\b/i, mapped: { builder_product_id: "lens-frosted" } }
 ]);
 
 function getKitAiBuilderMapping(item = {}, liveProduct = null) {
@@ -3413,7 +3471,11 @@ function getKitAiBuilderMapping(item = {}, liveProduct = null) {
   ].filter(Boolean);
 
   for (const sku of skuCandidates) {
-    const mapping = KIT_AI_BUILDER_SKU_MAP[String(sku || "").trim().toUpperCase()];
+    const rawKey = String(sku || "").trim().toUpperCase();
+    const normalizedKey = rawKey.replace(/^\[+|\]+$/g, "").trim();
+    const mapping =
+      KIT_AI_BUILDER_SKU_MAP[rawKey] ||
+      KIT_AI_BUILDER_SKU_MAP[normalizedKey];
     if (mapping) return { ...mapping };
   }
 
@@ -3682,6 +3744,192 @@ function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = []
   );
 
   return enforceKitAiDualLedWireQuantity(normalized, kitContext || {}).slice(0, 12);
+}
+
+
+function normalizeKitAiExactProductText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[“”"']/g, "")
+    .replace(/\bsku\s*:\s*/gi, " ")
+    .replace(/[()[\]]/g, " ")
+    .replace(/[^a-z0-9+.\-\/\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function kitAiLiveProductAliases(product = {}) {
+  return [
+    product?.name || "",
+    product?.sku || "",
+    ...(Array.isArray(product?.variantNames) ? product.variantNames : []),
+    ...(Array.isArray(product?.variantSkus) ? product.variantSkus : [])
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function findExactLiveProductsMentionedInText(text = "", liveProducts = []) {
+  const normalizedText = normalizeKitAiExactProductText(text);
+  if (!normalizedText) return [];
+
+  const matches = [];
+  const seen = new Set();
+
+  for (const product of liveProducts || []) {
+    const aliases = kitAiLiveProductAliases(product);
+    const matched = aliases.some((alias) => {
+      const normalizedAlias = normalizeKitAiExactProductText(alias);
+      if (!normalizedAlias || normalizedAlias.length < 4) return false;
+      return (
+        normalizedText === normalizedAlias ||
+        normalizedText.includes(normalizedAlias) ||
+        normalizedAlias.includes(normalizedText)
+      );
+    });
+
+    if (!matched) continue;
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    matches.push(product);
+  }
+
+  return matches;
+}
+
+function kitAiQuestionLooksLikeExactProductSelection(question = "", history = [], liveProducts = []) {
+  const q = String(question || "").trim();
+  if (!q) return false;
+
+  const productMatches = findExactLiveProductsMentionedInText(q, liveProducts);
+  if (!productMatches.length) return false;
+
+  const lower = q.toLowerCase();
+  const directAddIntent = /\b(add|include|select|choose|use|take)\b/i.test(lower);
+
+  const latestAssistantChoiceText = (Array.isArray(history) ? history : [])
+    .slice(-6)
+    .reverse()
+    .find((h) => String(h?.role || "").toLowerCase() === "assistant");
+
+  const assistantText = String(
+    latestAssistantChoiceText?.text ||
+    latestAssistantChoiceText?.content ||
+    ""
+  ).toLowerCase();
+
+  const priorAssistantAskedChoice =
+    /\b(which|choose|prefer|would you prefer|which one|option)\b/i.test(assistantText) &&
+    productMatches.some((product) =>
+      kitAiLiveProductAliases(product).some((alias) => {
+        const normalizedAlias = normalizeKitAiExactProductText(alias);
+        return normalizedAlias && normalizeKitAiExactProductText(assistantText).includes(normalizedAlias);
+      })
+    );
+
+  const looksLikeQuestion =
+    /\?/.test(q) ||
+    /^(what|why|how|which|is|are|can|could|should|tell|explain)\b/i.test(lower);
+
+  return !looksLikeQuestion && (directAddIntent || priorAssistantAskedChoice);
+}
+
+function findExactLiveSelectionActionsFromQuestion(question = "", liveProducts = [], kitContext = {}, history = []) {
+  if (!kitAiQuestionLooksLikeExactProductSelection(question, history, liveProducts)) return [];
+
+  const exactMatches = findExactLiveProductsMentionedInText(question, liveProducts);
+  if (!exactMatches.length) return [];
+
+  const actions = [];
+  const seen = new Set();
+
+  for (const live of exactMatches.slice(0, 3)) {
+    const candidate = normalizeKitAiRecommendedProducts([{
+      name: live.name || "",
+      sku: live.sku || (Array.isArray(live.variantSkus) ? live.variantSkus[0] : "") || "",
+      qty: 1,
+      type: getKitAiIntegrationProductBucket(live),
+      reason: "Customer selected an exact live product option from the previous assistant choice."
+    }], liveProducts)[0];
+
+    if (!candidate || candidate.auto_addable !== true) continue;
+
+    const key = `${candidate.sku || ""}|${candidate.name || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    actions.push({
+      action: "add",
+      name: candidate.name,
+      sku: candidate.sku,
+      qty: candidate.qty || 1,
+      type: candidate.type || "",
+      reason: candidate.reason || "",
+      ...(candidate.builder_product_id ? { builder_product_id: candidate.builder_product_id } : {}),
+      ...(candidate.builder_driver_id ? { builder_driver_id: candidate.builder_driver_id } : {}),
+      auto_addable: true
+    });
+  }
+
+  return actions.slice(0, 3);
+}
+
+function kitAiAnswerClaimsImmediateKitMutation(answer = "") {
+  const text = String(answer || "").toLowerCase();
+  return (
+    /\bi(?:'m| am)\s+(?:now\s+)?adding\b/i.test(text) ||
+    /\bi(?:'m| am)\s+(?:now\s+)?updating\b/i.test(text) ||
+    /\badding\b.{0,80}\bto your kit\b/i.test(text) ||
+    /\bupdating\b.{0,80}\bactive kit\b/i.test(text)
+  );
+}
+
+function repairUnsupportedImmediateKitMutationClaim({
+  answer = "",
+  activeKitActions = [],
+  recommendedProducts = [],
+  liveProducts = [],
+  question = ""
+} = {}) {
+  if (!kitAiAnswerClaimsImmediateKitMutation(answer)) return answer;
+  if ((Array.isArray(activeKitActions) && activeKitActions.length) ||
+      (Array.isArray(recommendedProducts) && recommendedProducts.length)) {
+    return answer;
+  }
+
+  const liveMatches = findExactLiveProductsMentionedInText(`${question}\n${answer}`, liveProducts);
+  if (liveMatches.length) {
+    const labels = liveMatches
+      .slice(0, 3)
+      .map((p) => kitAiProductLabel(p))
+      .filter(Boolean)
+      .join(", ");
+
+    return `I found the live product ${labels}. I cannot honestly say it was added automatically from this message because no confirmed kit-builder add action was prepared. Please send the exact product name again after I offer the addable option, or add it manually from the builder if it is visible.`;
+  }
+
+  return "I found your request, but I cannot honestly say the kit was updated automatically because no confirmed kit-builder add action was prepared. Please name the exact product again or add it manually from the builder if it is visible.";
+}
+
+function repairFalseNotLiveKitAiAnswer({
+  answer = "",
+  question = "",
+  liveProducts = []
+} = {}) {
+  const text = String(answer || "");
+  if (!/\bnot currently listed live on the website\b/i.test(text)) return answer;
+
+  const liveMatches = findExactLiveProductsMentionedInText(`${question}\n${text}`, liveProducts);
+  if (!liveMatches.length) return answer;
+
+  const labels = liveMatches
+    .slice(0, 3)
+    .map((p) => kitAiProductLabel(p))
+    .filter(Boolean)
+    .join(", ");
+
+  return `This product is listed live on the website: ${labels}. I will not mark it as unavailable. If you want it added to the kit, send the exact product name or choose the addable option I show.`;
 }
 
 function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitContext = {}) {
@@ -5262,6 +5510,14 @@ app.post("/kit-ai-chat", async (req, res) => {
     const deterministicDirectAddActions =
       findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {});
 
+    const deterministicExactSelectionActions =
+      findExactLiveSelectionActionsFromQuestion(
+        safeQuestion,
+        liveProducts,
+        kitContext || {},
+        history || []
+      );
+
     const lampReferencePromptContext = {
       imageAttachedThisTurn: !!normalizedLampReferenceImage,
       priorReferenceImageSummary: priorLampReferenceSummary || ""
@@ -5444,6 +5700,11 @@ ${JSON.stringify({
   lampReference: lampReferencePromptContext,
   guidedFlowPolicy: "stepwise application -> driver -> LED -> battery -> wire/accessories -> review",
   deterministicDirectAddCandidates: deterministicDirectAddActions.map((a) => ({
+    action: a.action,
+    name: a.name,
+    sku: a.sku
+  })),
+  deterministicExactSelectionCandidates: deterministicExactSelectionActions.map((a) => ({
     action: a.action,
     name: a.name,
     sku: a.sku
@@ -5650,6 +5911,27 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       if (directAddAnswer) answer = directAddAnswer;
     }
 
+    /*
+      Catalog-wide choice safety:
+      If the assistant previously asked the customer to choose between exact live products,
+      and the customer replies with the exact product name/SKU, execute that exact mapped
+      kit action deterministically. This avoids connector-only and future option-selection
+      failures across the Odoo product catalog.
+    */
+    if (
+      deterministicExactSelectionActions.length &&
+      activeKitActions.length === 0
+    ) {
+      activeKitActions = normalizeKitAiActiveKitActions(
+        deterministicExactSelectionActions,
+        liveProducts,
+        kitContext || {}
+      );
+
+      const exactSelectionAnswer = buildDirectAddOverrideAnswer(activeKitActions);
+      if (exactSelectionAnswer) answer = exactSelectionAnswer;
+    }
+
     if (
       recommendedProducts.length === 0 &&
       answerInvitesAddAll(answer)
@@ -5744,6 +6026,26 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     activeKitActions = guidedFlow.activeKitActions;
     alternativeProducts = guidedFlow.alternativeProducts;
 
+    /*
+      Final honesty guardrails:
+      - Never tell a customer a clearly matched live Odoo product is "not live".
+      - Never say an item was/is being added unless a real add path exists
+        (active kit action or fresh exact recommendation for frontend confirmation).
+    */
+    answer = repairFalseNotLiveKitAiAnswer({
+      answer,
+      question: safeQuestion,
+      liveProducts
+    });
+
+    answer = repairUnsupportedImmediateKitMutationClaim({
+      answer,
+      activeKitActions,
+      recommendedProducts,
+      liveProducts,
+      question: safeQuestion
+    });
+
     const finalPayload = {
       ok: true,
       answer,
@@ -5764,6 +6066,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
       deterministic_202_completion_candidates_count: deterministic202CompletionLiveProducts.length,
       deterministic_direct_add_candidates_count: deterministicDirectAddActions.length,
+      deterministic_exact_selection_candidates_count: deterministicExactSelectionActions.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
