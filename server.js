@@ -3485,6 +3485,50 @@ function normalizeKitAiRecommendedProducts(products = [], liveProducts = []) {
     .slice(0, 12);
 }
 
+
+function isKitAiDualLedProduct(product = {}) {
+  const text = compactTextForMatch([
+    product?.name || "",
+    product?.sku || "",
+    product?.type || ""
+  ].join(" "));
+  return (
+    text.includes("dual") ||
+    text.includes("warm cool") ||
+    text.includes("3d") ||
+    text.includes("sh cob 3d") ||
+    text.includes("sh cob 5d")
+  ) && (text.includes("led") || text.includes("cob"));
+}
+
+function isKitAiJstWireProduct(product = {}) {
+  const text = compactTextForMatch([
+    product?.name || "",
+    product?.sku || "",
+    product?.type || ""
+  ].join(" "));
+  return text.includes("jst") || text.includes("ledwire") || text.includes("wire");
+}
+
+function enforceKitAiDualLedWireQuantity(products = [], kitContext = {}) {
+  const list = Array.isArray(products) ? products.map((p) => ({ ...p })) : [];
+  const selectedDriver = compactTextForMatch(kitContext?.kitBuilderSnapshot?.selectedDriver || "");
+  const dualLedInList = list.some((p) => isKitAiDualLedProduct(p));
+  const isDualDriverContext =
+    selectedDriver.includes("202") ||
+    selectedDriver.includes("102") ||
+    dualLedInList;
+
+  if (!isDualDriverContext) return list;
+
+  return list.map((product) => {
+    if (isKitAiJstWireProduct(product)) {
+      return { ...product, qty: Math.max(2, Number(product.qty || 1)) };
+    }
+    return product;
+  });
+}
+
 function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitContext = {}) {
   const normalized = [];
   const source = Array.isArray(actions) ? actions : [];
