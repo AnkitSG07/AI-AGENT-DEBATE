@@ -3512,14 +3512,25 @@ function isKitAiJstWireProduct(product = {}) {
 
 function enforceKitAiDualLedWireQuantity(products = [], kitContext = {}) {
   const list = Array.isArray(products) ? products.map((p) => ({ ...p })) : [];
+
+  /*
+    V13 correction:
+    Smart Handicrafts rule is strict here:
+    - Qty 2 JST wire is needed only for the 202 and 102 dual-driver kit paths.
+    - Do NOT infer Qty 2 merely because some LED wording looks dual/CCT.
+    - For 201, 101, 204, 205, 103, 206, etc., the AI must keep the requested/default JST qty.
+  */
   const selectedDriver = compactTextForMatch(kitContext?.kitBuilderSnapshot?.selectedDriver || "");
-  const dualLedInList = list.some((p) => isKitAiDualLedProduct(p));
   const isDualDriverContext =
     selectedDriver.includes("202") ||
-    selectedDriver.includes("102") ||
-    dualLedInList;
+    selectedDriver.includes("102");
 
-  if (!isDualDriverContext) return list;
+  if (!isDualDriverContext) {
+    return list.map((product) => {
+      if (!isKitAiJstWireProduct(product)) return product;
+      return { ...product, qty: Math.max(1, Number(product.qty || 1)) };
+    });
+  }
 
   return list.map((product) => {
     if (isKitAiJstWireProduct(product)) {
@@ -3694,6 +3705,7 @@ function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitCont
         reason: stripMarkdownForCustomer(rawAction?.reason || candidate.reason || ""),
         ...(candidate.builder_product_id ? { builder_product_id: candidate.builder_product_id } : {}),
         ...(candidate.builder_driver_id ? { builder_driver_id: candidate.builder_driver_id } : {}),
+        ...(rawAction?.increment_existing ? { increment_existing: true } : {}),
         auto_addable: !!candidate.auto_addable
       });
       continue;
@@ -4184,6 +4196,12 @@ function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], 
       name: product.name || "",
       sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
       qty: 1,
+      /*
+        If the user says "add one more", "another", "extra", or "additional",
+        keep the add action instead of collapsing it into "already present".
+        The frontend uses this flag to increment the existing kit quantity.
+      */
+      increment_existing: /\b(one\s+more|another|extra|additional)\b/i.test(q),
       type: getKitAiIntegrationProductBucket(product),
       reason
     });
