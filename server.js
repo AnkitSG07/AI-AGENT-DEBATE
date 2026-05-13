@@ -4150,6 +4150,69 @@ function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = []
   return enforceKitAiDualLedWireQuantity(normalized, kitContext || {}).slice(0, 12);
 }
 
+function buildKitAiAlternativeProducts(primaryProducts = [], liveProducts = [], kitContext = {}) {
+  const primaries = Array.isArray(primaryProducts) ? primaryProducts : [];
+  if (!primaries.length) return [];
+
+  const alternatives = [];
+  const seen = new Set();
+
+  function pushAlternative(primary, alternative, note) {
+    if (!primary || !alternative) return;
+    const key = `${String(primary.sku || primary.name || "").toLowerCase()}|${String(alternative.sku || alternative.name || "").toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    alternatives.push({
+      for_name: primary.name || "",
+      for_sku: primary.sku || "",
+      name: alternative.name || "",
+      sku: alternative.sku || (Array.isArray(alternative.variantSkus) ? alternative.variantSkus[0] : "") || "",
+      note: note || ""
+    });
+  }
+
+  for (const primary of primaries) {
+    const text = compactTextForMatch(`${primary?.sku || ""} ${primary?.name || ""}`);
+
+    if (text.includes("battery") || text.includes("18650") || text.includes("mah")) {
+      const altNoSleeve2600 = findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without sleeve|no sleeve|nosleeve)\b/i],
+        prefer: [/\b18650\b/i, /\bmah\b/i]
+      }) || findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without sleeve|no sleeve|nosleeve)\b/i],
+        prefer: [/\b18650\b/i, /\bmah\b/i]
+      });
+
+      if (altNoSleeve2600 && compactTextForMatch(altNoSleeve2600.name) !== compactTextForMatch(primary.name)) {
+        pushAlternative(primary, altNoSleeve2600, "Alternative 2600mAh option; a holder may be required.");
+      }
+      continue;
+    }
+
+    if (isKitAiDualLedProduct(primary) && (text.includes("3w") || text.includes("3 w"))) {
+      const altDual5w = findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+        exclude: [/\b(strip|lsd)\b/i],
+        prefer: [/\bdual\b/i, /\bcob\b/i]
+      });
+      if (altDual5w) pushAlternative(primary, altDual5w, "Higher-brightness dual LED option, subject to final load confirmation.");
+      continue;
+    }
+
+    if ((text.includes("led") || text.includes("cob")) && (text.includes("3w") || text.includes("3 w")) && !isKitAiDualLedProduct(primary)) {
+      const altSingle5w = findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i],
+        exclude: [/\b(strip|lsd|dual|cct)\b/i],
+        prefer: [/\bcob\b/i, /\bcree\b/i]
+      });
+      if (altSingle5w) pushAlternative(primary, altSingle5w, "Higher-brightness single LED option, subject to driver/load confirmation.");
+      continue;
+    }
+  }
+
+  return alternatives.slice(0, 6);
+}
+
 function scoreLiveProductForKitAi(product, searchText) {
   const haystack = getProductSearchText(product);
   if (!haystack) return 0;
