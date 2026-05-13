@@ -3529,6 +3529,150 @@ function enforceKitAiDualLedWireQuantity(products = [], kitContext = {}) {
   });
 }
 
+function answerInvitesAddAll(answer = "") {
+  const text = String(answer || "").toLowerCase();
+  return (
+    /\bshould i add\b/i.test(text) ||
+    /\badd all\b/i.test(text) ||
+    /\badd (all|these|them)\b/i.test(text) ||
+    /\bactive kit\b/i.test(text) && /\badd\b/i.test(text)
+  );
+}
+
+function buildDirectAddOverrideAnswer(actions = []) {
+  const first = actions?.[0];
+  if (!first) return "";
+  const label = first.sku ? `${first.name} (${first.sku})` : first.name;
+  if (!label) return "";
+  return `I’m adding ${label} to your active kit now.`;
+}
+
+function recoverLiveRecommendedProductsFromAnswer(answer = "", liveProducts = [], kitContext = {}) {
+  const text = String(answer || "").toLowerCase();
+  if (!text || !answerInvitesAddAll(text)) return [];
+
+  const matched = [];
+  const seen = new Set();
+
+  function pushRecovered(product, qty = 1, reason = "Recovered from the customer-facing recommendation text after streaming.") {
+    if (!product) return;
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    matched.push({
+      name: product.name || "",
+      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+      qty: Math.max(1, Number(qty || 1)),
+      type: getKitAiIntegrationProductBucket(product),
+      reason
+    });
+  }
+
+  for (const product of liveProducts || []) {
+    const skuCandidates = [
+      String(product?.sku || "").trim(),
+      ...(Array.isArray(product?.variantSkus) ? product.variantSkus : [])
+    ].filter(Boolean);
+
+    const name = String(product?.name || "").trim();
+    const nameLower = name.toLowerCase();
+
+    const hasSkuMention = skuCandidates.some((sku) => {
+      const s = String(sku || "").trim().toLowerCase();
+      return s && text.includes(s);
+    });
+
+    const hasExactNameMention = nameLower && nameLower.length >= 6 && text.includes(nameLower);
+
+    if (!hasSkuMention && !hasExactNameMention) continue;
+    pushRecovered(product, 1);
+  }
+
+  /*
+    Repair generic assistant wording such as:
+    "Should I add the 2600mAh 18650 battery and JST wire?"
+
+    Earlier this did not reconstruct recommended_products because no exact live SKU/name
+    appeared in the visible answer. That caused a later plain "yes" to be sent back to Gemini
+    instead of adding the actual live kit items.
+  */
+  const selectedDriverText = compactTextForMatch(kitContext?.kitBuilderSnapshot?.selectedDriver || "");
+  const isDualDriverContext = selectedDriverText.includes("202") || selectedDriverText.includes("102");
+
+  if (/\b(battery|18650|2600\s*mah|2600mah)\b/i.test(text)) {
+    const preferred2600Sleeve =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
+        prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
+        prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      }) ||
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i],
+        prefer: [/\bsleeve\b/i, /\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
+      });
+
+    pushRecovered(preferred2600Sleeve, 1, "Recovered preferred 2600mAh sleeve battery from the add-confirmation wording.");
+  }
+
+  if (/\b(jst|wire|ledwire|connector)\b/i.test(text)) {
+    const preferredJst =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+        exclude: [/\b(battery|18650|cell)\b/i],
+        prefer: [/\bledwire\b/i, /\bdual\s*side\b/i, /\b2\s*pin\b/i, /\bwire\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\bjst\b/i, /\b(wire|cable|connector)\b/i],
+        exclude: [/\b(battery|18650|cell)\b/i],
+        prefer: [/\bledwire\b/i, /\bdual\s*side\b/i, /\b2\s*pin\b/i, /\bwire\b/i]
+      });
+
+    pushRecovered(preferredJst, isDualDriverContext ? 2 : 1, "Recovered JST wire from the add-confirmation wording.");
+  }
+
+  if (/\b(3\s*w|3w)\b/i.test(text) && /\b(dual|warm[-\s]?cool|warm cool|cct)\b/i.test(text)) {
+    const dual3w =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bsh-cob-3d\b/i, /\bled\s*-?\s*cree\s*3\s*w\s*dual\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i, /\b(dual|cct|warm[-\s]?cool|warm cool)\b/i],
+        exclude: [/\b(strip|lsd|12v|24v)\b/i],
+        prefer: [/\bsh-cob-3d\b/i, /\b3\s*w\s*dual\b/i, /\bdual\b/i]
+      });
+
+    pushRecovered(dual3w, 1, "Recovered dual 3W LED from the add-confirmation wording.");
+  }
+
+  if (/\b(3\s*w|3w)\b/i.test(text) && /\b(cob|led)\b/i.test(text) && !/\b(dual|warm[-\s]?cool|warm cool|cct)\b/i.test(text)) {
+    const single3w =
+      findBestLiveProductByTitleSkuSignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+        prefer: [/\bled\s*-?\s*cree\s*cob\s*3\s*w\b/i, /\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
+      }) ||
+      findBestLiveProductBySignals(liveProducts, {
+        must: [/\b(led|cob)\b/i, /\b3\s*w\b|\b3w\b/i],
+        exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+        prefer: [/\bsh-cob-3\b/i, /\bcob\b/i, /\bcree\b/i]
+      });
+
+    pushRecovered(single3w, 1, "Recovered single 3W LED from the add-confirmation wording.");
+  }
+
+  const normalized = filterAlreadyActiveRecommendations(
+    normalizeKitAiRecommendedProducts(matched, liveProducts),
+    kitContext || {}
+  );
+
+  return enforceKitAiDualLedWireQuantity(normalized, kitContext || {}).slice(0, 12);
+}
+
 function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitContext = {}) {
   const normalized = [];
   const source = Array.isArray(actions) ? actions : [];
