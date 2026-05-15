@@ -6451,6 +6451,18 @@ function buildAvailableProductSummary(liveProducts = [], max = 12) {
 
 
 const KIT_AI_MODEL = process.env.KIT_AI_MODEL || GEMINI_MODEL;
+
+// Visible streaming mode for the customer-facing Kit AI answer.
+// "final_only" (default) prevents a pre-final Gemini draft from appearing
+// and later being replaced by backend safety/finalisation guardrails.
+// "preview" restores the earlier live-preview behaviour for debugging only.
+const KIT_AI_VISIBLE_STREAM_MODE = String(
+  process.env.KIT_AI_VISIBLE_STREAM_MODE || "final_only"
+).trim().toLowerCase();
+
+function kitAiShouldStreamVisiblePreview() {
+  return KIT_AI_VISIBLE_STREAM_MODE === "preview";
+}
 const KIT_AI_MAX_PROMPT_PRODUCTS = Math.max(6, Number(process.env.KIT_AI_MAX_PROMPT_PRODUCTS || 12));
 const KIT_AI_MAX_RELEVANT_RULES = Math.max(2, Number(process.env.KIT_AI_MAX_RELEVANT_RULES || 8));
 const KIT_AI_THINKING_BUDGET = Math.max(0, Number(process.env.KIT_AI_THINKING_BUDGET || 0));
@@ -8253,18 +8265,29 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
             if (partialAnswer.length > streamedAnswerText.length) {
               const delta = partialAnswer.slice(streamedAnswerText.length);
               streamedAnswerText = partialAnswer;
-              sendKitAiSse(res, "delta", { text: delta });
+
+              // V7 hardening: by default the visitor sees only the fully
+              // finalised answer. This prevents a good-looking draft from being
+              // visibly overwritten by later backend guardrails, policy checks,
+              // live-product checks, or deterministic action repair.
+              if (kitAiShouldStreamVisiblePreview()) {
+                sendKitAiSse(res, "delta", { text: delta });
+              }
             }
 
             /*
-              The visible answer can finish before Gemini finishes the remaining JSON
-              fields such as recommended_products/action_offer. Tell the frontend so
-              it can show a clear "finalising" state instead of looking stuck.
+              The answer field can finish before Gemini finishes the remaining JSON
+              fields such as recommended_products/action_offer. In final-only mode,
+              keep the visitor in an honest "finalising" state rather than exposing
+              a pre-final draft. Preview streaming can still be re-enabled by env var
+              for internal debugging if required.
             */
             if (partialAnswerState.complete && !streamedAnswerCompleted) {
               streamedAnswerCompleted = true;
               sendKitAiSse(res, "answer_complete", {
-                message: "Answer written. Finalising the product check..."
+                message: kitAiShouldStreamVisiblePreview()
+                  ? "Answer written. Finalising the product check..."
+                  : "Kit Expert has drafted the answer. Running the final compatibility and safety check..."
               });
             }
           }
@@ -8351,6 +8374,20 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       safeAnswerSource
     ));
 
+    // V7 diagnostic trace: every backend stage that materially changes the
+    // customer-facing final answer is recorded in the JSON payload. The frontend
+    // does not display this, but it makes production debugging far easier if a
+    // future guardrail ever alters the final answer unexpectedly.
+    const finalAnswerMutationTrace = [];
+    function updateFinalAnswer(nextAnswer, reason) {
+      const current = String(answer || "");
+      const next = String(nextAnswer || "");
+      if (next && next !== current) {
+        finalAnswerMutationTrace.push(reason || "unspecified_final_answer_change");
+        answer = next;
+      }
+    }
+
     const returnedLampReferenceImageSummary =
       normalizedLampReferenceImage
         ? sanitizeKitAiLampReferenceSummary(parsedResponse.image_summary || "")
@@ -8382,7 +8419,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       );
 
       const directAddAnswer = buildDirectAddOverrideAnswer(activeKitActions);
-      if (directAddAnswer) answer = directAddAnswer;
+      if (directAddAnswer) updateFinalAnswer(directAddAnswer, "deterministic_direct_add_answer");
     }
 
     /*
@@ -8403,7 +8440,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       );
 
       const exactSelectionAnswer = buildDirectAddOverrideAnswer(activeKitActions);
-      if (exactSelectionAnswer) answer = exactSelectionAnswer;
+      if (exactSelectionAnswer) updateFinalAnswer(exactSelectionAnswer, "deterministic_exact_selection_answer");
     }
 
     if (
@@ -8475,20 +8512,23 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
         const liveCorrectionAnswer = buildLiveProductCorrectionAnswer(safeQuestion, liveNumberMatches);
 
         if (liveCorrectionAnswer) {
-          answer = liveCorrectionAnswer;
+          updateFinalAnswer(liveCorrectionAnswer, "live_availability_correction_answer");
         } else {
-          answer = [
+          updateFinalAnswer([
             "I cannot safely recommend that SKU because it is not currently listed live on the Smart Handicrafts website.",
             "",
             "Closest live products available for checking:",
             buildAvailableProductSummary(relevantLiveProducts, 8),
             "",
             "Please share the exact product/SKU you are checking so the closest live option can be verified."
-          ].join("\n");
+          ].join("\n"), "live_availability_missing_sku_fallback");
         }
       } else {
         // Preserve the real answer for general product/integration questions.
-        answer = removeUnsupportedSkuMentionsFromAnswer(answer, fakeSkus);
+        updateFinalAnswer(
+          removeUnsupportedSkuMentionsFromAnswer(answer, fakeSkus),
+          "unsupported_sku_mentions_removed"
+        );
       }
     }
 
@@ -8503,7 +8543,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       actionOffer: parsedResponse.action_offer || (recommendedProducts.length ? "active_kit" : "none")
     });
 
-    answer = guidedFlow.answer;
+    updateFinalAnswer(guidedFlow.answer, "guided_stepwise_flow_override");
     recommendedProducts = guidedFlow.recommendedProducts;
     activeKitActions = guidedFlow.activeKitActions;
     alternativeProducts = guidedFlow.alternativeProducts;
@@ -8514,30 +8554,41 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       - Never say an item was/is being added unless a real add path exists
         (active kit action or fresh exact recommendation for frontend confirmation).
     */
-    answer = repairFalseNotLiveKitAiAnswer({
-      answer,
-      question: safeQuestion,
-      liveProducts
-    });
+    updateFinalAnswer(
+      repairFalseNotLiveKitAiAnswer({
+        answer,
+        question: safeQuestion,
+        liveProducts
+      }),
+      "false_not_live_answer_repaired"
+    );
 
-    answer = repairUnsupportedImmediateKitMutationClaim({
-      answer,
-      activeKitActions,
-      recommendedProducts,
-      liveProducts,
-      question: safeQuestion
-    });
+    updateFinalAnswer(
+      repairUnsupportedImmediateKitMutationClaim({
+        answer,
+        activeKitActions,
+        recommendedProducts,
+        liveProducts,
+        question: safeQuestion
+      }),
+      "unsupported_immediate_mutation_claim_repaired"
+    );
 
-    answer = applyKitAiDecisionPolicyRepair({
-      answer,
-      decisionPolicy,
-      kitContext: kitContext || {},
-      projectState: resolvedProjectState
-    });
+    updateFinalAnswer(
+      applyKitAiDecisionPolicyRepair({
+        answer,
+        decisionPolicy,
+        kitContext: kitContext || {},
+        projectState: resolvedProjectState
+      }),
+      "deterministic_decision_policy_repair"
+    );
 
     const finalPayload = {
       ok: true,
       session_id: normalizedSessionId || null,
+      visible_stream_mode: KIT_AI_VISIBLE_STREAM_MODE,
+      final_answer_mutation_trace: finalAnswerMutationTrace,
       chat_history_restored_from_odoo: !!storedSessionSnapshot?.found,
       answer,
       image_summary: returnedLampReferenceImageSummary,
