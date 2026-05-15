@@ -1474,6 +1474,7 @@ function getKitAiRecentUserIntentText(history = [], question = "") {
     .toLowerCase();
 }
 
+
 function buildKitAiDecisionPolicy({
   question = "",
   history = [],
@@ -1483,200 +1484,844 @@ function buildKitAiDecisionPolicy({
   const recentUserIntentText = getKitAiRecentUserIntentText(history, question);
   const snapshot = kitContext?.kitBuilderSnapshot || {};
   const activeDriverText = String(snapshot.selectedDriver || "").toLowerCase();
+  const activeKitText = [
+    snapshot.selectedDriver || "",
+    ...(Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems : []),
+    ...(Array.isArray(snapshot.selectedItemIds) ? snapshot.selectedItemIds : [])
+  ].join(" ").toLowerCase();
 
   const flags = {
+    // Product forms / applications
     floorLamp: /\bfloor\s+lamp\b/i.test(recentUserIntentText),
-    tableLamp: /\btable\s+lamp\b/i.test(recentUserIntentText),
-    topTouch: /\btop[-\s]?touch\b|\btouch\s+from\s+top\b/i.test(recentUserIntentText),
-    wallSconce: /\bwall\s+sconce\b/i.test(recentUserIntentText),
-    rechargeable: /\brechargeable\b|\bbattery[-\s]?powered\b|\bwireless\b/i.test(recentUserIntentText),
-    usbPowered: /\busb[-\s]?powered\b|\bdirectly\s+powered\b|\bplug[-\s]?in\b/i.test(recentUserIntentText),
-    ambient: /\bambient\b|\bsoft\s+glow\b|\bdiffused\b|\bdecorative\s+glow\b/i.test(recentUserIntentText),
-    reading: /\breading\b|\btask\s+light\b|\bfocused\s+light\b/i.test(recentUserIntentText),
-    largeHead: /\blarge\s+head\b|\bbroad\s+head\b|\bwide\s+head\b|\bbig\s+head\b|\blarge\s+shade\b/i.test(recentUserIntentText),
-    headLight: /\bhead\b|\bshade\b|\bupper\s+light\b|\btop\s+light\b/i.test(recentUserIntentText),
-    stripPath: /\bstrip\b|\bperimeter\b|\bedge\b|\boutline\b|\bcurve\b|\bchannel\b|\belongated\b/i.test(recentUserIntentText),
-    fastCharging: /\bfast\s+charging\b|\bfaster\s+charging\b|\bquick\s+charge\b/i.test(recentUserIntentText),
-    dualLightPoints: /\btwo\s+(?:separate\s+)?(?:leds|light\s+points|lights)\b|\bdual\s+output\b|\btwo\s+locations\b/i.test(recentUserIntentText)
+    tableLamp: /\btable\s+lamp\b|\bdesk\s+lamp\b|\bbedside\s+lamp\b/i.test(recentUserIntentText),
+    wallSconce: /\bwall\s+sconce\b|\bwall\s+light\b|\bwall[-\s]?mounted\s+lamp\b/i.test(recentUserIntentText),
+    topTouch: /\btop[-\s]?touch\b|\btouch\s+from\s+top\b|\btouch\s+on\s+top\b/i.test(recentUserIntentText),
+    decorativeLamp: /\bdecorative\s+lamp\b|\baccent\s+lamp\b|\bdesigner\s+lamp\b/i.test(recentUserIntentText),
+    creativeObject: /\bnotebook\b|\bbook[-\s]?shaped\b|\bfigurine\b|\bsculpture\b|\bart\s+piece\b|\bfestive\b|\bgift\b|\bchristmas\b|\bdecorative\s+object\b|\bcreative\s+lamp\b/i.test(recentUserIntentText),
+    notebookLamp: /\bnotebook\b|\bbook[-\s]?shaped\b/i.test(recentUserIntentText),
+    bottleLamp: /\bbottle\s+lamp\b|\bjar\s+lamp\b/i.test(recentUserIntentText),
+
+    // Power
+    rechargeable: /\brechargeable\b|\bbattery[-\s]?powered\b|\bwireless\b|\bportable\b|\bcharge\s+and\s+use\b/i.test(recentUserIntentText),
+    usbPowered: /\busb[-\s]?powered\b|\bdirectly\s+powered\b|\bplug[-\s]?in\b|\busb[-\s]?c\s+charger\b|\bno\s+battery\b/i.test(recentUserIntentText),
+    noBattery: /\bno\s+battery\b|\bwithout\s+battery\b/i.test(recentUserIntentText),
+    fastCharging: /\bfast\s+charging\b|\bfaster\s+charging\b|\bquick\s+charge\b|\bcharge\s+faster\b/i.test(recentUserIntentText),
+
+    // Lighting topology
+    ambient: /\bambient\b|\bsoft\s+glow\b|\bdiffused\b|\bdecorative\s+glow\b|\bsoft\s+light\b/i.test(recentUserIntentText),
+    reading: /\breading\b|\btask\s+light\b|\bfocused\s+light\b|\bdirectional\s+light\b/i.test(recentUserIntentText),
+    largeHead: /\blarge\s+head\b|\bbroad\s+head\b|\bwide\s+head\b|\bbig\s+head\b|\blarge\s+shade\b|\blarge\s+round\s+head\b/i.test(recentUserIntentText),
+    mediumHead: /\bmedium\s+head\b|\bmoderate\s+head\b/i.test(recentUserIntentText),
+    smallHead: /\bsmall\s+head\b|\bcompact\s+head\b/i.test(recentUserIntentText),
+    headLight: /\bhead\b|\bshade\b|\bupper\s+light\b|\btop\s+light\b|\btop\s+glow\b/i.test(recentUserIntentText),
+    stripPath: /\bstrip\b|\bperimeter\b|\bedge\b|\boutline\b|\bcurve\b|\bchannel\b|\belongated\b|\bcontour\b|\bhalo\b|\bouter\s+edge\b/i.test(recentUserIntentText),
+    hiddenGlow: /\bhidden\s+glow\b|\bindirect\s+glow\b|\bbacklit\b|\bback[-\s]?lit\b|\bglow\s+from\s+inside\b|\binner\s+glow\b/i.test(recentUserIntentText),
+    singleLightPoint: /\bsingle\s+(?:led|light|light\s+point)\b|\bone\s+(?:led|light|light\s+point)\b|\bmain\s+light\s+point\b/i.test(recentUserIntentText),
+    dualLightPoints: /\btwo\s+(?:separate\s+)?(?:leds|light\s+points|lights)\b|\bdual\s+output\b|\btwo\s+locations\b|\bone\s+light\s+at\s+the\s+top\s+and\s+one\b/i.test(recentUserIntentText),
+
+    // Cavity / physical integration
+    baseCavity: /\bhollow\s+base\b|\bspace\s+inside\s+base\b|\bbase\s+cavity\b|\bdriver\s+in\s+base\b/i.test(recentUserIntentText),
+    headCavity: /\bspace\s+inside\s+head\b|\bhead\s+cavity\b|\bmodule\s+in\s+head\b/i.test(recentUserIntentText),
+    rearCavity: /\brear\s+cavity\b|\bback\s+cavity\b|\bwall\s+box\b|\brear\s+mounting\s+box\b/i.test(recentUserIntentText),
+    compactBase: /\bsmall\s+base\b|\bvery\s+small\s+base\b|\bbase\s+(?:is|seems)\s+(?:very\s+)?small\b|\bcompact\s+base\b|\btight\s+base\b|\blimited\s+space\b/i.test(recentUserIntentText),
+    tinyBase: /\btiny\s+base\b|\bbase\s+(?:is|seems)\s+tiny\b|\bvery\s+tight\b|\bvery\s+compact\b/i.test(recentUserIntentText),
+    largeBase: /\blarge\s+base\b|\bspacious\s+base\b|\benough\s+space\b/i.test(recentUserIntentText),
+
+    // Charging / panel mount
+    asksChargingAccess: /\bcharging\s+port\b|\bcharger\s+connect\b|\busb[-\s]?c\s+(?:port|input)\b|\bpower\s+input\b/i.test(recentUserIntentText),
+    chargingHidden: /\bport\s+(?:will\s+be\s+)?hidden\b|\bcharging\s+(?:point|port)\s+(?:is\s+)?hidden\b|\bdriver\s+hidden\s+inside\b|\bdeep\s+inside\b/i.test(recentUserIntentText),
+    cleanExternalPort: /\bclean\s+external\s+(?:port|charging)\b|\bneat\s+(?:port|charging\s+point)\b/i.test(recentUserIntentText),
+
+    // Touch
+    touchControl: /\btouch\b|\btouch\s+control\b|\btouch\s+sensor\b/i.test(recentUserIntentText),
+    metalBody: /\bmetal\s+body\b|\bbody\s+(?:is|made\s+of)\s+metal\b|\bconductive\s+body\b|\bbrass\b|\bsteel\b|\baluminium\b|\baluminum\b/i.test(recentUserIntentText),
+    fullBodyTouch: /\bwhole\s+body\s+touch\b|\bfull\s+body\s+touch\b|\bentire\s+body\s+touch\b|\btouch\s+wire\s+to\s+body\b/i.test(recentUserIntentText),
+    definedTouchPoint: /\bmetal\s+(?:nut|cap|ring|pin)\b|\btouch\s+cap\b|\btouch\s+nut\b|\btouch\s+point\b/i.test(recentUserIntentText),
+
+    // Battery path
+    sleeveBatteryWanted: /\bwith\s+sleeve\b|\bsleeve\s+battery\b/i.test(recentUserIntentText),
+    nonSleeveBatteryWanted: /\bwithout\s+sleeve\b|\bnon[-\s]?sleeve\b|\bno\s+sleeve\b/i.test(recentUserIntentText),
+    holderBasedBattery: /\bbattery\s+holder\b|\bholder[-\s]?based\b|\breplaceable\s+battery\b/i.test(recentUserIntentText),
+    batterySpaceConcern: /\bbattery\s+space\b|\bnot\s+much\s+space\b|\bspace\s+is\s+limited\b|\bvery\s+compact\b/i.test(recentUserIntentText),
+
+    // Optics / mechanics
+    softOutput: /\bsoft\s+output\b|\bsofter\s+light\b|\bnon[-\s]?harsh\b|\bdiffuser\b|\bdiffused\s+lens\b/i.test(recentUserIntentText),
+    directionalOutput: /\bfocused\s+beam\b|\bclear\s+lens\b|\bsharper\s+light\b|\bdirectional\s+output\b/i.test(recentUserIntentText),
+    shade: /\bshade\b|\blampshade\b/i.test(recentUserIntentText),
+    centralRod: /\bcentral\s+rod\b|\bstem\s+rod\b|\bthreaded\s+rod\b|\bpipe\b|\bnipple\b/i.test(recentUserIntentText),
+    asksMounting: /\bhow\s+(?:will|do)\s+(?:it|driver|battery|led|module)\s+(?:fit|mount|fix)\b|\bmounting\b|\bfix(?:ed)?\b/i.test(recentUserIntentText)
   };
 
   const policies = [];
+  const supporting = [];
 
-  if (flags.floorLamp && flags.rechargeable) {
-    const highConfidenceFloorDob =
-      flags.ambient ||
-      flags.largeHead ||
-      flags.headLight ||
-      !flags.stripPath;
-
-    if (highConfidenceFloorDob) {
-      policies.push({
-        id: "rechargeable_floor_lamp_dob",
-        priority: 100,
-        integrationMode: true,
-        retrievalHints: [
-          "floor lamp",
-          "AS-B-206 DOB",
-          "206 115mm",
-          "large floor lamp head",
-          "diffuser sheet",
-          "head integration"
-        ],
-        preferredPath: "AS-B-206 DOB series; mention 115mm DOB as the likely large-head floor-lamp direction if the head diameter allows.",
-        mustMention: [
-          "206 DOB",
-          "115mm if head size allows",
-          "201 is not automatically the best floor-lamp path just because it is already in the active kit"
-        ],
-        mustAvoid: [
-          "Do not say the current 201 + 3W COB table-lamp kit is well-suited for a rechargeable ambient floor lamp without a caveat.",
-          "Do not ignore the 206 DOB floor-lamp path."
-        ],
-        suggestedNextStep: "Explain that the current 201 path can work only for a separated base-driver / LED-in-head architecture, but the 206 DOB route is often cleaner for rechargeable ambient floor lamps. Ask whether to explore/switch to the 206 DOB floor-lamp path or confirm the lamp-head diameter."
-      });
-    }
-  }
-
-  if (flags.topTouch && flags.rechargeable) {
+  function pushPolicy(policy) {
     policies.push({
-      id: "top_touch_dob",
-      priority: 95,
       integrationMode: true,
-      retrievalHints: [
-        "top touch",
-        "AS-B-206 DOB",
-        "head-based integrated light",
-        "touch point at top"
-      ],
-      preferredPath: "AS-B-206 DOB series for top-touch head-based integrations.",
-      mustMention: [
-        "206 DOB",
-        "top-touch integration",
-        "head-based integrated module"
-      ],
-      mustAvoid: [
-        "Do not default to a table-lamp driver if the user is clearly describing a top-touch head-integrated concept."
-      ],
-      suggestedNextStep: "Explain the 206 DOB top-touch route and ask only for the head size if exact DOB size is needed."
+      scope: "primary",
+      ...policy
     });
   }
 
-  if (flags.stripPath) {
-    if (flags.usbPowered) {
-      policies.push({
+  function pushSupport(policy) {
+    supporting.push({
+      integrationMode: true,
+      scope: "supporting",
+      ...policy
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // PRIMARY PRODUCT-FAMILY POLICIES
+  // ------------------------------------------------------------------
+
+  // A. Rechargeable / USB strip path
+  if (flags.stripPath || flags.hiddenGlow) {
+    if (flags.usbPowered && !flags.rechargeable) {
+      pushPolicy({
         id: "usb_strip_path",
-        priority: 90,
-        integrationMode: true,
-        retrievalHints: ["USB strip lamp", "AS-U-103-LSD", "strip integration"],
-        preferredPath: "AS-U-103-LSD for USB-powered strip/perimeter/edge lighting.",
-        mustMention: ["103 strip driver"],
-        mustAvoid: ["Do not push COB/DOB when the user clearly needs light to follow a curve, edge, or channel."],
-        suggestedNextStep: "Guide toward the strip-driver path and ask only the strip voltage/length if needed."
+        priority: 118,
+        repairKind: "usb_strip_103",
+        retrievalHints: ["AS-U-103-LSD", "USB strip lamp", "edge glow", "strip integration"],
+        preferredPath: "AS-U-103-LSD for USB-powered strip / edge / perimeter / contour lighting.",
+        mustMention: ["AS-U-103-LSD or 103 strip driver", "strip is the intended light source", "no battery"],
+        mustAvoid: [
+          "Do not recommend COB or DOB as the primary light source when the user's light must follow an edge, contour, strip path, or hidden glow path.",
+          "Do not suggest any battery for USB-powered strip systems."
+        ],
+        suggestedNextStep: "Explain the 103 strip path and ask only for strip length, strip voltage/path, or charging-port access if needed."
+      });
+    } else if (flags.rechargeable && flags.fastCharging) {
+      pushPolicy({
+        id: "rechargeable_fast_strip_path",
+        priority: 119,
+        repairKind: "rechargeable_strip_205",
+        retrievalHints: ["AS-B-205-LSD", "205 fast charging strip driver", "rechargeable edge glow", "strip integration"],
+        preferredPath: "AS-B-205-LSD for rechargeable strip lighting where faster charging is requested.",
+        mustMention: ["205 fast-charging rechargeable strip driver", "strip is the intended light source", "battery required"],
+        mustAvoid: [
+          "Do not describe 205 as a USB-only driver.",
+          "Do not recommend COB LEDs as the light source for 205."
+        ],
+        suggestedNextStep: "Explain why 205 fits the fast-charging rechargeable strip path and ask for strip length/voltage only if needed."
       });
     } else if (flags.rechargeable) {
-      policies.push({
-        id: flags.fastCharging ? "rechargeable_fast_strip_path" : "rechargeable_standard_strip_path",
-        priority: 90,
-        integrationMode: true,
-        retrievalHints: [
-          "rechargeable strip lamp",
-          flags.fastCharging ? "AS-B-205-LSD fast charging" : "AS-B-204-LSD standard charging",
-          "strip integration"
+      pushPolicy({
+        id: "rechargeable_standard_strip_path",
+        priority: 117,
+        repairKind: "rechargeable_strip_204",
+        retrievalHints: ["AS-B-204-LSD", "204 standard charging strip driver", "rechargeable edge glow", "strip integration"],
+        preferredPath: "AS-B-204-LSD for rechargeable strip lighting when normal charging is acceptable. Mention 205 only as the faster-charging alternative if the user asks or the comparison is useful.",
+        mustMention: ["204 standard-charging rechargeable strip driver", "strip is the intended light source", "battery required"],
+        mustAvoid: [
+          "Do not confuse 204 with 205.",
+          "Do not recommend COB LEDs as the light source for 204."
         ],
-        preferredPath: flags.fastCharging
-          ? "AS-B-205-LSD for rechargeable strip lighting where faster charging is requested."
-          : "AS-B-204-LSD for rechargeable strip lighting where normal charging is acceptable.",
-        mustMention: [flags.fastCharging ? "205 fast-charging strip driver" : "204 standard-charging strip driver"],
-        mustAvoid: ["Do not default to 201/202 COB paths when the product shape clearly calls for strip lighting."],
-        suggestedNextStep: "Guide toward the rechargeable strip driver and ask for strip voltage/length if needed."
+        suggestedNextStep: "Explain the 204 strip route. Mention that 205 is the faster-charging variant only as a relevant comparison, not as a random upsell."
+      });
+    } else {
+      pushPolicy({
+        id: "strip_path_power_choice_needed",
+        priority: 103,
+        repairKind: "strip_power_choice",
+        retrievalHints: ["AS-U-103-LSD", "AS-B-204-LSD", "AS-B-205-LSD", "strip lamp power choice"],
+        preferredPath: "The light geometry clearly points to a strip solution, but the AI must first ask whether it should be rechargeable or directly USB-powered.",
+        mustMention: ["strip path", "rechargeable 204/205 vs USB 103 distinction"],
+        mustAvoid: [
+          "Do not choose COB, DOB, or a battery path before the customer chooses rechargeable vs USB-powered."
+        ],
+        suggestedNextStep: "Ask whether the customer wants rechargeable or USB-C direct power; then choose 204/205 or 103 accordingly."
       });
     }
   }
 
-  if (flags.dualLightPoints && flags.rechargeable) {
-    policies.push({
-      id: "rechargeable_dual_light_points",
-      priority: 88,
-      integrationMode: true,
-      retrievalHints: ["AS-B-202-DLD", "dual LED", "two light points"],
-      preferredPath: "AS-B-202-DLD for rechargeable concepts needing two distinct light points or dual output.",
-      mustMention: ["202 dual-driver path"],
-      mustAvoid: ["Do not continue with 201 if the user clearly wants two independently located light outputs."],
-      suggestedNextStep: "Explain why 202 fits the dual-light concept and ask whether the user wants separate light points or CCT-style output if that distinction matters."
+  // B. DOB head / top-touch / floor-lamp family
+  if (flags.topTouch && flags.rechargeable) {
+    pushPolicy({
+      id: "top_touch_dob",
+      priority: 116,
+      repairKind: "top_touch_dob_206",
+      retrievalHints: ["AS-B-206 DOB", "top touch lamp", "head-based integrated light", "touch point at top"],
+      preferredPath: "AS-B-206 DOB series for rechargeable top-touch head-based lamp designs.",
+      mustMention: ["206 DOB", "head-based integration", "top-touch route"],
+      mustAvoid: [
+        "Do not default to 201 or 202 if the customer is clearly describing a head-integrated top-touch lamp."
+      ],
+      suggestedNextStep: "Explain the 206 DOB route and ask for head size only if exact 55/75/115 mm selection is needed."
     });
   }
 
-  if (flags.dualLightPoints && flags.usbPowered) {
-    policies.push({
+  if (flags.floorLamp && flags.rechargeable && !flags.stripPath) {
+    const likelyLargeHeadDob =
+      flags.largeHead ||
+      flags.ambient ||
+      flags.headLight ||
+      !flags.reading;
+
+    if (likelyLargeHeadDob) {
+      pushPolicy({
+        id: "rechargeable_floor_lamp_dob",
+        priority: 115,
+        repairKind: "floor_dob_206",
+        retrievalHints: ["floor lamp", "AS-B-206 DOB", "206 115mm", "large head floor lamp", "diffuser sheet", "head integration"],
+        preferredPath: "AS-B-206 DOB series; mention 115 mm DOB as the likely large-head floor-lamp direction if the head diameter allows.",
+        mustMention: ["206 DOB", "115 mm if head size allows", "201 is not automatically the best floor-lamp path just because it is already in the active kit"],
+        mustAvoid: [
+          "Do not say the current 201 + 3W COB table-lamp kit is automatically well-suited for a rechargeable ambient floor lamp.",
+          "Do not ignore the 206 DOB floor-lamp path."
+        ],
+        suggestedNextStep: "Explain that 201 can work only for a separated base-driver plus LED-in-head construction, while 206 DOB is often cleaner for a rechargeable ambient floor lamp. Ask whether to explore/switch to the 206 path or confirm head diameter."
+      });
+    }
+  }
+
+  if (!flags.floorLamp && flags.largeHead && flags.rechargeable && flags.headLight && !flags.stripPath) {
+    pushPolicy({
+      id: "large_head_rechargeable_dob",
+      priority: 111,
+      repairKind: "large_head_dob_206",
+      retrievalHints: ["AS-B-206 DOB", "large head lamp", "integrated head module", "115 mm DOB"],
+      preferredPath: "AS-B-206 DOB series for rechargeable large-head lamps; 115 mm may be suitable if the head diameter allows.",
+      mustMention: ["206 DOB", "head size determines 55/75/115 mm choice"],
+      mustAvoid: ["Do not ignore the 206 route when the concept is clearly large-head and head-integrated."],
+      suggestedNextStep: "Explain the integrated-head DOB route and ask only for head diameter if exact size is needed."
+    });
+  }
+
+  // C. Dual-light point selection
+  if (flags.dualLightPoints && flags.rechargeable && !flags.stripPath && !flags.tableLamp && !flags.wallSconce) {
+    pushPolicy({
+      id: "rechargeable_dual_light_points",
+      priority: 110,
+      repairKind: "rechargeable_dual_202",
+      retrievalHints: ["AS-B-202-DLD", "dual LED", "two light points", "rechargeable dual-light lamp"],
+      preferredPath: "AS-B-202-DLD for rechargeable concepts needing two distinct light points or dual-light behavior.",
+      mustMention: ["202 dual-driver path", "two light-point use case"],
+      mustAvoid: [
+        "Do not continue with 201 if the user clearly wants two separately located light outputs."
+      ],
+      suggestedNextStep: "Explain why 202 fits and ask only the two light-point placement or LED selection detail if needed."
+    });
+  }
+
+  if (flags.dualLightPoints && flags.usbPowered && !flags.stripPath && !flags.tableLamp && !flags.wallSconce) {
+    pushPolicy({
       id: "usb_dual_light_points",
-      priority: 88,
-      integrationMode: true,
-      retrievalHints: ["AS-U-102-DLD", "dual LED", "two light points"],
-      preferredPath: "AS-U-102-DLD for USB-powered concepts needing two distinct light points or dual output.",
-      mustMention: ["102 dual-driver path"],
-      mustAvoid: ["Do not continue with 101 if the user clearly wants two independently located light outputs."],
-      suggestedNextStep: "Explain why 102 fits the dual-light concept and ask only the missing lighting detail if needed."
+      priority: 110,
+      repairKind: "usb_dual_102",
+      retrievalHints: ["AS-U-102-DLD", "dual LED", "two light points", "USB dual-light lamp"],
+      preferredPath: "AS-U-102-DLD for USB-powered concepts needing two distinct light points or dual-light behavior.",
+      mustMention: ["102 dual-driver path", "no battery"],
+      mustAvoid: [
+        "Do not continue with 101 if the user clearly wants two separately located light outputs.",
+        "Do not suggest a battery for 102."
+      ],
+      suggestedNextStep: "Explain why 102 fits and ask only the remaining light-point detail if needed."
+    });
+  }
+
+  // D. Wall sconce selection
+  if (flags.wallSconce && !flags.stripPath) {
+    if (flags.rechargeable && flags.dualLightPoints) {
+      pushPolicy({
+        id: "wall_sconce_rechargeable_dual",
+        priority: 108,
+        repairKind: "wall_rechargeable_dual_202",
+        retrievalHints: ["wall sconce", "AS-B-202-DLD", "rear cavity", "dual-light wall lamp"],
+        preferredPath: "AS-B-202-DLD for a rechargeable wall sconce with two light points.",
+        mustMention: ["202", "driver/battery in rear or base cavity", "wire routing to both light points"],
+        mustAvoid: ["Do not choose 201 if the wall sconce clearly needs two distinct lighting outputs."],
+        suggestedNextStep: "Explain the 202 wall-sconce path and ask only for cavity or two light locations if needed."
+      });
+    } else if (flags.rechargeable) {
+      pushPolicy({
+        id: "wall_sconce_rechargeable_single",
+        priority: 107,
+        repairKind: "wall_rechargeable_single_201",
+        retrievalHints: ["wall sconce", "AS-B-201-SLD", "rear cavity", "rechargeable wall lamp"],
+        preferredPath: "AS-B-201-SLD for a rechargeable wall sconce with one main light point, subject to cavity and structure.",
+        mustMention: ["201", "rear/base cavity", "charging access"],
+        mustAvoid: ["Do not describe the wall sconce without explaining where the driver and battery can sit."],
+        suggestedNextStep: "Explain the rear/base cavity placement and ask only for light position or cavity availability if not given."
+      });
+    } else if (flags.usbPowered && flags.dualLightPoints) {
+      pushPolicy({
+        id: "wall_sconce_usb_dual",
+        priority: 107,
+        repairKind: "wall_usb_dual_102",
+        retrievalHints: ["wall sconce", "AS-U-102-DLD", "USB wall lamp", "dual light points"],
+        preferredPath: "AS-U-102-DLD for a USB-powered wall sconce with two light points.",
+        mustMention: ["102", "no battery", "USB-C access"],
+        mustAvoid: ["Do not suggest a battery for 102."],
+        suggestedNextStep: "Explain the USB dual-light wall-sconce path and ask only the remaining placement detail if needed."
+      });
+    } else if (flags.usbPowered) {
+      pushPolicy({
+        id: "wall_sconce_usb_single",
+        priority: 106,
+        repairKind: "wall_usb_single_101",
+        retrievalHints: ["wall sconce", "AS-U-101-SLD", "USB wall lamp"],
+        preferredPath: "AS-U-101-SLD for a USB-powered wall sconce with one main light point.",
+        mustMention: ["101", "no battery", "USB-C access"],
+        mustAvoid: ["Do not suggest a battery for 101."],
+        suggestedNextStep: "Explain the 101 wall-sconce path and ask only the light/cavity detail if needed."
+      });
+    } else {
+      pushPolicy({
+        id: "wall_sconce_power_choice_needed",
+        priority: 100,
+        repairKind: "wall_power_choice",
+        retrievalHints: ["wall sconce", "rechargeable vs USB wall lamp"],
+        preferredPath: "Wall-sconce product family is clear, but rechargeable vs USB-powered must be decided before driver selection.",
+        mustMention: ["wall sconce", "rechargeable vs USB-powered choice"],
+        mustAvoid: ["Do not force 201/202/101/102 before the power type is known."],
+        suggestedNextStep: "Ask whether the wall sconce should be rechargeable or USB-powered and whether it has one or two light points."
+      });
+    }
+  }
+
+  // E. Table lamp selection
+  if (flags.tableLamp && !flags.stripPath && !flags.floorLamp) {
+    if (flags.rechargeable && flags.dualLightPoints) {
+      pushPolicy({
+        id: "table_lamp_rechargeable_dual",
+        priority: 105,
+        repairKind: "table_rechargeable_dual_202",
+        retrievalHints: ["AS-B-202-DLD", "rechargeable table lamp", "dual light points"],
+        preferredPath: "AS-B-202-DLD for a rechargeable table lamp with two light points or dual-output intent.",
+        mustMention: ["202", "two light-point use case"],
+        mustAvoid: ["Do not keep the user on 201 if they have clearly asked for two physical light points."],
+        suggestedNextStep: "Explain why 202 fits and then ask only the remaining LED or battery detail if needed."
+      });
+    } else if (flags.rechargeable) {
+      pushPolicy({
+        id: "table_lamp_rechargeable_single",
+        priority: 104,
+        repairKind: "table_rechargeable_single_201",
+        retrievalHints: ["AS-B-201-SLD", "rechargeable table lamp", "single COB lamp"],
+        preferredPath: "AS-B-201-SLD for a normal rechargeable single-light table lamp.",
+        mustMention: ["201", "battery required", "LED connected by JST wire"],
+        mustAvoid: ["Do not jump to strip/DOB unless the product geometry says so."],
+        suggestedNextStep: "Explain the 201 path and continue the kit-builder flow with LED brightness and battery choice only if unresolved."
+      });
+    } else if (flags.usbPowered && flags.dualLightPoints) {
+      pushPolicy({
+        id: "table_lamp_usb_dual",
+        priority: 104,
+        repairKind: "table_usb_dual_102",
+        retrievalHints: ["AS-U-102-DLD", "USB table lamp", "dual light points"],
+        preferredPath: "AS-U-102-DLD for a USB-powered table lamp with two light points or dual-light behavior.",
+        mustMention: ["102", "no battery"],
+        mustAvoid: ["Do not suggest a battery for 102."],
+        suggestedNextStep: "Explain why 102 fits and ask only the remaining light detail if needed."
+      });
+    } else if (flags.usbPowered) {
+      pushPolicy({
+        id: "table_lamp_usb_single",
+        priority: 103,
+        repairKind: "table_usb_single_101",
+        retrievalHints: ["AS-U-101-SLD", "USB table lamp", "single COB lamp"],
+        preferredPath: "AS-U-101-SLD for a USB-powered single-light table lamp.",
+        mustMention: ["101", "no battery"],
+        mustAvoid: ["Do not suggest a battery for 101."],
+        suggestedNextStep: "Explain the 101 path and continue with LED choice or port-access detail only if unresolved."
+      });
+    } else {
+      pushPolicy({
+        id: "table_lamp_power_choice_needed",
+        priority: 99,
+        repairKind: "table_power_choice",
+        retrievalHints: ["table lamp", "rechargeable 201", "USB 101"],
+        preferredPath: "The product is a table lamp, but rechargeable vs USB-powered must be decided before choosing 201/101 or 202/102.",
+        mustMention: ["rechargeable vs USB-powered choice"],
+        mustAvoid: ["Do not force a battery or a driver before the power type is known."],
+        suggestedNextStep: "Ask whether the lamp should be rechargeable or USB-C direct powered, then decide the driver family."
+      });
+    }
+  }
+
+  // F. Creative / unusual product logic where topology is more important than name
+  if (flags.creativeObject && !flags.floorLamp && !flags.wallSconce && !flags.tableLamp) {
+    if ((flags.stripPath || flags.hiddenGlow) && flags.rechargeable) {
+      pushPolicy({
+        id: "creative_rechargeable_strip",
+        priority: 101,
+        repairKind: flags.fastCharging ? "rechargeable_strip_205" : "rechargeable_strip_204",
+        retrievalHints: ["creative lamp", "edge glow", flags.fastCharging ? "AS-B-205-LSD" : "AS-B-204-LSD"],
+        preferredPath: flags.fastCharging
+          ? "AS-B-205-LSD for a rechargeable creative edge/contour glow concept that also needs faster charging."
+          : "AS-B-204-LSD for a rechargeable creative edge/contour glow concept.",
+        mustMention: [flags.fastCharging ? "205 fast-charging strip path" : "204 rechargeable strip path"],
+        mustAvoid: ["Do not force a single COB point-source solution when the concept needs glow along an edge or contour."],
+        suggestedNextStep: "Explain the strip-based creative route and ask about strip path/length or battery cavity only if needed."
+      });
+    } else if ((flags.stripPath || flags.hiddenGlow) && flags.usbPowered) {
+      pushPolicy({
+        id: "creative_usb_strip",
+        priority: 101,
+        repairKind: "usb_strip_103",
+        retrievalHints: ["creative lamp", "edge glow", "AS-U-103-LSD"],
+        preferredPath: "AS-U-103-LSD for a USB-powered creative edge/contour glow concept.",
+        mustMention: ["103 USB strip path", "no battery"],
+        mustAvoid: ["Do not force a point LED when the user wants contour or edge glow."],
+        suggestedNextStep: "Explain the 103 creative strip route and ask only about path length or port access if needed."
+      });
+    } else if (flags.singleLightPoint && flags.rechargeable) {
+      pushPolicy({
+        id: "creative_rechargeable_point_led",
+        priority: 98,
+        repairKind: "table_rechargeable_single_201",
+        retrievalHints: ["creative rechargeable lamp", "AS-B-201-SLD", "single light point"],
+        preferredPath: "AS-B-201-SLD for a rechargeable creative object with one defined light point.",
+        mustMention: ["201 path", "driver/battery cavity", "single light point"],
+        mustAvoid: ["Do not force strip lighting if the user explicitly wants one point source."],
+        suggestedNextStep: "Explain the 201 creative point-light route and ask where the cavity is if not described."
+      });
+    } else if (flags.singleLightPoint && flags.usbPowered) {
+      pushPolicy({
+        id: "creative_usb_point_led",
+        priority: 98,
+        repairKind: "table_usb_single_101",
+        retrievalHints: ["creative USB lamp", "AS-U-101-SLD", "single light point"],
+        preferredPath: "AS-U-101-SLD for a USB-powered creative object with one defined light point.",
+        mustMention: ["101 path", "no battery", "single light point"],
+        mustAvoid: ["Do not force strip lighting if the user explicitly wants one point source."],
+        suggestedNextStep: "Explain the 101 creative point-light route and ask only the cavity/light placement detail if needed."
+      });
+    } else {
+      pushPolicy({
+        id: "creative_concept_needs_light_pattern",
+        priority: 96,
+        repairKind: "creative_pattern_choice",
+        retrievalHints: ["creative product", "edge glow vs point source", "rechargeable vs USB"],
+        preferredPath: "Creative product idea is valid, but the AI must first determine whether the desired visible light is a strip/edge glow or a single light point, and whether the product is rechargeable or USB-powered.",
+        mustMention: ["light pattern choice", "power choice"],
+        mustAvoid: ["Do not reject the idea and do not randomly choose a product family without topology/power clarity."],
+        suggestedNextStep: "Ask whether the light should be an edge/outline glow or one visible light point, and whether the product should be rechargeable or USB-powered."
+      });
+    }
+  }
+
+  // G. Generic dual-light rule when application is not named
+  if (flags.dualLightPoints && !flags.floorLamp && !flags.wallSconce && !flags.tableLamp && !flags.stripPath) {
+    if (flags.rechargeable) {
+      pushPolicy({
+        id: "generic_rechargeable_dual_light_points",
+        priority: 97,
+        repairKind: "rechargeable_dual_202",
+        retrievalHints: ["AS-B-202-DLD", "dual light points", "rechargeable dual output"],
+        preferredPath: "AS-B-202-DLD for rechargeable designs with two distinct light outputs.",
+        mustMention: ["202"],
+        mustAvoid: ["Do not continue with 201 if the user clearly wants two separate light points."],
+        suggestedNextStep: "Explain the 202 route and ask only where both light points should sit if needed."
+      });
+    } else if (flags.usbPowered) {
+      pushPolicy({
+        id: "generic_usb_dual_light_points",
+        priority: 97,
+        repairKind: "usb_dual_102",
+        retrievalHints: ["AS-U-102-DLD", "dual light points", "USB dual output"],
+        preferredPath: "AS-U-102-DLD for USB-powered designs with two distinct light outputs.",
+        mustMention: ["102", "no battery"],
+        mustAvoid: ["Do not suggest battery for 102."],
+        suggestedNextStep: "Explain the 102 route and ask only where both light points should sit if needed."
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // SUPPORTING INTEGRATION POLICIES
+  // ------------------------------------------------------------------
+
+  if ((flags.usbPowered || flags.noBattery) && /\b(101|102|103)\b/.test(`${recentUserIntentText} ${activeDriverText}`)) {
+    pushSupport({
+      id: "usb_never_battery",
+      priority: 95,
+      retrievalHints: ["USB driver no battery", "101 102 103 do not use battery"],
+      preferredPath: "USB-powered drivers 101, 102, and 103 do not use batteries.",
+      mustMention: ["no battery for USB-powered driver"],
+      mustAvoid: ["Do not suggest a battery or battery holder for 101, 102, or 103."],
+      suggestedNextStep: "If the user asks about backup, clarify that this is direct USB-C power, not rechargeable operation."
+    });
+  }
+
+  if (flags.chargingHidden || flags.cleanExternalPort || flags.asksChargingAccess) {
+    pushSupport({
+      id: "panel_mount_when_port_hidden",
+      priority: 80,
+      retrievalHints: ["panel mount connector", "hidden charging port", "external USB-C access"],
+      preferredPath: "Recommend a panel mount connector when the built-in charging/power port is hidden or a cleaner external port is needed.",
+      mustMention: ["panel mount connector if the port would be hidden"],
+      mustAvoid: ["Do not ignore charging accessibility when the user explicitly asks about it."],
+      suggestedNextStep: "Explain direct port access vs panel mount connector in plain language."
+    });
+  }
+
+  if (flags.compactBase || flags.tinyBase || flags.batterySpaceConcern) {
+    pushSupport({
+      id: "compact_base_prefers_sleeve_battery",
+      priority: 79,
+      retrievalHints: ["sleeve battery", "compact base", "battery holder needs extra space"],
+      preferredPath: "If the base is compact and the product is rechargeable, a sleeve battery is often easier than a holder-based setup, subject to available cavity.",
+      mustMention: ["sleeve battery may be easier if space is tight"],
+      mustAvoid: ["Do not casually push a holder-based battery into a very small base."],
+      suggestedNextStep: "Ask only for cavity size if final battery style cannot be decided."
+    });
+  }
+
+  if (flags.holderBasedBattery || flags.nonSleeveBatteryWanted) {
+    pushSupport({
+      id: "holder_based_battery_requires_holder_space",
+      priority: 79,
+      retrievalHints: ["non-sleeve battery", "battery holder", "extra cavity space"],
+      preferredPath: "If the customer wants a non-sleeve or holder-based setup, remember that the battery holder itself needs extra space and should be included.",
+      mustMention: ["battery holder requires extra space"],
+      mustAvoid: ["Do not mention a non-sleeve battery without holder-space guidance."],
+      suggestedNextStep: "Confirm cavity space before finalizing the holder-based setup."
+    });
+  }
+
+  if (flags.softOutput || flags.ambient) {
+    pushSupport({
+      id: "soft_output_diffuser_guidance",
+      priority: 70,
+      retrievalHints: ["diffused lens", "diffuser sheet", "soft light"],
+      preferredPath: "For softer visual output, mention a diffused lens, diffuser sheet, or indirect placement where relevant.",
+      mustMention: ["softening approach"],
+      mustAvoid: ["Do not describe a harsh direct point source as ideal if the user explicitly wants soft ambient light."],
+      suggestedNextStep: "Mention diffuser or diffused lens only when optical finishing is relevant to the concept."
+    });
+  }
+
+  if (flags.directionalOutput || flags.reading) {
+    pushSupport({
+      id: "directional_output_clear_lens_guidance",
+      priority: 70,
+      retrievalHints: ["clear lens", "directional light", "focused beam"],
+      preferredPath: "For sharper or more directed light, mention a clear lens or more directional placement where suitable.",
+      mustMention: ["directional-light consideration"],
+      mustAvoid: ["Do not insist on soft diffused output when the user explicitly wants a focused task light."],
+      suggestedNextStep: "Mention clear-lens or directed-light reasoning only if it improves the answer."
+    });
+  }
+
+  if ((flags.shade || flags.centralRod) && !flags.stripPath) {
+    pushSupport({
+      id: "shade_holder_mechanical_support",
+      priority: 69,
+      retrievalHints: ["LED holder", "locking ring", "shade support", "rod-based structure"],
+      preferredPath: "When a shade must be supported around the LED area, consider LED holder plus locking-ring / rod-based mechanical support if the design calls for it.",
+      mustMention: ["mechanical support idea if relevant"],
+      mustAvoid: ["Do not ignore shade support if the customer is clearly asking how the lamp will physically assemble."],
+      suggestedNextStep: "Mention the holder/ring/rod concept only when the shade structure makes it useful."
+    });
+  }
+
+  if (flags.touchControl && flags.metalBody) {
+    pushSupport({
+      id: "metal_body_touch_isolation",
+      priority: 82,
+      retrievalHints: ["metal body touch isolation", "rubber gasket", "isolated touch point"],
+      preferredPath: "If touch control is used on a conductive metal body, recommend a defined isolated touch point and mention gasket/insulation when appropriate.",
+      mustMention: ["touch isolation consideration"],
+      mustAvoid: ["Do not casually suggest making the whole metal body touch-sensitive unless the customer explicitly wants and accepts that behavior."],
+      suggestedNextStep: "Suggest a metal nut/cap/ring touch point with isolation where needed."
+    });
+  }
+
+  if (flags.fullBodyTouch) {
+    pushSupport({
+      id: "avoid_uncontrolled_full_body_touch",
+      priority: 83,
+      retrievalHints: ["full body touch risk", "isolated touch cap", "metal body touch"],
+      preferredPath: "Warn that making the entire conductive body act as touch input may create uncontrolled behavior; an isolated touch point is usually cleaner.",
+      mustMention: ["full-body touch caution"],
+      mustAvoid: ["Do not approve whole-body touch without caution."],
+      suggestedNextStep: "Explain why a defined touch cap/nut may be better."
+    });
+  }
+
+  if (flags.asksMounting) {
+    pushSupport({
+      id: "driver_mounting_and_repeatable_assembly",
+      priority: 68,
+      retrievalHints: ["driver mounting", "screw fixing", "repeatable assembly"],
+      preferredPath: "When the customer asks how parts will fit, mention secure mounting rather than leaving electronics loose.",
+      mustMention: ["secure fixing / mounting idea"],
+      mustAvoid: ["Do not say only 'place it inside' when the user asks how it is physically fixed."],
+      suggestedNextStep: "Mention screw mounting, bracket, holder, or structurally appropriate fixing method."
     });
   }
 
   policies.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+  supporting.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
 
   return {
     active: policies[0] || null,
     policies,
+    supporting,
     flags,
     recentUserIntentText,
     activeDriverText,
+    activeKitText,
     activeDriverLooksLike201: /\b201\b/i.test(activeDriverText),
+    activeDriverLooksLike202: /\b202\b/i.test(activeDriverText),
+    activeDriverLooksLike101: /\b101\b/i.test(activeDriverText),
+    activeDriverLooksLike102: /\b102\b/i.test(activeDriverText),
+    activeDriverLooksLike103: /\b103\b/i.test(activeDriverText),
+    activeDriverLooksLike204: /\b204\b/i.test(activeDriverText),
+    activeDriverLooksLike205: /\b205\b/i.test(activeDriverText),
     activeDriverLooksLike206: /\b206\b/i.test(activeDriverText)
   };
 }
 
 function formatKitAiDecisionPolicyForPrompt(policy = {}) {
   const active = policy?.active;
-  if (!active) {
+  const supporting = Array.isArray(policy?.supporting) ? policy.supporting.slice(0, 6) : [];
+
+  if (!active && !supporting.length) {
     return "No deterministic product-decision override is active for this turn.";
   }
 
-  return [
-    `Active policy: ${active.id}`,
-    `Preferred path: ${active.preferredPath}`,
-    active.mustMention?.length ? `Must mention: ${active.mustMention.join(" | ")}` : "",
-    active.mustAvoid?.length ? `Must avoid: ${active.mustAvoid.join(" | ")}` : "",
-    active.suggestedNextStep ? `Suggested next step: ${active.suggestedNextStep}` : ""
-  ].filter(Boolean).join("\n");
+  const activeBlock = active
+    ? [
+        `Primary policy: ${active.id}`,
+        `Preferred path: ${active.preferredPath}`,
+        active.mustMention?.length ? `Must mention: ${active.mustMention.join(" | ")}` : "",
+        active.mustAvoid?.length ? `Must avoid: ${active.mustAvoid.join(" | ")}` : "",
+        active.suggestedNextStep ? `Suggested next step: ${active.suggestedNextStep}` : ""
+      ].filter(Boolean).join("\n")
+    : "Primary policy: none";
+
+  const supportingBlock = supporting.length
+    ? supporting.map((item, index) => [
+        `Supporting policy ${index + 1}: ${item.id}`,
+        `- ${item.preferredPath}`,
+        item.mustMention?.length ? `- Mention when relevant: ${item.mustMention.join(" | ")}` : "",
+        item.mustAvoid?.length ? `- Avoid: ${item.mustAvoid.join(" | ")}` : ""
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "Supporting policies: none";
+
+  return `${activeBlock}\n\n${supportingBlock}`;
 }
 
-function kitAiPolicyAnswerNeedsFloorDobRepair(answer = "", policy = {}) {
-  if (policy?.active?.id !== "rechargeable_floor_lamp_dob") return false;
+function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}) {
+  const active = policy?.active;
+  if (!active) return false;
 
   const text = String(answer || "").toLowerCase();
-  const mentions206Dob = /\b206\b|\bdob\b/i.test(text);
-  const praises201AsSuitable =
-    /\b201\b.{0,80}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
-    /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,80}\b201\b/i.test(text);
 
-  return !mentions206Dob || praises201AsSuitable;
+  switch (active.repairKind) {
+    case "floor_dob_206":
+      return !/\b206\b|\bdob\b/i.test(text) ||
+        /\b201\b.{0,90}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
+        /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,90}\b201\b/i.test(text);
+
+    case "top_touch_dob_206":
+    case "large_head_dob_206":
+      return !/\b206\b|\bdob\b/i.test(text);
+
+    case "rechargeable_dual_202":
+    case "table_rechargeable_dual_202":
+    case "wall_rechargeable_dual_202":
+      return !/\b202\b/i.test(text) || /\b201\b.{0,80}\b(best|better|suitable|ideal)\b/i.test(text);
+
+    case "usb_dual_102":
+    case "table_usb_dual_102":
+    case "wall_usb_dual_102":
+      return !/\b102\b/i.test(text) ||
+        (/\bbattery\b/i.test(text) && !/\bno\s+battery\b|\bwithout\s+battery\b/i.test(text));
+
+    case "table_rechargeable_single_201":
+    case "wall_rechargeable_single_201":
+      return !/\b201\b/i.test(text);
+
+    case "table_usb_single_101":
+    case "wall_usb_single_101":
+      return !/\b101\b/i.test(text) ||
+        (/\bbattery\b/i.test(text) && !/\bno\s+battery\b|\bwithout\s+battery\b/i.test(text));
+
+    case "usb_strip_103":
+      return !/\b103\b/i.test(text) ||
+        !/\bstrip\b/i.test(text) ||
+        (/\bbattery\b/i.test(text) && !/\bno\s+battery\b|\bwithout\s+battery\b/i.test(text));
+
+    case "rechargeable_strip_204":
+      return !/\b204\b/i.test(text) || !/\bstrip\b/i.test(text);
+
+    case "rechargeable_strip_205":
+      return !/\b205\b/i.test(text) || !/\bstrip\b/i.test(text) || !/\bfast\b/i.test(text);
+
+    case "strip_power_choice":
+      return !/\bstrip\b/i.test(text) || !/\brechargeable\b|\busb\b/i.test(text);
+
+    case "table_power_choice":
+      return !/\brechargeable\b|\busb\b/i.test(text);
+
+    case "wall_power_choice":
+      return !/\brechargeable\b|\busb\b/i.test(text);
+
+    case "creative_pattern_choice":
+      return !/\bedge\b|\bstrip\b|\bpoint\b|\blight\s+point\b/i.test(text) ||
+        !/\brechargeable\b|\busb\b/i.test(text);
+
+    default:
+      return false;
+  }
 }
 
-function buildFloorLampDobPolicyAnswer({
-  policy = {},
+function buildKitAiPolicyFallbackAnswer({
+  decisionPolicy = {},
   kitContext = {}
 } = {}) {
+  const active = decisionPolicy?.active || {};
   const activeDriver = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").trim();
-  const currentKitNote =
+  const driver201Note =
     activeDriver && /\b201\b/i.test(activeDriver)
-      ? "The current 201 kit can still be used only if you intentionally want a separated base-driver plus LED-in-head construction."
+      ? "The current 201 kit can still work only for a separated base-driver plus LED-in-head construction, but it should not be treated as the automatic default for this new concept."
       : "";
 
-  return [
-    "For a rechargeable ambient floor lamp, I would move the discussion toward the AS-B-206 DOB route rather than treating a normal 201 table-lamp kit as the default.",
-    "",
-    "A practical direction is the 206 DOB series, with the 115mm DOB being the likely large-head option if your floor-lamp head has enough internal diameter. That route keeps the LED, driver, charging and touch system together in the upper head, which is usually cleaner for floor-lamp integration.",
-    currentKitNote ? `\n${currentKitNote}` : "",
-    "",
-    "If you want, I can help you switch the build toward the 206 floor-lamp path. To choose the exact DOB size neatly, I would only need the approximate lamp-head diameter."
-  ].filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n");
+  switch (active.repairKind) {
+    case "floor_dob_206":
+      return [
+        "For a rechargeable ambient floor lamp, I would move the discussion toward the AS-B-206 DOB route rather than treating a normal 201 table-lamp kit as the default.",
+        "",
+        "A practical direction is the 206 DOB series, with the 115 mm DOB being the likely large-head option if your floor-lamp head has enough internal diameter. That route keeps the LED, driver, charging, and touch system together in the upper head, which is usually cleaner for floor-lamp integration.",
+        driver201Note ? `\n${driver201Note}` : "",
+        "",
+        "To choose the exact DOB size neatly, I would only need the approximate lamp-head diameter."
+      ].filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n");
+
+    case "top_touch_dob_206":
+      return [
+        "For a rechargeable top-touch lamp, the AS-B-206 DOB route is the cleaner direction.",
+        "",
+        "The DOB board sits directly in the head, the touch interaction can be taken to the top surface, and the light-facing side can be finished with a diffuser sheet where the design allows. The exact 55 mm, 75 mm, or 115 mm choice depends mainly on head size.",
+        "",
+        "To narrow the DOB size, I would just need the approximate head diameter."
+      ].join("\n");
+
+    case "large_head_dob_206":
+      return [
+        "For a rechargeable lamp with a large light head, the AS-B-206 DOB family is the more natural route than a small separated table-lamp driver.",
+        "",
+        "The board integrates the light source and control electronics in the head itself. If the head diameter allows, 115 mm may be the strongest option; otherwise 75 mm or 55 mm can be considered based on size.",
+        "",
+        "The one key detail needed is the approximate internal head diameter."
+      ].join("\n");
+
+    case "rechargeable_dual_202":
+    case "table_rechargeable_dual_202":
+    case "wall_rechargeable_dual_202":
+      return [
+        "Since you want two distinct light points in a rechargeable product, the AS-B-202-DLD path is the more suitable direction.",
+        "",
+        "This driver is intended for dual-light behavior, so one LED can go to one location and the second LED to another. The driver and battery sit in the available cavity, while separate JST wire paths run to each light point.",
+        "",
+        "To refine the kit, I would only need to know where the two light points will be placed."
+      ].join("\n");
+
+    case "usb_dual_102":
+    case "table_usb_dual_102":
+    case "wall_usb_dual_102":
+      return [
+        "Because this is a USB-powered dual-light concept, the AS-U-102-DLD path is the right family to consider.",
+        "",
+        "It supports two light outputs without using any battery. The driver can sit in the internal cavity, both LED outputs can be routed to their required locations, and the USB-C input must remain accessible directly or through a panel mount connector if hidden.",
+        "",
+        "To continue, I would only need the two light locations."
+      ].join("\n");
+
+    case "table_rechargeable_single_201":
+    case "wall_rechargeable_single_201":
+      return [
+        active.repairKind === "wall_rechargeable_single_201"
+          ? "For a rechargeable wall sconce with one main light point, AS-B-201-SLD is a practical direction."
+          : "For a normal rechargeable single-light table lamp, AS-B-201-SLD is the practical direction.",
+        "",
+        "The driver and battery go in the usable cavity, the LED sits at the visible light point, and a JST wire connects the driver to the LED. If the charging port would be hidden, a panel mount connector should bring access outside neatly.",
+        "",
+        "The next useful detail is the light position or cavity size only if you want a more exact integration plan."
+      ].join("\n");
+
+    case "table_usb_single_101":
+    case "wall_usb_single_101":
+      return [
+        active.repairKind === "wall_usb_single_101"
+          ? "For a USB-powered wall sconce with one main light point, AS-U-101-SLD is a suitable direction."
+          : "For a USB-powered single-light table lamp, AS-U-101-SLD is the suitable direction.",
+        "",
+        "No battery is used in this path. The driver sits in the available cavity, the LED goes at the visible light point, and the USB-C input must remain reachable directly or through a panel mount connector if the port would otherwise be hidden.",
+        "",
+        "The next useful detail is the light position or cavity layout if you want a more exact integration plan."
+      ].join("\n");
+
+    case "usb_strip_103":
+      return [
+        "Since the light needs to follow an edge, contour, strip path, or hidden-glow route and you want USB power, AS-U-103-LSD is the right product family.",
+        "",
+        "This is a strip-driver path, so the light source should be LED strip rather than a single COB LED. No battery is used. The strip follows the product geometry, and the USB-C input should remain accessible directly or through a panel mount connector if it would be hidden.",
+        "",
+        "To refine it, I would need only the strip path length or voltage detail if that is not already known."
+      ].join("\n");
+
+    case "rechargeable_strip_204":
+      return [
+        "Since the light needs to follow an edge, contour, strip path, or hidden-glow route and you want a rechargeable product, AS-B-204-LSD is the standard-charging strip-driver direction.",
+        "",
+        "This system uses LED strip as the light source, not a single COB LED. Battery planning and charging access both matter. If you specifically want faster charging, the related alternative is AS-B-205-LSD.",
+        "",
+        "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
+      ].join("\n");
+
+    case "rechargeable_strip_205":
+      return [
+        "Since this is a rechargeable strip-light concept and faster charging is desired, AS-B-205-LSD is the right direction.",
+        "",
+        "205 is the fast-charging rechargeable strip driver. The light source should be LED strip rather than a single COB LED. Battery placement and charging-port access should be planned with the product body.",
+        "",
+        "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
+      ].join("\n");
+
+    case "strip_power_choice":
+      return [
+        "The lighting pattern clearly points to an LED strip system rather than a single COB LED.",
+        "",
+        "If you want it rechargeable, the strip-driver direction is AS-B-204-LSD for normal charging or AS-B-205-LSD if faster charging matters. If you want it directly USB-powered, AS-U-103-LSD is the cleaner path.",
+        "",
+        "Please tell me whether you want rechargeable or USB-C direct power, and I can narrow it correctly."
+      ].join("\n");
+
+    case "table_power_choice":
+      return [
+        "For this table-lamp concept, the first product decision is the power type.",
+        "",
+        "If you want it rechargeable, we would move toward the 201 or 202 family depending on whether it has one or two light points. If you want direct USB-C power with no battery, we would move toward 101 or 102.",
+        "",
+        "Should this lamp be rechargeable or USB-C powered?"
+      ].join("\n");
+
+    case "wall_power_choice":
+      return [
+        "For this wall-sconce concept, the first product decision is whether it should be rechargeable or directly USB-C powered.",
+        "",
+        "Rechargeable versions typically move toward 201 or 202 depending on one or two light points. USB-powered versions typically move toward 101 or 102.",
+        "",
+        "Should the wall light be rechargeable or USB-C powered?"
+      ].join("\n");
+
+    case "creative_pattern_choice":
+      return [
+        "This creative lighting idea looks workable, but I need one product-shaping decision before choosing the electronics family.",
+        "",
+        "Should the visible light be a glowing edge/outline/inner contour, or one defined light point? And should the product be rechargeable or directly USB-C powered?",
+        "",
+        "Those two answers decide whether the cleaner path is a strip driver such as 204/205/103 or a point-light path such as 201/101."
+      ].join("\n");
+
+    default:
+      return "";
+  }
 }
 
 function applyKitAiDecisionPolicyRepair({
@@ -1684,14 +2329,14 @@ function applyKitAiDecisionPolicyRepair({
   decisionPolicy = {},
   kitContext = {}
 } = {}) {
-  if (kitAiPolicyAnswerNeedsFloorDobRepair(answer, decisionPolicy)) {
-    return buildFloorLampDobPolicyAnswer({
-      policy: decisionPolicy,
-      kitContext
-    });
-  }
+  if (!kitAiPolicyAnswerNeedsRepair(answer, decisionPolicy)) return answer;
 
-  return answer;
+  const repaired = buildKitAiPolicyFallbackAnswer({
+    decisionPolicy,
+    kitContext
+  });
+
+  return repaired || answer;
 }
 
 function buildKitIntegrationRetrievalQuery({
@@ -1703,9 +2348,11 @@ function buildKitIntegrationRetrievalQuery({
 } = {}) {
   const snapshot = kitContext?.kitBuilderSnapshot || {};
   const recentUserIntentText = getKitAiRecentUserIntentText(history, question);
-  const policyHints = Array.isArray(decisionPolicy?.active?.retrievalHints)
-    ? decisionPolicy.active.retrievalHints.join(" ")
-    : "";
+  const policyHints = [
+    ...(Array.isArray(decisionPolicy?.active?.retrievalHints) ? decisionPolicy.active.retrievalHints : []),
+    ...((Array.isArray(decisionPolicy?.supporting) ? decisionPolicy.supporting.slice(0, 4) : [])
+      .flatMap((item) => Array.isArray(item?.retrievalHints) ? item.retrievalHints : []))
+  ].join(" ");
 
   return [
     question || "",
@@ -5980,6 +6627,12 @@ ${JSON.stringify({
   guidedFlowPolicy: "stepwise application -> driver -> LED -> battery -> wire/accessories -> review",
   decisionPolicy: {
     active: decisionPolicy?.active || null,
+    supporting: Array.isArray(decisionPolicy?.supporting)
+      ? decisionPolicy.supporting.map((item) => ({
+          id: item.id,
+          preferredPath: item.preferredPath
+        }))
+      : [],
     flags: decisionPolicy?.flags || {},
     recentUserIntentText: decisionPolicy?.recentUserIntentText || ""
   },
@@ -6353,6 +7006,9 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       integration_consulting_mode: integrationConsultingMode,
       deterministic_decision_policy_id: decisionPolicy?.active?.id || null,
       deterministic_decision_policy_active: !!decisionPolicy?.active,
+      deterministic_decision_supporting_policy_ids: Array.isArray(decisionPolicy?.supporting)
+        ? decisionPolicy.supporting.map((item) => item.id)
+        : [],
       reference_image_used: !!normalizedLampReferenceImage,
       prior_reference_image_summary_used: !!priorLampReferenceSummary,
       deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
