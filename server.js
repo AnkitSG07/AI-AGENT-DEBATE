@@ -5703,21 +5703,43 @@ function getActiveKitTextForMatch(kitContext = {}) {
 }
 
 function productAlreadyInActiveKit(product = {}, kitContext = {}) {
+  /*
+    V10 exact active-kit state check:
+    Never infer "already present" from loose name-token overlap. That was the
+    root cause of 201 being mistaken for 206, and it can also confuse battery,
+    connector, LED, and DOB variants. Prefer the builder's exact IDs, then fall
+    back only to exact SKU/name phrase presence in the active-kit snapshot.
+  */
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const selectedDriverId = String(snapshot?.selectedDriverId || "").trim();
+  const selectedItemIds = new Set(
+    (Array.isArray(snapshot?.selectedItemIds) ? snapshot.selectedItemIds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  );
+
+  const explicitDriverId = String(product?.builder_driver_id || product?.builderDriverId || "").trim();
+  const explicitProductId = String(product?.builder_product_id || product?.builderProductId || "").trim();
+  const mapped = getKitAiBuilderMapping(product || {}, null) || {};
+  const mappedDriverId = explicitDriverId || String(mapped?.builder_driver_id || "").trim();
+  const mappedProductId = explicitProductId || String(mapped?.builder_product_id || "").trim();
+
+  if (mappedDriverId && selectedDriverId) {
+    return mappedDriverId === selectedDriverId;
+  }
+
+  if (mappedProductId && selectedItemIds.size) {
+    return selectedItemIds.has(mappedProductId);
+  }
+
   const activeText = getActiveKitTextForMatch(kitContext);
   if (!activeText) return false;
 
-  const sku = compactTextForMatch(product.sku || "");
-  const name = compactTextForMatch(product.name || "");
-
+  const sku = compactTextForMatch(product?.sku || "");
   if (sku && activeText.includes(sku)) return true;
 
-  if (name) {
-    const tokens = name.split(" ").filter((t) => t.length >= 3);
-    if (tokens.length) {
-      const hits = tokens.filter((t) => activeText.includes(t)).length;
-      if (hits >= Math.min(3, tokens.length)) return true;
-    }
-  }
+  const name = compactTextForMatch(product?.name || "");
+  if (name && name.length >= 6 && activeText.includes(name)) return true;
 
   return false;
 }
@@ -6403,7 +6425,42 @@ function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitCont
     });
   }
 
-  return enforceKitAiDualLedWireQuantity(normalized.slice(0, 12), kitContext || {});
+  const compactActions = normalized.slice(0, 12);
+
+  /*
+    V9 driver-switch action cleanup:
+    The Kit Builder replaces the currently selected driver when it receives an "add"
+    action for a new mapped driver. A simultaneous "remove current driver" action is both
+    unnecessary and misleading, because the frontend intentionally keeps one active driver
+    and refuses standalone driver removal. Keep non-driver removals, such as removing a
+    standalone COB LED when switching to a DOB, but drop driver-removal actions whenever
+    the same action batch contains a new driver add.
+  */
+  const hasDriverAdd = compactActions.some((action) => {
+    const text = compactTextForMatch(`${action?.sku || ""} ${action?.name || ""} ${action?.type || ""}`);
+    return action?.action === "add" && (
+      !!action?.builder_driver_id ||
+      /\bdriver\b/.test(text) ||
+      /\bdob\b/.test(text) ||
+      /\bas\s+[bu]\s+(101|102|103|201|202|204|205|206)\b/.test(text)
+    );
+  });
+
+  const switchSafeActions = hasDriverAdd
+    ? compactActions.filter((action) => {
+        if (action?.action !== "remove") return true;
+        const text = compactTextForMatch(`${action?.sku || ""} ${action?.name || ""} ${action?.type || ""}`);
+        const mapped = getKitAiBuilderMapping({ name: action?.name, sku: action?.sku, type: action?.type }, null);
+        return !(
+          !!mapped?.builder_driver_id ||
+          /\bdriver\b/.test(text) ||
+          /\bdob\b/.test(text) ||
+          /\bas\s+[bu]\s+(101|102|103|201|202|204|205|206)\b/.test(text)
+        );
+      })
+    : compactActions;
+
+  return enforceKitAiDualLedWireQuantity(switchSafeActions, kitContext || {});
 }
 
 function extractNumbersFromText(text) {
@@ -6977,6 +7034,129 @@ function findConfirmedLiveActionsFromPreviousAssistant(question = "", history = 
   }
 
   return matches.slice(0, 3);
+}
+
+
+function isKitAiActiveKitCorrectionQuestion(question = "") {
+  const q = String(question || "").toLowerCase().trim();
+  if (!q) return false;
+  return (
+    /\b(?:not|isn['’]?t|is not|wasn['’]?t|was not)\s+(?:currently\s+)?(?:in|inside|showing in|visible in)\s+(?:the\s+)?(?:active\s+)?kit\b/i.test(q) ||
+    /\b(?:not|isn['’]?t|is not)\s+(?:in|inside)\s+(?:the\s+)?active\s+kit\s+list\b/i.test(q) ||
+    /\byou\s+(?:didn['’]?t|did not|haven['’]?t|have not)\s+(?:add|switch|change|select|put)\b/i.test(q) ||
+    /\b(?:it|this|that|the item|the product|206|201|202|204|205|101|102|103)\s+(?:is\s+)?(?:still\s+)?(?:not\s+)?(?:there|missing|absent)\b/i.test(q) ||
+    /\b(?:still\s+showing|still\s+shows|still\s+has|still\s+contains)\s+(?:the\s+)?(?:old\s+)?(?:201|202|204|205|101|102|103|driver|item|product)\b/i.test(q) ||
+    /\b(?:i\s+)?(?:can['’]?t|cannot|do\s+not|don['’]?t)\s+(?:see|find)\b.{0,70}\b(?:in|inside|on)\s+(?:the\s+)?(?:active\s+)?kit\b/i.test(q) ||
+    /\b(?:wrong\s+(?:item|product|driver|battery)|not\s+the\s+(?:right|correct)\s+(?:item|product|driver|battery))\b/i.test(q)
+  );
+}
+
+function kitAiCorrectionLooksLikeMissingAdd(question = "") {
+  const q = String(question || "").toLowerCase().trim();
+  return (
+    /\b(?:not|isn['’]?t|is not|wasn['’]?t|was not)\s+(?:currently\s+)?(?:in|inside|showing in|visible in)\s+(?:the\s+)?(?:active\s+)?kit\b/i.test(q) ||
+    /\b(?:not|isn['’]?t|is not)\s+(?:in|inside)\s+(?:the\s+)?active\s+kit\s+list\b/i.test(q) ||
+    /\byou\s+(?:didn['’]?t|did not|haven['’]?t|have not)\s+(?:add|switch|change|select|put)\b/i.test(q) ||
+    /\b(?:it|this|that|the item|the product|206|201|202|204|205|101|102|103)\s+(?:is\s+)?(?:still\s+)?(?:not\s+)?(?:there|missing|absent)\b/i.test(q) ||
+    /\b(?:still\s+showing|still\s+shows|still\s+has|still\s+contains)\s+(?:the\s+)?(?:old\s+)?(?:201|202|204|205|101|102|103|driver|item|product)\b/i.test(q) ||
+    /\b(?:i\s+)?(?:can['’]?t|cannot|do\s+not|don['’]?t)\s+(?:see|find)\b.{0,70}\b(?:in|inside|on)\s+(?:the\s+)?(?:active\s+)?kit\b/i.test(q)
+  );
+}
+
+function buildCorrectionRecoveryOverrideAnswer(actions = []) {
+  const list = Array.isArray(actions) ? actions : [];
+  if (!list.length) return "";
+
+  const labels = list
+    .slice(0, 3)
+    .map((action) => kitAiProductLabel(action))
+    .filter(Boolean);
+  if (!labels.length) return "";
+
+  const hasDriverSwitch = list.some((action) => !!action?.builder_driver_id);
+  const subject = labels.length === 1 ? labels[0] : labels.join(", ");
+
+  return hasDriverSwitch
+    ? `You’re right to flag that. Based on the active-kit state I received, ${subject} is not confirmed in the active kit yet. I’m correcting that now by switching the active kit to ${subject}.`
+    : `You’re right to flag that. Based on the active-kit state I received, ${subject} is not confirmed in the active kit yet. I’m correcting that now by adding ${subject}.`;
+}
+
+function findCorrectionRecoveryLiveActionsFromQuestion(
+  question = "",
+  history = [],
+  liveProducts = [],
+  kitContext = {},
+  projectState = {}
+) {
+  if (!isKitAiActiveKitCorrectionQuestion(question) || !kitAiCorrectionLooksLikeMissingAdd(question)) {
+    return { detected: false, actions: [] };
+  }
+
+  const q = String(question || "");
+  const previousAssistant = getLatestAssistantHistoryText(history);
+  const candidateProducts = [];
+  const seenProducts = new Set();
+
+  function pushLiveProduct(product) {
+    if (!product) return;
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seenProducts.has(key)) return;
+    seenProducts.add(key);
+    candidateProducts.push(product);
+  }
+
+  findExactLiveProductsMentionedInText(q, liveProducts).slice(0, 3).forEach(pushLiveProduct);
+
+  const mentions206InQuestion = /\b206\b/i.test(q) || /\bdob\b/i.test(q);
+  const previousAssistantOffered206 = /\b206\b/i.test(previousAssistant) && /\bdob\b/i.test(previousAssistant);
+  if (mentions206InQuestion || previousAssistantOffered206) {
+    pushLiveProduct(findPreferred206DobLiveProduct(liveProducts, projectState || {}, `${q}\n${previousAssistant}`));
+  }
+
+  const genericCorrection = /\b(it|this|that|the item|the product|you didn['’]?t add|you did not add)\b/i.test(q);
+  if (genericCorrection) {
+    findExactLiveProductsMentionedInText(previousAssistant, liveProducts)
+      .slice(0, 3)
+      .forEach(pushLiveProduct);
+  }
+
+  if (!candidateProducts.length) {
+    return { detected: true, actions: [] };
+  }
+
+  const actions = [];
+  const seenActions = new Set();
+
+  for (const live of candidateProducts.slice(0, 4)) {
+    const candidate = normalizeKitAiRecommendedProducts([{
+      name: live?.name || "",
+      sku: live?.sku || (Array.isArray(live?.variantSkus) ? live.variantSkus[0] : "") || "",
+      qty: 1,
+      type: getKitAiIntegrationProductBucket(live),
+      reason: "Customer corrected that the previously discussed item is not present in the active kit."
+    }], liveProducts)[0];
+
+    if (!candidate || candidate.auto_addable !== true) continue;
+    if (productAlreadyInActiveKit(candidate, kitContext || {})) continue;
+
+    const key = `${candidate.sku || ""}|${candidate.name || ""}`;
+    if (seenActions.has(key)) continue;
+    seenActions.add(key);
+
+    actions.push({
+      action: "add",
+      name: candidate.name,
+      sku: candidate.sku,
+      qty: candidate.qty || 1,
+      type: candidate.type || "",
+      reason: candidate.reason || "",
+      ...(candidate.builder_product_id ? { builder_product_id: candidate.builder_product_id } : {}),
+      ...(candidate.builder_driver_id ? { builder_driver_id: candidate.builder_driver_id } : {}),
+      auto_addable: true
+    });
+  }
+
+  return { detected: true, actions: actions.slice(0, 3) };
 }
 
 function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], kitContext = {}, projectState = {}) {
@@ -8142,6 +8322,15 @@ app.post("/kit-ai-chat", async (req, res) => {
         effectiveHistory
       );
 
+    const deterministicCorrectionRecovery =
+      findCorrectionRecoveryLiveActionsFromQuestion(
+        safeQuestion,
+        effectiveHistory,
+        liveProducts,
+        kitContext || {},
+        resolvedProjectState || {}
+      );
+
     const lampReferencePromptContext = {
       imageAttachedThisTurn: !!normalizedLampReferenceImage,
       priorReferenceImageSummary: priorLampReferenceSummary || ""
@@ -8634,6 +8823,30 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       if (exactSelectionAnswer) updateFinalAnswer(exactSelectionAnswer, "deterministic_exact_selection_answer");
     }
 
+
+    /*
+      V10 correction recovery:
+      If the customer says a previously discussed item is "not in the active kit",
+      "you didn't add it", or similar, compare against the real active-kit snapshot
+      and retry the exact add/switch path when a live, mapped item can be identified.
+      This prevents the AI from repeating its prior recommendation while the UI stays wrong.
+    */
+    if (
+      deterministicCorrectionRecovery?.actions?.length &&
+      activeKitActions.length === 0
+    ) {
+      activeKitActions = normalizeKitAiActiveKitActions(
+        deterministicCorrectionRecovery.actions,
+        liveProducts,
+        kitContext || {}
+      );
+
+      const correctionRecoveryAnswer = buildCorrectionRecoveryOverrideAnswer(activeKitActions);
+      if (correctionRecoveryAnswer) {
+        updateFinalAnswer(correctionRecoveryAnswer, "deterministic_correction_recovery_answer");
+      }
+    }
+
     if (
       recommendedProducts.length === 0 &&
       answerInvitesAddAll(answer)
@@ -8810,6 +9023,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       deterministic_direct_add_candidates_count: deterministicDirectAddActions.length,
       deterministic_confirmed_followup_candidates_count: deterministicConfirmedFollowupActions.length,
       deterministic_exact_selection_candidates_count: deterministicExactSelectionActions.length,
+      deterministic_correction_recovery_candidates_count: deterministicCorrectionRecovery?.actions?.length || 0,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
