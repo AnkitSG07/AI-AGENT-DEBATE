@@ -2852,6 +2852,37 @@ function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}, projectState = n
   }
 }
 
+
+function getKitAiDecisionRecentIntentText(decisionPolicy = {}) {
+  return String(decisionPolicy?.recentUserIntentText || "").trim();
+}
+
+function kitAiDecisionTextHasDualLocationDetail(decisionPolicy = {}) {
+  const text = getKitAiDecisionRecentIntentText(decisionPolicy).toLowerCase();
+  if (!text) return false;
+
+  return [
+    /\bone\s+(?:led|light)\s+(?:at|in|on)\s+(?:the\s+)?(?:top|head|upper|base|bottom|left|right|side|center|centre)\b/i,
+    /\b(?:top|head|upper|base|bottom|left|right|side)\s+(?:and|&)\s+(?:top|head|upper|base|bottom|left|right|side)\b/i,
+    /\bone\s+(?:at|in|on)\s+(?:the\s+)?(?:top|head|upper|base|bottom|left|right|side).{0,70}\bone\s+(?:at|in|on)\s+(?:the\s+)?(?:top|head|upper|base|bottom|left|right|side)\b/i,
+    /\b(?:led|light)\s*(?:1|one)\b.{0,80}\b(?:led|light)\s*(?:2|two)\b/i,
+    /\b(?:first|1st)\s+(?:led|light)\b.{0,80}\b(?:second|2nd)\s+(?:led|light)\b/i,
+    /\breading\s+light\b.{0,80}\bambient\b|\bambient\b.{0,80}\breading\s+light\b/i
+  ].some((rx) => rx.test(text));
+}
+
+function kitAiDecisionTextHasStripDetail(decisionPolicy = {}) {
+  const text = getKitAiDecisionRecentIntentText(decisionPolicy).toLowerCase();
+  if (!text) return false;
+
+  return [
+    /\b(?:12|24)\s*v\b/i,
+    /\b(?:\d+(?:\.\d+)?)\s*(?:mm|cm|m|meter|metre|meters|metres|inch|inches|ft|feet)\b/i,
+    /\bstrip\s+(?:length|path)\s*(?:is|of|around|about)?\s*\d/i,
+    /\b(?:edge|perimeter|outline|contour)\s+(?:length|path)\b/i
+  ].some((rx) => rx.test(text));
+}
+
 function buildKitAiPolicyFallbackAnswer({
   decisionPolicy = {},
   kitContext = {},
@@ -2918,25 +2949,33 @@ function buildKitAiPolicyFallbackAnswer({
 
     case "rechargeable_dual_202":
     case "table_rechargeable_dual_202":
-    case "wall_rechargeable_dual_202":
+    case "wall_rechargeable_dual_202": {
+      const dualLocationsAlreadyDescribed = kitAiDecisionTextHasDualLocationDetail(decisionPolicy);
       return [
         "Since you want two distinct light points in a rechargeable product, the AS-B-202-DLD path is the more suitable direction.",
         "",
         "This driver is intended for dual-light behavior, so one LED can go to one location and the second LED to another. The driver and battery sit in the available cavity, while separate JST wire paths run to each light point.",
         "",
-        "To refine the kit, I would only need to know where the two light points will be placed."
+        dualLocationsAlreadyDescribed
+          ? "Since you have already described the two light positions, the next useful step is to refine the LED choice, wire routing, and available cavity for the driver/battery."
+          : "To refine the kit, I would only need to know where the two light points will be placed."
       ].join("\n");
+    }
 
     case "usb_dual_102":
     case "table_usb_dual_102":
-    case "wall_usb_dual_102":
+    case "wall_usb_dual_102": {
+      const dualLocationsAlreadyDescribed = kitAiDecisionTextHasDualLocationDetail(decisionPolicy);
       return [
         "Because this is a USB-powered dual-light concept, the AS-U-102-DLD path is the right family to consider.",
         "",
         "It supports two light outputs without using any battery. The driver can sit in the internal cavity, both LED outputs can be routed to their required locations, and the USB-C input must remain accessible directly or through a panel mount connector if hidden.",
         "",
-        "To continue, I would only need the two light locations."
+        dualLocationsAlreadyDescribed
+          ? "Since the two light locations are already described, the next useful step is to refine LED selection, wire routing, and where the USB-C input should remain accessible."
+          : "To continue, I would only need the two light locations."
       ].join("\n");
+    }
 
     case "table_rechargeable_single_201":
     case "wall_rechargeable_single_201":
@@ -2962,32 +3001,44 @@ function buildKitAiPolicyFallbackAnswer({
         "The next useful detail is the light position or cavity layout if you want a more exact integration plan."
       ].join("\n");
 
-    case "usb_strip_103":
+    case "usb_strip_103": {
+      const stripDetailAlreadyDescribed = kitAiDecisionTextHasStripDetail(decisionPolicy);
       return [
         "Since the light needs to follow an edge, contour, strip path, or hidden-glow route and you want USB power, AS-U-103-LSD is the right product family.",
         "",
         "This is a strip-driver path, so the light source should be LED strip rather than a single COB LED. No battery is used. The strip follows the product geometry, and the USB-C input should remain accessible directly or through a panel mount connector if it would be hidden.",
         "",
-        "To refine it, I would need only the strip path length or voltage detail if that is not already known."
+        stripDetailAlreadyDescribed
+          ? "Since a strip length/path or voltage detail is already present, the next useful step is to narrow the matching live strip option and the port-access plan."
+          : "To refine it, I would need only the strip path length or voltage detail if that is not already known."
       ].join("\n");
+    }
 
-    case "rechargeable_strip_204":
+    case "rechargeable_strip_204": {
+      const stripDetailAlreadyDescribed = kitAiDecisionTextHasStripDetail(decisionPolicy);
       return [
         "Since the light needs to follow an edge, contour, strip path, or hidden-glow route and you want a rechargeable product, AS-B-204-LSD is the standard-charging strip-driver direction.",
         "",
         "This system uses LED strip as the light source, not a single COB LED. Battery planning and charging access both matter. If you specifically want faster charging, the related alternative is AS-B-205-LSD.",
         "",
-        "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
+        stripDetailAlreadyDescribed
+          ? "Since the strip length/path or voltage is already described, the next useful step is to narrow the live strip choice and plan battery/charging-port placement."
+          : "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
       ].join("\n");
+    }
 
-    case "rechargeable_strip_205":
+    case "rechargeable_strip_205": {
+      const stripDetailAlreadyDescribed = kitAiDecisionTextHasStripDetail(decisionPolicy);
       return [
         "Since this is a rechargeable strip-light concept and faster charging is desired, AS-B-205-LSD is the right direction.",
         "",
         "205 is the fast-charging rechargeable strip driver. The light source should be LED strip rather than a single COB LED. Battery placement and charging-port access should be planned with the product body.",
         "",
-        "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
+        stripDetailAlreadyDescribed
+          ? "Since the strip length/path or voltage is already described, the next useful step is to narrow the live strip choice and plan battery/charging-port placement."
+          : "To refine it, I would need the strip path length or voltage detail if that has not been decided yet."
       ].join("\n");
+    }
 
     case "strip_power_choice":
       return [
@@ -5443,11 +5494,25 @@ function getLiveSkuSet(liveProducts = []) {
   );
 }
 
+function isKnownLiveSkuOrFamilyShorthand(sku, liveSkus = new Set()) {
+  const token = String(sku || "").trim();
+  if (!token) return false;
+  if (liveSkus.has(token)) return true;
+
+  // Families such as AS-B-206 are intentionally used in customer-facing
+  // integration answers, while the live catalogue may contain only the
+  // concrete variants AS-B-206-55 / -75 / -115. Do not treat a valid live
+  // SKU family prefix as a hallucinated SKU.
+  return Array.from(liveSkus || []).some((liveSku) =>
+    String(liveSku || "").trim().startsWith(`${token}-`)
+  );
+}
+
 function getFakeSkusFromAnswer(answer, liveProducts = []) {
   const liveSkus = getLiveSkuSet(liveProducts);
   const mentioned = extractSkuLikeText(answer);
   if (!mentioned.length) return [];
-  return mentioned.filter((sku) => !liveSkus.has(sku));
+  return mentioned.filter((sku) => !isKnownLiveSkuOrFamilyShorthand(sku, liveSkus));
 }
 
 function kitAiUserAskedAboutSpecificProduct(question = "") {
@@ -5456,6 +5521,17 @@ function kitAiUserAskedAboutSpecificProduct(question = "") {
     /\bAS-[A-Z]-[A-Z0-9-]+\b/i.test(q) ||
     /\b(?:DRIVER|KIT)\s*[-–—]?\s*(?:101|102|103|201|202|203|204|205|206)\b/i.test(q) ||
     /\b(?:101|102|103|201|202|203|204|205|206)\s*(?:driver|kit|sku|product)?\b/i.test(q)
+  );
+}
+
+function kitAiQuestionIsLiveAvailabilityCorrectionIntent(question = "") {
+  const q = String(question || "").toLowerCase().trim();
+  if (!q) return false;
+
+  return (
+    /\b(there\s+is|you\s+have|do\s+you\s+have|is\s+there)\b/.test(q) ||
+    /\b(available|availability|listed|live|on\s+the\s+website|website\s+listing|not\s+listed|not\s+live|missing\s+from\s+website)\b/.test(q) ||
+    /\bwhere\s+(?:is|are)\s+(?:the\s+)?(?:product|driver|sku|kit)?\b/.test(q)
   );
 }
 
@@ -8376,12 +8452,20 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       recommendedProducts = [];
 
       /*
-        Only switch into the product-number correction reply when the USER
-        actually asked about a specific product/SKU. Previously, a stray SKU
-        hallucination inside Gemini's answer could overwrite an unrelated
-        question such as "Rechargeable or USB?" with a random 205-style reply.
+        Preserve substantive answers. A normal integration query can mention a
+        product family number such as "206" and Gemini may write a family label
+        like AS-B-206 in the visible explanation. That should never cause the
+        final answer to be replaced by a generic "this product is listed live"
+        inventory correction.
+
+        Use the live-product correction reply only when the USER is clearly
+        disputing/checking availability/listing status. In all other cases,
+        keep the actual answer and only remove genuinely unsupported SKU tokens.
       */
-      if (kitAiUserAskedAboutSpecificProduct(safeQuestion)) {
+      if (
+        kitAiUserAskedAboutSpecificProduct(safeQuestion) &&
+        kitAiQuestionIsLiveAvailabilityCorrectionIntent(safeQuestion)
+      ) {
         const liveNumberMatches = findLiveProductsByNumber(
           `${safeQuestion}\n${answer}\n${fakeSkus.join(" ")}`,
           liveProducts,
@@ -8399,11 +8483,11 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
             "Closest live products available for checking:",
             buildAvailableProductSummary(relevantLiveProducts, 8),
             "",
-            "Please share your lamp voltage, total wattage, LED strip type and battery requirement so the closest live option can be verified."
+            "Please share the exact product/SKU you are checking so the closest live option can be verified."
           ].join("\n");
         }
       } else {
-        // Preserve the real answer for general questions, but remove unsupported SKU tokens.
+        // Preserve the real answer for general product/integration questions.
         answer = removeUnsupportedSkuMentionsFromAnswer(answer, fakeSkus);
       }
     }
