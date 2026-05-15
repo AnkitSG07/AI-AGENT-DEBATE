@@ -6299,24 +6299,53 @@ function repairUnsupportedImmediateKitMutationClaim({
   return "I found your request, but I cannot honestly say the kit was updated automatically because no confirmed kit-builder add action was prepared. Please name the exact product again or add it manually from the builder if it is visible.";
 }
 
+function kitAiAnswerContainsFalseNotLiveClaim(answer = "") {
+  const text = String(answer || "");
+  return /\b(?:not\s+currently\s+listed\s+live|not\s+listed\s+live|not\s+available\s+live|not\s+currently\s+available)\b.{0,80}\b(?:website|site|catalog|catalogue|store)\b/i.test(text) ||
+    /\b(?:not\s+currently\s+listed\s+live|not\s+listed\s+live)\b/i.test(text);
+}
+
 function repairFalseNotLiveKitAiAnswer({
   answer = "",
   question = "",
   liveProducts = []
 } = {}) {
   const text = String(answer || "");
-  if (!/\bnot currently listed live on the website\b/i.test(text)) return answer;
+  if (!kitAiAnswerContainsFalseNotLiveClaim(text)) return answer;
 
-  const liveMatches = findExactLiveProductsMentionedInText(`${question}\n${text}`, liveProducts);
+  const exactMatches = findExactLiveProductsMentionedInText(`${question}\n${text}`, liveProducts);
+  const numberMatches = findLiveProductsByNumber(`${question}\n${text}`, liveProducts, 8);
+  const seen = new Set();
+  const liveMatches = [...exactMatches, ...numberMatches].filter((product) => {
+    const key = `${String(product?.sku || "").toLowerCase()}|${String(product?.name || "").toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   if (!liveMatches.length) return answer;
 
   const labels = liveMatches
-    .slice(0, 3)
+    .slice(0, 4)
     .map((p) => kitAiProductLabel(p))
     .filter(Boolean)
     .join(", ");
 
-  return `This product is listed live on the website: ${labels}. I will not mark it as unavailable. If you want it added to the kit, send the exact product name or choose the addable option I show.`;
+  const correctionSentence = labels
+    ? `The relevant product is listed live on the website: ${labels}.`
+    : "The relevant product is listed live on the website.";
+
+  const sentenceRegex = /[^.!?\n]*(?:not\s+currently\s+listed\s+live|not\s+listed\s+live|not\s+available\s+live|not\s+currently\s+available)[^.!?\n]*(?:[.!?]|$)/gi;
+  let repaired = text.replace(sentenceRegex, ` ${correctionSentence} `);
+  if (repaired === text) {
+    repaired = `${correctionSentence}\n\n${text}`;
+  }
+
+  return repaired
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,!?;:])/g, "$1")
+    .replace(/\n\s+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function normalizeKitAiActiveKitActions(actions = [], liveProducts = [], kitContext = {}) {
@@ -6433,6 +6462,34 @@ function buildLiveProductCorrectionAnswer(question, liveMatches = []) {
     lines.join("\n"),
     "",
     "Smart Handicrafts rule: DRIVER-204 is the normal-charging rechargeable strip LED driver, while DRIVER-205 / AS-U-205-LSD is treated as the fast-charging rechargeable strip LED driver. Do not infer USB-only behavior from the AS-U prefix for 205."
+  ].join("\n");
+}
+
+
+function buildLiveProductFamilyAvailabilityPrompt(liveProducts = []) {
+  const familyMap = new Map();
+  const driverNumbers = ["101", "102", "103", "201", "202", "204", "205", "206"];
+
+  for (const num of driverNumbers) {
+    const matches = findLiveProductsByNumber(num, liveProducts, 8);
+    if (!matches.length) continue;
+    const labels = matches
+      .slice(0, 6)
+      .map((p) => kitAiProductLabel(p))
+      .filter(Boolean);
+    if (labels.length) familyMap.set(num, labels);
+  }
+
+  if (!familyMap.size) return "No family shorthand facts available.";
+
+  const lines = Array.from(familyMap.entries()).map(([num, labels]) =>
+    `- Family ${num} is live through: ${labels.join(" | ")}`
+  );
+
+  return [
+    "Use these facts to avoid false availability claims:",
+    ...lines,
+    "If a family such as 206 DOB has live variants here, never say the family is not listed live. Explain the live variants or choose the relevant exact variant when the user asks to add/switch."
   ].join("\n");
 }
 
@@ -6657,8 +6714,8 @@ function isKitAiStarterOrCompletionQuestion(question = "") {
 function isKitAiExplicitDirectAddQuestion(question = "") {
   const q = String(question || "").toLowerCase().trim();
   return (
-    /\b(add|put|include|select)\b/i.test(q) &&
-    /\b(led|3w|5w|battery|18650|2600|jst|wire|driver|201|202|204|205|206|101|102|103)\b/i.test(q) &&
+    /\b(add|put|include|select|switch|shift|replace|move)\b/i.test(q) &&
+    /\b(led|3w|5w|battery|18650|2600|jst|wire|driver|dob|201|202|204|205|206|101|102|103)\b/i.test(q) &&
     !/\b(add all|add them|add these|add those|add recommended|add suggested)\b/i.test(q)
   );
 }
@@ -6826,7 +6883,103 @@ function build201StarterKitOverrideAnswer(products = []) {
   ].join("\n\n");
 }
 
-function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], kitContext = {}) {
+
+function isKitAiAffirmativeConfirmation(question = "") {
+  const q = String(question || "").toLowerCase().trim();
+  return /^(yes|yes please|yes,? do it|yes,? please do it|go ahead|please proceed|proceed|do it|please switch|switch it|please add it|add it)$/i.test(q);
+}
+
+function getLatestAssistantHistoryText(history = []) {
+  const rows = Array.isArray(history) ? history : [];
+  const row = rows
+    .slice()
+    .reverse()
+    .find((item) => String(item?.role || item?.agent || "").toLowerCase() === "assistant");
+  return String(row?.text || row?.content || "").trim();
+}
+
+function findPreferred206DobLiveProduct(liveProducts = [], projectState = {}, question = "") {
+  const q = String(question || "").toLowerCase();
+  const diameterMm = Number(projectState?.head_diameter_mm || 0);
+  const headSizeClass = String(projectState?.head_size_class || "").toLowerCase();
+  const wants115 = /\b115\s*mm\b|\b115mm\b|\b206[-\s]?115\b/i.test(q) || diameterMm >= 115 || headSizeClass === "large";
+  const wants75 = /\b75\s*mm\b|\b75mm\b|\b206[-\s]?75\b/i.test(q);
+  const wants55 = /\b55\s*mm\b|\b55mm\b|\b206[-\s]?55\b/i.test(q);
+
+  function pickVariant(variantMm) {
+    return findBestLiveProductByTitleSkuSignals(liveProducts, {
+      must: [/\b206\b/i, new RegExp(`\\b${variantMm}\\s*mm\\b|\\b${variantMm}mm\\b|206[-\\s]?${variantMm}`, "i")],
+      prefer: [/\bdob\b/i, /\bdriver\b/i, /\brechargeable\b/i]
+    }) || findBestLiveProductBySignals(liveProducts, {
+      must: [/\b206\b/i, new RegExp(`\\b${variantMm}\\s*mm\\b|\\b${variantMm}mm\\b|206[-\\s]?${variantMm}`, "i")],
+      prefer: [/\bdob\b/i, /\bdriver\b/i, /\brechargeable\b/i]
+    });
+  }
+
+  if (wants115) return pickVariant(115) || pickVariant(75) || pickVariant(55);
+  if (wants75) return pickVariant(75) || pickVariant(115) || pickVariant(55);
+  if (wants55) return pickVariant(55) || pickVariant(75) || pickVariant(115);
+
+  return findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b206\b/i],
+    prefer: [/\bdob\b/i, /\b115\s*mm\b|\b115mm\b/i, /\bdriver\b/i, /\brechargeable\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b206\b/i],
+    prefer: [/\bdob\b/i, /\b115\s*mm\b|\b115mm\b/i, /\bdriver\b/i, /\brechargeable\b/i]
+  });
+}
+
+function findConfirmedLiveActionsFromPreviousAssistant(question = "", history = [], liveProducts = [], kitContext = {}, projectState = {}) {
+  if (!isKitAiAffirmativeConfirmation(question)) return [];
+  const previousAssistant = getLatestAssistantHistoryText(history);
+  if (!previousAssistant) return [];
+
+  const offeredMutation = /\b(would you like|should i|do you want|shall i)\b.{0,140}\b(add|switch|shift|move|replace|select)\b|\b(add|switch|shift|move|replace|select)\b.{0,140}\b(to your active kit|active kit|for your lamp)\b/i.test(previousAssistant);
+  if (!offeredMutation) return [];
+
+  const matches = [];
+  const seen = new Set();
+
+  function pushLive(product, reason) {
+    if (!product) return;
+    const candidate = normalizeKitAiRecommendedProducts([{
+      name: product.name || "",
+      sku: product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "",
+      qty: 1,
+      type: getKitAiIntegrationProductBucket(product),
+      reason
+    }], liveProducts)[0];
+    if (!candidate || candidate.auto_addable !== true) return;
+    const key = `${candidate.sku || ""}|${candidate.name || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    matches.push({
+      action: "add",
+      name: candidate.name,
+      sku: candidate.sku,
+      qty: candidate.qty || 1,
+      type: candidate.type,
+      reason,
+      ...(candidate.builder_product_id ? { builder_product_id: candidate.builder_product_id } : {}),
+      ...(candidate.builder_driver_id ? { builder_driver_id: candidate.builder_driver_id } : {}),
+      auto_addable: true
+    });
+  }
+
+  const exactMatches = findExactLiveProductsMentionedInText(previousAssistant, liveProducts);
+  exactMatches.slice(0, 3).forEach((product) => pushLive(product, "Customer confirmed the exact live product the assistant had just offered."));
+
+  if (!matches.length && /\b206\b/i.test(previousAssistant) && /\bdob\b/i.test(previousAssistant)) {
+    pushLive(
+      findPreferred206DobLiveProduct(liveProducts, projectState, previousAssistant),
+      "Customer confirmed the previously offered 206 DOB switch path."
+    );
+  }
+
+  return matches.slice(0, 3);
+}
+
+function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], kitContext = {}, projectState = {}) {
   const q = String(question || "").toLowerCase();
   if (!isKitAiExplicitDirectAddQuestion(q)) return [];
 
@@ -6959,13 +7112,19 @@ function findDirectAddLiveActionsFromQuestion(question = "", liveProducts = [], 
   }
 
   const driverNumber = (q.match(/\b(101|102|103|201|202|204|205|206)\b/) || [])[1];
-  if (driverNumber && /\b(driver|switch|replace|select|add)\b/i.test(q)) {
+  if (driverNumber && /\b(driver|dob|switch|shift|replace|select|add|move)\b/i.test(q)) {
+    const selectedDriverProduct = driverNumber === "206"
+      ? findPreferred206DobLiveProduct(liveProducts, projectState || {}, q)
+      : findBestLiveProductBySignals(liveProducts, {
+          must: [new RegExp(`(^|[^0-9])${driverNumber}([^0-9]|$)`, "i")],
+          prefer: [/\bdriver\b/i, /\bmodule\b/i, /\bdob\b/i]
+        });
+
     pushAdd(
-      findBestLiveProductBySignals(liveProducts, {
-        must: [new RegExp(`(^|[^0-9])${driverNumber}([^0-9]|$)`, "i")],
-        prefer: [/\bdriver\b/i, /\bmodule\b/i, /\bdob\b/i]
-      }),
-      `User explicitly asked for driver ${driverNumber}.`
+      selectedDriverProduct,
+      driverNumber === "206"
+        ? "User explicitly asked to shift/switch toward the 206 DOB route."
+        : `User explicitly asked for driver ${driverNumber}.`
     );
   }
 
@@ -7936,6 +8095,7 @@ app.post("/kit-ai-chat", async (req, res) => {
     });
 
     const liveProductsForPrompt = buildLiveProductsForPrompt(relevantLiveProducts);
+    const liveProductFamilyAvailabilityPrompt = buildLiveProductFamilyAvailabilityPrompt(liveProducts);
     const compactPage = compactKitAiPageContext(pageContext || {});
     const compactKit = compactKitAiContext(kitContext || {}, safeQuestion);
     const compactHistory = compactChatHistory(effectiveHistory);
@@ -7963,7 +8123,16 @@ app.post("/kit-ai-chat", async (req, res) => {
         : [];
 
     const deterministicDirectAddActions =
-      findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {});
+      findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {}, resolvedProjectState || {});
+
+    const deterministicConfirmedFollowupActions =
+      findConfirmedLiveActionsFromPreviousAssistant(
+        safeQuestion,
+        compactHistory || [],
+        liveProducts,
+        kitContext || {},
+        resolvedProjectState || {}
+      );
 
     const deterministicExactSelectionActions =
       findExactLiveSelectionActionsFromQuestion(
@@ -8164,6 +8333,9 @@ How to use the integration knowledge:
 - Product recommendations must still come only from LIVE ODOO WEBSITE PRODUCTS.
 - For mechanical suggestions beyond fixed product facts, you may reason practically, but do not invent new Smart Handicrafts specifications or unsupported electrical compatibility.
 
+LIVE PRODUCT FAMILY AVAILABILITY FACTS:
+${liveProductFamilyAvailabilityPrompt}
+
 LIVE ODOO WEBSITE PRODUCTS:
 ${JSON.stringify(liveProductsForPrompt, null, 2)}
 
@@ -8186,6 +8358,11 @@ ${JSON.stringify({
     recentUserIntentText: decisionPolicy?.recentUserIntentText || ""
   },
   deterministicDirectAddCandidates: deterministicDirectAddActions.map((a) => ({
+    action: a.action,
+    name: a.name,
+    sku: a.sku
+  })),
+  deterministicConfirmedFollowupCandidates: deterministicConfirmedFollowupActions.map((a) => ({
     action: a.action,
     name: a.name,
     sku: a.sku
@@ -8430,6 +8607,20 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       failures across the Odoo product catalog.
     */
     if (
+      deterministicConfirmedFollowupActions.length &&
+      activeKitActions.length === 0
+    ) {
+      activeKitActions = normalizeKitAiActiveKitActions(
+        deterministicConfirmedFollowupActions,
+        liveProducts,
+        kitContext || {}
+      );
+
+      const confirmedFollowupAnswer = buildDirectAddOverrideAnswer(activeKitActions);
+      if (confirmedFollowupAnswer) updateFinalAnswer(confirmedFollowupAnswer, "deterministic_confirmed_followup_answer");
+    }
+
+    if (
       deterministicExactSelectionActions.length &&
       activeKitActions.length === 0
     ) {
@@ -8617,6 +8808,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
       deterministic_202_completion_candidates_count: deterministic202CompletionLiveProducts.length,
       deterministic_direct_add_candidates_count: deterministicDirectAddActions.length,
+      deterministic_confirmed_followup_candidates_count: deterministicConfirmedFollowupActions.length,
       deterministic_exact_selection_candidates_count: deterministicExactSelectionActions.length,
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
