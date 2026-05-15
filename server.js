@@ -1459,10 +1459,258 @@ async function ensureKitIntegrationKnowledgeIndex() {
   kitIntegrationKnowledgeCache.loadedAt = Date.now();
 }
 
-function buildKitIntegrationRetrievalQuery({ question, pageContext, kitContext } = {}) {
+
+function getKitAiRecentUserIntentText(history = [], question = "") {
+  const historyText = (Array.isArray(history) ? history : [])
+    .filter((item) => String(item?.role || item?.agent || "").toLowerCase() === "user")
+    .slice(-8)
+    .map((item) => String(item?.text || item?.content || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return `${historyText} ${String(question || "").trim()}`
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function buildKitAiDecisionPolicy({
+  question = "",
+  history = [],
+  kitContext = {},
+  liveProducts = []
+} = {}) {
+  const recentUserIntentText = getKitAiRecentUserIntentText(history, question);
   const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const activeDriverText = String(snapshot.selectedDriver || "").toLowerCase();
+
+  const flags = {
+    floorLamp: /\bfloor\s+lamp\b/i.test(recentUserIntentText),
+    tableLamp: /\btable\s+lamp\b/i.test(recentUserIntentText),
+    topTouch: /\btop[-\s]?touch\b|\btouch\s+from\s+top\b/i.test(recentUserIntentText),
+    wallSconce: /\bwall\s+sconce\b/i.test(recentUserIntentText),
+    rechargeable: /\brechargeable\b|\bbattery[-\s]?powered\b|\bwireless\b/i.test(recentUserIntentText),
+    usbPowered: /\busb[-\s]?powered\b|\bdirectly\s+powered\b|\bplug[-\s]?in\b/i.test(recentUserIntentText),
+    ambient: /\bambient\b|\bsoft\s+glow\b|\bdiffused\b|\bdecorative\s+glow\b/i.test(recentUserIntentText),
+    reading: /\breading\b|\btask\s+light\b|\bfocused\s+light\b/i.test(recentUserIntentText),
+    largeHead: /\blarge\s+head\b|\bbroad\s+head\b|\bwide\s+head\b|\bbig\s+head\b|\blarge\s+shade\b/i.test(recentUserIntentText),
+    headLight: /\bhead\b|\bshade\b|\bupper\s+light\b|\btop\s+light\b/i.test(recentUserIntentText),
+    stripPath: /\bstrip\b|\bperimeter\b|\bedge\b|\boutline\b|\bcurve\b|\bchannel\b|\belongated\b/i.test(recentUserIntentText),
+    fastCharging: /\bfast\s+charging\b|\bfaster\s+charging\b|\bquick\s+charge\b/i.test(recentUserIntentText),
+    dualLightPoints: /\btwo\s+(?:separate\s+)?(?:leds|light\s+points|lights)\b|\bdual\s+output\b|\btwo\s+locations\b/i.test(recentUserIntentText)
+  };
+
+  const policies = [];
+
+  if (flags.floorLamp && flags.rechargeable) {
+    const highConfidenceFloorDob =
+      flags.ambient ||
+      flags.largeHead ||
+      flags.headLight ||
+      !flags.stripPath;
+
+    if (highConfidenceFloorDob) {
+      policies.push({
+        id: "rechargeable_floor_lamp_dob",
+        priority: 100,
+        integrationMode: true,
+        retrievalHints: [
+          "floor lamp",
+          "AS-B-206 DOB",
+          "206 115mm",
+          "large floor lamp head",
+          "diffuser sheet",
+          "head integration"
+        ],
+        preferredPath: "AS-B-206 DOB series; mention 115mm DOB as the likely large-head floor-lamp direction if the head diameter allows.",
+        mustMention: [
+          "206 DOB",
+          "115mm if head size allows",
+          "201 is not automatically the best floor-lamp path just because it is already in the active kit"
+        ],
+        mustAvoid: [
+          "Do not say the current 201 + 3W COB table-lamp kit is well-suited for a rechargeable ambient floor lamp without a caveat.",
+          "Do not ignore the 206 DOB floor-lamp path."
+        ],
+        suggestedNextStep: "Explain that the current 201 path can work only for a separated base-driver / LED-in-head architecture, but the 206 DOB route is often cleaner for rechargeable ambient floor lamps. Ask whether to explore/switch to the 206 DOB floor-lamp path or confirm the lamp-head diameter."
+      });
+    }
+  }
+
+  if (flags.topTouch && flags.rechargeable) {
+    policies.push({
+      id: "top_touch_dob",
+      priority: 95,
+      integrationMode: true,
+      retrievalHints: [
+        "top touch",
+        "AS-B-206 DOB",
+        "head-based integrated light",
+        "touch point at top"
+      ],
+      preferredPath: "AS-B-206 DOB series for top-touch head-based integrations.",
+      mustMention: [
+        "206 DOB",
+        "top-touch integration",
+        "head-based integrated module"
+      ],
+      mustAvoid: [
+        "Do not default to a table-lamp driver if the user is clearly describing a top-touch head-integrated concept."
+      ],
+      suggestedNextStep: "Explain the 206 DOB top-touch route and ask only for the head size if exact DOB size is needed."
+    });
+  }
+
+  if (flags.stripPath) {
+    if (flags.usbPowered) {
+      policies.push({
+        id: "usb_strip_path",
+        priority: 90,
+        integrationMode: true,
+        retrievalHints: ["USB strip lamp", "AS-U-103-LSD", "strip integration"],
+        preferredPath: "AS-U-103-LSD for USB-powered strip/perimeter/edge lighting.",
+        mustMention: ["103 strip driver"],
+        mustAvoid: ["Do not push COB/DOB when the user clearly needs light to follow a curve, edge, or channel."],
+        suggestedNextStep: "Guide toward the strip-driver path and ask only the strip voltage/length if needed."
+      });
+    } else if (flags.rechargeable) {
+      policies.push({
+        id: flags.fastCharging ? "rechargeable_fast_strip_path" : "rechargeable_standard_strip_path",
+        priority: 90,
+        integrationMode: true,
+        retrievalHints: [
+          "rechargeable strip lamp",
+          flags.fastCharging ? "AS-B-205-LSD fast charging" : "AS-B-204-LSD standard charging",
+          "strip integration"
+        ],
+        preferredPath: flags.fastCharging
+          ? "AS-B-205-LSD for rechargeable strip lighting where faster charging is requested."
+          : "AS-B-204-LSD for rechargeable strip lighting where normal charging is acceptable.",
+        mustMention: [flags.fastCharging ? "205 fast-charging strip driver" : "204 standard-charging strip driver"],
+        mustAvoid: ["Do not default to 201/202 COB paths when the product shape clearly calls for strip lighting."],
+        suggestedNextStep: "Guide toward the rechargeable strip driver and ask for strip voltage/length if needed."
+      });
+    }
+  }
+
+  if (flags.dualLightPoints && flags.rechargeable) {
+    policies.push({
+      id: "rechargeable_dual_light_points",
+      priority: 88,
+      integrationMode: true,
+      retrievalHints: ["AS-B-202-DLD", "dual LED", "two light points"],
+      preferredPath: "AS-B-202-DLD for rechargeable concepts needing two distinct light points or dual output.",
+      mustMention: ["202 dual-driver path"],
+      mustAvoid: ["Do not continue with 201 if the user clearly wants two independently located light outputs."],
+      suggestedNextStep: "Explain why 202 fits the dual-light concept and ask whether the user wants separate light points or CCT-style output if that distinction matters."
+    });
+  }
+
+  if (flags.dualLightPoints && flags.usbPowered) {
+    policies.push({
+      id: "usb_dual_light_points",
+      priority: 88,
+      integrationMode: true,
+      retrievalHints: ["AS-U-102-DLD", "dual LED", "two light points"],
+      preferredPath: "AS-U-102-DLD for USB-powered concepts needing two distinct light points or dual output.",
+      mustMention: ["102 dual-driver path"],
+      mustAvoid: ["Do not continue with 101 if the user clearly wants two independently located light outputs."],
+      suggestedNextStep: "Explain why 102 fits the dual-light concept and ask only the missing lighting detail if needed."
+    });
+  }
+
+  policies.sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+
+  return {
+    active: policies[0] || null,
+    policies,
+    flags,
+    recentUserIntentText,
+    activeDriverText,
+    activeDriverLooksLike201: /\b201\b/i.test(activeDriverText),
+    activeDriverLooksLike206: /\b206\b/i.test(activeDriverText)
+  };
+}
+
+function formatKitAiDecisionPolicyForPrompt(policy = {}) {
+  const active = policy?.active;
+  if (!active) {
+    return "No deterministic product-decision override is active for this turn.";
+  }
+
+  return [
+    `Active policy: ${active.id}`,
+    `Preferred path: ${active.preferredPath}`,
+    active.mustMention?.length ? `Must mention: ${active.mustMention.join(" | ")}` : "",
+    active.mustAvoid?.length ? `Must avoid: ${active.mustAvoid.join(" | ")}` : "",
+    active.suggestedNextStep ? `Suggested next step: ${active.suggestedNextStep}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function kitAiPolicyAnswerNeedsFloorDobRepair(answer = "", policy = {}) {
+  if (policy?.active?.id !== "rechargeable_floor_lamp_dob") return false;
+
+  const text = String(answer || "").toLowerCase();
+  const mentions206Dob = /\b206\b|\bdob\b/i.test(text);
+  const praises201AsSuitable =
+    /\b201\b.{0,80}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
+    /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,80}\b201\b/i.test(text);
+
+  return !mentions206Dob || praises201AsSuitable;
+}
+
+function buildFloorLampDobPolicyAnswer({
+  policy = {},
+  kitContext = {}
+} = {}) {
+  const activeDriver = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").trim();
+  const currentKitNote =
+    activeDriver && /\b201\b/i.test(activeDriver)
+      ? "The current 201 kit can still be used only if you intentionally want a separated base-driver plus LED-in-head construction."
+      : "";
+
+  return [
+    "For a rechargeable ambient floor lamp, I would move the discussion toward the AS-B-206 DOB route rather than treating a normal 201 table-lamp kit as the default.",
+    "",
+    "A practical direction is the 206 DOB series, with the 115mm DOB being the likely large-head option if your floor-lamp head has enough internal diameter. That route keeps the LED, driver, charging and touch system together in the upper head, which is usually cleaner for floor-lamp integration.",
+    currentKitNote ? `\n${currentKitNote}` : "",
+    "",
+    "If you want, I can help you switch the build toward the 206 floor-lamp path. To choose the exact DOB size neatly, I would only need the approximate lamp-head diameter."
+  ].filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+function applyKitAiDecisionPolicyRepair({
+  answer = "",
+  decisionPolicy = {},
+  kitContext = {}
+} = {}) {
+  if (kitAiPolicyAnswerNeedsFloorDobRepair(answer, decisionPolicy)) {
+    return buildFloorLampDobPolicyAnswer({
+      policy: decisionPolicy,
+      kitContext
+    });
+  }
+
+  return answer;
+}
+
+function buildKitIntegrationRetrievalQuery({
+  question,
+  pageContext,
+  kitContext,
+  history = [],
+  decisionPolicy = null
+} = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const recentUserIntentText = getKitAiRecentUserIntentText(history, question);
+  const policyHints = Array.isArray(decisionPolicy?.active?.retrievalHints)
+    ? decisionPolicy.active.retrievalHints.join(" ")
+    : "";
+
   return [
     question || "",
+    recentUserIntentText || "",
+    policyHints || "",
     pageContext?.pageTitle || "",
     pageContext?.h1 || "",
     snapshot.selectedApplication || "",
@@ -1512,13 +1760,18 @@ async function retrieveRelevantKitIntegrationChunks({
   question,
   pageContext,
   kitContext,
+  history = [],
+  decisionPolicy = null,
   integrationConsultingMode = false,
   topK = 4
 } = {}) {
+  const recentUserIntentText = getKitAiRecentUserIntentText(history, question);
+
   const shouldRetrieve =
     integrationConsultingMode ||
-    /\b(integrat|place|placement|mount|fit|hide|route|wiring|charging port|touch point|panel mount|lamp concept|notebook|christmas|gift|floor lamp|wall sconce|shade|rod|battery holder)\b/i.test(
-      String(question || "")
+    !!decisionPolicy?.active ||
+    /\b(integrat|place|placement|mount|fit|hide|route|wiring|charging port|touch point|panel mount|lamp concept|notebook|christmas|gift|floor lamp|wall sconce|shade|rod|battery holder|ambient|top touch|dob)\b/i.test(
+      `${String(question || "")} ${recentUserIntentText}`
     );
 
   if (!shouldRetrieve) return [];
@@ -1527,7 +1780,13 @@ async function retrieveRelevantKitIntegrationChunks({
   const chunks = kitIntegrationKnowledgeCache.chunks || [];
   if (!chunks.length) return [];
 
-  const query = buildKitIntegrationRetrievalQuery({ question, pageContext, kitContext });
+  const query = buildKitIntegrationRetrievalQuery({
+    question,
+    pageContext,
+    kitContext,
+    history,
+    decisionPolicy
+  });
 
   const ranked = chunks
     .map((chunk) => ({ chunk, score: scoreKitIntegrationChunk(chunk, query) }))
@@ -5469,8 +5728,16 @@ app.post("/kit-ai-chat", async (req, res) => {
       });
     }
 
+    const decisionPolicy = buildKitAiDecisionPolicy({
+      question: safeQuestion,
+      history: history || [],
+      kitContext: kitContext || {},
+      liveProducts
+    });
+
     const integrationConsultingMode =
       isKitAiIntegrationConceptQuestion(safeQuestion, pageContext, kitContext) ||
+      !!decisionPolicy?.active?.integrationMode ||
       !!normalizedLampReferenceImage ||
       !!priorLampReferenceSummary;
 
@@ -5492,10 +5759,13 @@ app.post("/kit-ai-chat", async (req, res) => {
       question: safeQuestion,
       pageContext,
       kitContext,
+      history: history || [],
+      decisionPolicy,
       integrationConsultingMode,
       topK: 4
     });
     const integrationKnowledgePrompt = formatKitIntegrationChunksForPrompt(relevantIntegrationKnowledgeChunks);
+    const decisionPolicyPrompt = formatKitAiDecisionPolicyForPrompt(decisionPolicy);
 
     const deterministic201StarterLiveProducts =
       isKitAiStarterOrCompletionQuestion(safeQuestion)
@@ -5683,6 +5953,15 @@ ${approvedRulesPrompt}
 
 These approved rules override general assumptions. Use them whenever relevant, especially for compatibility decisions.
 
+DETERMINISTIC SMART HANDICRAFTS DECISION POLICY:
+${decisionPolicyPrompt}
+
+How to use the deterministic policy:
+- This is a server-side high-confidence decision layer, not a casual suggestion.
+- If an active policy is present, do not contradict it.
+- The active policy exists to stop drift from prior conversation context or from an already-selected but no-longer-optimal active kit.
+- If the policy says a better product family should be surfaced, explain that clearly before continuing the old kit path.
+
 RELEVANT SMART HANDICRAFTS PHYSICAL INTEGRATION KNOWLEDGE:
 ${integrationKnowledgePrompt}
 
@@ -5699,6 +5978,11 @@ ${JSON.stringify({
   integrationConsultingMode,
   lampReference: lampReferencePromptContext,
   guidedFlowPolicy: "stepwise application -> driver -> LED -> battery -> wire/accessories -> review",
+  decisionPolicy: {
+    active: decisionPolicy?.active || null,
+    flags: decisionPolicy?.flags || {},
+    recentUserIntentText: decisionPolicy?.recentUserIntentText || ""
+  },
   deterministicDirectAddCandidates: deterministicDirectAddActions.map((a) => ({
     action: a.action,
     name: a.name,
@@ -6046,6 +6330,12 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       question: safeQuestion
     });
 
+    answer = applyKitAiDecisionPolicyRepair({
+      answer,
+      decisionPolicy,
+      kitContext: kitContext || {}
+    });
+
     const finalPayload = {
       ok: true,
       answer,
@@ -6061,6 +6351,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       prompt_rules_count: relevantApprovedRules.length,
       prompt_integration_chunks_count: relevantIntegrationKnowledgeChunks.length,
       integration_consulting_mode: integrationConsultingMode,
+      deterministic_decision_policy_id: decisionPolicy?.active?.id || null,
+      deterministic_decision_policy_active: !!decisionPolicy?.active,
       reference_image_used: !!normalizedLampReferenceImage,
       prior_reference_image_summary_used: !!priorLampReferenceSummary,
       deterministic_starter_candidates_count: deterministic201StarterLiveProducts.length,
