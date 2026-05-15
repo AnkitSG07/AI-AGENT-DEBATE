@@ -2000,12 +2000,40 @@ function buildKitAiDecisionPolicyFromProjectState({
 } = {}) {
   const state = sanitizeKitAiProjectState(projectState);
   const policyQuestion = kitAiProjectStateToPolicyQuestion(state) || String(fallbackQuestion || "");
-  const policy = buildKitAiDecisionPolicy({
+  let policy = buildKitAiDecisionPolicy({
     question: policyQuestion,
     history: [],
     kitContext,
     liveProducts
   });
+
+  /*
+    If the structured state already contains a head diameter, the prompt-level
+    deterministic policy must not ask the customer for that same diameter again.
+    This prevents Gemini from streaming a good answer and then drifting back into
+    a redundant "share head diameter" follow-up on the same turn.
+  */
+  if (
+    policy?.active &&
+    Number.isFinite(state.head_diameter_mm) &&
+    ["floor_dob_206", "top_touch_dob_206", "large_head_dob_206"].includes(policy.active.repairKind)
+  ) {
+    const knownHeadDiameterMm = Math.round(state.head_diameter_mm);
+    policy = {
+      ...policy,
+      active: {
+        ...policy.active,
+        suggestedNextStep:
+          `Use the already known lamp-head diameter (${knownHeadDiameterMm} mm). ` +
+          `Do not ask for head diameter again. State the likely DOB sizing direction ` +
+          `and ask only the next unresolved design or kit decision, if any.`,
+        mustAvoid: [
+          ...(Array.isArray(policy.active.mustAvoid) ? policy.active.mustAvoid : []),
+          "Do not ask the customer for head diameter again; it is already present in the structured project state."
+        ]
+      }
+    };
+  }
 
   /*
     V2 state-specific policy:
@@ -2720,27 +2748,60 @@ function formatKitAiDecisionPolicyForPrompt(policy = {}) {
   return `${activeBlock}\n\n${supportingBlock}`;
 }
 
-function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}) {
+function getKitAiKnownHeadDiameterMm(decisionPolicy = {}, projectState = null) {
+  const state = sanitizeKitAiProjectState(projectState || decisionPolicy?.projectState || null);
+  return Number.isFinite(state.head_diameter_mm) ? state.head_diameter_mm : null;
+}
+
+function formatKitAiHeadDiameterForReply(headDiameterMm = null) {
+  if (!Number.isFinite(headDiameterMm)) return "";
+  const mm = Math.round(headDiameterMm);
+  const inches = headDiameterMm / 25.4;
+  const roundedInches = Math.abs(inches - Math.round(inches)) < 0.06
+    ? String(Math.round(inches))
+    : String(Math.round(inches * 10) / 10);
+  return `${roundedInches} inch (~${mm} mm)`;
+}
+
+function kitAiAnswerRequestsHeadDiameter(answer = "") {
+  const text = String(answer || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text) return false;
+
+  return (
+    /\b(?:need|share|tell|provide|confirm|know|give|require)\b.{0,90}\b(?:lamp[-\s]?head|head)\b.{0,50}\b(?:diameter|dia|size)\b/i.test(text) ||
+    /\b(?:lamp[-\s]?head|head)\b.{0,50}\b(?:diameter|dia|size)\b.{0,90}\b(?:need|share|tell|provide|confirm|know|give|required)\b/i.test(text) ||
+    /\bto\s+(?:choose|finali[sz]e|narrow|select)\b.{0,100}\b(?:lamp[-\s]?head|head)\b.{0,50}\b(?:diameter|dia|size)\b/i.test(text) ||
+    /\bi\s+(?:would|will)\s+(?:only\s+)?need\b.{0,100}\b(?:lamp[-\s]?head|head)\b.{0,50}\b(?:diameter|dia|size)\b/i.test(text)
+  );
+}
+
+function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}, projectState = null) {
   const active = policy?.active;
   if (!active) return false;
 
   const text = String(answer || "").toLowerCase();
+  const knownHeadDiameterMm = getKitAiKnownHeadDiameterMm(policy, projectState);
+  const repeatsKnownHeadDiameterQuestion =
+    Number.isFinite(knownHeadDiameterMm) &&
+    kitAiAnswerRequestsHeadDiameter(answer);
 
   switch (active.repairKind) {
     case "floor_large_head_power_choice":
-      return !/\b206\b|\bdob\b/i.test(text) ||
+      return repeatsKnownHeadDiameterQuestion ||
+        !/\b206\b|\bdob\b/i.test(text) ||
         !/\brechargeable\b|\busb\b/i.test(text) ||
         /\b201\b.{0,90}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
         /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,90}\b201\b/i.test(text);
 
     case "floor_dob_206":
-      return !/\b206\b|\bdob\b/i.test(text) ||
+      return repeatsKnownHeadDiameterQuestion ||
+        !/\b206\b|\bdob\b/i.test(text) ||
         /\b201\b.{0,90}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
         /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,90}\b201\b/i.test(text);
 
     case "top_touch_dob_206":
     case "large_head_dob_206":
-      return !/\b206\b|\bdob\b/i.test(text);
+      return repeatsKnownHeadDiameterQuestion || !/\b206\b|\bdob\b/i.test(text);
 
     case "rechargeable_dual_202":
     case "table_rechargeable_dual_202":
@@ -2793,9 +2854,12 @@ function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}) {
 
 function buildKitAiPolicyFallbackAnswer({
   decisionPolicy = {},
-  kitContext = {}
+  kitContext = {},
+  projectState = null
 } = {}) {
   const active = decisionPolicy?.active || {};
+  const knownHeadDiameterMm = getKitAiKnownHeadDiameterMm(decisionPolicy, projectState);
+  const knownHeadDiameterText = formatKitAiHeadDiameterForReply(knownHeadDiameterMm);
   const activeDriver = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").trim();
   const driver201Note =
     activeDriver && /\b201\b/i.test(activeDriver)
@@ -2816,28 +2880,40 @@ function buildKitAiPolicyFallbackAnswer({
       return [
         "For a rechargeable ambient floor lamp, I would move the discussion toward the AS-B-206 DOB route rather than treating a normal 201 table-lamp kit as the default.",
         "",
-        "A practical direction is the 206 DOB series, with the 115 mm DOB being the likely large-head option if your floor-lamp head has enough internal diameter. That route keeps the LED, driver, charging, and touch system together in the upper head, which is usually cleaner for floor-lamp integration.",
+        knownHeadDiameterText
+          ? `With the ${knownHeadDiameterText} circular head you already shared, the 115 mm 206 DOB is the likely size to evaluate first, provided the usable internal diameter still leaves enough clearance for the board, diffuser lip, mounting support, and charging/touch arrangement.`
+          : "A practical direction is the 206 DOB series, with the 115 mm DOB being the likely large-head option if your floor-lamp head has enough internal diameter. That route keeps the LED, driver, charging, and touch system together in the upper head, which is usually cleaner for floor-lamp integration.",
         driver201Note ? `\n${driver201Note}` : "",
         "",
-        "To choose the exact DOB size neatly, I would only need the approximate lamp-head diameter."
+        knownHeadDiameterText
+          ? "The next useful decision is whether to shift the active kit toward this 206 DOB head-integrated path or compare it against the separated 201 base-driver construction."
+          : "To choose the exact DOB size neatly, I would only need the approximate lamp-head diameter."
       ].filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n");
 
     case "top_touch_dob_206":
       return [
         "For a rechargeable top-touch lamp, the AS-B-206 DOB route is the cleaner direction.",
         "",
-        "The DOB board sits directly in the head, the touch interaction can be taken to the top surface, and the light-facing side can be finished with a diffuser sheet where the design allows. The exact 55 mm, 75 mm, or 115 mm choice depends mainly on head size.",
+        knownHeadDiameterText
+          ? `With the ${knownHeadDiameterText} head size already shared, I can use that dimension while narrowing the 55 mm, 75 mm, or 115 mm DOB fit. The DOB board sits directly in the head, the touch interaction can be taken to the top surface, and the light-facing side can be finished with a diffuser sheet where the design allows.`
+          : "The DOB board sits directly in the head, the touch interaction can be taken to the top surface, and the light-facing side can be finished with a diffuser sheet where the design allows. The exact 55 mm, 75 mm, or 115 mm choice depends mainly on head size.",
         "",
-        "To narrow the DOB size, I would just need the approximate head diameter."
+        knownHeadDiameterText
+          ? "The next useful detail is the intended head cavity/clearance or whether charging access will stay reachable after assembly."
+          : "To narrow the DOB size, I would just need the approximate head diameter."
       ].join("\n");
 
     case "large_head_dob_206":
       return [
         "For a rechargeable lamp with a large light head, the AS-B-206 DOB family is the more natural route than a small separated table-lamp driver.",
         "",
-        "The board integrates the light source and control electronics in the head itself. If the head diameter allows, 115 mm may be the strongest option; otherwise 75 mm or 55 mm can be considered based on size.",
+        knownHeadDiameterText
+          ? `With the ${knownHeadDiameterText} head size already shared, 115 mm is the stronger DOB size to evaluate first if the usable internal diameter and mounting clearance permit it; 75 mm or 55 mm remain fallback options only if the internal cavity is smaller than expected.`
+          : "The board integrates the light source and control electronics in the head itself. If the head diameter allows, 115 mm may be the strongest option; otherwise 75 mm or 55 mm can be considered based on size.",
         "",
-        "The one key detail needed is the approximate internal head diameter."
+        knownHeadDiameterText
+          ? "The next useful detail is the usable internal clearance or whether the head will include a diffuser and center rod arrangement."
+          : "The one key detail needed is the approximate internal head diameter."
       ].join("\n");
 
     case "rechargeable_dual_202":
@@ -2957,13 +3033,15 @@ function buildKitAiPolicyFallbackAnswer({
 function applyKitAiDecisionPolicyRepair({
   answer = "",
   decisionPolicy = {},
-  kitContext = {}
+  kitContext = {},
+  projectState = null
 } = {}) {
-  if (!kitAiPolicyAnswerNeedsRepair(answer, decisionPolicy)) return answer;
+  if (!kitAiPolicyAnswerNeedsRepair(answer, decisionPolicy, projectState)) return answer;
 
   const repaired = buildKitAiPolicyFallbackAnswer({
     decisionPolicy,
-    kitContext
+    kitContext,
+    projectState
   });
 
   return repaired || answer;
@@ -8369,7 +8447,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     answer = applyKitAiDecisionPolicyRepair({
       answer,
       decisionPolicy,
-      kitContext: kitContext || {}
+      kitContext: kitContext || {},
+      projectState: resolvedProjectState
     });
 
     const finalPayload = {
