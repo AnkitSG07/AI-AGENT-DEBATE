@@ -3083,10 +3083,15 @@ function buildKitAiPolicyFallbackAnswer({
 
 function applyKitAiDecisionPolicyRepair({
   answer = "",
+  question = "",
   decisionPolicy = {},
   kitContext = {},
   projectState = null
 } = {}) {
+  if (shouldBypassKitAiDecisionPolicyRepair({ question, decisionPolicy, kitContext })) {
+    return answer;
+  }
+
   if (!kitAiPolicyAnswerNeedsRepair(answer, decisionPolicy, projectState)) return answer;
 
   const repaired = buildKitAiPolicyFallbackAnswer({
@@ -6777,6 +6782,113 @@ function isKitAiExplicitDirectAddQuestion(question = "") {
   );
 }
 
+
+// ===================== V11 POLICY-GATING + COMPLETION STATUS HELPERS =====================
+// These helpers prevent an already-resolved route policy (for example the
+// 206 DOB floor-lamp path) from hijacking later operational follow-ups such as
+// "add 2600mAh battery" or "kit is complete?".
+function kitAiQuestionAsksKitCompletionStatus(question = "") {
+  const q = String(question || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!q) return false;
+
+  return [
+    /\bis\s+(?:my|the|this|current|active)?\s*kit\s+(?:complete|ready|done)\b/i,
+    /\b(?:my|the|this|current|active)?\s*kit\s+is\s+(?:complete|ready|done)\b/i,
+    /\bkit\s+(?:complete|ready|done)\s*\??$/i,
+    /\bwhat(?:'s|\s+is)\s+missing\b/i,
+    /\bwhat\s+(?:parts?|items?)\s+(?:are|is)\s+missing\b/i,
+    /\bdo\s+i\s+still\s+need\b.{0,60}\b(?:parts?|items?|battery|wire|led|driver)\b/i,
+    /\bwhat\s+(?:does|do)\s+(?:the\s+)?(?:active\s+)?kit\s+(?:still\s+)?need\b/i
+  ].some((pattern) => pattern.test(q));
+}
+
+function buildKitAiCompletionStatusAnswer(kitContext = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const coreComplete = snapshot.coreComplete === true;
+  const missingCoreParts = Array.isArray(snapshot.missingCoreParts)
+    ? snapshot.missingCoreParts.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const completionMessage = String(snapshot.completionMessage || "").trim();
+
+  if (coreComplete) {
+    return [
+      "Yes — the active kit is marked complete by the Kit Builder core-parts check.",
+      "You can review it now, save the kit, or continue with any optional accessories you want to add."
+    ].join("\n");
+  }
+
+  if (missingCoreParts.length) {
+    return [
+      "Not yet. The active kit is still missing:",
+      ...missingCoreParts.map((part) => `• ${part}`),
+      "",
+      "Tell me which missing part you want to choose next, and I’ll continue from there."
+    ].join("\n");
+  }
+
+  if (completionMessage) {
+    return [
+      "Not yet — the active kit is not marked complete in the Kit Builder.",
+      completionMessage
+    ].join("\n\n");
+  }
+
+  return [
+    "Not yet — the active kit is not currently marked complete in the Kit Builder.",
+    "I can continue by checking the next missing core part or by helping you choose the battery, wire, or accessory needed for this path."
+  ].join("\n");
+}
+
+function kitAiQuestionIsOperationalFollowup(question = "", kitContext = {}) {
+  const q = String(question || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!q) return false;
+
+  if (isKitAiExplicitDirectAddQuestion(q)) return true;
+  if (kitAiQuestionAsksKitCompletionStatus(q)) return true;
+  if (kitAiQuestionRequestsGeneric2600BatteryChoice(q)) return true;
+  if (kitAiQuestionAsksWhichBattery(q)) return true;
+  if (kitAiQuestionNeedsBatteryChoice(q, kitContext)) return true;
+  if (isKitAiActiveKitCorrectionQuestion(q)) return true;
+
+  return /\b(?:battery|18650|mah|sleeve|without\s+sleeve|holder|jst|wire|panel\s*mount|connector|active\s+kit|kit\s+list|kit\s+status|what\s+is\s+missing|what's\s+missing)\b/i.test(q);
+}
+
+function kitAiRouteDecisionPolicyAlreadyResolved(decisionPolicy = {}, kitContext = {}) {
+  const repairKind = String(decisionPolicy?.active?.repairKind || "").trim();
+  if (!["floor_dob_206", "top_touch_dob_206", "large_head_dob_206"].includes(repairKind)) {
+    return false;
+  }
+
+  const activeText = kitAiActiveText(kitContext).toLowerCase();
+  return /\b206\b|\bdob\b/i.test(activeText);
+}
+
+function shouldBypassKitAiDecisionPolicyRepair({
+  question = "",
+  decisionPolicy = {},
+  kitContext = {}
+} = {}) {
+  const active = decisionPolicy?.active;
+  if (!active) return false;
+
+  const q = String(question || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!q) return false;
+
+  // Operational follow-ups should be answered from the present user request
+  // and real kit state, not from an older route-selection policy.
+  if (kitAiQuestionIsOperationalFollowup(q, kitContext)) return true;
+
+  // Once a DOB route is already active in the kit, do not keep forcing the
+  // route-selection fallback on ordinary follow-up questions. Keep repair
+  // available only for explicit path comparison/switch questions.
+  if (kitAiRouteDecisionPolicyAlreadyResolved(decisionPolicy, kitContext)) {
+    const explicitlyReopensRouteChoice = /\b(compare|switch|shift|move|replace|which\s+driver|should\s+i\s+(?:use|choose)|206\s+vs|201\s+vs)\b/i.test(q);
+    if (!explicitlyReopensRouteChoice) return true;
+  }
+
+  return false;
+}
+
 function findDefault201StarterKitLiveProducts(liveProducts = [], kitContext = {}, question = "") {
   const selectedDriverText = String(kitContext?.kitBuilderSnapshot?.selectedDriver || "").toLowerCase();
   const q = String(question || "").toLowerCase();
@@ -7453,7 +7565,8 @@ function kitAiFind3wSingleLed(liveProducts = []) {
 
 function kitAiQuestionRequestsGeneric2600BatteryChoice(question = "") {
   const q = String(question || "").toLowerCase().trim();
-  const mentions2600 = /\b2600\b/.test(q);
+  // Match both "2600 mah" and compact user input such as "2600mah".
+  const mentions2600 = /\b2600(?:\s*mah)?\b/i.test(q);
   const namesVariant = /\b(with\s+sleeve|without\s+sleeve|no\s+sleeve|26[-\s]?ws|26s)\b/i.test(q);
   return mentions2600 && !namesVariant;
 }
@@ -7546,6 +7659,19 @@ function applyGuidedKitAiFlowOverrides({
     .filter((action) => action && (action.action === "remove" || action.auto_addable !== false));
   let nextAlternatives = [];
   let nextOffer = actionOffer || (nextRecommended.length ? "active_kit" : "none");
+
+  // 0) Explicit kit-completion/status questions must answer from the real active-kit snapshot.
+  //    Do not let a previously active route policy (such as floor-lamp -> 206 DOB)
+  //    replay itself instead of answering the actual completion question.
+  if (kitAiQuestionAsksKitCompletionStatus(q)) {
+    return {
+      answer: buildKitAiCompletionStatusAnswer(kitContext),
+      recommendedProducts: [],
+      activeKitActions: [],
+      alternativeProducts: [],
+      actionOffer: "none"
+    };
+  }
 
   // 1) Battery choice is unresolved until capacity and, for 2600mAh, sleeve variant are known.
   if (kitAiQuestionRequestsGeneric2600BatteryChoice(q)) {
@@ -8981,6 +9107,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     updateFinalAnswer(
       applyKitAiDecisionPolicyRepair({
         answer,
+        question: safeQuestion,
         decisionPolicy,
         kitContext: kitContext || {},
         projectState: resolvedProjectState
