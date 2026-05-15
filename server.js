@@ -1367,6 +1367,16 @@ async function embedText(text) {
 
 async function readProductKnowledge() {
   try {
+    const result = await getActiveOdooAiKnowledgeRecords();
+    const odooText = buildOdooAiKnowledgeText(result.records || [], {
+      includeTypes: ["product", "policy", "faq", "sales"]
+    });
+    if (odooText) return odooText;
+  } catch (error) {
+    console.warn("Odoo AI product knowledge lookup failed; using local fallback if available:", error);
+  }
+
+  try {
     const text = await readFile(PRODUCT_KNOWLEDGE_PATH, "utf8");
     return text.trim();
   } catch {
@@ -1375,6 +1385,16 @@ async function readProductKnowledge() {
 }
 
 async function readKitIntegrationKnowledge() {
+  try {
+    const result = await getActiveOdooAiKnowledgeRecords();
+    const odooText = buildOdooAiKnowledgeText(result.records || [], {
+      includeTypes: ["integration"]
+    });
+    if (odooText) return odooText;
+  } catch (error) {
+    console.warn("Odoo AI integration knowledge lookup failed; using local fallback if available:", error);
+  }
+
   try {
     const text = await readFile(KIT_INTEGRATION_KNOWLEDGE_PATH, "utf8");
     return String(text || "").trim();
@@ -1459,6 +1479,601 @@ async function ensureKitIntegrationKnowledgeIndex() {
   kitIntegrationKnowledgeCache.loadedAt = Date.now();
 }
 
+
+
+// ===================== KIT AI V2 STRUCTURED PROJECT STATE =====================
+// Purpose:
+// 1) Let Gemini interpret natural language in many phrasings into a stable lamp-project state.
+// 2) Let deterministic Smart Handicrafts policies use that state instead of depending only on keywords.
+// 3) Keep backward compatibility: if the extractor fails or the frontend does not send projectState yet,
+//    the legacy deterministic policy path still runs.
+
+const KIT_AI_PROJECT_STATE_VERSION = 2;
+
+const KIT_AI_STATE_ENUMS = Object.freeze({
+  project_mode: new Set(["unknown", "new_lamp", "refine_current_kit", "product_question", "builder_action"]),
+  intent_type: new Set(["unknown", "greeting", "new_concept", "refine_concept", "integration_question", "builder_action", "product_question", "comparison", "correction"]),
+  product_type: new Set(["unknown", "table_lamp", "floor_lamp", "wall_sconce", "top_touch_lamp", "decorative_object", "strip_product", "other_lighting_product"]),
+  power_type: new Set(["unknown", "rechargeable", "usb_powered"]),
+  light_topology: new Set(["unknown", "single_point", "dual_points", "strip_path", "dob_head", "large_head_integrated"]),
+  light_effect: new Set(["unknown", "ambient", "reading", "focused", "edge_glow", "hidden_glow", "decorative"]),
+  head_size_class: new Set(["unknown", "small", "medium", "large"]),
+  battery_variant: new Set(["unknown", "with_sleeve", "without_sleeve", "holder_based"]),
+  charging_preference: new Set(["unknown", "normal", "fast"]),
+  tri_state: new Set(["unknown", "yes", "no"]),
+  body_material: new Set(["unknown", "metal", "wood", "ceramic", "stone", "plastic", "acrylic", "mixed", "other"])
+});
+
+function kitAiEmptyProjectState() {
+  return {
+    version: KIT_AI_PROJECT_STATE_VERSION,
+    project_mode: "unknown",
+    intent_type: "unknown",
+    product_type: "unknown",
+    power_type: "unknown",
+    light_topology: "unknown",
+    light_effect: "unknown",
+    head_diameter_mm: null,
+    head_size_class: "unknown",
+    desired_led_wattage_w: null,
+    battery_capacity_mah: null,
+    battery_variant: "unknown",
+    charging_preference: "unknown",
+    touch_required: "unknown",
+    body_material: "unknown",
+    base_cavity: "unknown",
+    head_cavity: "unknown",
+    charging_port_hidden: "unknown",
+    wants_panel_mount: "unknown",
+    has_shade: "unknown",
+    has_central_rod: "unknown",
+    asks_mounting_help: "unknown",
+    changed_project_this_turn: false,
+    summary: "",
+    pending_information: [],
+    confidence: 0
+  };
+}
+
+function kitAiNormalizeEnum(value, allowed, fallback = "unknown") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+  return allowed.has(normalized) ? normalized : fallback;
+}
+
+function kitAiNormalizeTriState(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (["yes", "true", "1", "required", "present", "wanted"].includes(raw)) return "yes";
+  if (["no", "false", "0", "not_required", "absent", "not_wanted"].includes(raw)) return "no";
+  return "unknown";
+}
+
+function kitAiNormalizeFiniteNumber(value, { min = 0, max = Number.POSITIVE_INFINITY } = {}) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < min || num > max) return null;
+  return num;
+}
+
+function kitAiNormalizeStringList(value, maxItems = 8) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .slice(0, maxItems)
+    )
+  );
+}
+
+function sanitizeKitAiProjectState(rawState = null) {
+  const src = rawState && typeof rawState === "object" ? rawState : {};
+  const out = kitAiEmptyProjectState();
+
+  out.project_mode = kitAiNormalizeEnum(src.project_mode, KIT_AI_STATE_ENUMS.project_mode);
+  out.intent_type = kitAiNormalizeEnum(src.intent_type, KIT_AI_STATE_ENUMS.intent_type);
+  out.product_type = kitAiNormalizeEnum(src.product_type, KIT_AI_STATE_ENUMS.product_type);
+  out.power_type = kitAiNormalizeEnum(src.power_type, KIT_AI_STATE_ENUMS.power_type);
+  out.light_topology = kitAiNormalizeEnum(src.light_topology, KIT_AI_STATE_ENUMS.light_topology);
+  out.light_effect = kitAiNormalizeEnum(src.light_effect, KIT_AI_STATE_ENUMS.light_effect);
+  out.head_size_class = kitAiNormalizeEnum(src.head_size_class, KIT_AI_STATE_ENUMS.head_size_class);
+  out.battery_variant = kitAiNormalizeEnum(src.battery_variant, KIT_AI_STATE_ENUMS.battery_variant);
+  out.charging_preference = kitAiNormalizeEnum(src.charging_preference, KIT_AI_STATE_ENUMS.charging_preference);
+  out.touch_required = kitAiNormalizeTriState(src.touch_required);
+  out.body_material = kitAiNormalizeEnum(src.body_material, KIT_AI_STATE_ENUMS.body_material);
+  out.base_cavity = kitAiNormalizeTriState(src.base_cavity);
+  out.head_cavity = kitAiNormalizeTriState(src.head_cavity);
+  out.charging_port_hidden = kitAiNormalizeTriState(src.charging_port_hidden);
+  out.wants_panel_mount = kitAiNormalizeTriState(src.wants_panel_mount);
+  out.has_shade = kitAiNormalizeTriState(src.has_shade);
+  out.has_central_rod = kitAiNormalizeTriState(src.has_central_rod);
+  out.asks_mounting_help = kitAiNormalizeTriState(src.asks_mounting_help);
+
+  out.head_diameter_mm = kitAiNormalizeFiniteNumber(src.head_diameter_mm, { min: 1, max: 2000 });
+  out.desired_led_wattage_w = kitAiNormalizeFiniteNumber(src.desired_led_wattage_w, { min: 0.1, max: 100 });
+  out.battery_capacity_mah = kitAiNormalizeFiniteNumber(src.battery_capacity_mah, { min: 100, max: 100000 });
+
+  out.changed_project_this_turn = src.changed_project_this_turn === true;
+  out.summary = String(src.summary || "").trim().slice(0, 320);
+  out.pending_information = kitAiNormalizeStringList(src.pending_information, 8);
+  out.confidence = Math.max(0, Math.min(1, Number(src.confidence || 0)));
+
+  if (!out.head_size_class || out.head_size_class === "unknown") {
+    if (Number.isFinite(out.head_diameter_mm)) {
+      if (out.head_diameter_mm >= 125) out.head_size_class = "large";
+      else if (out.head_diameter_mm >= 70) out.head_size_class = "medium";
+      else out.head_size_class = "small";
+    }
+  }
+
+  return out;
+}
+
+function kitAiStateIsMeaningful(state = null) {
+  const s = sanitizeKitAiProjectState(state);
+  return [
+    s.product_type,
+    s.power_type,
+    s.light_topology,
+    s.light_effect,
+    s.head_size_class,
+    s.battery_variant,
+    s.charging_preference,
+    s.body_material
+  ].some((value) => value && value !== "unknown") ||
+    Number.isFinite(s.head_diameter_mm) ||
+    Number.isFinite(s.desired_led_wattage_w) ||
+    Number.isFinite(s.battery_capacity_mah) ||
+    s.touch_required !== "unknown";
+}
+
+function kitAiMergeProjectState(previousState = null, extractedState = null) {
+  const previous = sanitizeKitAiProjectState(previousState);
+  const extracted = sanitizeKitAiProjectState(extractedState);
+
+  const resetProject =
+    extracted.changed_project_this_turn === true ||
+    extracted.project_mode === "new_lamp";
+
+  const base = resetProject ? kitAiEmptyProjectState() : previous;
+  const merged = { ...base };
+
+  const replaceIfKnown = [
+    "project_mode",
+    "intent_type",
+    "product_type",
+    "power_type",
+    "light_topology",
+    "light_effect",
+    "head_size_class",
+    "battery_variant",
+    "charging_preference",
+    "touch_required",
+    "body_material",
+    "base_cavity",
+    "head_cavity",
+    "charging_port_hidden",
+    "wants_panel_mount",
+    "has_shade",
+    "has_central_rod",
+    "asks_mounting_help"
+  ];
+
+  for (const key of replaceIfKnown) {
+    const value = extracted[key];
+    if (value && value !== "unknown") merged[key] = value;
+  }
+
+  for (const key of ["head_diameter_mm", "desired_led_wattage_w", "battery_capacity_mah"]) {
+    if (Number.isFinite(extracted[key])) merged[key] = extracted[key];
+  }
+
+  merged.version = KIT_AI_PROJECT_STATE_VERSION;
+  merged.changed_project_this_turn = extracted.changed_project_this_turn === true;
+  merged.summary = extracted.summary || previous.summary || "";
+  merged.pending_information = extracted.pending_information.length
+    ? extracted.pending_information
+    : previous.pending_information || [];
+  merged.confidence = Math.max(previous.confidence || 0, extracted.confidence || 0);
+
+  if ((!merged.head_size_class || merged.head_size_class === "unknown") && Number.isFinite(merged.head_diameter_mm)) {
+    if (merged.head_diameter_mm >= 125) merged.head_size_class = "large";
+    else if (merged.head_diameter_mm >= 70) merged.head_size_class = "medium";
+    else merged.head_size_class = "small";
+  }
+
+  return sanitizeKitAiProjectState(merged);
+}
+
+function parseKitAiLooseJsonObject(rawText = "") {
+  const raw = String(rawText || "").trim();
+  if (!raw) return null;
+
+  const candidates = [raw];
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+
+  const objectMatch = raw.match(/\{[\s\S]*\}/);
+  if (objectMatch?.[0]) candidates.push(objectMatch[0]);
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+  }
+
+  return null;
+}
+
+function getKitAiExtractorHistoryText(history = [], question = "") {
+  const historyText = (Array.isArray(history) ? history : [])
+    .slice(-12)
+    .map((item) => {
+      const role = String(item?.role || item?.agent || "user").toLowerCase() === "assistant" ? "assistant" : "user";
+      const body = String(item?.text || item?.content || "").trim();
+      return body ? `${role}: ${body}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  return [historyText, `user: ${String(question || "").trim()}`]
+    .filter(Boolean)
+    .join("\n")
+    .slice(-7000);
+}
+
+function buildKitAiHeuristicProjectState({
+  question = "",
+  history = [],
+  priorState = null
+} = {}) {
+  const text = `${getKitAiExtractorHistoryText(history, question)}`
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  const update = kitAiEmptyProjectState();
+
+  if (/\b(new\s+lamp|another\s+lamp|different\s+lamp|start\s+(?:a\s+)?new\s+lamp|fresh\s+lamp)\b/i.test(text)) {
+    update.project_mode = "new_lamp";
+    update.changed_project_this_turn = true;
+    update.intent_type = "new_concept";
+  }
+
+  if (/\bfloor\s+lamp\b|\bstanding\s+lamp\b|\bstand\s+lamp\b|\btall\s+lamp\b/i.test(text)) update.product_type = "floor_lamp";
+  else if (/\bwall\s+sconce\b|\bwall\s+light\b|\bwall[-\s]?mounted\s+lamp\b/i.test(text)) update.product_type = "wall_sconce";
+  else if (/\btable\s+lamp\b|\bdesk\s+lamp\b|\bbedside\s+lamp\b/i.test(text)) update.product_type = "table_lamp";
+
+  if (/\btop[-\s]?touch\b|\btouch\s+from\s+top\b|\btouch\s+on\s+top\b/i.test(text)) {
+    update.product_type = update.product_type === "unknown" ? "top_touch_lamp" : update.product_type;
+    update.light_topology = "dob_head";
+    update.touch_required = "yes";
+  }
+
+  if (/\brechargeable\b|\bcordless\b|\bwireless\b|\bbattery[-\s]?powered\b|\bportable\b|\bcharge\s+and\s+use\b/i.test(text)) update.power_type = "rechargeable";
+  if (/\busb[-\s]?powered\b|\bdirectly\s+powered\b|\bplug[-\s]?in\b|\busb[-\s]?c\s+charger\b|\bno\s+battery\b/i.test(text)) update.power_type = "usb_powered";
+
+  if (/\bstrip\b|\bedge\b|\boutline\b|\bperimeter\b|\bcontour\b|\bhalo\b|\bglow\s+around\b|\bglow\s+all\s+around\b|\baround\s+the\s+border\b|\bborder\s+glow\b/i.test(text)) update.light_topology = "strip_path";
+  if (/\btwo\s+(?:separate\s+)?(?:leds|lights|light\s+points)\b|\bdual\s+output\b|\btwo\s+locations\b/i.test(text)) update.light_topology = "dual_points";
+  if (/\bambient\b|\bsoft\s+glow\b|\bdiffused\b|\bsoft\s+light\b|\bsoft\s+room\s+light\b|\bgentle\s+room\s+light\b/i.test(text)) update.light_effect = "ambient";
+  if (/\breading\b|\btask\s+light\b/i.test(text)) update.light_effect = "reading";
+  if (/\bfocused\b|\bdirectional\b/i.test(text)) update.light_effect = "focused";
+  if (/\bhidden\s+glow\b|\bindirect\s+glow\b|\bbacklit\b|\bback[-\s]?lit\b/i.test(text)) update.light_effect = "hidden_glow";
+
+  const inch = text.match(/\b(?:head\s*(?:dia(?:meter)?|diameter|size)?\s*(?:is|=|:)?\s*)?(\d+(?:\.\d+)?)\s*(?:inch|inches|in\b|")/i);
+  const mm = text.match(/\b(?:head\s*(?:dia(?:meter)?|diameter|size)?\s*(?:is|=|:)?\s*)?(\d+(?:\.\d+)?)\s*mm\b/i);
+  const cm = text.match(/\b(?:head\s*(?:dia(?:meter)?|diameter|size)?\s*(?:is|=|:)?\s*)?(\d+(?:\.\d+)?)\s*cm\b/i);
+  if (inch) update.head_diameter_mm = Number(inch[1]) * 25.4;
+  else if (mm) update.head_diameter_mm = Number(mm[1]);
+  else if (cm) update.head_diameter_mm = Number(cm[1]) * 10;
+
+  if (/\b(big|large|wide|broad)\s+(?:round\s+)?head\b|\blarge\s+shade\b/i.test(text)) update.head_size_class = "large";
+  else if (/\bmedium\s+head\b|\bmoderate\s+head\b/i.test(text)) update.head_size_class = "medium";
+  else if (/\bsmall\s+head\b|\bcompact\s+head\b/i.test(text)) update.head_size_class = "small";
+
+  const watts = text.match(/\b(\d+(?:\.\d+)?)\s*w(?:att)?\b/i);
+  if (watts) update.desired_led_wattage_w = Number(watts[1]);
+
+  const battery = text.match(/\b(1200|1800|2600|5200|5000)\s*mah\b/i);
+  if (battery) update.battery_capacity_mah = Number(battery[1]);
+
+  if (/\bwith\s+sleeve\b|\bsleeve\s+battery\b/i.test(text)) update.battery_variant = "with_sleeve";
+  if (/\bwithout\s+sleeve\b|\bnon[-\s]?sleeve\b|\bno\s+sleeve\b/i.test(text)) update.battery_variant = "without_sleeve";
+  if (/\bbattery\s+holder\b|\bholder[-\s]?based\b|\breplaceable\s+battery\b/i.test(text)) update.battery_variant = "holder_based";
+
+  if (/\bfast\s+charging\b|\bfaster\s+charging\b|\bquick\s+charge\b/i.test(text)) update.charging_preference = "fast";
+  if (/\bnormal\s+charging\b|\bstandard\s+charging\b/i.test(text)) update.charging_preference = "normal";
+
+  if (/\btouch\b/i.test(text)) update.touch_required = "yes";
+  if (/\bmetal\s+body\b|\bbody\s+(?:is|made\s+of)\s+metal\b|\bbrass\b|\bsteel\b|\baluminium\b|\baluminum\b/i.test(text)) update.body_material = "metal";
+  if (/\bwood(?:en)?\b/i.test(text)) update.body_material = "wood";
+  if (/\bceramic\b/i.test(text)) update.body_material = "ceramic";
+  if (/\bstone\b/i.test(text)) update.body_material = "stone";
+  if (/\bacrylic\b/i.test(text)) update.body_material = "acrylic";
+
+  if (/\bhollow\s+base\b|\bbase\s+cavity\b|\bspace\s+inside\s+base\b/i.test(text)) update.base_cavity = "yes";
+  if (/\bhead\s+cavity\b|\bspace\s+inside\s+head\b/i.test(text)) update.head_cavity = "yes";
+  if (/\bport\s+(?:will\s+be\s+)?hidden\b|\bcharging\s+(?:port|point)\s+(?:is\s+)?hidden\b|\bdeep\s+inside\b/i.test(text)) update.charging_port_hidden = "yes";
+  if (/\bpanel\s+mount\b/i.test(text)) update.wants_panel_mount = "yes";
+  if (/\bshade\b|\blampshade\b/i.test(text)) update.has_shade = "yes";
+  if (/\bcentral\s+rod\b|\bthreaded\s+rod\b|\bstem\s+rod\b/i.test(text)) update.has_central_rod = "yes";
+  if (/\bhow\s+(?:will|do)\s+(?:it|driver|battery|led|module)\s+(?:fit|mount|fix)\b|\bmounting\b|\bfix(?:ed)?\b/i.test(text)) update.asks_mounting_help = "yes";
+
+  update.confidence = kitAiStateIsMeaningful(update) ? 0.55 : 0;
+  return kitAiMergeProjectState(priorState, update);
+}
+
+function buildKitAiStateExtractorPrompt({
+  question = "",
+  history = [],
+  priorState = null,
+  kitContext = {},
+  lampReferenceSummary = ""
+} = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const normalizedPriorState = sanitizeKitAiProjectState(priorState);
+
+  return `
+Extract the customer's current lamp-project requirement state for Smart Handicrafts Kit AI.
+
+Your task:
+- Read the recent conversation and the current user message.
+- Interpret natural phrasing flexibly. Examples: "standing lamp" may mean floor lamp; "cordless" may mean rechargeable; "glow all around the border" may mean strip path.
+- Produce a complete updated project state, preserving prior known facts unless the customer clearly starts a new lamp/project or contradicts them.
+- Do NOT recommend products. Do NOT write a customer-facing answer. Output JSON only.
+
+Important reset rule:
+- If the user says "new lamp", "another lamp", "different lamp", "start fresh", "start over", or clearly begins a different product concept, set:
+  "project_mode": "new_lamp",
+  "changed_project_this_turn": true
+and do not keep old lamp-specific facts unless the current message restates them.
+
+Allowed values:
+project_mode: unknown | new_lamp | refine_current_kit | product_question | builder_action
+intent_type: unknown | greeting | new_concept | refine_concept | integration_question | builder_action | product_question | comparison | correction
+product_type: unknown | table_lamp | floor_lamp | wall_sconce | top_touch_lamp | decorative_object | strip_product | other_lighting_product
+power_type: unknown | rechargeable | usb_powered
+light_topology: unknown | single_point | dual_points | strip_path | dob_head | large_head_integrated
+light_effect: unknown | ambient | reading | focused | edge_glow | hidden_glow | decorative
+head_size_class: unknown | small | medium | large
+battery_variant: unknown | with_sleeve | without_sleeve | holder_based
+charging_preference: unknown | normal | fast
+tri-state fields: unknown | yes | no
+body_material: unknown | metal | wood | ceramic | stone | plastic | acrylic | mixed | other
+
+Numerical fields:
+- head_diameter_mm: number or null
+- desired_led_wattage_w: number or null
+- battery_capacity_mah: number or null
+
+Prior project state:
+${JSON.stringify(normalizedPriorState, null, 2)}
+
+Current visible kit summary:
+${JSON.stringify({
+  selectedDriver: snapshot.selectedDriver || "",
+  activeKitItems: Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems : [],
+  coreStatus: snapshot.coreStatus || "",
+  completionMessage: snapshot.completionMessage || ""
+}, null, 2)}
+
+Prior reference-image summary, if any:
+${lampReferenceSummary || "(none)"}
+
+Recent conversation plus current message:
+${getKitAiExtractorHistoryText(history, question)}
+
+Return exactly one JSON object with these keys:
+{
+  "project_mode": "...",
+  "intent_type": "...",
+  "product_type": "...",
+  "power_type": "...",
+  "light_topology": "...",
+  "light_effect": "...",
+  "head_diameter_mm": null,
+  "head_size_class": "...",
+  "desired_led_wattage_w": null,
+  "battery_capacity_mah": null,
+  "battery_variant": "...",
+  "charging_preference": "...",
+  "touch_required": "...",
+  "body_material": "...",
+  "base_cavity": "...",
+  "head_cavity": "...",
+  "charging_port_hidden": "...",
+  "wants_panel_mount": "...",
+  "has_shade": "...",
+  "has_central_rod": "...",
+  "asks_mounting_help": "...",
+  "changed_project_this_turn": false,
+  "summary": "short plain-text summary of the current lamp project state",
+  "pending_information": ["only the most important missing details if any"],
+  "confidence": 0.0
+}
+`.trim();
+}
+
+async function extractKitAiProjectState({
+  question = "",
+  history = [],
+  priorState = null,
+  kitContext = {},
+  lampReferenceSummary = ""
+} = {}) {
+  const heuristicState = buildKitAiHeuristicProjectState({
+    question,
+    history,
+    priorState
+  });
+
+  try {
+    const prompt = buildKitAiStateExtractorPrompt({
+      question,
+      history,
+      priorState,
+      kitContext,
+      lampReferenceSummary
+    });
+
+    const result = await callGeminiWithFallback(
+      "You are a strict requirement-state extractor. Output only valid JSON. Do not answer the user.",
+      prompt,
+      "",
+      PRODUCT_BOT_OR_MODEL
+    );
+
+    const parsed = parseKitAiLooseJsonObject(result?.text || "");
+    if (!parsed) {
+      return {
+        state: heuristicState,
+        source: "heuristic_fallback",
+        raw: String(result?.text || "").slice(0, 1000),
+        extractor_ok: false
+      };
+    }
+
+    const extractedState = sanitizeKitAiProjectState(parsed);
+    const mergedState = kitAiMergeProjectState(priorState, extractedState);
+    const useHeuristicIfExtractorEmpty =
+      !kitAiStateIsMeaningful(mergedState) && kitAiStateIsMeaningful(heuristicState);
+
+    return {
+      state: useHeuristicIfExtractorEmpty ? heuristicState : mergedState,
+      source: useHeuristicIfExtractorEmpty ? "heuristic_fallback_empty_extractor" : (result?.provider || "llm_extractor"),
+      raw: "",
+      extractor_ok: true
+    };
+  } catch (error) {
+    return {
+      state: heuristicState,
+      source: "heuristic_error_fallback",
+      raw: String(error?.message || error || "").slice(0, 1000),
+      extractor_ok: false
+    };
+  }
+}
+
+function kitAiProjectStateToPolicyQuestion(projectState = null) {
+  const state = sanitizeKitAiProjectState(projectState);
+  const tokens = [];
+
+  if (state.changed_project_this_turn || state.project_mode === "new_lamp") tokens.push("new lamp");
+  if (state.product_type === "floor_lamp") tokens.push("floor lamp");
+  if (state.product_type === "table_lamp") tokens.push("table lamp");
+  if (state.product_type === "wall_sconce") tokens.push("wall sconce");
+  if (state.product_type === "top_touch_lamp") tokens.push("top touch lamp");
+  if (state.product_type === "decorative_object") tokens.push("creative decorative object");
+
+  if (state.power_type === "rechargeable") tokens.push("rechargeable");
+  if (state.power_type === "usb_powered") tokens.push("usb powered no battery");
+
+  if (state.light_topology === "strip_path") tokens.push("strip edge contour perimeter");
+  if (state.light_topology === "dual_points") tokens.push("two separate light points dual output");
+  if (state.light_topology === "dob_head" || state.light_topology === "large_head_integrated") tokens.push("head integrated DOB");
+
+  if (state.light_effect === "ambient") tokens.push("ambient soft light");
+  if (state.light_effect === "reading") tokens.push("reading task light");
+  if (state.light_effect === "focused") tokens.push("focused directional light");
+  if (state.light_effect === "edge_glow" || state.light_effect === "hidden_glow") tokens.push("hidden edge glow contour");
+
+  if (state.head_size_class === "large") tokens.push("large head");
+  if (state.head_size_class === "medium") tokens.push("medium head");
+  if (state.head_size_class === "small") tokens.push("small head");
+  if (Number.isFinite(state.head_diameter_mm)) tokens.push(`head diameter ${Math.round(state.head_diameter_mm)} mm`);
+
+  if (state.charging_preference === "fast") tokens.push("fast charging");
+  if (state.battery_variant === "without_sleeve" || state.battery_variant === "holder_based") tokens.push("battery holder non sleeve");
+  if (state.battery_variant === "with_sleeve") tokens.push("sleeve battery");
+  if (state.body_material === "metal" && state.touch_required === "yes") tokens.push("metal body touch control");
+  if (state.charging_port_hidden === "yes" || state.wants_panel_mount === "yes") tokens.push("charging port hidden panel mount connector");
+  if (state.has_shade === "yes") tokens.push("shade");
+  if (state.has_central_rod === "yes") tokens.push("central rod");
+  if (state.asks_mounting_help === "yes") tokens.push("mounting help");
+
+  return tokens.join(" ").trim();
+}
+
+function buildKitAiDecisionPolicyFromProjectState({
+  projectState = null,
+  fallbackQuestion = "",
+  kitContext = {},
+  liveProducts = []
+} = {}) {
+  const state = sanitizeKitAiProjectState(projectState);
+  const policyQuestion = kitAiProjectStateToPolicyQuestion(state) || String(fallbackQuestion || "");
+  const policy = buildKitAiDecisionPolicy({
+    question: policyQuestion,
+    history: [],
+    kitContext,
+    liveProducts
+  });
+
+  /*
+    V2 state-specific policy:
+    A large-head floor lamp should not drift back to a stale 201 kit merely because
+    the customer has not re-stated rechargeable vs USB in the latest turn.
+    We surface the 206 route conditionally and ask for the missing power decision.
+  */
+  if (
+    !policy?.active &&
+    state.product_type === "floor_lamp" &&
+    state.head_size_class === "large" &&
+    state.power_type === "unknown" &&
+    state.light_topology !== "strip_path"
+  ) {
+    return {
+      ...policy,
+      active: {
+        id: "floor_lamp_large_head_power_choice",
+        priority: 116,
+        repairKind: "floor_large_head_power_choice",
+        integrationMode: true,
+        scope: "primary",
+        retrievalHints: [
+          "floor lamp",
+          "large head floor lamp",
+          "AS-B-206 DOB",
+          "206 115mm",
+          "rechargeable vs USB floor lamp"
+        ],
+        preferredPath: "For a large-head floor lamp, surface the 206 DOB rechargeable head-integrated route as the likely best path if the customer wants rechargeable operation, but ask power type before finalizing.",
+        mustMention: [
+          "large head floor lamp",
+          "if rechargeable, 206 DOB / 115 mm is likely the cleaner direction if head size allows",
+          "the old active 201 kit should not be treated as automatically suitable for this new lamp"
+        ],
+        mustAvoid: [
+          "Do not say the current 201 kit is well-suited for a large-head floor lamp just because it is active.",
+          "Do not finalize 201 or 206 before confirming rechargeable vs USB-powered when power type is not yet stated."
+        ],
+        suggestedNextStep: "Say that the large floor-lamp head points strongly toward 206 DOB if the lamp is rechargeable, and ask whether the new floor lamp should be rechargeable or USB-powered."
+      },
+      projectState: state,
+      policy_source: "structured_project_state"
+    };
+  }
+
+  return {
+    ...policy,
+    projectState: state,
+    policy_source: kitAiStateIsMeaningful(state) ? "structured_project_state" : "legacy_fallback"
+  };
+}
+
+function choosePreferredKitAiDecisionPolicy(structuredPolicy = null, legacyPolicy = null) {
+  const structured = structuredPolicy && typeof structuredPolicy === "object" ? structuredPolicy : null;
+  const legacy = legacyPolicy && typeof legacyPolicy === "object" ? legacyPolicy : null;
+
+  if (structured?.active && !legacy?.active) return structured;
+  if (!structured?.active && legacy?.active) return legacy;
+  if (!structured?.active && !legacy?.active) return structured || legacy || { active: null, supporting: [] };
+
+  const structuredPriority = Number(structured?.active?.priority || 0);
+  const legacyPriority = Number(legacy?.active?.priority || 0);
+
+  // Prefer the state-driven policy when it is as strong as the legacy policy.
+  if (structuredPriority >= legacyPriority) return structured;
+  return legacy;
+}
 
 function getKitAiRecentUserIntentText(history = [], question = "") {
   const historyText = (Array.isArray(history) ? history : [])
@@ -2112,6 +2727,12 @@ function kitAiPolicyAnswerNeedsRepair(answer = "", policy = {}) {
   const text = String(answer || "").toLowerCase();
 
   switch (active.repairKind) {
+    case "floor_large_head_power_choice":
+      return !/\b206\b|\bdob\b/i.test(text) ||
+        !/\brechargeable\b|\busb\b/i.test(text) ||
+        /\b201\b.{0,90}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
+        /\b(well[-\s]?suited|excellent|good|suitable|fits well)\b.{0,90}\b201\b/i.test(text);
+
     case "floor_dob_206":
       return !/\b206\b|\bdob\b/i.test(text) ||
         /\b201\b.{0,90}\b(well[-\s]?suited|excellent|good|suitable|fits well)\b/i.test(text) ||
@@ -2182,6 +2803,15 @@ function buildKitAiPolicyFallbackAnswer({
       : "";
 
   switch (active.repairKind) {
+    case "floor_large_head_power_choice":
+      return [
+        "A large circular floor-lamp head should not be treated as an automatic 201 + separate COB path just because that older kit is active.",
+        "",
+        "If this new floor lamp is rechargeable, the AS-B-206 DOB route becomes the stronger direction, and the 115 mm DOB is likely worth considering if the usable internal head diameter allows. That keeps the light source and control electronics together in the head and is usually cleaner for a large floor-lamp head.",
+        "",
+        "Should this new floor lamp be rechargeable or directly USB-powered? Once you confirm that, I can guide the right product path cleanly."
+      ].join("\n");
+
     case "floor_dob_206":
       return [
         "For a rechargeable ambient floor lamp, I would move the discussion toward the AS-B-206 DOB route rather than treating a normal 201 table-lamp kit as the default.",
@@ -3355,6 +3985,68 @@ const aiTrainingRulesCache = {
 const AI_TRAINING_RULES_TTL_MS = Number(process.env.AI_TRAINING_RULES_TTL_MS || 2 * 60 * 1000);
 const AI_TRAINING_RULES_LIMIT = Math.max(20, Number(process.env.AI_TRAINING_RULES_LIMIT || 120));
 
+
+// ===================== ODOO AI KNOWLEDGE + CHAT MEMORY =====================
+// The Odoo Studio models below hold persistent AI knowledge, conversation sessions,
+// and full chat transcripts. Render remains stateless and acts only as the AI processor.
+const AI_KNOWLEDGE_MODEL = process.env.AI_KNOWLEDGE_MODEL || "x_ai_knowledge_library";
+const AI_KNOWLEDGE_FIELDS = {
+  title: process.env.AI_KNOWLEDGE_FIELD_TITLE || "x_studio_knowledge_title",
+  type: process.env.AI_KNOWLEDGE_FIELD_TYPE || "x_studio_knowledge_type",
+  content: process.env.AI_KNOWLEDGE_FIELD_CONTENT || "x_studio_knowledge_content",
+  relatedSku: process.env.AI_KNOWLEDGE_FIELD_RELATED_SKU || "x_studio_related_sku",
+  tags: process.env.AI_KNOWLEDGE_FIELD_TAGS || "x_studio_tags_1",
+  priority: process.env.AI_KNOWLEDGE_FIELD_PRIORITY || "x_studio_priority",
+  active: process.env.AI_KNOWLEDGE_FIELD_ACTIVE || "x_studio_active",
+  lastReviewed: process.env.AI_KNOWLEDGE_FIELD_LAST_REVIEWED || "x_studio_last_reviewed",
+  sequence: process.env.AI_KNOWLEDGE_FIELD_SEQUENCE || "x_studio_sequence"
+};
+
+const AI_CHAT_SESSION_MODEL = process.env.AI_CHAT_SESSION_MODEL || "x_ai_chat_sessions";
+const AI_CHAT_SESSION_FIELDS = {
+  sessionId: process.env.AI_CHAT_SESSION_FIELD_SESSION_ID || "x_studio_session_id",
+  title: process.env.AI_CHAT_SESSION_FIELD_TITLE || "x_studio_session_title",
+  status: process.env.AI_CHAT_SESSION_FIELD_STATUS || "x_studio_status",
+  projectState: process.env.AI_CHAT_SESSION_FIELD_PROJECT_STATE || "x_studio_latest_project_state_json",
+  kitContext: process.env.AI_CHAT_SESSION_FIELD_KIT_CONTEXT || "x_studio_latest_kit_context_json",
+  rollingSummary: process.env.AI_CHAT_SESSION_FIELD_SUMMARY || "x_studio_rolling_conversation_summary",
+  startedAt: process.env.AI_CHAT_SESSION_FIELD_STARTED_AT || "x_studio_started_at",
+  lastActive: process.env.AI_CHAT_SESSION_FIELD_LAST_ACTIVE || "x_studio_last_active",
+  visitorName: process.env.AI_CHAT_SESSION_FIELD_VISITOR_NAME || "x_studio_visitor_name",
+  visitorEmail: process.env.AI_CHAT_SESSION_FIELD_VISITOR_EMAIL || "x_studio_visitor_email"
+};
+
+const AI_CHAT_MESSAGE_MODEL = process.env.AI_CHAT_MESSAGE_MODEL || "x_ai_chat_messages";
+const AI_CHAT_MESSAGE_FIELDS = {
+  session: process.env.AI_CHAT_MESSAGE_FIELD_SESSION || "x_studio_session",
+  role: process.env.AI_CHAT_MESSAGE_FIELD_ROLE || "x_studio_role",
+  text: process.env.AI_CHAT_MESSAGE_FIELD_TEXT || "x_studio_message_text",
+  messageTime: process.env.AI_CHAT_MESSAGE_FIELD_TIME || "x_studio_message_time",
+  projectState: process.env.AI_CHAT_MESSAGE_FIELD_PROJECT_STATE || "x_studio_project_state_snapshot_json",
+  recommendedProducts: process.env.AI_CHAT_MESSAGE_FIELD_PRODUCTS || "x_studio_recommended_products_json",
+  actionPayload: process.env.AI_CHAT_MESSAGE_FIELD_ACTIONS || "x_studio_action_payload_json",
+  imageSummary: process.env.AI_CHAT_MESSAGE_FIELD_IMAGE_SUMMARY || "x_studio_image_summary",
+  sequence: process.env.AI_CHAT_MESSAGE_FIELD_SEQUENCE || "x_studio_sequence"
+};
+
+const AI_KNOWLEDGE_CACHE_TTL_MS = Number(process.env.AI_KNOWLEDGE_CACHE_TTL_MS || 5 * 60 * 1000);
+const AI_KNOWLEDGE_LIMIT = Math.max(20, Number(process.env.AI_KNOWLEDGE_LIMIT || 600));
+const AI_CHAT_LOAD_MESSAGE_LIMIT = Math.max(10, Number(process.env.AI_CHAT_LOAD_MESSAGE_LIMIT || 120));
+
+const aiKnowledgeRecordsCache = {
+  records: [],
+  fetchedAt: 0,
+  error: null
+};
+
+const aiChatSelectionCache = {
+  values: null,
+  fetchedAt: 0
+};
+
+const AI_CHAT_SELECTION_TTL_MS = Number(process.env.AI_CHAT_SELECTION_TTL_MS || 10 * 60 * 1000);
+
+
 function normalizeOdooSelection(value) {
   return String(value || "")
     .trim()
@@ -3684,6 +4376,641 @@ function chooseOdooSelectionValue(options = [], desired, fallbackCandidates = []
   }
 
   return options[0].value;
+}
+
+
+function canonicalAiKnowledgeType(value = "") {
+  const normalized = normalizeOdooSelection(value);
+  if (normalized.includes("integration")) return "integration";
+  if (normalized.includes("policy")) return "policy";
+  if (normalized.includes("faq")) return "faq";
+  if (normalized.includes("sales")) return "sales";
+  if (normalized.includes("product")) return "product";
+  return normalized || "product";
+}
+
+function formatOdooAiKnowledgeRecordForText(record = {}) {
+  const title = String(record.title || record.name || "Smart Handicrafts Knowledge").trim();
+  const type = String(record.type || "").trim();
+  const relatedSku = String(record.related_sku || "").trim();
+  const tags = String(record.tags || "").trim();
+  const content = String(record.content || "").trim();
+  if (!content) return "";
+
+  const header = [
+    `# ${title}`,
+    type ? `Knowledge Type: ${type}` : "",
+    relatedSku ? `Related SKU: ${relatedSku}` : "",
+    tags ? `Tags: ${tags}` : ""
+  ].filter(Boolean).join("\n");
+
+  return `${header}\n\n${content}`.trim();
+}
+
+function buildOdooAiKnowledgeText(records = [], { includeTypes = [] } = {}) {
+  const allowed = new Set((includeTypes || []).map((type) => canonicalAiKnowledgeType(type)));
+  return (records || [])
+    .filter((record) => !allowed.size || allowed.has(canonicalAiKnowledgeType(record.type)))
+    .map((record) => formatOdooAiKnowledgeRecordForText(record))
+    .filter(Boolean)
+    .join("\n\n---\n\n")
+    .trim();
+}
+
+async function getActiveOdooAiKnowledgeRecords({ force = false } = {}) {
+  if (!odooConfigured) {
+    return {
+      ok: false,
+      records: [],
+      cached: false,
+      error: "Odoo is not configured."
+    };
+  }
+
+  const cacheValid =
+    !force &&
+    Date.now() - aiKnowledgeRecordsCache.fetchedAt < AI_KNOWLEDGE_CACHE_TTL_MS;
+
+  if (cacheValid) {
+    return {
+      ok: true,
+      records: aiKnowledgeRecordsCache.records,
+      cached: true,
+      error: aiKnowledgeRecordsCache.error
+    };
+  }
+
+  try {
+    const uid = await odooLoginCached();
+    const fields = [
+      "id",
+      "display_name",
+      AI_KNOWLEDGE_FIELDS.title,
+      AI_KNOWLEDGE_FIELDS.type,
+      AI_KNOWLEDGE_FIELDS.content,
+      AI_KNOWLEDGE_FIELDS.relatedSku,
+      AI_KNOWLEDGE_FIELDS.tags,
+      AI_KNOWLEDGE_FIELDS.priority,
+      AI_KNOWLEDGE_FIELDS.active,
+      AI_KNOWLEDGE_FIELDS.lastReviewed,
+      AI_KNOWLEDGE_FIELDS.sequence
+    ];
+
+    const rows = await odooExecute(
+      uid,
+      AI_KNOWLEDGE_MODEL,
+      "search_read",
+      [[
+        [AI_KNOWLEDGE_FIELDS.active, "=", true]
+      ], fields],
+      {
+        limit: AI_KNOWLEDGE_LIMIT,
+        order: `${AI_KNOWLEDGE_FIELDS.priority} desc, ${AI_KNOWLEDGE_FIELDS.sequence} asc, id asc`
+      }
+    );
+
+    const records = (rows || [])
+      .map((row) => ({
+        id: row.id,
+        name: String(row.display_name || "").trim(),
+        title: String(row[AI_KNOWLEDGE_FIELDS.title] || row.display_name || "").trim(),
+        type: String(row[AI_KNOWLEDGE_FIELDS.type] || "").trim(),
+        normalized_type: canonicalAiKnowledgeType(row[AI_KNOWLEDGE_FIELDS.type]),
+        content: String(row[AI_KNOWLEDGE_FIELDS.content] || "").trim(),
+        related_sku: String(row[AI_KNOWLEDGE_FIELDS.relatedSku] || "").trim(),
+        tags: String(row[AI_KNOWLEDGE_FIELDS.tags] || "").trim(),
+        priority: Number(row[AI_KNOWLEDGE_FIELDS.priority] || 0),
+        active: !!row[AI_KNOWLEDGE_FIELDS.active],
+        last_reviewed: String(row[AI_KNOWLEDGE_FIELDS.lastReviewed] || "").trim(),
+        sequence: Number(row[AI_KNOWLEDGE_FIELDS.sequence] || 0)
+      }))
+      .filter((record) => record.content);
+
+    aiKnowledgeRecordsCache.records = records;
+    aiKnowledgeRecordsCache.fetchedAt = Date.now();
+    aiKnowledgeRecordsCache.error = null;
+
+    return {
+      ok: true,
+      records,
+      cached: false,
+      error: null
+    };
+  } catch (error) {
+    aiKnowledgeRecordsCache.error = String(error?.message || error || "Unknown Odoo AI knowledge error");
+    return {
+      ok: false,
+      records: aiKnowledgeRecordsCache.records || [],
+      cached: !!aiKnowledgeRecordsCache.records?.length,
+      error: aiKnowledgeRecordsCache.error
+    };
+  }
+}
+
+function odooDateTimeNow() {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
+function safeJsonStringify(value, fallback = "") {
+  try {
+    if (value === undefined) return fallback;
+    return JSON.stringify(value ?? null);
+  } catch {
+    return fallback;
+  }
+}
+
+function safeJsonParse(value, fallback = null) {
+  try {
+    if (value === undefined || value === null || value === "") return fallback;
+    return typeof value === "string" ? JSON.parse(value) : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeKitAiSessionId(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const safe = raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 160);
+  return safe.length >= 8 ? safe : "";
+}
+
+function canonicalAiChatRole(value = "") {
+  const normalized = normalizeOdooSelection(value);
+  if (normalized.includes("assistant") || normalized === "bot") return "assistant";
+  if (normalized.includes("system")) return "system";
+  return "user";
+}
+
+function clipChatPersistenceText(value = "", max = 12000) {
+  return String(value || "").trim().slice(0, Math.max(0, Number(max) || 12000));
+}
+
+async function getAiChatSelectionValues({ force = false } = {}) {
+  const cacheValid =
+    !force &&
+    aiChatSelectionCache.values &&
+    Date.now() - aiChatSelectionCache.fetchedAt < AI_CHAT_SELECTION_TTL_MS;
+
+  if (cacheValid) return aiChatSelectionCache.values;
+
+  const uid = await odooLoginCached();
+
+  const [sessionMeta, messageMeta] = await Promise.all([
+    odooExecute(
+      uid,
+      AI_CHAT_SESSION_MODEL,
+      "fields_get",
+      [[AI_CHAT_SESSION_FIELDS.status]],
+      { attributes: ["selection", "string", "type"] }
+    ),
+    odooExecute(
+      uid,
+      AI_CHAT_MESSAGE_MODEL,
+      "fields_get",
+      [[AI_CHAT_MESSAGE_FIELDS.role]],
+      { attributes: ["selection", "string", "type"] }
+    )
+  ]);
+
+  function readSelection(meta, fieldName) {
+    const raw = meta?.[fieldName]?.selection || [];
+    return raw
+      .map((item) => ({
+        value: Array.isArray(item) ? String(item[0] ?? "") : "",
+        label: Array.isArray(item) ? String(item[1] ?? "") : ""
+      }))
+      .filter((item) => item.value);
+  }
+
+  const values = {
+    status: readSelection(sessionMeta, AI_CHAT_SESSION_FIELDS.status),
+    role: readSelection(messageMeta, AI_CHAT_MESSAGE_FIELDS.role)
+  };
+
+  aiChatSelectionCache.values = values;
+  aiChatSelectionCache.fetchedAt = Date.now();
+  return values;
+}
+
+async function getOdooKitAiSessionRecord(sessionId = "") {
+  const safeSessionId = normalizeKitAiSessionId(sessionId);
+  if (!odooConfigured || !safeSessionId) return null;
+
+  const uid = await odooLoginCached();
+  const fields = [
+    "id",
+    "display_name",
+    AI_CHAT_SESSION_FIELDS.sessionId,
+    AI_CHAT_SESSION_FIELDS.title,
+    AI_CHAT_SESSION_FIELDS.status,
+    AI_CHAT_SESSION_FIELDS.projectState,
+    AI_CHAT_SESSION_FIELDS.kitContext,
+    AI_CHAT_SESSION_FIELDS.rollingSummary,
+    AI_CHAT_SESSION_FIELDS.startedAt,
+    AI_CHAT_SESSION_FIELDS.lastActive,
+    AI_CHAT_SESSION_FIELDS.visitorName,
+    AI_CHAT_SESSION_FIELDS.visitorEmail
+  ];
+
+  const rows = await odooExecute(
+    uid,
+    AI_CHAT_SESSION_MODEL,
+    "search_read",
+    [[
+      [AI_CHAT_SESSION_FIELDS.sessionId, "=", safeSessionId]
+    ], fields],
+    { limit: 1, order: "id desc" }
+  );
+
+  const row = rows?.[0];
+  if (!row?.id) return null;
+
+  return {
+    id: row.id,
+    session_id: safeSessionId,
+    title: String(row[AI_CHAT_SESSION_FIELDS.title] || row.display_name || "").trim(),
+    status: normalizeOdooSelection(row[AI_CHAT_SESSION_FIELDS.status]),
+    project_state: safeJsonParse(row[AI_CHAT_SESSION_FIELDS.projectState], null),
+    kit_context: safeJsonParse(row[AI_CHAT_SESSION_FIELDS.kitContext], null),
+    rolling_summary: String(row[AI_CHAT_SESSION_FIELDS.rollingSummary] || "").trim(),
+    started_at: String(row[AI_CHAT_SESSION_FIELDS.startedAt] || "").trim(),
+    last_active: String(row[AI_CHAT_SESSION_FIELDS.lastActive] || "").trim(),
+    visitor_name: String(row[AI_CHAT_SESSION_FIELDS.visitorName] || "").trim(),
+    visitor_email: String(row[AI_CHAT_SESSION_FIELDS.visitorEmail] || "").trim()
+  };
+}
+
+async function createOdooKitAiSession({
+  sessionId,
+  projectState = null,
+  kitContext = null,
+  title = "",
+  visitorName = "",
+  visitorEmail = ""
+} = {}) {
+  if (!odooConfigured) throw new Error("Odoo is not configured.");
+  const safeSessionId = normalizeKitAiSessionId(sessionId);
+  if (!safeSessionId) throw new Error("Valid Kit AI sessionId is required.");
+
+  const uid = await odooLoginCached();
+  const selectionValues = await getAiChatSelectionValues();
+  const activeStatus = chooseOdooSelectionValue(
+    selectionValues.status,
+    "Active",
+    ["active", "Active", "ACTIVE"]
+  );
+
+  const recordTitle = String(title || "").trim() || `Kit AI Session - ${safeSessionId.slice(-18)}`;
+  const timestamp = odooDateTimeNow();
+
+  const payload = {
+    x_name: recordTitle.slice(0, 80),
+    [AI_CHAT_SESSION_FIELDS.sessionId]: safeSessionId,
+    [AI_CHAT_SESSION_FIELDS.title]: recordTitle,
+    [AI_CHAT_SESSION_FIELDS.status]: activeStatus,
+    [AI_CHAT_SESSION_FIELDS.projectState]: safeJsonStringify(projectState, ""),
+    [AI_CHAT_SESSION_FIELDS.kitContext]: safeJsonStringify(kitContext, ""),
+    [AI_CHAT_SESSION_FIELDS.rollingSummary]: "",
+    [AI_CHAT_SESSION_FIELDS.startedAt]: timestamp,
+    [AI_CHAT_SESSION_FIELDS.lastActive]: timestamp,
+    [AI_CHAT_SESSION_FIELDS.visitorName]: String(visitorName || "").trim(),
+    [AI_CHAT_SESSION_FIELDS.visitorEmail]: String(visitorEmail || "").trim()
+  };
+
+  const id = await odooExecute(uid, AI_CHAT_SESSION_MODEL, "create", [payload]);
+  return {
+    id,
+    session_id: safeSessionId,
+    title: recordTitle,
+    status: normalizeOdooSelection(activeStatus),
+    project_state: projectState,
+    kit_context: kitContext,
+    rolling_summary: "",
+    started_at: timestamp,
+    last_active: timestamp,
+    visitor_name: String(visitorName || "").trim(),
+    visitor_email: String(visitorEmail || "").trim()
+  };
+}
+
+async function ensureOdooKitAiSession({ sessionId, projectState = null, kitContext = null } = {}) {
+  const safeSessionId = normalizeKitAiSessionId(sessionId);
+  if (!odooConfigured || !safeSessionId) return null;
+
+  const existing = await getOdooKitAiSessionRecord(safeSessionId);
+  if (existing) return existing;
+
+  return await createOdooKitAiSession({
+    sessionId: safeSessionId,
+    projectState,
+    kitContext
+  });
+}
+
+function buildRollingConversationSummary({
+  priorSummary = "",
+  question = "",
+  answer = "",
+  projectState = null
+} = {}) {
+  const compactState = projectState && typeof projectState === "object"
+    ? [
+        projectState.product_type ? `product=${projectState.product_type}` : "",
+        projectState.power_type ? `power=${projectState.power_type}` : "",
+        projectState.light_topology ? `topology=${projectState.light_topology}` : "",
+        projectState.light_effect ? `effect=${projectState.light_effect}` : "",
+        projectState.head_size_class ? `head=${projectState.head_size_class}` : ""
+      ].filter(Boolean).join(", ")
+    : "";
+
+  const summaryParts = [
+    compactState ? `Latest project state: ${compactState}.` : "",
+    question ? `Latest user request: ${clipChatPersistenceText(question, 360)}` : "",
+    answer ? `Latest assistant reply: ${clipChatPersistenceText(answer, 560)}` : ""
+  ].filter(Boolean);
+
+  const generated = summaryParts.join("\n").trim();
+  if (!generated) return clipChatPersistenceText(priorSummary, 1800);
+  return clipChatPersistenceText(generated, 1800);
+}
+
+async function updateOdooKitAiSession(session, {
+  projectState = null,
+  kitContext = null,
+  rollingSummary = "",
+  status = "Active"
+} = {}) {
+  if (!odooConfigured || !session?.id) return null;
+
+  const uid = await odooLoginCached();
+  const selectionValues = await getAiChatSelectionValues();
+  const safeStatus = chooseOdooSelectionValue(
+    selectionValues.status,
+    status,
+    ["Active", "active", "ACTIVE"]
+  );
+
+  const payload = {
+    [AI_CHAT_SESSION_FIELDS.status]: safeStatus,
+    [AI_CHAT_SESSION_FIELDS.projectState]: safeJsonStringify(projectState, ""),
+    [AI_CHAT_SESSION_FIELDS.kitContext]: safeJsonStringify(kitContext, ""),
+    [AI_CHAT_SESSION_FIELDS.rollingSummary]: String(rollingSummary || "").trim(),
+    [AI_CHAT_SESSION_FIELDS.lastActive]: odooDateTimeNow()
+  };
+
+  await odooExecute(uid, AI_CHAT_SESSION_MODEL, "write", [[session.id], payload]);
+  return {
+    ...session,
+    status: normalizeOdooSelection(safeStatus),
+    project_state: projectState,
+    kit_context: kitContext,
+    rolling_summary: String(rollingSummary || "").trim(),
+    last_active: payload[AI_CHAT_SESSION_FIELDS.lastActive]
+  };
+}
+
+async function createOdooKitAiMessage(session, {
+  role = "User",
+  text = "",
+  projectState = null,
+  recommendedProducts = [],
+  actionPayload = [],
+  imageSummary = ""
+} = {}) {
+  if (!odooConfigured || !session?.id) return null;
+
+  const safeText = clipChatPersistenceText(text, 28000);
+  if (!safeText) return null;
+
+  const uid = await odooLoginCached();
+  const selectionValues = await getAiChatSelectionValues();
+  const safeRole = chooseOdooSelectionValue(
+    selectionValues.role,
+    role,
+    [role, String(role || "").toLowerCase(), String(role || "").toUpperCase()]
+  );
+  const timestamp = odooDateTimeNow();
+
+  const payload = {
+    x_name: `${role || "Message"} - ${timestamp}`.slice(0, 80),
+    [AI_CHAT_MESSAGE_FIELDS.session]: session.id,
+    [AI_CHAT_MESSAGE_FIELDS.role]: safeRole,
+    [AI_CHAT_MESSAGE_FIELDS.text]: safeText,
+    [AI_CHAT_MESSAGE_FIELDS.messageTime]: timestamp,
+    [AI_CHAT_MESSAGE_FIELDS.projectState]: safeJsonStringify(projectState, ""),
+    [AI_CHAT_MESSAGE_FIELDS.recommendedProducts]: safeJsonStringify(recommendedProducts, ""),
+    [AI_CHAT_MESSAGE_FIELDS.actionPayload]: safeJsonStringify(actionPayload, ""),
+    [AI_CHAT_MESSAGE_FIELDS.imageSummary]: clipChatPersistenceText(imageSummary, 800)
+  };
+
+  const id = await odooExecute(uid, AI_CHAT_MESSAGE_MODEL, "create", [payload]);
+  return {
+    id,
+    role: canonicalAiChatRole(safeRole),
+    text: safeText,
+    message_time: timestamp
+  };
+}
+
+async function getOdooKitAiSessionMessages(session, { limit = AI_CHAT_LOAD_MESSAGE_LIMIT } = {}) {
+  if (!odooConfigured || !session?.id) return [];
+
+  const uid = await odooLoginCached();
+  const fields = [
+    "id",
+    AI_CHAT_MESSAGE_FIELDS.role,
+    AI_CHAT_MESSAGE_FIELDS.text,
+    AI_CHAT_MESSAGE_FIELDS.messageTime,
+    AI_CHAT_MESSAGE_FIELDS.projectState,
+    AI_CHAT_MESSAGE_FIELDS.recommendedProducts,
+    AI_CHAT_MESSAGE_FIELDS.actionPayload,
+    AI_CHAT_MESSAGE_FIELDS.imageSummary
+  ];
+
+  const rows = await odooExecute(
+    uid,
+    AI_CHAT_MESSAGE_MODEL,
+    "search_read",
+    [[
+      [AI_CHAT_MESSAGE_FIELDS.session, "=", session.id]
+    ], fields],
+    {
+      limit: Math.max(1, Number(limit) || AI_CHAT_LOAD_MESSAGE_LIMIT),
+      order: `${AI_CHAT_MESSAGE_FIELDS.messageTime} asc, id asc`
+    }
+  );
+
+  return (rows || [])
+    .map((row) => ({
+      id: row.id,
+      role: canonicalAiChatRole(row[AI_CHAT_MESSAGE_FIELDS.role]),
+      text: String(row[AI_CHAT_MESSAGE_FIELDS.text] || "").trim(),
+      message_time: String(row[AI_CHAT_MESSAGE_FIELDS.messageTime] || "").trim(),
+      project_state: safeJsonParse(row[AI_CHAT_MESSAGE_FIELDS.projectState], null),
+      recommended_products: safeJsonParse(row[AI_CHAT_MESSAGE_FIELDS.recommendedProducts], []),
+      action_payload: safeJsonParse(row[AI_CHAT_MESSAGE_FIELDS.actionPayload], []),
+      image_summary: String(row[AI_CHAT_MESSAGE_FIELDS.imageSummary] || "").trim()
+    }))
+    .filter((row) => row.text);
+}
+
+async function loadOdooKitAiSessionSnapshot(sessionId = "") {
+  if (!odooConfigured) {
+    return {
+      ok: false,
+      found: false,
+      session: null,
+      messages: [],
+      error: "Odoo is not configured."
+    };
+  }
+
+  const safeSessionId = normalizeKitAiSessionId(sessionId);
+  if (!safeSessionId) {
+    return {
+      ok: false,
+      found: false,
+      session: null,
+      messages: [],
+      error: "Valid sessionId is required."
+    };
+  }
+
+  const session = await getOdooKitAiSessionRecord(safeSessionId);
+  if (!session) {
+    return {
+      ok: true,
+      found: false,
+      session: null,
+      messages: [],
+      error: null
+    };
+  }
+
+  const messages = await getOdooKitAiSessionMessages(session);
+  return {
+    ok: true,
+    found: true,
+    session,
+    messages,
+    error: null
+  };
+}
+
+async function safeLoadOdooKitAiSessionSnapshot(sessionId = "") {
+  try {
+    return await loadOdooKitAiSessionSnapshot(sessionId);
+  } catch (error) {
+    return {
+      ok: false,
+      found: false,
+      session: null,
+      messages: [],
+      error: String(error?.message || error || "")
+    };
+  }
+}
+
+function buildEffectiveKitAiHistory(requestHistory = [], persistedMessages = [], safeQuestion = "") {
+  if (Array.isArray(requestHistory) && requestHistory.length) return requestHistory;
+
+  const restored = Array.isArray(persistedMessages)
+    ? persistedMessages
+        .slice(-12)
+        .map((message) => ({
+          role: canonicalAiChatRole(message?.role),
+          text: String(message?.text || "").trim()
+        }))
+        .filter((message) => message.text)
+    : [];
+
+  if (safeQuestion && !restored.some((message) => message.role === "user" && message.text === safeQuestion)) {
+    restored.push({
+      role: "user",
+      text: String(safeQuestion || "").trim()
+    });
+  }
+
+  return restored;
+}
+
+async function persistOdooKitAiConversationTurn({
+  sessionId,
+  session = null,
+  question = "",
+  answer = "",
+  projectState = null,
+  kitContext = null,
+  recommendedProducts = [],
+  activeKitActions = [],
+  imageSummary = ""
+} = {}) {
+  const safeSessionId = normalizeKitAiSessionId(sessionId);
+  if (!odooConfigured || !safeSessionId) {
+    return {
+      ok: false,
+      session_id: safeSessionId || null,
+      persisted: false,
+      error: !odooConfigured ? "Odoo is not configured." : "Valid sessionId is required."
+    };
+  }
+
+  try {
+    const activeSession = session || await ensureOdooKitAiSession({
+      sessionId: safeSessionId,
+      projectState,
+      kitContext
+    });
+
+    if (!activeSession?.id) throw new Error("Could not create or load Kit AI session.");
+
+    await createOdooKitAiMessage(activeSession, {
+      role: "User",
+      text: question,
+      projectState
+    });
+
+    await createOdooKitAiMessage(activeSession, {
+      role: "Assistant",
+      text: answer,
+      projectState,
+      recommendedProducts,
+      actionPayload: activeKitActions,
+      imageSummary
+    });
+
+    const rollingSummary = buildRollingConversationSummary({
+      priorSummary: activeSession.rolling_summary || "",
+      question,
+      answer,
+      projectState
+    });
+
+    const updatedSession = await updateOdooKitAiSession(activeSession, {
+      projectState,
+      kitContext,
+      rollingSummary,
+      status: "Active"
+    });
+
+    return {
+      ok: true,
+      session_id: safeSessionId,
+      persisted: true,
+      session_record_id: updatedSession?.id || activeSession.id,
+      error: null
+    };
+  } catch (error) {
+    console.warn("Kit AI Odoo chat persistence failed:", error);
+    return {
+      ok: false,
+      session_id: safeSessionId,
+      persisted: false,
+      error: String(error?.message || error || "")
+    };
+  }
 }
 
 async function createOdooAiTrainingRule({
@@ -6296,7 +7623,9 @@ app.post("/kit-ai-chat", async (req, res) => {
       kitContext,
       history,
       lampReferenceImage,
-      lampReferenceSummary
+      lampReferenceSummary,
+      projectState,
+      sessionId
     } = req.body || {};
     const wantsStream = String(req.headers.accept || "").toLowerCase().includes("text/event-stream") || req.body?.stream === true;
     const normalizedLampReferenceImage = normalizeKitAiLampReferenceImage(lampReferenceImage);
@@ -6352,6 +7681,20 @@ app.post("/kit-ai-chat", async (req, res) => {
       });
     }
 
+    // Persistent Odoo chat/session memory. The frontend also keeps a local cache,
+    // but this server-side session store is the durable source after refresh or browser loss.
+    const normalizedSessionId = normalizeKitAiSessionId(sessionId || req.body?.session_id || "");
+    const storedSessionSnapshot = normalizedSessionId
+      ? await safeLoadOdooKitAiSessionSnapshot(normalizedSessionId)
+      : { ok: false, found: false, session: null, messages: [], error: null };
+
+    const persistedSession = storedSessionSnapshot?.session || null;
+    const effectiveHistory = buildEffectiveKitAiHistory(
+      Array.isArray(history) ? history : [],
+      storedSessionSnapshot?.messages || [],
+      safeQuestion
+    );
+
     // Fast path: Odoo products are cached after the first fetch.
     const liveProductResult = await getLiveOdooWebsiteProducts();
     const liveProducts = liveProductResult.products || [];
@@ -6375,12 +7718,41 @@ app.post("/kit-ai-chat", async (req, res) => {
       });
     }
 
-    const decisionPolicy = buildKitAiDecisionPolicy({
+    const priorProjectState = sanitizeKitAiProjectState(
+      projectState ||
+      kitContext?.projectState ||
+      persistedSession?.project_state ||
+      null
+    );
+
+    const projectStateResult = await extractKitAiProjectState({
       question: safeQuestion,
-      history: history || [],
+      history: effectiveHistory,
+      priorState: priorProjectState,
+      kitContext: kitContext || {},
+      lampReferenceSummary: priorLampReferenceSummary || ""
+    });
+
+    const resolvedProjectState = sanitizeKitAiProjectState(projectStateResult?.state || priorProjectState);
+
+    const structuredDecisionPolicy = buildKitAiDecisionPolicyFromProjectState({
+      projectState: resolvedProjectState,
+      fallbackQuestion: safeQuestion,
       kitContext: kitContext || {},
       liveProducts
     });
+
+    const legacyDecisionPolicy = buildKitAiDecisionPolicy({
+      question: safeQuestion,
+      history: effectiveHistory,
+      kitContext: kitContext || {},
+      liveProducts
+    });
+
+    const decisionPolicy = choosePreferredKitAiDecisionPolicy(
+      structuredDecisionPolicy,
+      legacyDecisionPolicy
+    );
 
     const integrationConsultingMode =
       isKitAiIntegrationConceptQuestion(safeQuestion, pageContext, kitContext) ||
@@ -6400,13 +7772,13 @@ app.post("/kit-ai-chat", async (req, res) => {
     const liveProductsForPrompt = buildLiveProductsForPrompt(relevantLiveProducts);
     const compactPage = compactKitAiPageContext(pageContext || {});
     const compactKit = compactKitAiContext(kitContext || {}, safeQuestion);
-    const compactHistory = compactChatHistory(history || []);
+    const compactHistory = compactChatHistory(effectiveHistory);
 
     const relevantIntegrationKnowledgeChunks = await retrieveRelevantKitIntegrationChunks({
       question: safeQuestion,
       pageContext,
       kitContext,
-      history: history || [],
+      history: effectiveHistory,
       decisionPolicy,
       integrationConsultingMode,
       topK: 4
@@ -6432,7 +7804,7 @@ app.post("/kit-ai-chat", async (req, res) => {
         safeQuestion,
         liveProducts,
         kitContext || {},
-        history || []
+        effectiveHistory
       );
 
     const lampReferencePromptContext = {
@@ -6600,6 +7972,15 @@ ${approvedRulesPrompt}
 
 These approved rules override general assumptions. Use them whenever relevant, especially for compatibility decisions.
 
+STRUCTURED LAMP PROJECT STATE:
+${JSON.stringify(resolvedProjectState, null, 2)}
+
+How to use structured lamp project state:
+- Treat it as the server's current best interpretation of the user's ongoing lamp/project requirement.
+- It may combine multiple recent messages, so do not forget earlier project details just because the latest message is short.
+- If changed_project_this_turn is true or project_mode is new_lamp, do not over-defend the old active kit; evaluate the new lamp concept freshly.
+- The deterministic policy below has already been derived from this state and must not be contradicted.
+
 DETERMINISTIC SMART HANDICRAFTS DECISION POLICY:
 ${decisionPolicyPrompt}
 
@@ -6625,6 +8006,8 @@ ${JSON.stringify({
   integrationConsultingMode,
   lampReference: lampReferencePromptContext,
   guidedFlowPolicy: "stepwise application -> driver -> LED -> battery -> wire/accessories -> review",
+  structuredProjectState: resolvedProjectState,
+  projectStateSource: projectStateResult?.source || "unknown",
   decisionPolicy: {
     active: decisionPolicy?.active || null,
     supporting: Array.isArray(decisionPolicy?.supporting)
@@ -6991,6 +8374,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     const finalPayload = {
       ok: true,
+      session_id: normalizedSessionId || null,
+      chat_history_restored_from_odoo: !!storedSessionSnapshot?.found,
       answer,
       image_summary: returnedLampReferenceImageSummary,
       image_analyzed_this_turn: !!normalizedLampReferenceImage,
@@ -7004,6 +8389,10 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       prompt_rules_count: relevantApprovedRules.length,
       prompt_integration_chunks_count: relevantIntegrationKnowledgeChunks.length,
       integration_consulting_mode: integrationConsultingMode,
+      project_state: resolvedProjectState,
+      project_state_source: projectStateResult?.source || "unknown",
+      project_state_extractor_ok: !!projectStateResult?.extractor_ok,
+      deterministic_decision_policy_source: decisionPolicy?.policy_source || (decisionPolicy === structuredDecisionPolicy ? "structured_project_state" : "legacy_fallback"),
       deterministic_decision_policy_id: decisionPolicy?.active?.id || null,
       deterministic_decision_policy_active: !!decisionPolicy?.active,
       deterministic_decision_supporting_policy_ids: Array.isArray(decisionPolicy?.supporting)
@@ -7018,6 +8407,19 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       live_products_cached: !!liveProductResult.cached,
       model: KIT_AI_MODEL
     };
+
+    const chatPersistenceResult = await persistOdooKitAiConversationTurn({
+      sessionId: normalizedSessionId,
+      session: persistedSession,
+      question: safeQuestion,
+      answer,
+      projectState: resolvedProjectState,
+      kitContext: kitContext || {},
+      recommendedProducts,
+      activeKitActions,
+      imageSummary: returnedLampReferenceImageSummary
+    });
+    finalPayload.persistence = chatPersistenceResult;
 
     if (wantsStream) {
       // The final event replaces any streamed preview text if guardrails or
@@ -7047,6 +8449,68 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
   }
 });
 
+
+
+// ===================== KIT AI SESSION RESTORE + KNOWLEDGE STATUS ROUTES =====================
+app.get("/kit-ai-session/load", async (req, res) => {
+  try {
+    const sessionId = normalizeKitAiSessionId(req.query?.sessionId || req.query?.session_id || "");
+    if (!sessionId) {
+      return res.status(400).json({
+        ok: false,
+        found: false,
+        error: "Valid sessionId is required."
+      });
+    }
+
+    const snapshot = await loadOdooKitAiSessionSnapshot(sessionId);
+    return res.json({
+      ok: snapshot.ok,
+      found: snapshot.found,
+      session_id: sessionId,
+      session: snapshot.session,
+      messages: snapshot.messages,
+      project_state: snapshot.session?.project_state || null,
+      kit_context: snapshot.session?.kit_context || null,
+      rolling_summary: snapshot.session?.rolling_summary || "",
+      error: snapshot.error || null
+    });
+  } catch (error) {
+    console.error("Kit AI session load error:", error);
+    return res.status(500).json({
+      ok: false,
+      found: false,
+      error: "Could not load Kit AI session.",
+      detail: String(error?.message || error || "")
+    });
+  }
+});
+
+app.get("/kit-ai-knowledge-status", async (req, res) => {
+  try {
+    const result = await getActiveOdooAiKnowledgeRecords({ force: true });
+    const counts = (result.records || []).reduce((acc, record) => {
+      const type = canonicalAiKnowledgeType(record.type);
+      acc[type] = (acc[type] || 0) + 1;
+      return acc;
+    }, {});
+
+    return res.json({
+      ok: !!result.ok,
+      cached: !!result.cached,
+      total: (result.records || []).length,
+      counts,
+      error: result.error || null
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      total: 0,
+      counts: {},
+      error: String(error?.message || error || "")
+    });
+  }
+});
 
 
 // ===================== KIT AI TRAINING RULE ROUTES =====================
