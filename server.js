@@ -7638,6 +7638,1158 @@ function filterUnsafeKitAiRecommendations(products = [], question = "") {
   });
 }
 
+// ===================== V12 UNIVERSAL PRODUCT RESOLUTION & CHOICE RECOVERY ENGINE =====================
+// This block is intentionally deterministic. It intercepts compact user replies that are answers
+// to the AI's previous question, and it resolves them against live Odoo products BEFORE stale route
+// policies or broad LLM text can hijack the turn.
+
+const KIT_AI_V12_STRIP_WIDTHS = ["3mm", "5mm", "8mm", "10mm", "12mm"];
+const KIT_AI_V12_DOB_SIZES = ["55mm", "75mm", "115mm"];
+const KIT_AI_V12_VOLTAGES = ["12v", "24v"];
+
+function kitAiV12Text(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function kitAiV12Compact(value = "") {
+  return kitAiV12Text(value)
+    .replace(/\bmillimet(er|re)s?\b/g, "mm")
+    .replace(/\bvolts?\b/g, "v")
+    .replace(/\s+/g, "");
+}
+
+function kitAiV12ProductText(product = {}) {
+  return [
+    product?.name || "",
+    product?.display_name || "",
+    product?.sku || "",
+    product?.default_code || "",
+    ...(Array.isArray(product?.variantSkus) ? product.variantSkus : []),
+    ...(Array.isArray(product?.variant_skus) ? product.variant_skus : []),
+    ...(Array.isArray(product?.tags) ? product.tags : []),
+    ...(Array.isArray(product?.categories) ? product.categories : [])
+  ].filter(Boolean).join(" ");
+}
+
+function kitAiV12ProductTextLower(product = {}) {
+  return kitAiV12Text(kitAiV12ProductText(product));
+}
+
+function kitAiV12ProductSku(product = {}) {
+  return String(
+    product?.sku ||
+    product?.default_code ||
+    (Array.isArray(product?.variantSkus) ? product.variantSkus[0] : "") ||
+    (Array.isArray(product?.variant_skus) ? product.variant_skus[0] : "") ||
+    ""
+  ).trim();
+}
+
+function kitAiV12ProductLabel(product = {}) {
+  if (typeof kitAiProductLabel === "function") {
+    return kitAiProductLabel(product);
+  }
+  const sku = kitAiV12ProductSku(product);
+  const name = product?.name || product?.display_name || "Live product";
+  return sku ? `${name} (${sku})` : name;
+}
+
+function kitAiV12NormalizeChoiceAlias(raw = "") {
+  const q = kitAiV12Text(raw);
+  const compact = kitAiV12Compact(raw);
+
+  if (!q) return { type: "", value: "", raw: "" };
+
+  // Battery pack sleeve choices
+  if (
+    /\bwith\s+sleeve\b/i.test(q) ||
+    /\bsleeve\b/i.test(q) ||
+    /\bpack(?:ed)?\s+battery\b/i.test(q)
+  ) {
+    return { type: "battery_sleeve", value: "with_sleeve", raw: q };
+  }
+
+  if (
+    /\bwithout\s+sleeve\b/i.test(q) ||
+    /\bno\s+sleeve\b/i.test(q) ||
+    /\bbare\s+(cell|battery)\b/i.test(q) ||
+    /\bwithout\s+pack\b/i.test(q)
+  ) {
+    return { type: "battery_sleeve", value: "without_sleeve", raw: q };
+  }
+
+  // Strip / strip-driver voltage choices
+  if (/\b12\s*v\b/i.test(q) || /\b12v\b/i.test(compact)) {
+    return { type: "voltage", value: "12v", raw: q };
+  }
+
+  if (/\b24\s*v\b/i.test(q) || /\b24v\b/i.test(compact)) {
+    return { type: "voltage", value: "24v", raw: q };
+  }
+
+  // DOB size / diameter choices
+  if (/\b55\s*mm\b/i.test(q) || /\b55mm\b/i.test(compact)) {
+    return { type: "dob_size", value: "55mm", raw: q };
+  }
+
+  if (/\b75\s*mm\b/i.test(q) || /\b75mm\b/i.test(compact)) {
+    return { type: "dob_size", value: "75mm", raw: q };
+  }
+
+  if (/\b115\s*mm\b/i.test(q) || /\b115mm\b/i.test(compact)) {
+    return { type: "dob_size", value: "115mm", raw: q };
+  }
+
+  // Charging route / driver choice
+  if (
+    /\bfast\s*charging\b/i.test(q) ||
+    /\bfast\s*charge\b/i.test(q) ||
+    /\bfaster\s*charging\b/i.test(q) ||
+    /\b205\b/i.test(q)
+  ) {
+    return { type: "charging_route", value: "fast_charging", raw: q };
+  }
+
+  if (
+    /\bnormal\s*charging\b/i.test(q) ||
+    /\bstandard\s*charging\b/i.test(q) ||
+    /\bregular\s*charging\b/i.test(q) ||
+    /\b204\b/i.test(q)
+  ) {
+    return { type: "charging_route", value: "normal_charging", raw: q };
+  }
+
+  // USB-C panel-mount indicator variant
+  if (
+    /\bwith\s+indicator\b/i.test(q) ||
+    /\bindicator\s+led\b/i.test(q) ||
+    /\bled\s+indicator\b/i.test(q)
+  ) {
+    return { type: "indicator_variant", value: "with_indicator", raw: q };
+  }
+
+  if (
+    /\bwithout\s+indicator\b/i.test(q) ||
+    /\bno\s+indicator\b/i.test(q) ||
+    /\bplain\s+connector\b/i.test(q)
+  ) {
+    return { type: "indicator_variant", value: "without_indicator", raw: q };
+  }
+
+  // Strip width choice. Important: keep widths as explicit choice tokens.
+  for (const width of KIT_AI_V12_STRIP_WIDTHS) {
+    const numeric = width.replace("mm", "");
+    if (
+      new RegExp(`\\b${numeric}\\s*mm\\b`, "i").test(q) ||
+      new RegExp(`\\b${numeric}mm\\b`, "i").test(compact)
+    ) {
+      return { type: "strip_width", value: width, raw: q };
+    }
+  }
+
+  // Generic confirmation answers
+  if (/^(yes|y|ok|okay|sure|go ahead|proceed|confirm|confirmed)$/i.test(q)) {
+    return { type: "confirmation", value: "yes", raw: q };
+  }
+
+  if (/^(no|n|not now|dont|do not|stop|cancel)$/i.test(q)) {
+    return { type: "confirmation", value: "no", raw: q };
+  }
+
+  return { type: "", value: "", raw: q };
+}
+
+function kitAiV12LastAssistantText(history = []) {
+  if (!Array.isArray(history)) return "";
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i] || {};
+    const role = kitAiV12Text(item?.role || item?.agent || "");
+    if (role === "assistant" || role === "ai" || role === "bot") {
+      return String(item?.text || item?.content || item?.message || "").trim();
+    }
+  }
+  return "";
+}
+
+function kitAiV12ConversationText(history = []) {
+  if (!Array.isArray(history)) return "";
+  return history
+    .slice(-8)
+    .map((item) => `${item?.role || item?.agent || ""}: ${item?.text || item?.content || item?.message || ""}`)
+    .join("\n");
+}
+
+function kitAiV12DetectPendingChoice({
+  question = "",
+  history = [],
+  kitContext = {},
+  answer = ""
+} = {}) {
+  const lastAssistant = kitAiV12Text(kitAiV12LastAssistantText(history) || answer || "");
+  const conversation = kitAiV12Text(kitAiV12ConversationText(history));
+  const activeText = kitAiV12Text(
+    typeof kitAiActiveText === "function" ? kitAiActiveText(kitContext) : ""
+  );
+  const all = `${lastAssistant}\n${conversation}\n${activeText}`;
+
+  // Order matters: if AI just asked a direct question, that direct question wins.
+  if (
+    /\bwith sleeve\b.*\bwithout sleeve\b/i.test(lastAssistant) ||
+    /\bsleeve vs without sleeve\b/i.test(lastAssistant) ||
+    /\bchoose with sleeve or without sleeve\b/i.test(lastAssistant)
+  ) {
+    return "battery_sleeve";
+  }
+
+  if (
+    /\b12v\b.*\b24v\b/i.test(lastAssistant) ||
+    /\b12\s*v\b.*\b24\s*v\b/i.test(lastAssistant) ||
+    /\bchoose 12v or 24v\b/i.test(lastAssistant) ||
+    /\bchoose 12\s*v or 24\s*v\b/i.test(lastAssistant)
+  ) {
+    return "voltage";
+  }
+
+  if (
+    /\b55mm\b.*\b75mm\b.*\b115mm\b/i.test(lastAssistant) ||
+    /\b55\s*mm\b.*\b75\s*mm\b.*\b115\s*mm\b/i.test(lastAssistant) ||
+    /\bchoose 55mm, 75mm, or 115mm\b/i.test(lastAssistant)
+  ) {
+    return "dob_size";
+  }
+
+  if (
+    /\bfast charging\b.*\bnormal charging\b/i.test(lastAssistant) ||
+    /\b205\b.*\b204\b/i.test(lastAssistant) ||
+    /\bfast-charging option\b.*\bstandard\b/i.test(lastAssistant)
+  ) {
+    return "charging_route";
+  }
+
+  if (
+    /\bwith indicator\b.*\bwithout indicator\b/i.test(lastAssistant) ||
+    /\bindicator\b.*\bwithout indicator\b/i.test(lastAssistant)
+  ) {
+    return "indicator_variant";
+  }
+
+  if (
+    /\bstrip width\b/i.test(lastAssistant) ||
+    /\bchoose the strip width\b/i.test(lastAssistant) ||
+    /\b3mm\b.*\b5mm\b/i.test(lastAssistant) ||
+    /\b3\s*mm\b.*\b5\s*mm\b/i.test(lastAssistant)
+  ) {
+    return "strip_width";
+  }
+
+  // Secondary context inference when history is compacted or wording varies.
+  if (/\b2600mah\b/i.test(all) && /\bsleeve\b/i.test(all)) return "battery_sleeve";
+  if (/\bstrip\b/i.test(all) && /\b12v\b|\b24v\b/i.test(all)) return "voltage";
+  if (/\b206\b|\bdob\b/i.test(all) && /\b55mm\b|\b75mm\b|\b115mm\b/i.test(all)) return "dob_size";
+  if (/\b204\b|\b205\b|\bstrip driver\b/i.test(all) && /\bcharging\b/i.test(all)) return "charging_route";
+  if (/\bpanel mount\b|\busb-c connector\b|\bconnector\b/i.test(all) && /\bindicator\b/i.test(all)) return "indicator_variant";
+  if (/\bstrip\b/i.test(all) && /\bwidth\b|\b3mm\b|\b5mm\b|\b8mm\b|\b10mm\b|\b12mm\b/i.test(all)) return "strip_width";
+
+  return "";
+}
+
+function kitAiV12FindProducts(liveProducts = [], predicate = () => false) {
+  return (Array.isArray(liveProducts) ? liveProducts : []).filter((product) => {
+    try {
+      return !!predicate(product, kitAiV12ProductTextLower(product));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function kitAiV12ProductLooksLike(product = {}, family = "") {
+  const text = kitAiV12ProductTextLower(product);
+  switch (family) {
+    case "battery_2600":
+      return /\b2600\b|\b2600mah\b/i.test(text) && /\bbattery\b|\b18650\b|\bbat\b/i.test(text);
+    case "strip_driver":
+      return /\b204\b|\b205\b|\bstrip driver\b|\blsd\b/i.test(text);
+    case "dob_206":
+      return /\b206\b|\bdob\b/i.test(text);
+    case "panel_connector":
+      return /\bpanel mount\b|\busb-c\b|\btype-c\b|\bconnector\b/i.test(text);
+    case "cob_strip":
+      return /\bstrip\b/i.test(text) && !/\b204\b|\b205\b|\b103\b/i.test(text);
+    default:
+      return false;
+  }
+}
+
+function kitAiV12MatchChoiceToLiveProducts({
+  liveProducts = [],
+  pendingChoice = "",
+  choice = null,
+  kitContext = {}
+} = {}) {
+  const normalized = choice || { type: "", value: "" };
+  const selected = [];
+
+  if (!pendingChoice || !normalized?.value) return selected;
+
+  if (pendingChoice === "battery_sleeve") {
+    const candidates = kitAiV12FindProducts(liveProducts, (product, text) =>
+      kitAiV12ProductLooksLike(product, "battery_2600")
+    );
+
+    return candidates.filter((product) => {
+      const text = kitAiV12ProductTextLower(product);
+      if (normalized.value === "with_sleeve") {
+        return /\bsleeve\b|\bpack\b|\bjst\b/i.test(text) && !/\bwithout sleeve\b|\bbare\b/i.test(text);
+      }
+      if (normalized.value === "without_sleeve") {
+        return /\bwithout sleeve\b|\bbare\b|\bcell\b/i.test(text) || (!/\bsleeve\b/i.test(text) && /\b2600\b/i.test(text));
+      }
+      return false;
+    });
+  }
+
+  if (pendingChoice === "voltage") {
+    return kitAiV12FindProducts(liveProducts, (product, text) => {
+      const hasVoltage =
+        normalized.value === "12v"
+          ? /\b12\s*v\b|\b12v\b/i.test(text)
+          : /\b24\s*v\b|\b24v\b/i.test(text);
+
+      // Prefer products already relevant to the active route:
+      const activeText = kitAiV12Text(
+        typeof kitAiActiveText === "function" ? kitAiActiveText(kitContext) : ""
+      );
+
+      const routeIsStripDriver = /\b204\b|\b205\b|\b103\b|\bstrip driver\b/i.test(activeText);
+      const routeIsStripLed = /\bstrip\b/i.test(activeText);
+
+      if (routeIsStripDriver) return hasVoltage && kitAiV12ProductLooksLike(product, "strip_driver");
+      if (routeIsStripLed) return hasVoltage && kitAiV12ProductLooksLike(product, "cob_strip");
+      return hasVoltage && (kitAiV12ProductLooksLike(product, "strip_driver") || kitAiV12ProductLooksLike(product, "cob_strip"));
+    });
+  }
+
+  if (pendingChoice === "dob_size") {
+    return kitAiV12FindProducts(liveProducts, (product, text) =>
+      kitAiV12ProductLooksLike(product, "dob_206") &&
+      new RegExp(`\\b${normalized.value.replace("mm", "")}\\s*mm\\b|\\b${normalized.value}\\b`, "i").test(text)
+    );
+  }
+
+  if (pendingChoice === "charging_route") {
+    return kitAiV12FindProducts(liveProducts, (product, text) => {
+      if (!kitAiV12ProductLooksLike(product, "strip_driver")) return false;
+      if (normalized.value === "fast_charging") {
+        return /\b205\b|\bfast charging\b|\bfast charge\b/i.test(text);
+      }
+      if (normalized.value === "normal_charging") {
+        return /\b204\b|\bnormal charging\b|\bstandard charging\b/i.test(text);
+      }
+      return false;
+    });
+  }
+
+  if (pendingChoice === "indicator_variant") {
+    return kitAiV12FindProducts(liveProducts, (product, text) => {
+      if (!kitAiV12ProductLooksLike(product, "panel_connector")) return false;
+      if (normalized.value === "with_indicator") {
+        return /\bwith indicator\b|\bindicator\b|\bled indicator\b/i.test(text) && !/\bwithout indicator\b|\bno indicator\b/i.test(text);
+      }
+      if (normalized.value === "without_indicator") {
+        return /\bwithout indicator\b|\bno indicator\b/i.test(text) || (!/\bindicator\b/i.test(text) && /\bconnector\b/i.test(text));
+      }
+      return false;
+    });
+  }
+
+  if (pendingChoice === "strip_width") {
+    return kitAiV12FindProducts(liveProducts, (product, text) => {
+      if (!kitAiV12ProductLooksLike(product, "cob_strip")) return false;
+      const width = normalized.value;
+      const digits = width.replace("mm", "");
+      return new RegExp(`\\b${digits}\\s*mm\\b|\\b${width}\\b`, "i").test(text);
+    });
+  }
+
+  return selected;
+}
+
+function kitAiV12LiveChoiceRows(products = []) {
+  return (Array.isArray(products) ? products : [])
+    .slice(0, 8)
+    .map((product, idx) => `${idx + 1}. ${kitAiV12ProductLabel(product)}`);
+}
+
+function kitAiV12BuildAction(product = {}, type = "product", reason = "") {
+  const sku = kitAiV12ProductSku(product);
+  if (!sku) return null;
+  return {
+    action: "add",
+    name: product?.name || product?.display_name || "",
+    sku,
+    qty: 1,
+    type,
+    reason,
+    auto_addable: true,
+    v12_resolved_choice: true
+  };
+}
+
+function kitAiV12ResolveChoiceReply({
+  question = "",
+  history = [],
+  kitContext = {},
+  liveProducts = [],
+  currentAnswer = ""
+} = {}) {
+  const choice = kitAiV12NormalizeChoiceAlias(question);
+  if (!choice?.type) return null;
+
+  const pendingChoice = kitAiV12DetectPendingChoice({
+    question,
+    history,
+    kitContext,
+    answer: currentAnswer
+  });
+
+  // Only short/compact reply recovery should trigger. Do not hijack a fresh rich user request.
+  const qWords = kitAiV12Text(question).split(/\s+/).filter(Boolean);
+  const looksCompactChoiceReply = qWords.length <= 5;
+
+  if (!pendingChoice || !looksCompactChoiceReply) return null;
+  if (choice.type !== pendingChoice && choice.type !== "confirmation") return null;
+
+  // Confirmation-only replies must NOT create add actions unless there is already a pending
+  // auto-addable recommendation in the current server payload. V12 keeps them neutral here.
+  if (choice.type === "confirmation") {
+    return {
+      handled: true,
+      answer:
+        choice.value === "yes"
+          ? "Confirmed. I’ll continue with the selected direction."
+          : "Understood. I won’t apply that choice.",
+      recommendedProducts: [],
+      activeKitActions: [],
+      alternativeProducts: [],
+      actionOffer: "none",
+      v12Reason: "confirmation_reply_without_premature_add"
+    };
+  }
+
+  const matches = kitAiV12MatchChoiceToLiveProducts({
+    liveProducts,
+    pendingChoice,
+    choice,
+    kitContext
+  });
+
+  // 0 live matches: avoid false "not live". State resolution issue, not availability issue.
+  if (!matches.length) {
+    const labelMap = {
+      battery_sleeve: "battery sleeve variant",
+      voltage: "voltage variant",
+      dob_size: "DOB size variant",
+      charging_route: "charging route variant",
+      indicator_variant: "indicator variant",
+      strip_width: "strip width variant"
+    };
+
+    return {
+      handled: true,
+      answer: [
+        `I understood your choice as ${choice.value.replace(/_/g, " ")} for the ${labelMap[pendingChoice] || "product variant"}.`,
+        "I found the matching product family in the live catalogue, but I could not safely isolate one exact live variant from the current product labels.",
+        "I will keep this choice in the route instead of incorrectly saying the product is not live."
+      ].join("\n"),
+      recommendedProducts: [],
+      activeKitActions: [],
+      alternativeProducts: [],
+      actionOffer: "none",
+      v12Reason: "choice_understood_but_exact_variant_not_isolated"
+    };
+  }
+
+  // Multiple live matches: ask only for the genuinely missing detail. Do not add prematurely.
+  if (matches.length > 1) {
+    const rows = kitAiV12LiveChoiceRows(matches);
+    const followupMap = {
+      battery_sleeve: "I found multiple live battery entries for that choice. Please pick the exact one from these live options:",
+      voltage: "I found multiple live products for that voltage. Please pick the exact one:",
+      dob_size: "I found multiple live DOB entries for that size. Please pick the exact one:",
+      charging_route: "I found multiple live strip-driver entries for that charging direction. Please pick the exact one:",
+      indicator_variant: "I found multiple live connector entries for that indicator choice. Please pick the exact one:",
+      strip_width: "I found multiple live strip entries for that width. Please give the remaining strip detail, such as voltage/CCT/color, or select the exact product:"
+    };
+
+    return {
+      handled: true,
+      answer: [
+        followupMap[pendingChoice] || "I found multiple live options for that choice. Please pick the exact one:",
+        "",
+        ...rows
+      ].join("\n"),
+      recommendedProducts: [],
+      activeKitActions: [],
+      alternativeProducts: matches,
+      actionOffer: "none",
+      v12Reason: "choice_ambiguous_live_matches"
+    };
+  }
+
+  // Exact live product resolved. Only now emit an add action.
+  const exact = matches[0];
+  const typeMap = {
+    battery_sleeve: "battery",
+    voltage: kitAiV12ProductLooksLike(exact, "strip_driver") ? "driver" : "led",
+    dob_size: "led",
+    charging_route: "driver",
+    indicator_variant: "accessory",
+    strip_width: "led"
+  };
+
+  const reasonMap = {
+    battery_sleeve: "Resolved the user's prior battery sleeve choice.",
+    voltage: "Resolved the user's prior voltage choice.",
+    dob_size: "Resolved the user's prior DOB size choice.",
+    charging_route: "Resolved the user's prior strip-driver charging choice.",
+    indicator_variant: "Resolved the user's prior connector indicator choice.",
+    strip_width: "Resolved the user's prior strip width choice."
+  };
+
+  const action = kitAiV12BuildAction(
+    exact,
+    typeMap[pendingChoice] || "product",
+    reasonMap[pendingChoice] || "Resolved prior product variant choice."
+  );
+
+  return {
+    handled: true,
+    answer: `Done — I matched your ${choice.value.replace(/_/g, " ")} choice to the live product: ${kitAiV12ProductLabel(exact)}.`,
+    recommendedProducts: exact ? [exact] : [],
+    activeKitActions: action ? [action] : [],
+    alternativeProducts: [],
+    actionOffer: action ? "active_kit" : "none",
+    v12Reason: "exact_live_choice_resolved"
+  };
+}
+
+function kitAiV12StripWidthMention(question = "") {
+  const choice = kitAiV12NormalizeChoiceAlias(question);
+  return choice?.type === "strip_width" ? choice.value : "";
+}
+
+function kitAiV12QuestionAsksForStripWidth(question = "", history = [], kitContext = {}) {
+  const q = kitAiV12Text(question);
+  const all = [
+    q,
+    kitAiV12ConversationText(history),
+    typeof kitAiActiveText === "function" ? kitAiActiveText(kitContext) : ""
+  ].join("\n").toLowerCase();
+
+  return (
+    /\bstrip\b/i.test(all) &&
+    (
+      /\bwidth\b/i.test(q) ||
+      /\bwhich width\b/i.test(q) ||
+      /\bstrip size\b/i.test(q) ||
+      /\b3mm\b|\b5mm\b|\b8mm\b|\b10mm\b|\b12mm\b/i.test(all)
+    )
+  );
+}
+
+function kitAiV12FindLiveStripWidths(liveProducts = []) {
+  const found = new Set();
+  for (const product of Array.isArray(liveProducts) ? liveProducts : []) {
+    if (!kitAiV12ProductLooksLike(product, "cob_strip")) continue;
+    const text = kitAiV12ProductTextLower(product);
+    for (const width of KIT_AI_V12_STRIP_WIDTHS) {
+      const digits = width.replace("mm", "");
+      if (new RegExp(`\\b${digits}\\s*mm\\b|\\b${width}\\b`, "i").test(text)) {
+        found.add(width);
+      }
+    }
+  }
+  return [...found];
+}
+
+function kitAiV12BuildStripWidthFollowup(liveProducts = []) {
+  const widths = kitAiV12FindLiveStripWidths(liveProducts);
+  if (!widths.length) {
+    return [
+      "For COB strip LEDs, width is an important fitment choice.",
+      "Please tell me the width you want, such as 3mm, 5mm, 8mm, 10mm, or 12mm."
+    ].join("\n");
+  }
+
+  return [
+    "Before I narrow the live COB strip options, please choose the strip width:",
+    "",
+    ...widths.map((w, i) => `${i + 1}. ${w}`),
+    "",
+    "Reply with the width only, for example: 5mm."
+  ].join("\n");
+}
+
+function kitAiV12AnswerMentionsFalseNotLive(answer = "") {
+  const text = kitAiV12Text(answer);
+  return (
+    /\bnot live\b/i.test(text) ||
+    /\bnot available live\b/i.test(text) ||
+    /\bnot currently live\b/i.test(text) ||
+    /\bnot on the live catalogue\b/i.test(text) ||
+    /\bnot found in live products\b/i.test(text)
+  );
+}
+
+function kitAiV12NormalizeFamilyText(value = "") {
+  return kitAiV12Text(value)
+    .replace(/\b(?:with|without|no)\s+(?:sleeve|indicator)\b/gi, " ")
+    .replace(/\b(?:sleeve|indicator|fast\s*charging|fast\s*charge|normal\s*charging|standard\s*charging|regular\s*charging)\b/gi, " ")
+    .replace(/\b(?:warm\s*white|cool\s*white|neutral\s*white|white|black|transparent|clear|frosted|milky|warm|cool|rgbcct|rgbcw|rgb|cct|snap\s*fit|threaded)\b/gi, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:mm|v|mah|w)\b/gi, " ")
+    .replace(/\b(?:55|75|115)\s*mm\b/gi, " ")
+    .replace(/[()[\],/|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function kitAiV12MeaningfulFamilyTokens(value = "") {
+  const stop = new Set([
+    "the", "and", "for", "with", "without", "from", "this", "that",
+    "smart", "handicrafts", "live", "product", "products", "option", "options",
+    "variant", "variants", "available", "website", "catalogue", "catalog"
+  ]);
+
+  return Array.from(
+    new Set(
+      kitAiV12NormalizeFamilyText(value)
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) =>
+          token &&
+          token.length >= 2 &&
+          !stop.has(token)
+        )
+    )
+  );
+}
+
+function kitAiV12ProductFamilyKey(product = {}) {
+  const titleText = [
+    product?.name || "",
+    product?.display_name || "",
+    ...(Array.isArray(product?.variantNames) ? product.variantNames : []),
+    ...(Array.isArray(product?.variant_names) ? product.variant_names : [])
+  ].filter(Boolean).join(" ") || [
+    product?.sku || "",
+    product?.default_code || ""
+  ].filter(Boolean).join(" ");
+
+  const tokens = kitAiV12MeaningfulFamilyTokens(titleText);
+  if (!tokens.length) return "";
+
+  const normalizedTokens = tokens
+    .map((token) => token.replace(/[^a-z0-9-]+/gi, ""))
+    .filter(Boolean);
+
+  return normalizedTokens.slice(0, 12).join(" ");
+}
+
+function kitAiV12FamilyTokenSetFromProduct(product = {}) {
+  return new Set(kitAiV12ProductFamilyKey(product).split(/\s+/).filter(Boolean));
+}
+
+function kitAiV12FamilyDomainTokens(tokens = new Set()) {
+  const domain = new Set([
+    "battery", "driver", "strip", "connector", "led", "cob", "dob",
+    "holder", "lens", "wire", "jst", "panel", "mount", "module", "enclosure"
+  ]);
+  return Array.from(tokens).filter((token) => domain.has(token));
+}
+
+function kitAiV12FamilySetsAreSimilar(a = new Set(), b = new Set()) {
+  if (!a.size || !b.size) return false;
+
+  const aList = Array.from(a);
+  const bList = Array.from(b);
+  const overlapTokens = aList.filter((token) => b.has(token));
+  const overlap = overlapTokens.length;
+  const union = new Set([...aList, ...bList]).size;
+  const jaccard = union ? overlap / union : 0;
+
+  const sharedDomain = kitAiV12FamilyDomainTokens(new Set(overlapTokens)).length > 0;
+  const smaller = Math.min(a.size, b.size);
+  const containment = smaller ? overlap / smaller : 0;
+
+  return (
+    sharedDomain &&
+    (
+      (overlap >= 2 && jaccard >= 0.45) ||
+      (overlap >= 2 && containment >= 0.65) ||
+      (overlap >= 3)
+    )
+  );
+}
+
+function kitAiV12BuildUniversalFamilyGroups(liveProducts = []) {
+  const groups = [];
+
+  for (const product of Array.isArray(liveProducts) ? liveProducts : []) {
+    const tokenSet = kitAiV12FamilyTokenSetFromProduct(product);
+    if (!tokenSet.size) continue;
+
+    let matched = null;
+    for (const group of groups) {
+      if (kitAiV12FamilySetsAreSimilar(group.tokens, tokenSet)) {
+        matched = group;
+        break;
+      }
+    }
+
+    if (!matched) {
+      groups.push({
+        key: Array.from(tokenSet).join(" "),
+        tokens: tokenSet,
+        products: [product]
+      });
+      continue;
+    }
+
+    matched.products.push(product);
+    matched.tokens = new Set([...matched.tokens, ...tokenSet]);
+  }
+
+  return new Map(groups.map((group) => [group.key, group.products]));
+}
+
+function kitAiV12FindUniversalFamilySiblingsForProduct(product = {}, liveProducts = []) {
+  const targetTokens = kitAiV12FamilyTokenSetFromProduct(product);
+  if (!targetTokens.size) return [product].filter(Boolean);
+
+  const siblings = [];
+  for (const candidate of Array.isArray(liveProducts) ? liveProducts : []) {
+    const candidateTokens = kitAiV12FamilyTokenSetFromProduct(candidate);
+    if (!candidateTokens.size) continue;
+
+    if (
+      candidate === product ||
+      kitAiV12FamilySetsAreSimilar(targetTokens, candidateTokens)
+    ) {
+      siblings.push(candidate);
+    }
+  }
+
+  return siblings.length ? siblings : [product].filter(Boolean);
+}
+
+function kitAiV12FindUniversalLiveFamilyMatches(question = "", liveProducts = []) {
+  const qTokens = new Set(kitAiV12MeaningfulFamilyTokens(question));
+  if (!qTokens.size) return [];
+
+  const groups = kitAiV12BuildUniversalFamilyGroups(liveProducts);
+  const matches = [];
+
+  for (const [familyKey, products] of groups.entries()) {
+    const familyProducts = Array.isArray(products) ? products : [];
+    const familyTokenSet = new Set(
+      familyProducts.flatMap((product) =>
+        Array.from(kitAiV12FamilyTokenSetFromProduct(product))
+      )
+    );
+    const familyTokens = Array.from(familyTokenSet);
+    if (!familyTokens.length) continue;
+
+    let overlap = 0;
+    for (const token of familyTokens) {
+      if (qTokens.has(token)) overlap += 1;
+    }
+
+    const hasStrongOverlap =
+      overlap >= 2 ||
+      (overlap >= 1 && familyTokens.some((token) =>
+        /^(battery|driver|strip|connector|led|cob|dob|holder|lens|wire|jst|panel|mount|module|enclosure)$/i.test(token)
+      ));
+
+    if (hasStrongOverlap) {
+      matches.push({
+        familyKey,
+        products: familyProducts,
+        overlap
+      });
+    }
+  }
+
+  return matches.sort((a, b) => b.overlap - a.overlap);
+}
+
+function kitAiV12UniversalFamilyExistsForQuestion(question = "", liveProducts = []) {
+  if (typeof findExactLiveProductsMentionedInText === "function") {
+    const exact = findExactLiveProductsMentionedInText(question, liveProducts);
+    if (Array.isArray(exact) && exact.length) return true;
+  }
+
+  return kitAiV12FindUniversalLiveFamilyMatches(question, liveProducts).length > 0;
+}
+
+function kitAiV12QuestionLikelyReferencesKnownFamily(question = "", liveProducts = []) {
+  const q = kitAiV12Text(question);
+  if (!q) return false;
+
+  if (
+    /\bstrip\b|\bcob\b|\bdob\b|\b206\b|\b204\b|\b205\b|\b201\b|\b202\b|\b101\b|\b102\b|\b103\b/i.test(q) ||
+    /\bbattery\b|\b2600\b|\b5200\b|\bsleeve\b/i.test(q) ||
+    /\bconnector\b|\bpanel mount\b|\bindicator\b/i.test(q)
+  ) {
+    return true;
+  }
+
+  return kitAiV12UniversalFamilyExistsForQuestion(q, liveProducts);
+}
+
+function kitAiV12HasAnyFamilyLiveMatch(question = "", liveProducts = []) {
+  const q = kitAiV12Text(question);
+  if (!q) return false;
+
+  const families = [];
+
+  if (/\bstrip\b/i.test(q)) families.push("cob_strip", "strip_driver");
+  if (/\bdob\b|\b206\b/i.test(q)) families.push("dob_206");
+  if (/\bbattery\b|\b2600\b|\b5200\b|\bsleeve\b/i.test(q)) families.push("battery_2600");
+  if (/\bconnector\b|\bpanel mount\b|\bindicator\b/i.test(q)) families.push("panel_connector");
+
+  const specificFamilyMatch =
+    families.length > 0 &&
+    (Array.isArray(liveProducts) ? liveProducts : []).some((product) =>
+      families.some((family) => kitAiV12ProductLooksLike(product, family))
+    );
+
+  if (specificFamilyMatch) return true;
+
+  return kitAiV12UniversalFamilyExistsForQuestion(q, liveProducts);
+}
+
+function kitAiV12ProductExactMentioned(question = "", product = {}) {
+  const q = kitAiV12Text(question);
+  if (!q) return false;
+
+  const sku = kitAiV12Text(kitAiV12ProductSku(product));
+  if (sku && q.includes(sku)) return true;
+
+  const name = kitAiV12Text(product?.name || product?.display_name || "");
+  if (name && q.includes(name)) return true;
+
+  return false;
+}
+
+function kitAiV12VariantSignalScore(product = {}, question = "") {
+  const q = kitAiV12Text(question);
+  const text = kitAiV12ProductTextLower(product);
+  if (!q || !text) return 0;
+
+  let score = 0;
+
+  const directPatterns = [
+    [/\b12\s*v\b|\b12v\b/i, /\b12\s*v\b|\b12v\b/i],
+    [/\b24\s*v\b|\b24v\b/i, /\b24\s*v\b|\b24v\b/i],
+    [/\b55\s*mm\b|\b55mm\b/i, /\b55\s*mm\b|\b55mm\b/i],
+    [/\b75\s*mm\b|\b75mm\b/i, /\b75\s*mm\b|\b75mm\b/i],
+    [/\b115\s*mm\b|\b115mm\b/i, /\b115\s*mm\b|\b115mm\b/i],
+    [/\b3\s*mm\b|\b3mm\b/i, /\b3\s*mm\b|\b3mm\b/i],
+    [/\b5\s*mm\b|\b5mm\b/i, /\b5\s*mm\b|\b5mm\b/i],
+    [/\b8\s*mm\b|\b8mm\b/i, /\b8\s*mm\b|\b8mm\b/i],
+    [/\b10\s*mm\b|\b10mm\b/i, /\b10\s*mm\b|\b10mm\b/i],
+    [/\b12\s*mm\b|\b12mm\b/i, /\b12\s*mm\b|\b12mm\b/i],
+    [/\b2600\s*mah\b|\b2600mah\b|\b2600\b/i, /\b2600\s*mah\b|\b2600mah\b|\b2600\b/i],
+    [/\b5200\s*mah\b|\b5200mah\b|\b5200\b/i, /\b5200\s*mah\b|\b5200mah\b|\b5200\b/i],
+    [/\bwith\s+sleeve\b|\bsleeve\b/i, /\bwith\s+sleeve\b|\bsleeve\b/i],
+    [/\bwithout\s+sleeve\b|\bno\s+sleeve\b|\bbare\b/i, /\bwithout\s+sleeve\b|\bno\s+sleeve\b|\bbare\b/i],
+    [/\bfast\s*charging\b|\bfast\s*charge\b/i, /\bfast\s*charging\b|\bfast\s*charge\b/i],
+    [/\bnormal\s*charging\b|\bstandard\s*charging\b|\bregular\s*charging\b/i, /\bnormal\s*charging\b|\bstandard\s*charging\b|\bregular\s*charging\b/i],
+    [/\bwith\s+indicator\b|\bindicator\b/i, /\bwith\s+indicator\b|\bindicator\b/i],
+    [/\bwithout\s+indicator\b|\bno\s+indicator\b/i, /\bwithout\s+indicator\b|\bno\s+indicator\b/i],
+    [/\bwarm\s*white\b|\bwarm\b/i, /\bwarm\s*white\b|\bwarm\b/i],
+    [/\bcool\s*white\b|\bcool\b/i, /\bcool\s*white\b|\bcool\b/i],
+    [/\bclear\b/i, /\bclear\b/i],
+    [/\bfrosted\b|\bmilky\b/i, /\bfrosted\b|\bmilky\b/i],
+    [/\bblack\b/i, /\bblack\b/i],
+    [/\bwhite\b/i, /\bwhite\b/i],
+    [/\bsnap\s*fit\b/i, /\bsnap\s*fit\b/i],
+    [/\bthreaded\b/i, /\bthreaded\b/i],
+    [/\brgbcct\b|\brgbcw\b|\brgb\b|\bcct\b/i, /\brgbcct\b|\brgbcw\b|\brgb\b|\bcct\b/i]
+  ];
+
+  for (const [questionPattern, productPattern] of directPatterns) {
+    if (questionPattern.test(q) && productPattern.test(text)) score += 15;
+  }
+
+  if (kitAiV12ProductExactMentioned(q, product)) score += 100;
+
+  return score;
+}
+
+function kitAiV12UniqueVariantResolvedByQuestion(products = [], question = "") {
+  const rows = (Array.isArray(products) ? products : [])
+    .map((product) => ({ product, score: kitAiV12VariantSignalScore(product, question) }))
+    .sort((a, b) => b.score - a.score);
+
+  const top = rows[0];
+  const second = rows[1];
+
+  return !!top && top.score > 0 && (!second || top.score > second.score);
+}
+
+function kitAiV12FindAmbiguousRecommendedFamily({
+  recommendedProducts = [],
+  activeKitActions = [],
+  liveProducts = [],
+  question = ""
+} = {}) {
+  const selectedRows = [
+    ...(Array.isArray(recommendedProducts) ? recommendedProducts : []),
+    ...(Array.isArray(activeKitActions) ? activeKitActions.filter((action) => action?.action === "add") : [])
+  ];
+
+  if (!selectedRows.length) return null;
+
+  for (const selected of selectedRows) {
+    if (selected?.v12_resolved_choice === true) continue;
+
+    const selectedSku = kitAiV12Text(selected?.sku || "");
+    const selectedName = kitAiV12Text(selected?.name || "");
+    const exactLive = (Array.isArray(liveProducts) ? liveProducts : []).find((product) => {
+      const sku = kitAiV12Text(kitAiV12ProductSku(product));
+      const name = kitAiV12Text(product?.name || product?.display_name || "");
+      return (selectedSku && sku === selectedSku) || (selectedName && name === selectedName);
+    });
+
+    if (!exactLive) continue;
+
+    const familyKey = kitAiV12ProductFamilyKey(exactLive);
+    if (!familyKey) continue;
+
+    const siblings = kitAiV12FindUniversalFamilySiblingsForProduct(exactLive, liveProducts);
+    if (siblings.length <= 1) continue;
+    if (kitAiV12UniqueVariantResolvedByQuestion(siblings, question)) continue;
+
+    return {
+      familyKey,
+      siblings
+    };
+  }
+
+  return null;
+}
+
+function kitAiV12ApplyUniversalVariantChoiceGuard({
+  question = "",
+  answer = "",
+  recommendedProducts = [],
+  activeKitActions = [],
+  alternativeProducts = [],
+  liveProducts = [],
+  actionOffer = "none"
+} = {}) {
+  const ambiguity = kitAiV12FindAmbiguousRecommendedFamily({
+    recommendedProducts,
+    activeKitActions,
+    liveProducts,
+    question
+  });
+
+  if (!ambiguity) {
+    return {
+      answer,
+      recommendedProducts,
+      activeKitActions,
+      alternativeProducts,
+      actionOffer
+    };
+  }
+
+  const liveRows = kitAiV12LiveChoiceRows(ambiguity.siblings);
+  return {
+    answer: [
+      "I found the live product family, but there are multiple live variants and the latest message does not uniquely choose one.",
+      "Please pick the exact variant before I add anything:",
+      "",
+      ...liveRows
+    ].join("\n"),
+    recommendedProducts: [],
+    activeKitActions: [],
+    alternativeProducts: ambiguity.siblings,
+    actionOffer: "none"
+  };
+}
+
+function kitAiV12PreventFalseNotLiveClaim({
+  answer = "",
+  question = "",
+  liveProducts = []
+} = {}) {
+  if (!kitAiV12AnswerMentionsFalseNotLive(answer)) return answer;
+  if (!kitAiV12QuestionLikelyReferencesKnownFamily(question, liveProducts)) return answer;
+  if (!kitAiV12HasAnyFamilyLiveMatch(question, liveProducts)) return answer;
+
+  return [
+    "I found the relevant product family in the live Smart Handicrafts catalogue.",
+    "I will avoid saying it is not live. The remaining issue is exact variant resolution, not product-family availability.",
+    "Please give the missing variant detail if needed, such as sleeve type, voltage, DOB size, indicator choice, or strip width."
+  ].join("\n");
+}
+
+function kitAiV12AnswerLooksLikeConfirmationQuestion(answer = "") {
+  const text = kitAiV12Text(answer);
+  return (
+    /\bshall i\b/i.test(text) ||
+    /\bshould i\b/i.test(text) ||
+    /\bdo you want me to\b/i.test(text) ||
+    /\bwould you like me to\b/i.test(text) ||
+    /\bplease confirm\b/i.test(text) ||
+    /\bconfirm\b.*\badd\b/i.test(text)
+  );
+}
+
+function kitAiV12SuppressPrematureAddWhenAskingConfirmation({
+  answer = "",
+  recommendedProducts = [],
+  activeKitActions = [],
+  actionOffer = "none"
+} = {}) {
+  if (!kitAiV12AnswerLooksLikeConfirmationQuestion(answer)) {
+    return { recommendedProducts, activeKitActions, actionOffer };
+  }
+
+  return {
+    recommendedProducts: [],
+    activeKitActions: [],
+    actionOffer: "none"
+  };
+}
+
+function kitAiV12StripRouteLikelyNeedsWidth({
+  question = "",
+  answer = "",
+  history = [],
+  kitContext = {},
+  liveProducts = []
+} = {}) {
+  const q = kitAiV12Text(question);
+  const a = kitAiV12Text(answer);
+  const conv = kitAiV12Text(kitAiV12ConversationText(history));
+  const active = kitAiV12Text(
+    typeof kitAiActiveText === "function" ? kitAiActiveText(kitContext) : ""
+  );
+  const all = `${q}\n${a}\n${conv}\n${active}`;
+
+  const userRouteIsStrip =
+    /\bstrip\b/i.test(all) ||
+    /\b204\b|\b205\b|\b103\b/i.test(all);
+
+  const alreadyHasWidth = !!kitAiV12StripWidthMention(all);
+  const liveWidths = kitAiV12FindLiveStripWidths(liveProducts);
+
+  return userRouteIsStrip && !alreadyHasWidth && liveWidths.length > 1;
+}
+
+function kitAiV12ApplyPostModelGuardrails({
+  question = "",
+  history = [],
+  kitContext = {},
+  liveProducts = [],
+  answer = "",
+  recommendedProducts = [],
+  activeKitActions = [],
+  alternativeProducts = [],
+  actionOffer = "none"
+} = {}) {
+  let nextAnswer = answer;
+  let nextRecommended = Array.isArray(recommendedProducts) ? recommendedProducts : [];
+  let nextActions = Array.isArray(activeKitActions) ? activeKitActions : [];
+  let nextAlternatives = Array.isArray(alternativeProducts) ? alternativeProducts : [];
+  let nextOffer = actionOffer || "none";
+
+  // 1. Global false "not live" prevention.
+  nextAnswer = kitAiV12PreventFalseNotLiveClaim({
+    answer: nextAnswer,
+    question,
+    liveProducts
+  });
+
+  // 2. If strip route is clear but width is not, ask for width before selecting a strip.
+  if (kitAiV12StripRouteLikelyNeedsWidth({
+    question,
+    answer: nextAnswer,
+    history,
+    kitContext,
+    liveProducts
+  })) {
+    nextAnswer = kitAiV12BuildStripWidthFollowup(liveProducts);
+    nextRecommended = [];
+    nextActions = [];
+    nextAlternatives = [];
+    nextOffer = "none";
+  }
+
+  // 3. Universal family-level variant guard:
+  //    if a model tries to add one member of a live product family while multiple
+  //    live variants exist and the user's latest message did not uniquely choose
+  //    that variant, ask for the exact variant instead of prematurely adding.
+  const universalVariantSafe = kitAiV12ApplyUniversalVariantChoiceGuard({
+    question,
+    answer: nextAnswer,
+    recommendedProducts: nextRecommended,
+    activeKitActions: nextActions,
+    alternativeProducts: nextAlternatives,
+    liveProducts,
+    actionOffer: nextOffer
+  });
+
+  nextAnswer = universalVariantSafe.answer;
+  nextRecommended = universalVariantSafe.recommendedProducts;
+  nextActions = universalVariantSafe.activeKitActions;
+  nextAlternatives = universalVariantSafe.alternativeProducts;
+  nextOffer = universalVariantSafe.actionOffer;
+
+  // 4. No premature add actions while the AI is only asking for confirmation.
+  const confirmationSafe = kitAiV12SuppressPrematureAddWhenAskingConfirmation({
+    answer: nextAnswer,
+    recommendedProducts: nextRecommended,
+    activeKitActions: nextActions,
+    actionOffer: nextOffer
+  });
+
+  nextRecommended = confirmationSafe.recommendedProducts;
+  nextActions = confirmationSafe.activeKitActions;
+  nextOffer = confirmationSafe.actionOffer;
+
+  const v12Guarded = kitAiV12ApplyPostModelGuardrails({
+      question: q,
+      history: Array.isArray(kitContext?.history) ? kitContext.history : [],
+      kitContext,
+      liveProducts,
+      answer: nextAnswer,
+      recommendedProducts: nextRecommended,
+      activeKitActions: nextActions,
+      alternativeProducts: nextAlternatives,
+      actionOffer: nextOffer
+    });
+
+    return {
+      answer: v12Guarded.answer,
+      recommendedProducts: v12Guarded.recommendedProducts,
+      activeKitActions: v12Guarded.activeKitActions,
+      alternativeProducts: v12Guarded.alternativeProducts,
+      actionOffer: v12Guarded.actionOffer
+    };
+}
+
+// ===================== END V12 UNIVERSAL PRODUCT RESOLUTION ENGINE =====================
+
 function applyGuidedKitAiFlowOverrides({
   question = "",
   kitContext = {},
@@ -7659,6 +8811,28 @@ function applyGuidedKitAiFlowOverrides({
     .filter((action) => action && (action.action === "remove" || action.auto_addable !== false));
   let nextAlternatives = [];
   let nextOffer = actionOffer || (nextRecommended.length ? "active_kit" : "none");
+
+  // ===================== V12 PRE-FLIGHT: COMPACT PREVIOUS-CHOICE REPLY RECOVERY =====================
+    // Examples caught here:
+    // sleeve / without sleeve / 12V / 24V / 115mm / fast charging / with indicator / 5mm
+    // This must run BEFORE older route policy branches to stop stale-context hijack.
+    const v12ChoiceRecovery = kitAiV12ResolveChoiceReply({
+      question: q,
+      history: Array.isArray(kitContext?.history) ? kitContext.history : [],
+      kitContext,
+      liveProducts,
+      currentAnswer: nextAnswer
+    });
+
+    if (v12ChoiceRecovery?.handled) {
+      return {
+        answer: v12ChoiceRecovery.answer,
+        recommendedProducts: v12ChoiceRecovery.recommendedProducts || [],
+        activeKitActions: v12ChoiceRecovery.activeKitActions || [],
+        alternativeProducts: v12ChoiceRecovery.alternativeProducts || [],
+        actionOffer: v12ChoiceRecovery.actionOffer || "none"
+      };
+    }
 
   // 0) Explicit kit-completion/status questions must answer from the real active-kit snapshot.
   //    Do not let a previously active route policy (such as floor-lamp -> 206 DOB)
@@ -9064,7 +10238,10 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
 
     const guidedFlow = applyGuidedKitAiFlowOverrides({
       question: safeQuestion,
-      kitContext: kitContext || {},
+      kitContext: {
+        ...(kitContext || {}),
+        history: effectiveHistory
+      },
       liveProducts,
       answer,
       recommendedProducts,
