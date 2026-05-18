@@ -5856,7 +5856,6 @@ const KIT_AI_BUILDER_NAME_HINTS = Object.freeze([
   { pattern: /\b2600\b.*\b(without\s+sleeve|no\s+sleeve)\b/i, mapped: { builder_product_id: "battery-2600-nosleeve" } },
   { pattern: /\b1200\b.*\b(without\s+sleeve|no\s+sleeve)\b/i, mapped: { builder_product_id: "battery-1200" } },
   { pattern: /\b1800\b.*\b(sleeve|battery)\b/i, mapped: { builder_product_id: "battery-1800" } },
-  { pattern: /\b5200\b.*\bbms\b/i, mapped: { builder_product_id: "battery-5200-bms" } },
   { pattern: /\b5200\b.*\bbattery\b(?!.*\bbms\b)/i, mapped: { builder_product_id: "battery-5200" } },
   { pattern: /\b18650\b.*\bholder\b/i, mapped: { builder_product_id: "battery-holder" } },
 
@@ -7514,26 +7513,32 @@ function kitAiHasActiveWire(kitContext = {}) {
 }
 
 function kitAiFind2600BatteryVariants(liveProducts = []) {
+  const safeProducts = kitAiFilterNormalKitBuilderLiveProducts(liveProducts);
+
   const withSleeve =
-    findBestLiveProductByTitleSkuSignals(liveProducts, {
+    safeProducts.find((product) => kitAiLiveProductBuilderId(product) === "battery-2600-sleeve") ||
+    findBestLiveProductByTitleSkuSignals(safeProducts, {
       must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
-      exclude: [/\bwithout\s+sleeve|no\s+sleeve\b/i],
+      exclude: [/\bwithout\s+sleeve|no\s+sleeve\b/i, /\b(5000|5200)\b/i, /\bbms\b/i],
       prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
     }) ||
-    findBestLiveProductBySignals(liveProducts, {
+    findBestLiveProductBySignals(safeProducts, {
       must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\bsleeve\b/i],
-      exclude: [/\bwithout\s+sleeve|no\s+sleeve\b/i],
+      exclude: [/\bwithout\s+sleeve|no\s+sleeve\b/i, /\b(5000|5200)\b/i, /\bbms\b/i],
       prefer: [/\bsh-bat-26s\b/i, /\b18650\b/i, /\bmah\b/i]
     });
 
   const withoutSleeve =
-    findBestLiveProductByTitleSkuSignals(liveProducts, {
+    safeProducts.find((product) => kitAiLiveProductBuilderId(product) === "battery-2600-nosleeve") ||
+    findBestLiveProductByTitleSkuSignals(safeProducts, {
       must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without\s+sleeve|no\s+sleeve)\b/i],
-      prefer: [/\bsh-bat-26-ws\b/i, /\b18650\b/i, /\bmah\b/i]
+      exclude: [/\b(5000|5200)\b/i, /\bbms\b/i],
+      prefer: [/\bsh-bat-26[-\s]?ws\b/i, /\b18650\b/i, /\bmah\b/i]
     }) ||
-    findBestLiveProductBySignals(liveProducts, {
+    findBestLiveProductBySignals(safeProducts, {
       must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without\s+sleeve|no\s+sleeve)\b/i],
-      prefer: [/\bsh-bat-26-ws\b/i, /\b18650\b/i, /\bmah\b/i]
+      exclude: [/\b(5000|5200)\b/i, /\bbms\b/i],
+      prefer: [/\bsh-bat-26[-\s]?ws\b/i, /\b18650\b/i, /\bmah\b/i]
     });
 
   return { withSleeve, withoutSleeve };
@@ -8873,35 +8878,45 @@ function applyGuidedKitAiFlowOverrides({
   }
 
   if (kitAiQuestionAsksWhichBattery(q)) {
-    const activeText = kitAiActiveText(kitContext);
-    const higherPowerContext =
-      /\b205\b|\b206[-\s]?115\b|\bstrip\b|\bdob\b/i.test(activeText) ||
-      /\bstrip\b|\bdob\b|\blong\s+(runtime|backup)\b|\bmaximum\s+runtime\b/i.test(qLower);
+    const selectedDriverId = String(snapshot.selectedDriverId || "").trim().toLowerCase();
 
-    if (higherPowerContext) {
-      nextAnswer = [
-        "The battery choice depends on runtime and the size available in your lamp.",
-        "",
-        "1. 2600mAh — more compact rechargeable path.",
-        "2. 5200mAh — longer backup when the lamp body can fit the larger pack or the application needs more runtime.",
-        "",
-        "Tell me 2600mAh or 5200mAh. If you choose 2600mAh, I will then ask with sleeve vs without sleeve."
-      ].join("\n");
-    } else {
-      const { withSleeve, withoutSleeve } = kitAiFind2600BatteryVariants(liveProducts);
-      const rows = [
-        withSleeve ? `1. ${kitAiProductLabel(withSleeve)} — easier lamp assembly; no separate battery holder is normally needed in this kit path.` : "",
-        withoutSleeve ? `2. ${kitAiProductLabel(withoutSleeve)} — choose this when your design uses a separate 18650 holder; the holder becomes required.` : ""
-      ].filter(Boolean);
+    if (selectedDriverId === "201-lc") {
+      const battery1200 = kitAiFind1200Battery(liveProducts);
+      const batteryRec = battery1200
+        ? kitAiLiveProductToRecommendation(
+            battery1200,
+            1,
+            "201 LC is the low-cost path; 1200mAh is the primary battery recommendation."
+          )
+        : null;
 
-      nextAnswer = [
-        "For this compact rechargeable lamp path, the normal battery direction is 2600mAh. There are two valid Smart Handicrafts options:",
-        "",
-        rows.join("\n") || "I found the 2600mAh battery family, but the two live variant labels could not be resolved cleanly.",
-        "",
-        "Please choose with sleeve or without sleeve. I will add the exact one after you choose."
-      ].join("\n");
+      nextAnswer = batteryRec
+        ? "For the 201 LC low-cost driver, the primary battery recommendation is the 1200mAh option. It keeps the LC path cost-conscious. Should I add that exact 1200mAh battery to your kit?"
+        : "For the 201 LC low-cost driver, the primary battery recommendation is 1200mAh. I could not resolve the exact live 1200mAh battery item cleanly in this turn.";
+
+      return {
+        answer: nextAnswer,
+        recommendedProducts: batteryRec ? [batteryRec] : [],
+        activeKitActions: [],
+        alternativeProducts: [],
+        actionOffer: batteryRec ? "active_kit" : "none"
+      };
     }
+
+    const { withSleeve, withoutSleeve } = kitAiFind2600BatteryVariants(liveProducts);
+    const rows = [
+      withSleeve ? `1. ${kitAiProductLabel(withSleeve)} — easier lamp assembly; no separate battery holder is normally needed in this kit path.` : "",
+      withoutSleeve ? `2. ${kitAiProductLabel(withoutSleeve)} — choose this when your design uses a separate 18650 holder; the holder becomes required.` : ""
+    ].filter(Boolean);
+
+    nextAnswer = [
+      "For this rechargeable lamp path, the primary battery recommendation is 2600mAh.",
+      "",
+      rows.join("\n") || "I found the 2600mAh battery family, but the two live variant labels could not be resolved cleanly.",
+      "",
+      "Please choose with sleeve or without sleeve. I will add the exact one after you choose.",
+      "If you specifically want a smaller lower-cost path, ask for 1200mAh. If you need longer backup and the lamp has space, ask for the larger 5200mAh sleeve pack."
+    ].join("\n");
 
     return {
       answer: nextAnswer,
@@ -8981,15 +8996,46 @@ function applyGuidedKitAiFlowOverrides({
     };
   }
 
-  // 4) If LED is selected but battery is not, do not silently decide capacity.
+  // 4) If LED is selected but battery is not, follow the battery policy without drifting.
   if (kitAiQuestionNeedsBatteryChoice(q, kitContext)) {
+    const selectedDriverId = String(snapshot.selectedDriverId || "").trim().toLowerCase();
+
+    if (selectedDriverId === "201-lc") {
+      const battery1200 = kitAiFind1200Battery(liveProducts);
+      const batteryRec = battery1200
+        ? kitAiLiveProductToRecommendation(
+            battery1200,
+            1,
+            "201 LC is the low-cost path; 1200mAh is the primary battery recommendation."
+          )
+        : null;
+
+      nextAnswer = batteryRec
+        ? "The LED side is now defined. For the 201 LC low-cost path, the primary battery recommendation is 1200mAh. Should I add that exact 1200mAh battery next?"
+        : "The LED side is now defined. For the 201 LC low-cost path, the primary battery recommendation is 1200mAh, but I could not resolve the exact live battery item cleanly in this turn.";
+
+      return {
+        answer: nextAnswer,
+        recommendedProducts: batteryRec ? [batteryRec] : [],
+        activeKitActions: [],
+        alternativeProducts: [],
+        actionOffer: batteryRec ? "active_kit" : "none"
+      };
+    }
+
+    const { withSleeve, withoutSleeve } = kitAiFind2600BatteryVariants(liveProducts);
+    const rows = [
+      withSleeve ? `1. ${kitAiProductLabel(withSleeve)} — easier lamp assembly; no separate battery holder is normally needed in this kit path.` : "",
+      withoutSleeve ? `2. ${kitAiProductLabel(withoutSleeve)} — choose this when your design uses a separate 18650 holder; the holder becomes required.` : ""
+    ].filter(Boolean);
+
     nextAnswer = [
-      "The LED side is now defined. Before I add a battery, please choose the backup direction:",
+      "The LED side is now defined. For this normal rechargeable path, the primary battery recommendation is 2600mAh.",
       "",
-      "• 2600mAh — the normal compact rechargeable lamp path.",
-      "• 5200mAh — use only when you want longer runtime or the lamp design can accommodate the larger pack.",
+      rows.join("\n") || "I found the 2600mAh battery family, but the two live variant labels could not be resolved cleanly.",
       "",
-      "If you choose 2600mAh, I’ll then ask whether you want with sleeve or without sleeve."
+      "Please choose with sleeve or without sleeve. I will add the exact one after you choose.",
+      "1200mAh is only the smaller lower-cost path. 5200mAh is only for explicitly requested longer backup and comes as the larger sleeve pack."
     ].join("\n");
 
     return {
@@ -9567,6 +9613,256 @@ function kitAiBuildDirectConversationStatePatchForNoSleeve(state = null, recomme
   });
 }
 
+
+function kitAiProductSearchTextForController(product = {}) {
+  return [
+    product?.name || "",
+    product?.sku || "",
+    Array.isArray(product?.variantSkus) ? product.variantSkus.join(" ") : "",
+    product?.builder_product_id || product?.builderProductId || "",
+    product?.description || ""
+  ].join(" ").toLowerCase();
+}
+
+function kitAiProductIsForbiddenBmsBattery(product = {}) {
+  const text = kitAiProductSearchTextForController(product);
+  return /\bbms\b/i.test(text) && /\b(battery|18650|mah|cell)\b/i.test(text);
+}
+
+function kitAiFilterNormalKitBuilderLiveProducts(liveProducts = []) {
+  return (Array.isArray(liveProducts) ? liveProducts : []).filter((product) => !kitAiProductIsForbiddenBmsBattery(product));
+}
+
+function kitAiFind201LcDriver(liveProducts = []) {
+  return findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b201\b/i, /\b(driver|module)\b/i, /\blc\b/i],
+    prefer: [/\bas-b-201-sld-lc\b/i, /\brechargeable\b/i, /\b1\s*color\b|\bsingle\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b201\b/i, /\b(driver|module)\b/i, /\blc\b/i],
+    prefer: [/\bas-b-201-sld-lc\b/i, /\brechargeable\b/i]
+  });
+}
+
+function kitAiFind5wSingleLed(liveProducts = []) {
+  return findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i],
+    exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+    prefer: [/\bsh-cob-5\b/i, /\bcob\b/i, /\bcree\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(led|cob)\b/i, /\b5\s*w\b|\b5w\b/i],
+    exclude: [/\b(strip|lsd|12v|24v|dual|cct)\b/i],
+    prefer: [/\bsh-cob-5\b/i, /\bcob\b/i, /\bcree\b/i]
+  });
+}
+
+function kitAiFind1200Battery(liveProducts = []) {
+  return findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b1200\b/i],
+    prefer: [/\bsh-bat-1200\b|\bsh-bat-12\b/i, /\bmah\b/i],
+    exclude: [/\bbms\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b1200\b/i],
+    prefer: [/\bsh-bat-1200\b|\bsh-bat-12\b/i, /\bmah\b/i],
+    exclude: [/\bbms\b/i]
+  });
+}
+
+function kitAiFind5200SleevePack(liveProducts = []) {
+  return findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b(5200|5000)\b/i],
+    prefer: [/\bsleeve\b/i, /\bsh-bat-5000\b|\bsh-bat-5200\b/i, /\bmah\b/i],
+    exclude: [/\bbms\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b(5200|5000)\b/i],
+    prefer: [/\bsleeve\b/i, /\bsh-bat-5000\b|\bsh-bat-5200\b/i, /\bmah\b/i],
+    exclude: [/\bbms\b/i]
+  });
+}
+
+function kitAiLiveProductToActiveAddAction(product = null, qty = 1, reason = "") {
+  const rec = kitAiLiveProductToRecommendation(product, qty, reason);
+  if (!rec) return null;
+  return {
+    action: "add",
+    ...rec
+  };
+}
+
+function kitAiHistoryTextForController(history = []) {
+  return (Array.isArray(history) ? history : [])
+    .slice(-8)
+    .map((entry) => `${String(entry?.role || entry?.agent || "")}: ${String(entry?.text || entry?.content || "")}`)
+    .join("\n")
+    .toLowerCase();
+}
+
+function kitAiAssistantAskedForPowerChoice(text = "") {
+  const last = kitAiNormalizeControllerText(text);
+  return (
+    last.includes("rechargeable") &&
+    (
+      last.includes("directly powered") ||
+      last.includes("usb") ||
+      last.includes("cordless") ||
+      last.includes("powered via")
+    )
+  ) && (
+    last.includes("would you like") ||
+    last.includes("choose") ||
+    last.includes("prefer")
+  );
+}
+
+function kitAiUserChoseRechargeable(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return (
+    /\brechargeable\b/i.test(q) ||
+    /\bcordless\b/i.test(q) ||
+    /\bbattery\s*powered\b/i.test(q) ||
+    /\bwireless\b/i.test(q)
+  ) && !/\busb\b|\bplug\b|\bdirectly\s*powered\b/i.test(q);
+}
+
+function kitAiHistoryIndicatesTableLamp(history = [], state = null) {
+  const safe = sanitizeKitAiConversationState(state);
+  const text = kitAiHistoryTextForController(history);
+  return (
+    String(safe.lockedContext?.lampType || safe.resolvedIntent?.lampType || "").toLowerCase() === "table_lamp" ||
+    text.includes("table lamp")
+  );
+}
+
+function kitAiHasSelectedDriverInContext(kitContext = {}) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  return !!String(snapshot.selectedDriverId || snapshot.selectedDriver || "").trim();
+}
+
+function kitAiAssistantAskedForLedWattage(text = "") {
+  const last = kitAiNormalizeControllerText(text);
+  const mentions3 = last.includes("3w") || last.includes("3 w") || last.includes("3 watt");
+  const mentions5 = last.includes("5w") || last.includes("5 w") || last.includes("5 watt");
+  return mentions3 && mentions5 && (
+    last.includes("prefer") ||
+    last.includes("brightness") ||
+    last.includes("brighter") ||
+    last.includes("looking for") ||
+    last.includes("choose")
+  );
+}
+
+function kitAiUserChose3w(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return q === "3w" || q === "3 w" || q === "3 watt" || q === "three watt" || /\b3\s*w\b/i.test(q);
+}
+
+function kitAiUserChose5w(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return q === "5w" || q === "5 w" || q === "5 watt" || q === "five watt" || /\b5\s*w\b/i.test(q);
+}
+
+function kitAiSelectedDriverIdForController(kitContext = {}, state = null) {
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const safe = sanitizeKitAiConversationState(state);
+  return String(snapshot.selectedDriverId || safe.lockedContext?.driverId || safe.resolvedIntent?.driverId || "").trim().toLowerCase();
+}
+
+function kitAiBuildGuidedRechargeable201State(state = null, assistantText = "") {
+  const safe = sanitizeKitAiConversationState(state);
+  return sanitizeKitAiConversationState({
+    ...safe,
+    pendingQuestion: {
+      kind: "led_wattage",
+      expected: "Choose 3W or 5W brightness for the selected standard 201 driver.",
+      source: "server_guided_rechargeable_table_201",
+      createdAt: Date.now()
+    },
+    resolvedIntent: {
+      ...(safe.resolvedIntent || {}),
+      lampType: "table_lamp",
+      powerType: "rechargeable",
+      driverId: "201"
+    },
+    lockedContext: {
+      ...(safe.lockedContext || {}),
+      status: "locked",
+      lampType: "table_lamp",
+      powerType: "rechargeable",
+      driverId: "201"
+    },
+    lastRoute: "server_guided_rechargeable_table_201",
+    lastAssistantMessage: assistantText || "",
+    updatedAt: Date.now()
+  });
+}
+
+function kitAiBuildGuidedBatteryVariantState(state = null, { driverId = "", ledWattage = "" } = {}, assistantText = "") {
+  const safe = sanitizeKitAiConversationState(state);
+  return sanitizeKitAiConversationState({
+    ...safe,
+    pendingQuestion: {
+      kind: "battery_variant",
+      expected: "Choose with sleeve or without sleeve for the primary 2600mAh battery.",
+      capacity: "2600",
+      source: "server_guided_standard_rechargeable_2600_variant",
+      createdAt: Date.now()
+    },
+    resolvedIntent: {
+      ...(safe.resolvedIntent || {}),
+      driverId: driverId || safe.resolvedIntent?.driverId || "",
+      ledWattage: ledWattage || safe.resolvedIntent?.ledWattage || "",
+      batteryCapacity: "2600"
+    },
+    lockedContext: {
+      ...(safe.lockedContext || {}),
+      status: safe.lockedContext?.status || "locked",
+      driverId: driverId || safe.lockedContext?.driverId || "",
+      ledWattage: ledWattage || safe.lockedContext?.ledWattage || "",
+      batteryCapacity: "2600"
+    },
+    lastRoute: "server_guided_standard_rechargeable_2600_variant",
+    lastAssistantMessage: assistantText || "",
+    updatedAt: Date.now()
+  });
+}
+
+function kitAiBuildGuided201Lc1200State(state = null, recommendedProduct = null, assistantText = "") {
+  const safe = sanitizeKitAiConversationState(state);
+  return sanitizeKitAiConversationState({
+    ...safe,
+    pendingQuestion: null,
+    pendingAction: {
+      kind: "confirm_recommended_products",
+      products: recommendedProduct ? [recommendedProduct] : [],
+      source: "server_guided_201_lc_1200_battery",
+      createdAt: Date.now()
+    },
+    resolvedIntent: {
+      ...(safe.resolvedIntent || {}),
+      driverId: "201-lc",
+      batteryCapacity: "1200"
+    },
+    lockedContext: {
+      ...(safe.lockedContext || {}),
+      status: safe.lockedContext?.status || "locked",
+      driverId: "201-lc",
+      batteryCapacity: "1200"
+    },
+    lastRoute: "server_guided_201_lc_1200_battery",
+    lastAssistantMessage: assistantText || "",
+    updatedAt: Date.now()
+  });
+}
+
+function kitAiUserAskedForSmallerLowerCostBattery(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return /\b(smaller|small|compact|low cost|lower cost|cheaper|budget|less backup|short runtime)\b/i.test(q);
+}
+
+function kitAiUserAskedForLongerRuntimeBattery(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return /\b(longer runtime|more runtime|more backup|extended backup|higher backup|long backup|maximum runtime|5200)\b/i.test(q);
+}
+
 function kitAiBuildDirectControllerResponse({
   question = "",
   history = [],
@@ -9577,6 +9873,217 @@ function kitAiBuildDirectControllerResponse({
   const state = kitAiBuildLiveKitLockFromContext(kitContext || {}, conversationState);
   const lastAssistantText = kitAiGetLastAssistantText(history, state);
   const q = kitAiNormalizeControllerText(question);
+
+  /*
+    V31 deterministic beginner guided flow:
+    For the common fresh table-lamp path, do not merely narrate the selected product.
+    Select/add the resolved product in the active kit step-by-step:
+    1) table lamp + rechargeable -> Standard 201 driver
+    2) 3W/5W response after the brightness question -> exact compatible LED
+    3) Standard rechargeable paths ask 2600mAh sleeve variant next
+    4) 201 LC keeps the 1200mAh low-cost battery priority
+  */
+  if (
+    kitAiUserChoseRechargeable(question) &&
+    !kitAiHasSelectedDriverInContext(kitContext || {}) &&
+    kitAiAssistantAskedForPowerChoice(lastAssistantText) &&
+    kitAiHistoryIndicatesTableLamp(history, state)
+  ) {
+    const driver201 = kitAiFind201Driver(liveProducts);
+    if (driver201) {
+      const driverAction = kitAiLiveProductToActiveAddAction(
+        driver201,
+        1,
+        "Fresh guided rechargeable table-lamp path: select the Standard 201 driver before asking LED brightness."
+      );
+      const answer = "Great — for a rechargeable and cordless table lamp, I’ve selected the Standard 201 rechargeable control module. Next, choose the light output: 3W for a standard balanced lamp path, or 5W only if you specifically want a brighter output.";
+      const nextState = kitAiBuildGuidedRechargeable201State(state, answer);
+      nextState.lastUserMessage = String(question || "");
+      return {
+        answer,
+        recommended_products: [],
+        active_kit_actions: driverAction ? [driverAction] : [],
+        action_offer: "none",
+        conversation_state: nextState,
+        direct_reason: "guided_rechargeable_table_select_201"
+      };
+    }
+  }
+
+  if (
+    (kitAiUserChose3w(question) || kitAiUserChose5w(question)) &&
+    (
+      state.pendingQuestion?.kind === "led_wattage" ||
+      kitAiAssistantAskedForLedWattage(lastAssistantText)
+    )
+  ) {
+    const selectedDriverId = kitAiSelectedDriverIdForController(kitContext || {}, state);
+    const is3w = kitAiUserChose3w(question);
+    const is5w = kitAiUserChose5w(question);
+
+    if (selectedDriverId === "201-lc" && is5w) {
+      const answer = "For the 201 LC low-cost driver, stay with the 3W COB path. I should not move this LC build to 5W. Please choose 3W for this driver, or ask me to switch to the Standard 201 driver if you need a brighter 5W path.";
+      const nextState = sanitizeKitAiConversationState({
+        ...state,
+        pendingQuestion: {
+          kind: "led_wattage",
+          expected: "Choose 3W for 201 LC, or explicitly ask to switch driver for a 5W path.",
+          source: "server_guided_201_lc_reject_5w",
+          createdAt: Date.now()
+        },
+        lastUserMessage: String(question || ""),
+        lastAssistantMessage: answer,
+        lastRoute: "server_guided_201_lc_reject_5w",
+        updatedAt: Date.now()
+      });
+      return {
+        answer,
+        recommended_products: [],
+        active_kit_actions: [],
+        action_offer: "none",
+        conversation_state: nextState,
+        direct_reason: "guided_201_lc_reject_5w"
+      };
+    }
+
+    const ledProduct = is3w ? kitAiFind3wSingleLed(liveProducts) : kitAiFind5wSingleLed(liveProducts);
+    if (ledProduct && (selectedDriverId === "201" || selectedDriverId === "201-lc")) {
+      const ledAction = kitAiLiveProductToActiveAddAction(
+        ledProduct,
+        1,
+        `Fresh guided LED resolution for ${selectedDriverId}: add the exact ${is3w ? "3W" : "5W"} compatible single COB LED.`
+      );
+
+      if (selectedDriverId === "201-lc") {
+        const battery1200 = kitAiFind1200Battery(liveProducts);
+        const batteryRec = battery1200
+          ? kitAiLiveProductToRecommendation(
+              battery1200,
+              1,
+              "201 LC is the low-cost path; 1200mAh is the primary default battery recommendation."
+            )
+          : null;
+        const answer = batteryRec
+          ? `Excellent — I’m adding the ${is3w ? "3W" : "3W"} COB LED to your 201 LC kit. For this low-cost LC path, the primary battery recommendation is 1200mAh. Should I add the 1200mAh battery next?`
+          : `Excellent — I’m adding the ${is3w ? "3W" : "3W"} COB LED to your 201 LC kit. For this low-cost LC path, the primary battery recommendation is 1200mAh, but I could not resolve the exact live battery item cleanly in this turn.`;
+        const nextState = kitAiBuildGuided201Lc1200State(state, batteryRec, answer);
+        nextState.lastUserMessage = String(question || "");
+        return {
+          answer,
+          recommended_products: batteryRec ? [batteryRec] : [],
+          active_kit_actions: ledAction ? [ledAction] : [],
+          action_offer: batteryRec ? "active_kit" : "none",
+          conversation_state: nextState,
+          direct_reason: "guided_201_lc_led_then_1200_battery"
+        };
+      }
+
+      const answer = `Excellent — I’m adding the ${is3w ? "3W" : "5W"} COB LED to your Standard 201 kit. For this normal rechargeable path, the primary battery recommendation is 2600mAh. Do you want the 2600mAh battery with sleeve or without sleeve? If you need a smaller lower-cost path, ask for 1200mAh. If you specifically need longer backup and have extra space, I can show the larger 5200mAh sleeve pack.`;
+      const nextState = kitAiBuildGuidedBatteryVariantState(state, {
+        driverId: "201",
+        ledWattage: is3w ? "3w" : "5w"
+      }, answer);
+      nextState.lastUserMessage = String(question || "");
+      return {
+        answer,
+        recommended_products: [],
+        active_kit_actions: ledAction ? [ledAction] : [],
+        action_offer: "none",
+        conversation_state: nextState,
+        direct_reason: "guided_standard_201_led_then_2600_variant"
+      };
+    }
+  }
+
+  /*
+    V31 battery-choice clarification:
+    "yes" after a with-sleeve / without-sleeve choice is not enough to pick a variant.
+    Keep the user on the exact unresolved variant question instead of drifting to another battery.
+  */
+  if (
+    kitAiIsShortAssentReply(question) &&
+    !state.pendingAction &&
+    kitAiStateLooksLikeBatteryVariantChoice(state, lastAssistantText)
+  ) {
+    const answer = "Please choose the exact 2600mAh battery variant: with sleeve or without sleeve. I’ll keep the build on that battery choice and will not switch to a different capacity unless you ask.";
+    const nextState = sanitizeKitAiConversationState({
+      ...state,
+      pendingQuestion: {
+        kind: "battery_variant",
+        expected: "Choose with sleeve or without sleeve for the 2600mAh battery.",
+        capacity: "2600",
+        source: "server_guided_battery_variant_yes_needs_variant",
+        createdAt: Date.now()
+      },
+      lastUserMessage: String(question || ""),
+      lastAssistantMessage: answer,
+      lastRoute: "server_guided_battery_variant_yes_needs_variant",
+      updatedAt: Date.now()
+    });
+    return {
+      answer,
+      recommended_products: [],
+      active_kit_actions: [],
+      action_offer: "none",
+      conversation_state: nextState,
+      direct_reason: "battery_variant_short_assent_needs_choice"
+    };
+  }
+
+  /*
+    V31 deterministic with-sleeve resolution:
+    Match the V30 no-sleeve path. If the user explicitly chooses "with sleeve"
+    while a 2600mAh variant question is active, resolve only that exact product.
+  */
+  if (
+    /\bwith\s+sleeve\b/i.test(q) &&
+    !/\bwithout\s+sleeve\b|\bno\s+sleeve\b/i.test(q) &&
+    kitAiStateLooksLikeBatteryVariantChoice(state, lastAssistantText)
+  ) {
+    const { withSleeve } = kitAiFind2600BatteryVariants(liveProducts);
+    if (withSleeve) {
+      const rec = kitAiLiveProductToRecommendation(
+        withSleeve,
+        1,
+        "User chose the 2600mAh with-sleeve battery variant."
+      );
+      const answer = "Perfect — I’ll keep the 2600mAh with-sleeve battery choice. Should I add that exact variant to your kit?";
+      const nextState = sanitizeKitAiConversationState({
+        ...state,
+        pendingQuestion: null,
+        pendingAction: {
+          kind: "confirm_recommended_products",
+          products: [rec],
+          source: "server_direct_with_sleeve_choice",
+          createdAt: Date.now()
+        },
+        productDispute: null,
+        resolvedIntent: {
+          ...(state.resolvedIntent || {}),
+          batteryCapacity: "2600",
+          batteryVariant: "with_sleeve"
+        },
+        lockedContext: {
+          ...(state.lockedContext || {}),
+          status: state.lockedContext?.status || "locked",
+          batteryCapacity: "2600",
+          batteryVariant: "with_sleeve"
+        },
+        lastUserMessage: String(question || ""),
+        lastAssistantMessage: answer,
+        lastRoute: "server_direct_with_sleeve_choice",
+        updatedAt: Date.now()
+      });
+      return {
+        answer,
+        recommended_products: [rec],
+        active_kit_actions: [],
+        action_offer: "active_kit",
+        conversation_state: nextState,
+        direct_reason: "with_sleeve_variant_choice"
+      };
+    }
+  }
 
   /*
     V30 ambiguous assent guard:
@@ -10251,7 +10758,7 @@ app.post("/kit-ai-chat", async (req, res) => {
 
     // Fast path: Odoo products are cached after the first fetch.
     const liveProductResult = await getLiveOdooWebsiteProducts();
-    const liveProducts = liveProductResult.products || [];
+    const liveProducts = kitAiFilterNormalKitBuilderLiveProducts(liveProductResult.products || []);
 
     const approvedRulesResult = await getApprovedOdooAiTrainingRules();
     const approvedRules = approvedRulesResult.rules || [];
@@ -10573,7 +11080,7 @@ Answer style:
 - If the user says only "add battery" or only "2600mAh", do not choose a variant. Ask for the exact battery direction/variant first.
 - For a starter-kit or complete-kit question, follow the wizard order. Resolve only the next clear step; ask before deciding LED brightness or battery capacity/variant.
 - For a completion question where DRIVER-202 is selected, respect the dual-LED path and correct JST quantity rules, but do not jump to a battery or 5W LED without user confirmation.
-- Battery decision rule: 2600mAh is normally the compact rechargeable lamp path, but the AI must still ask whether the user wants With Sleeve or Without Sleeve unless the variant is explicitly stated. Do not recommend 5200mAh unless the user explicitly asks for longer runtime, greater backup, or a higher-power use case that requires it.
+- Battery decision rule: For Standard 201, 202, and normal rechargeable driver paths, 2600mAh is the primary/default battery recommendation. Ask whether the user wants With Sleeve or Without Sleeve unless the variant is explicitly stated. 1200mAh is a lower-cost/smaller-backup alternative only when the user asks for a smaller, cheaper, or reduced-backup path. For 201 LC specifically, 1200mAh is the primary/default recommendation because LC is the low-cost driver path; 2600mAh is only a longer-runtime alternative when the user asks. 5200mAh is a larger sleeve-only pack, effectively two 2600mAh cells packed together in one sleeve-style pack; mention or recommend it only when the user explicitly asks for longer runtime, greater backup, or a larger battery and the lamp has sufficient space. Never recommend any BMS battery in the normal Kit Builder flow.
 - For bulk/custom requirements, suggest Smart Handicrafts verification.
 - Final lamp compliance depends on full lamp design/testing.
 - Do not say "as an AI language model".
