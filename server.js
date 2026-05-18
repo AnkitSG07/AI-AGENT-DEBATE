@@ -9145,7 +9145,7 @@ function buildBalancedIntegrationProductPromptSet(liveProducts = [], scored = []
   return output.slice(0, KIT_AI_MAX_INTEGRATION_PROMPT_PRODUCTS);
 }
 
-function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageContext, kitContext } = {}) {
+function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageContext, kitContext, integrationConsultingMode = false } = {}) {
   const searchText = buildKitAiSearchText({ question, pageContext, kitContext });
 
   const scored = (liveProducts || [])
@@ -9156,7 +9156,7 @@ function selectRelevantLiveProductsForKitAi(liveProducts = [], { question, pageC
     .sort((a, b) => b.score - a.score);
 
   if (
-    isKitAiIntegrationConceptQuestion(question, pageContext, kitContext) ||
+    integrationConsultingMode ||
     isKitAiStarterOrCompletionQuestion(question) ||
     isKitAiExplicitDirectAddQuestion(question)
   ) {
@@ -9229,6 +9229,9 @@ function compactKitAiContext(kitContext = {}, question = "") {
       : [],
     activeKitItems: Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.slice(0, 12) : [],
     selectedItemIds: Array.isArray(snapshot.selectedItemIds) ? snapshot.selectedItemIds.slice(0, 30) : [],
+    selectedItemQuantities: snapshot.selectedItemQuantities && typeof snapshot.selectedItemQuantities === "object"
+      ? snapshot.selectedItemQuantities
+      : {},
     coreComplete: !!snapshot.coreComplete,
     missingCoreParts: Array.isArray(snapshot.missingCoreParts) ? snapshot.missingCoreParts.slice(0, 8) : [],
     ...(includeSavedKits && Array.isArray(snapshot.savedKits)
@@ -9256,8 +9259,393 @@ function compactChatHistory(history = []) {
 }
 
 
+// ===================== KIT AI V29 STATEFUL CONVERSATION CONTROLLER =====================
+const KIT_AI_CONVERSATION_STATE_VERSION = 1;
 
+function kitAiEmptyConversationState() {
+  return {
+    version: KIT_AI_CONVERSATION_STATE_VERSION,
+    pendingQuestion: null,
+    pendingAction: null,
+    resolvedIntent: {},
+    productDispute: null,
+    lockedContext: {
+      status: "unlocked",
+      lampType: "",
+      powerType: "",
+      driverId: "",
+      driverLabel: "",
+      ledPath: "",
+      ledWattage: "",
+      batteryCapacity: "",
+      batteryVariant: "",
+      lastExplicitChangeAt: 0,
+      lockedAt: 0
+    },
+    integrationState: {
+      status: "inactive",
+      userAsked: false,
+      imageAttached: false,
+      lastImageSummary: "",
+      suitabilityLevel: "unknown",
+      physicalDetails: {},
+      lastActivatedAt: 0
+    },
+    lastAssistantMessage: "",
+    lastUserMessage: "",
+    lastRoute: "",
+    contextChangeRequested: null,
+    manualSyncSignature: "",
+    updatedAt: Date.now()
+  };
+}
 
+function kitAiSafeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function sanitizeKitAiConversationState(rawState = null) {
+  const raw = kitAiSafeObject(rawState);
+  const base = kitAiEmptyConversationState();
+  return {
+    version: KIT_AI_CONVERSATION_STATE_VERSION,
+    pendingQuestion: raw.pendingQuestion && typeof raw.pendingQuestion === "object" ? raw.pendingQuestion : null,
+    pendingAction: raw.pendingAction && typeof raw.pendingAction === "object" ? raw.pendingAction : null,
+    resolvedIntent: { ...kitAiSafeObject(raw.resolvedIntent) },
+    productDispute: raw.productDispute && typeof raw.productDispute === "object" ? raw.productDispute : null,
+    lockedContext: { ...base.lockedContext, ...kitAiSafeObject(raw.lockedContext) },
+    integrationState: { ...base.integrationState, ...kitAiSafeObject(raw.integrationState) },
+    lastAssistantMessage: String(raw.lastAssistantMessage || ""),
+    lastUserMessage: String(raw.lastUserMessage || ""),
+    lastRoute: String(raw.lastRoute || ""),
+    contextChangeRequested: raw.contextChangeRequested && typeof raw.contextChangeRequested === "object"
+      ? raw.contextChangeRequested
+      : null,
+    manualSyncSignature: String(raw.manualSyncSignature || ""),
+    updatedAt: Number(raw.updatedAt || Date.now())
+  };
+}
+
+function kitAiNormalizeControllerText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function kitAiUserExplicitlyRequestsIntegration(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  if (!q) return false;
+  return (
+    q.includes("integration") ||
+    q.includes("integrate") ||
+    q.includes("fit inside") ||
+    q.includes("will it fit") ||
+    q.includes("where should i place") ||
+    q.includes("where do i place") ||
+    q.includes("placement") ||
+    q.includes("inside the lamp") ||
+    q.includes("mount") ||
+    q.includes("cavity") ||
+    q.includes("charging port") ||
+    q.includes("wire routing") ||
+    q.includes("analyze the lamp") ||
+    q.includes("analyse the lamp") ||
+    q.includes("lamp image") ||
+    q.includes("image of the lamp") ||
+    q.includes("photo of the lamp")
+  );
+}
+
+function kitAiUserExplicitlyChangesContext(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  if (!q) return false;
+  return (
+    q.includes("start over") ||
+    q.includes("start again") ||
+    q.includes("new lamp") ||
+    q.includes("new build") ||
+    q.includes("switch to") ||
+    q.includes("change to") ||
+    q.includes("actually i want") ||
+    q.includes("instead i want") ||
+    q.includes("i want usb instead") ||
+    q.includes("i want rechargeable instead") ||
+    q.includes("replace the driver") ||
+    q.includes("change the driver") ||
+    q.includes("different driver") ||
+    q.includes("different lamp type")
+  );
+}
+
+function kitAiLooksLikeProductPushback(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  if (!q) return false;
+  return (
+    q === "wrong" ||
+    q === "not correct" ||
+    q === "that is wrong" ||
+    q === "that is not correct" ||
+    q.includes("check again") ||
+    q.includes("look again") ||
+    q.includes("you have it") ||
+    q.includes("it is listed") ||
+    q.includes("it is available") ||
+    q.includes("listed live") ||
+    q.includes("available live") ||
+    q.includes("it exists") ||
+    q.includes("that product exists") ||
+    q.includes("i saw it")
+  );
+}
+
+function kitAiBuildLiveKitLockFromContext(kitContext = {}, existingConversationState = null) {
+  const state = sanitizeKitAiConversationState(existingConversationState);
+  const snapshot = kitContext?.kitBuilderSnapshot || {};
+  const selectedDriverId = String(snapshot.selectedDriverId || state.lockedContext.driverId || "");
+  const selectedDriver = String(snapshot.selectedDriver || state.lockedContext.driverLabel || "");
+  const selectedApplication = String(snapshot.selectedApplication || state.lockedContext.lampType || "");
+  const selectedItemIds = Array.isArray(snapshot.selectedItemIds) ? snapshot.selectedItemIds.map((id) => String(id || "")) : [];
+  const selectedItemQuantities = snapshot.selectedItemQuantities && typeof snapshot.selectedItemQuantities === "object"
+    ? snapshot.selectedItemQuantities
+    : {};
+  const activeText = Array.isArray(snapshot.activeKitItems) ? snapshot.activeKitItems.join(" ").toLowerCase() : "";
+
+  if (!state.lockedContext.status || state.lockedContext.status === "unlocked") {
+    if (selectedApplication) state.lockedContext.lampType = selectedApplication;
+    if (selectedDriverId) {
+      state.lockedContext.driverId = selectedDriverId;
+      state.lockedContext.driverLabel = selectedDriver;
+      state.lockedContext.status = "locked";
+      state.lockedContext.lockedAt = state.lockedContext.lockedAt || Date.now();
+    }
+  }
+
+  if (selectedDriverId && !state.contextChangeRequested) {
+    /*
+      The live builder may be ahead of server memory. Treat the actual selected driver as
+      authoritative if no explicit context-change request is in progress.
+    */
+    state.lockedContext.driverId = selectedDriverId;
+    state.lockedContext.driverLabel = selectedDriver;
+    state.lockedContext.status = "locked";
+  }
+
+  if (/^(101|102|103)$/.test(selectedDriverId)) state.lockedContext.powerType = "usb_powered";
+  if (/^(201|201-lc|202|202-lc|204|205|206-55|206-75|206-115)$/.test(selectedDriverId)) state.lockedContext.powerType = "rechargeable";
+
+  if (selectedItemIds.includes("3w-dual")) {
+    state.lockedContext.ledPath = "dual_cct";
+    state.lockedContext.ledWattage = "3w";
+  } else if (selectedItemIds.includes("5w-dual")) {
+    state.lockedContext.ledPath = "dual_cct";
+    state.lockedContext.ledWattage = "5w";
+  } else if (
+    state.lockedContext.driverId === "202" &&
+    selectedItemIds.includes("3w-single") &&
+    (
+      Number(selectedItemQuantities["3w-single"] || 0) >= 2 ||
+      activeText.includes("qty: 2") ||
+      activeText.includes("qty 2") ||
+      state.resolvedIntent?.lightingMode === "two_separate_single_color_leds"
+    )
+  ) {
+    state.lockedContext.ledPath = "two_separate_single_color";
+    state.lockedContext.ledWattage = "3w";
+  } else if (selectedItemIds.includes("3w-single")) {
+    state.lockedContext.ledPath = state.lockedContext.ledPath || "single_color";
+    state.lockedContext.ledWattage = "3w";
+  } else if (selectedItemIds.includes("5w-single")) {
+    state.lockedContext.ledPath = state.lockedContext.ledPath || "single_color";
+    state.lockedContext.ledWattage = "5w";
+  }
+
+  if (selectedItemIds.includes("battery-1200")) state.lockedContext.batteryCapacity = "1200";
+  if (selectedItemIds.includes("battery-1800")) state.lockedContext.batteryCapacity = "1800";
+  if (selectedItemIds.includes("battery-2600-sleeve") || selectedItemIds.includes("battery-2600-nosleeve")) state.lockedContext.batteryCapacity = "2600";
+  if (selectedItemIds.includes("battery-5200") || selectedItemIds.includes("battery-5200-bms")) state.lockedContext.batteryCapacity = "5200";
+  if (selectedItemIds.includes("battery-2600-sleeve")) state.lockedContext.batteryVariant = "with_sleeve";
+  if (selectedItemIds.includes("battery-2600-nosleeve") || selectedItemIds.includes("battery-1200") || selectedItemIds.includes("battery-1800")) state.lockedContext.batteryVariant = "without_sleeve";
+
+  state.updatedAt = Date.now();
+  return state;
+}
+
+function kitAiShouldRunIntegrationMode({ question = "", imageAttached = false, conversationState = null, decisionPolicy = null } = {}) {
+  const state = sanitizeKitAiConversationState(conversationState);
+  return (
+    !!imageAttached ||
+    kitAiUserExplicitlyRequestsIntegration(question) ||
+    state.integrationState?.status === "active" ||
+    state.integrationState?.userAsked === true ||
+    !!decisionPolicy?.active?.integrationMode
+  );
+}
+
+function kitAiBuildConversationStateForPrompt({
+  rawConversationState = null,
+  question = "",
+  kitContext = {},
+  imageAttached = false,
+  priorImageSummary = "",
+  answer = ""
+} = {}) {
+  let state = sanitizeKitAiConversationState(rawConversationState);
+  state = kitAiBuildLiveKitLockFromContext(kitContext, state);
+  state.lastUserMessage = String(question || state.lastUserMessage || "");
+  if (answer) {
+    state.lastAssistantMessage = String(answer || "");
+    const answerText = kitAiNormalizeControllerText(answer);
+    if (
+      answerText.includes("not currently listed live") ||
+      answerText.includes("not explicitly listed live") ||
+      answerText.includes("not listed live")
+    ) {
+      state.productDispute = {
+        active: true,
+        kind: "availability_claim",
+        claim: String(answer || "").slice(0, 420),
+        createdAt: Date.now()
+      };
+    }
+
+    if (
+      answerText.includes("with sleeve or without sleeve") ||
+      answerText.includes("choose with sleeve or without sleeve")
+    ) {
+      state.pendingQuestion = {
+        kind: "battery_variant",
+        options: ["with_sleeve", "without_sleeve"],
+        capacity: String(state.lockedContext?.batteryCapacity || "2600"),
+        source: "server_answer",
+        createdAt: Date.now()
+      };
+    }
+
+    if (
+      answerText.includes("3w or 5w") ||
+      answerText.includes("3 w or 5 w") ||
+      answerText.includes("3w / 5w")
+    ) {
+      state.pendingQuestion = {
+        kind: "led_wattage",
+        options: ["3w", "5w"],
+        source: "server_answer",
+        createdAt: Date.now()
+      };
+    }
+  }
+  if (kitAiUserExplicitlyChangesContext(question)) {
+    state.contextChangeRequested = {
+      active: true,
+      text: String(question || ""),
+      at: Date.now()
+    };
+    state.lockedContext.status = "unlocked";
+  }
+  if (kitAiUserExplicitlyRequestsIntegration(question) || imageAttached) {
+    state.integrationState = {
+      ...state.integrationState,
+      status: "active",
+      userAsked: true,
+      imageAttached: !!imageAttached,
+      lastImageSummary: String(priorImageSummary || state.integrationState?.lastImageSummary || ""),
+      lastActivatedAt: Date.now()
+    };
+  }
+  if (state.productDispute?.active && kitAiLooksLikeProductPushback(question)) {
+    state.productDispute.userPushbackDetected = true;
+    state.productDispute.pushbackText = String(question || "");
+  }
+  state.updatedAt = Date.now();
+  return sanitizeKitAiConversationState(state);
+}
+
+function formatKitAiConversationStateForPrompt(state = null) {
+  const safe = sanitizeKitAiConversationState(state);
+  return JSON.stringify({
+    pendingQuestion: safe.pendingQuestion,
+    pendingAction: safe.pendingAction,
+    resolvedIntent: safe.resolvedIntent,
+    productDispute: safe.productDispute,
+    lockedContext: safe.lockedContext,
+    integrationState: safe.integrationState,
+    contextChangeRequested: safe.contextChangeRequested
+  }, null, 2);
+}
+
+function repairLockedKitContextDriftAnswer({
+  answer = "",
+  question = "",
+  conversationState = null
+} = {}) {
+  const text = String(answer || "").trim();
+  if (!text) return text;
+
+  const state = sanitizeKitAiConversationState(conversationState);
+  const lock = state.lockedContext || {};
+  const q = kitAiNormalizeControllerText(question);
+
+  if (
+    lock.status === "locked" &&
+    lock.powerType === "rechargeable" &&
+    !kitAiUserExplicitlyChangesContext(question) &&
+    !/\bcompare\b|\bdifference\b|\balternative\b|\bwhat about usb\b/i.test(q) &&
+    /\bUSB[-\s]?powered\b|\bUSB\s+path\b|\bAS-U-10[123]\b/i.test(text)
+  ) {
+    return [
+      "I will keep this build on the rechargeable path you already established.",
+      "",
+      "The current selected kit context should not switch to USB unless you explicitly ask to change it.",
+      "",
+      "Please continue with the next unresolved rechargeable-kit choice, or tell me clearly if you want to switch power type."
+    ].join("\n");
+  }
+
+  if (
+    lock.status === "locked" &&
+    lock.driverId === "202" &&
+    lock.ledPath === "two_separate_single_color" &&
+    !kitAiUserExplicitlyChangesContext(question) &&
+    /\b3W\s+Dual\b|\b5W\s+Dual\b|\bdual[-\s]?colour\b|\bdual[-\s]?color\b/i.test(text) &&
+    !/\bcompare\b|\bdifference\b|\bexplain\b/i.test(q)
+  ) {
+    return [
+      "I will keep the LED path on two separate single-colour light points, because that is the context already established.",
+      "",
+      "For this 202 build, continue with two normal separate LED modules unless you explicitly ask to switch to the Dual Warm-Cool COB path."
+    ].join("\n");
+  }
+
+  return text;
+}
+
+function repairUnrequestedKitIntegrationAnswer({
+  answer = "",
+  question = "",
+  conversationState = null
+} = {}) {
+  const text = String(answer || "").trim();
+  if (!text) return text;
+  const state = sanitizeKitAiConversationState(conversationState);
+  if (kitAiShouldRunIntegrationMode({
+    question,
+    imageAttached: false,
+    conversationState: state,
+    decisionPolicy: null
+  })) return text;
+
+  const hard = /\b(integration|integrate|placement|cavity|where .* place|lamp base|charging port|material it will be made of|light position|fit inside)\b/i;
+  if (!hard.test(text)) return text;
+
+  const paragraphs = text.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  const kept = paragraphs.filter((part) => !hard.test(part));
+  return kept.length
+    ? kept.join("\n\n")
+    : "I’ll keep this focused on the current kit-selection step. Ask for integration or fitment help whenever you want physical placement guidance.";
+}
 
 // ===================== KIT AI SSE STREAM HELPERS =====================
 // Streams only the customer-facing "answer" text while Gemini is still
@@ -9430,6 +9818,7 @@ app.post("/kit-ai-chat", async (req, res) => {
       lampReferenceImage,
       lampReferenceSummary,
       projectState,
+      conversationState,
       sessionId
     } = req.body || {};
     const wantsStream = String(req.headers.accept || "").toLowerCase().includes("text/event-stream") || req.body?.stream === true;
@@ -9500,6 +9889,13 @@ app.post("/kit-ai-chat", async (req, res) => {
       safeQuestion
     );
 
+    const incomingConversationState = sanitizeKitAiConversationState(
+      conversationState ||
+      kitContext?.conversationState ||
+      persistedSession?.kit_context?.conversationState ||
+      null
+    );
+
     // Fast path: Odoo products are cached after the first fetch.
     const liveProductResult = await getLiveOdooWebsiteProducts();
     const liveProducts = liveProductResult.products || [];
@@ -9559,11 +9955,20 @@ app.post("/kit-ai-chat", async (req, res) => {
       legacyDecisionPolicy
     );
 
-    const integrationConsultingMode =
-      isKitAiIntegrationConceptQuestion(safeQuestion, pageContext, kitContext) ||
-      !!decisionPolicy?.active?.integrationMode ||
-      !!normalizedLampReferenceImage ||
-      !!priorLampReferenceSummary;
+    const resolvedConversationState = kitAiBuildConversationStateForPrompt({
+      rawConversationState: incomingConversationState,
+      question: safeQuestion,
+      kitContext: kitContext || {},
+      imageAttached: !!normalizedLampReferenceImage,
+      priorImageSummary: priorLampReferenceSummary || ""
+    });
+
+    const integrationConsultingMode = kitAiShouldRunIntegrationMode({
+      question: safeQuestion,
+      imageAttached: !!normalizedLampReferenceImage,
+      conversationState: resolvedConversationState,
+      decisionPolicy
+    });
 
     // Speed optimization: send only relevant live products to Gemini, not the full website catalogue.
     // For creative lamp/integration questions, send a balanced compact set across drivers, LEDs/strips,
@@ -9571,7 +9976,8 @@ app.post("/kit-ai-chat", async (req, res) => {
     const relevantLiveProducts = selectRelevantLiveProductsForKitAi(liveProducts, {
       question: safeQuestion,
       pageContext,
-      kitContext
+      kitContext,
+      integrationConsultingMode
     });
 
     const liveProductsForPrompt = buildLiveProductsForPrompt(relevantLiveProducts);
@@ -9643,7 +10049,7 @@ You are not a generic chatbot. You are a technical product assistant and sales e
 
 Your job is to help artisans, exporters, manufacturers, lighting brands, and OEM buyers build correct kits using live Smart Handicrafts website products only.
 
-You are also a practical lamp integration consultant. When the user describes a lamp concept, object, gift idea, enclosure, or asks how to place electronics inside a design, help them translate that idea into a practical lighting layout before jumping to products.
+You are also a practical lamp integration consultant, but integration mode is controlled. Enter physical integration/placement analysis only when the user explicitly asks for fitment, placement, installation, physical suitability, or when a lamp image is attached for analysis. If the current turn is product selection, confirmation, correction, or a short reply, stay in that exact kit-selection context and do not drift into placement advice.
 
 REFERENCE IMAGE SUPPORT:
 - A customer may attach a reference lamp image. When an image is attached, analyze only the visible structure: apparent lamp form, base/head/body shape, likely visible light zones, contour/edge opportunities, and possible external port/touch-point locations.
@@ -9655,7 +10061,7 @@ REFERENCE IMAGE SUPPORT:
 
 Always respond in this order:
 1. Acknowledge the user’s requirement.
-2. If this is a lamp concept or integration question, briefly explain the likely lighting layout and how the electronics could sit inside the object.
+2. Only if integrationConsultingMode is true, briefly explain the likely physical layout/integration issue. Otherwise do not add cavity, placement, charging-port, or material advice unless the user asked for it.
 3. Check and mention the current active kit/selected driver if available and relevant.
 4. Explain whether the active kit is suitable.
 5. Identify missing core parts.
@@ -9688,6 +10094,12 @@ INTEGRATION CONSULTING RULES:
 - Ask for only the most useful missing inputs, usually 1 to 3 of: approximate dimensions, material, desired light effect, expected runtime, portability, or a sketch/photo.
 - If the user asks "how should I place it" or "how to integrate it", prioritise placement/integration guidance over selling a product.
 - If the user asks for a complete product recommendation and enough detail exists, combine the integration guidance with a final Smart Handicrafts kit recommendation.
+- Indian users may describe practical "jugaad" or informal workarounds. Do not dismiss them. Evaluate the idea as: Good fit, Workable with care, Possible but not recommended, or Avoid/not suitable. Explain why in practical terms.
+- Separate electrical compatibility from physical integration suitability. A part can be electrically correct but physically awkward or unsuitable for the described cavity, charging access, wire route, material, or serviceability.
+- If a chosen part may not physically suit the design, do not silently change the kit. Say what may be difficult and ask whether the user wants to keep the selected context and plan a workaround, or explicitly explore a different option.
+- For one-off prototype/jugaad ideas, you may suggest a workable path with cautions. For repeat production, highlight repeatability, serviceability, charging access, wire routing, and assembly risk.
+- If a reference image is attached, separate: (a) what is visibly observed, (b) cautious inference, and (c) what still needs confirmation. Never claim hidden cavity size, exact fit, material certainty, or internal construction from an exterior photo alone.
+- When image analysis is requested, relate the visible lamp form to the currently locked kit context if one exists, instead of restarting product selection.
 
 Answer style:
 - Talk naturally like a helpful expert assistant, not like a form, script, FAQ, or product catalogue.
@@ -9799,6 +10211,19 @@ These approved rules override general assumptions. Use them whenever relevant, e
 STRUCTURED LAMP PROJECT STATE:
 ${JSON.stringify(resolvedProjectState, null, 2)}
 
+STATEFUL CONVERSATION CONTROLLER:
+${formatKitAiConversationStateForPrompt(resolvedConversationState)}
+
+How to use the stateful conversation controller:
+- This state is the server/frontend coordination layer for what the user is replying to.
+- lockedContext is sticky. Do not change lamp power type, driver path, LED path, battery path, or build direction unless contextChangeRequested is active or the user explicitly asks to change it in the current message.
+- If pendingQuestion exists, interpret short replies as answers to that question before treating them as a new topic.
+- If pendingAction exists, interpret "yes", "no", "add it", "add them", "skip", or similar short replies in relation to that action.
+- If productDispute is active, resolve the disputed live-product claim first by checking the live product list and builder context. Do not jump to integration advice.
+- resolvedIntent stores decisions already clarified. Do not reopen or contradict them unless the user explicitly changes them.
+- integrationState controls physical placement/fitment mode. Do not enter integration mode merely because an older image summary exists or because a kit is complete.
+- Manual builder state is authoritative. Do not claim the kit changed unless active_kit_actions exists and the frontend will execute it.
+
 How to use structured lamp project state:
 - Treat it as the server's current best interpretation of the user's ongoing lamp/project requirement.
 - It may combine multiple recent messages, so do not forget earlier project details just because the latest message is short.
@@ -9834,6 +10259,7 @@ ${JSON.stringify({
   lampReference: lampReferencePromptContext,
   guidedFlowPolicy: "stepwise application -> driver -> LED -> battery -> wire/accessories -> review",
   structuredProjectState: resolvedProjectState,
+  conversationController: resolvedConversationState,
   projectStateSource: projectStateResult?.source || "unknown",
   decisionPolicy: {
     active: decisionPolicy?.active || null,
@@ -9872,6 +10298,10 @@ Context interpretation rules:
 - The "kit.selectedDriverSupportedProductIds" field is the Kit Builder's internal compatibility list for the selected driver. Treat it as a strong signal for what the builder can actually add for that selected driver.
 - The "kit.selectedDriverRecommendedProductIds" field is the Kit Builder's preferred default set for that selected driver. Use it to avoid suggesting live but builder-incompatible parts.
 - The "kit.completionMessage" and "kit.coreStatus" indicate missing core parts.
+- The "conversationController.lockedContext" is a hard context lock. Stay inside it unless the user explicitly requests a change. Never switch rechargeable ↔ USB, two-separate-LED ↔ dual-CCT LED, or normal COB ↔ 12V/strip path by inference alone.
+- The "conversationController.pendingQuestion" and "conversationController.pendingAction" explain what a short reply is answering. Honor them before doing new reasoning.
+- The "conversationController.productDispute" means the user is challenging a prior live-product or suitability claim; resolve that exact claim first.
+- The "conversationController.integrationState" controls whether physical placement/fitment should be discussed this turn.
 - If the user gives a broad intent such as "need to make a table lamp", answer like a guided kit builder: acknowledge current selection first, then decide only the next clear step. Do not dump a complete kit.
 - Respect kit.currentStep and kit.currentPartsTab. The assistant should advance the flow step-wise and never behave as though it cannot see the wizard state.
 - If the user gives a creative form-factor concept such as "notebook lamp", "gift lamp", "lighting inside a bottle", or asks about placement/integration, treat it as both an implementation question and a kit-building question.
@@ -10282,6 +10712,24 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     );
 
     updateFinalAnswer(
+      repairLockedKitContextDriftAnswer({
+        answer,
+        question: safeQuestion,
+        conversationState: resolvedConversationState
+      }),
+      "locked_context_drift_repaired"
+    );
+
+    updateFinalAnswer(
+      repairUnrequestedKitIntegrationAnswer({
+        answer,
+        question: safeQuestion,
+        conversationState: resolvedConversationState
+      }),
+      "unrequested_integration_repaired"
+    );
+
+    updateFinalAnswer(
       applyKitAiDecisionPolicyRepair({
         answer,
         question: safeQuestion,
@@ -10290,6 +10738,29 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
         projectState: resolvedProjectState
       }),
       "deterministic_decision_policy_repair"
+    );
+
+    /*
+      Final V29 controller guard pass. The deterministic policy may improve product
+      selection wording, but it must not re-open a context drift or inject physical
+      integration advice in a non-integration turn.
+    */
+    updateFinalAnswer(
+      repairLockedKitContextDriftAnswer({
+        answer,
+        question: safeQuestion,
+        conversationState: resolvedConversationState
+      }),
+      "locked_context_final_guard"
+    );
+
+    updateFinalAnswer(
+      repairUnrequestedKitIntegrationAnswer({
+        answer,
+        question: safeQuestion,
+        conversationState: resolvedConversationState
+      }),
+      "unrequested_integration_final_guard"
     );
 
     const finalPayload = {
@@ -10312,6 +10783,14 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       prompt_integration_chunks_count: relevantIntegrationKnowledgeChunks.length,
       integration_consulting_mode: integrationConsultingMode,
       project_state: resolvedProjectState,
+      conversation_state: kitAiBuildConversationStateForPrompt({
+        rawConversationState: resolvedConversationState,
+        question: safeQuestion,
+        kitContext: kitContext || {},
+        imageAttached: !!normalizedLampReferenceImage,
+        priorImageSummary: returnedLampReferenceImageSummary || priorLampReferenceSummary || "",
+        answer
+      }),
       project_state_source: projectStateResult?.source || "unknown",
       project_state_extractor_ok: !!projectStateResult?.extractor_ok,
       deterministic_decision_policy_source: decisionPolicy?.policy_source || (decisionPolicy === structuredDecisionPolicy ? "structured_project_state" : "legacy_fallback"),
@@ -10338,7 +10817,10 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       question: safeQuestion,
       answer,
       projectState: resolvedProjectState,
-      kitContext: kitContext || {},
+      kitContext: {
+        ...(kitContext || {}),
+        conversationState: finalPayload.conversation_state
+      },
       recommendedProducts,
       activeKitActions,
       imageSummary: returnedLampReferenceImageSummary
@@ -10396,6 +10878,7 @@ app.get("/kit-ai-session/load", async (req, res) => {
       messages: snapshot.messages,
       project_state: snapshot.session?.project_state || null,
       kit_context: snapshot.session?.kit_context || null,
+      conversation_state: snapshot.session?.kit_context?.conversationState || null,
       rolling_summary: snapshot.session?.rolling_summary || "",
       error: snapshot.error || null
     });
