@@ -9396,9 +9396,339 @@ function kitAiLooksLikeProductPushback(message = "") {
     q.includes("listed live") ||
     q.includes("available live") ||
     q.includes("it exists") ||
+    q.includes("it is there") ||
+    q.includes("yes it is there") ||
     q.includes("that product exists") ||
     q.includes("i saw it")
   );
+}
+
+
+function kitAiIsShortAssentReply(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return /^(yes|yes please|ok|okay|sure|haan|ha|yep|yeah|correct|right)$/.test(q);
+}
+
+function kitAiGetLastAssistantText(history = [], conversationState = null) {
+  for (let i = (Array.isArray(history) ? history.length : 0) - 1; i >= 0; i -= 1) {
+    const item = history[i] || {};
+    const role = String(item.role || item.agent || "").toLowerCase();
+    if (role === "assistant" || role === "bot") {
+      const text = String(item.text || item.content || "").trim();
+      if (text) return text;
+    }
+  }
+  const state = sanitizeKitAiConversationState(conversationState);
+  return String(state.lastAssistantMessage || "").trim();
+}
+
+function kitAiAssistantAskedForOpenDetail(text = "") {
+  const last = kitAiNormalizeControllerText(text);
+  if (!last) return false;
+  const asksWhereOrDescribe =
+    last.includes("where the two light points") ||
+    last.includes("where will the two light points") ||
+    last.includes("where would the two light points") ||
+    last.includes("where do you want") ||
+    last.includes("where would you like") ||
+    last.includes("could you tell me where") ||
+    last.includes("tell me where") ||
+    last.includes("describe") ||
+    last.includes("light positions") ||
+    last.includes("placement detail") ||
+    last.includes("physical placement");
+
+  const looksOpenTextRatherThanBinary =
+    !last.includes("should i add") &&
+    !last.includes("would you like to add") &&
+    !last.includes("do you want me to add") &&
+    !last.includes("with sleeve or without sleeve") &&
+    !last.includes("3w or 5w");
+
+  return asksWhereOrDescribe && looksOpenTextRatherThanBinary;
+}
+
+function kitAiLiveProductBuilderId(product = {}) {
+  return String(product?.builder_product_id || product?.builderProductId || "").trim();
+}
+
+function kitAiFindBattery2600WithoutSleeveLiveProduct(liveProducts = []) {
+  return (liveProducts || []).find((product) =>
+    kitAiLiveProductBuilderId(product) === "battery-2600-nosleeve"
+  ) || findBestLiveProductByTitleSkuSignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without\s+sleeve|no\s+sleeve)\b/i],
+    prefer: [/\bsh-bat-26[-\s]?ws\b/i, /\bwithout\s+sleeve\b/i, /\b18650\b/i, /\bmah\b/i]
+  }) || findBestLiveProductBySignals(liveProducts, {
+    must: [/\b(battery|18650|cell)\b/i, /\b2600\b/i, /\b(without\s+sleeve|no\s+sleeve)\b/i],
+    prefer: [/\bsh-bat-26[-\s]?ws\b/i, /\bwithout\s+sleeve\b/i, /\b18650\b/i, /\bmah\b/i]
+  }) || null;
+}
+
+function kitAiLiveProductToRecommendation(product = null, qty = 1, reason = "") {
+  if (!product) return null;
+  return {
+    name: String(product.name || "").trim(),
+    sku: String(product.sku || (Array.isArray(product.variantSkus) ? product.variantSkus[0] : "") || "").trim(),
+    qty: Math.max(1, Number(qty || 1)),
+    type: getKitAiIntegrationProductBucket(product),
+    builder_product_id: kitAiLiveProductBuilderId(product),
+    reason: String(reason || "").trim()
+  };
+}
+
+function kitAiStateLooksLikeBatteryVariantChoice(state = null, lastAssistantText = "") {
+  const safe = sanitizeKitAiConversationState(state);
+  if (safe.pendingQuestion?.kind === "battery_variant") return true;
+
+  const last = kitAiNormalizeControllerText(lastAssistantText);
+  if (!last) return false;
+
+  const mentionsVariant =
+    last.includes("with sleeve") ||
+    last.includes("without sleeve") ||
+    last.includes("sleeve version") ||
+    last.includes("separate 18650 battery holder") ||
+    last.includes("battery holder");
+
+  const asksChoice =
+    last.includes("would you prefer") ||
+    last.includes("do you intend") ||
+    last.includes("which") ||
+    last.includes("choose") ||
+    last.includes("with sleeve or without sleeve");
+
+  return mentionsVariant && asksChoice;
+}
+
+function kitAiUserChoseWithoutSleeve(message = "") {
+  const q = kitAiNormalizeControllerText(message);
+  return (
+    q === "without sleeve" ||
+    q === "no sleeve" ||
+    q === "bare" ||
+    q === "bare battery" ||
+    q.includes("without sleeve")
+  );
+}
+
+function kitAiLastAssistantClaimedNoSleeveUnavailable(text = "") {
+  const last = kitAiNormalizeControllerText(text);
+  return (
+    last.includes("without sleeve") &&
+    last.includes("battery") &&
+    (
+      last.includes("not explicitly listed live") ||
+      last.includes("not currently listed live") ||
+      last.includes("not listed") ||
+      last.includes("dont have") ||
+      last.includes("do not have")
+    )
+  );
+}
+
+function kitAiBatteryDisputeTargetsWithoutSleeve(state = null) {
+  const safe = sanitizeKitAiConversationState(state);
+  const dispute = safe.productDispute;
+  if (!dispute || dispute.active !== true) return false;
+  const claim = kitAiNormalizeControllerText(dispute.claim || "");
+  return (
+    String(dispute.targetBuilderProductId || "") === "battery-2600-nosleeve" ||
+    String(dispute.targetVariant || "") === "without_sleeve" ||
+    String(dispute.targetHint || "").toLowerCase().includes("without") ||
+    claim.includes("without sleeve")
+  );
+}
+
+function kitAiBuildDirectConversationStatePatchForNoSleeve(state = null, recommendedProduct = null, source = "") {
+  const safe = sanitizeKitAiConversationState(state);
+  return sanitizeKitAiConversationState({
+    ...safe,
+    pendingQuestion: null,
+    pendingAction: {
+      kind: "confirm_recommended_products",
+      products: recommendedProduct ? [recommendedProduct] : [],
+      source: source || "server_direct_no_sleeve_resolution",
+      createdAt: Date.now()
+    },
+    productDispute: null,
+    resolvedIntent: {
+      ...(safe.resolvedIntent || {}),
+      batteryCapacity: "2600",
+      batteryVariant: "without_sleeve"
+    },
+    lockedContext: {
+      ...(safe.lockedContext || {}),
+      status: safe.lockedContext?.status || "locked",
+      batteryCapacity: "2600",
+      batteryVariant: "without_sleeve"
+    },
+    lastRoute: source || "server_direct_no_sleeve_resolution",
+    updatedAt: Date.now()
+  });
+}
+
+function kitAiBuildDirectControllerResponse({
+  question = "",
+  history = [],
+  conversationState = null,
+  kitContext = {},
+  liveProducts = []
+} = {}) {
+  const state = kitAiBuildLiveKitLockFromContext(kitContext || {}, conversationState);
+  const lastAssistantText = kitAiGetLastAssistantText(history, state);
+  const q = kitAiNormalizeControllerText(question);
+
+  /*
+    V30 ambiguous assent guard:
+    "yes" after an open-ended request for placement detail must not be reinterpreted
+    as confirmation of a product path or kit action.
+  */
+  if (
+    kitAiIsShortAssentReply(question) &&
+    !state.pendingAction &&
+    kitAiAssistantAskedForOpenDetail(lastAssistantText)
+  ) {
+    return {
+      answer: "I still need the actual placement detail to continue — for example, whether the two light points are in two arms, two shades, two sides of the same body, or another layout.",
+      recommended_products: [],
+      active_kit_actions: [],
+      action_offer: "none",
+      conversation_state: sanitizeKitAiConversationState({
+        ...state,
+        pendingQuestion: {
+          kind: "open_text_detail",
+          detail: "light_point_placement",
+          expected: "Describe where the two light points will be placed.",
+          source: "server_ambiguous_assent_guard",
+          createdAt: Date.now()
+        },
+        lastUserMessage: String(question || ""),
+        lastAssistantMessage: "I still need the actual placement detail to continue — for example, whether the two light points are in two arms, two shades, two sides of the same body, or another layout.",
+        lastRoute: "server_ambiguous_assent_guard",
+        updatedAt: Date.now()
+      }),
+      direct_reason: "ambiguous_assent_open_detail"
+    };
+  }
+
+  /*
+    V30 deterministic battery-variant resolution:
+    If the active conversation is choosing a battery sleeve variant, "without sleeve"
+    must lock the exact without-sleeve path locally and must not go back to Gemini.
+  */
+  if (
+    kitAiUserChoseWithoutSleeve(question) &&
+    kitAiStateLooksLikeBatteryVariantChoice(state, lastAssistantText)
+  ) {
+    const noSleeveProduct = kitAiFindBattery2600WithoutSleeveLiveProduct(liveProducts);
+    if (noSleeveProduct) {
+      const rec = kitAiLiveProductToRecommendation(
+        noSleeveProduct,
+        1,
+        "User chose the 2600mAh without-sleeve battery variant."
+      );
+      const nextState = kitAiBuildDirectConversationStatePatchForNoSleeve(state, rec, "server_direct_without_sleeve_choice");
+      const answer = "Perfect — I’ll keep the 2600mAh without-sleeve battery choice. It is available live. Should I add that exact variant to your kit?";
+      nextState.lastUserMessage = String(question || "");
+      nextState.lastAssistantMessage = answer;
+      return {
+        answer,
+        recommended_products: [rec],
+        active_kit_actions: [],
+        action_offer: "active_kit",
+        conversation_state: nextState,
+        direct_reason: "without_sleeve_variant_choice"
+      };
+    }
+  }
+
+  /*
+    V30 product dispute resolver:
+    If the assistant wrongly claimed the no-sleeve battery was unavailable and the user
+    pushes back with natural language such as "it is there", keep the exact no-sleeve
+    choice and offer that same product — never substitute the with-sleeve battery.
+  */
+  if (
+    kitAiLooksLikeProductPushback(question) &&
+    (
+      kitAiLastAssistantClaimedNoSleeveUnavailable(lastAssistantText) ||
+      kitAiBatteryDisputeTargetsWithoutSleeve(state) ||
+      String(state.lockedContext?.batteryVariant || state.resolvedIntent?.batteryVariant || "") === "without_sleeve"
+    )
+  ) {
+    const noSleeveProduct = kitAiFindBattery2600WithoutSleeveLiveProduct(liveProducts);
+    if (noSleeveProduct) {
+      const rec = kitAiLiveProductToRecommendation(
+        noSleeveProduct,
+        1,
+        "Correction: the user was referring to the live 2600mAh without-sleeve battery."
+      );
+      const nextState = kitAiBuildDirectConversationStatePatchForNoSleeve(state, rec, "server_direct_no_sleeve_dispute_resolution");
+      const answer = "You’re right — the 2600mAh without-sleeve battery is available. I’ll keep your without-sleeve choice unchanged. Should I add that exact variant to your kit?";
+      nextState.lastUserMessage = String(question || "");
+      nextState.lastAssistantMessage = answer;
+      return {
+        answer,
+        recommended_products: [rec],
+        active_kit_actions: [],
+        action_offer: "active_kit",
+        conversation_state: nextState,
+        direct_reason: "without_sleeve_product_dispute"
+      };
+    }
+  }
+
+  return null;
+}
+
+function enforceLockedBatteryVariantOnOutput({
+  answer = "",
+  question = "",
+  recommendedProducts = [],
+  activeKitActions = [],
+  conversationState = null
+} = {}) {
+  const state = sanitizeKitAiConversationState(conversationState);
+  const lockedVariant = String(state.lockedContext?.batteryVariant || state.resolvedIntent?.batteryVariant || "");
+  if (lockedVariant !== "without_sleeve" || kitAiUserExplicitlyChangesContext(question)) {
+    return { answer, recommendedProducts, activeKitActions, changed: false };
+  }
+
+  const isWithSleeveBattery = (item = {}) => {
+    const blob = kitAiNormalizeControllerText([
+      item.name || "",
+      item.sku || "",
+      item.builder_product_id || "",
+      item.builderProductId || ""
+    ].join(" "));
+    return blob.includes("battery") && blob.includes("with sleeve") && !blob.includes("without sleeve");
+  };
+
+  const filteredRecommendations = (recommendedProducts || []).filter((item) => !isWithSleeveBattery(item));
+  const filteredActions = (activeKitActions || []).filter((item) => !isWithSleeveBattery(item));
+  const removedSomething =
+    filteredRecommendations.length !== (recommendedProducts || []).length ||
+    filteredActions.length !== (activeKitActions || []).length;
+
+  let nextAnswer = answer;
+  const normalizedAnswer = kitAiNormalizeControllerText(answer);
+  if (
+    removedSomething ||
+    (
+      normalizedAnswer.includes("with sleeve") &&
+      !normalizedAnswer.includes("without sleeve") &&
+      (normalizedAnswer.includes("add") || normalizedAnswer.includes("prefer"))
+    )
+  ) {
+    nextAnswer = "I will keep your 2600mAh without-sleeve battery choice unchanged. I will not switch it to the with-sleeve battery unless you explicitly ask to change that variant.";
+  }
+
+  return {
+    answer: nextAnswer,
+    recommendedProducts: filteredRecommendations,
+    activeKitActions: filteredActions,
+    changed: removedSomething || nextAnswer !== answer
+  };
 }
 
 function kitAiBuildLiveKitLockFromContext(kitContext = {}, existingConversationState = null) {
@@ -9475,12 +9805,19 @@ function kitAiBuildLiveKitLockFromContext(kitContext = {}, existingConversationS
 
 function kitAiShouldRunIntegrationMode({ question = "", imageAttached = false, conversationState = null, decisionPolicy = null } = {}) {
   const state = sanitizeKitAiConversationState(conversationState);
+  /*
+    V30 controlled integration mode:
+    Decision-policy context alone must NOT activate physical integration prompts.
+    Integration should run only when the user explicitly asks for fit/placement/integration,
+    when an image is attached for analysis, or when an already-explicit integration session
+    is still active. This prevents a tiny product correction such as "it is there" from
+    sending large integration knowledge and drifting into placement advice.
+  */
   return (
     !!imageAttached ||
     kitAiUserExplicitlyRequestsIntegration(question) ||
     state.integrationState?.status === "active" ||
-    state.integrationState?.userAsked === true ||
-    !!decisionPolicy?.active?.integrationMode
+    state.integrationState?.userAsked === true
   );
 }
 
@@ -9503,17 +9840,33 @@ function kitAiBuildConversationStateForPrompt({
       answerText.includes("not explicitly listed live") ||
       answerText.includes("not listed live")
     ) {
+      const isNoSleeveBatteryClaim =
+        answerText.includes("without sleeve") &&
+        answerText.includes("battery");
       state.productDispute = {
         active: true,
         kind: "availability_claim",
         claim: String(answer || "").slice(0, 420),
+        targetHint: isNoSleeveBatteryClaim ? "2600mAh without sleeve battery" : "",
+        targetBuilderProductId: isNoSleeveBatteryClaim ? "battery-2600-nosleeve" : "",
+        targetVariant: isNoSleeveBatteryClaim ? "without_sleeve" : "",
         createdAt: Date.now()
       };
     }
 
     if (
       answerText.includes("with sleeve or without sleeve") ||
-      answerText.includes("choose with sleeve or without sleeve")
+      answerText.includes("choose with sleeve or without sleeve") ||
+      (
+        answerText.includes("without sleeve") &&
+        answerText.includes("with sleeve") &&
+        (
+          answerText.includes("would you prefer") ||
+          answerText.includes("do you intend") ||
+          answerText.includes("choose") ||
+          answerText.includes("which")
+        )
+      )
     ) {
       state.pendingQuestion = {
         kind: "battery_variant",
@@ -9925,6 +10278,87 @@ app.post("/kit-ai-chat", async (req, res) => {
       persistedSession?.project_state ||
       null
     );
+
+    /*
+      V30 deterministic controller fast path:
+      Handle high-confidence conversational state cases without calling Gemini.
+      This prevents:
+      - "yes" after an open-ended placement question from being misread as a product confirmation
+      - "without sleeve" from being sent back to the model when it is clearly the battery-variant answer
+      - "it is there" after a false availability claim from switching to the opposite with-sleeve battery
+    */
+    const directControllerResponse = kitAiBuildDirectControllerResponse({
+      question: safeQuestion,
+      history: effectiveHistory,
+      conversationState: incomingConversationState,
+      kitContext: kitContext || {},
+      liveProducts
+    });
+
+    if (directControllerResponse) {
+      const directPayload = {
+        ok: true,
+        session_id: normalizedSessionId || null,
+        visible_stream_mode: KIT_AI_VISIBLE_STREAM_MODE,
+        final_answer_mutation_trace: [`direct_controller:${directControllerResponse.direct_reason || "handled"}`],
+        chat_history_restored_from_odoo: !!storedSessionSnapshot?.found,
+        answer: directControllerResponse.answer,
+        image_summary: "",
+        image_analyzed_this_turn: false,
+        recommended_products: directControllerResponse.recommended_products || [],
+        active_kit_actions: directControllerResponse.active_kit_actions || [],
+        alternative_products: [],
+        action_offer: directControllerResponse.action_offer || "none",
+        live_products_available: true,
+        live_products_count: liveProducts.length,
+        prompt_products_count: 0,
+        prompt_rules_count: 0,
+        prompt_integration_chunks_count: 0,
+        integration_consulting_mode: false,
+        project_state: priorProjectState,
+        conversation_state: directControllerResponse.conversation_state || incomingConversationState,
+        project_state_source: "direct_controller_fast_path",
+        project_state_extractor_ok: false,
+        deterministic_decision_policy_source: "direct_controller_fast_path",
+        deterministic_decision_policy_id: null,
+        deterministic_decision_policy_active: false,
+        deterministic_decision_supporting_policy_ids: [],
+        reference_image_used: false,
+        prior_reference_image_summary_used: !!priorLampReferenceSummary,
+        deterministic_starter_candidates_count: 0,
+        deterministic_202_completion_candidates_count: 0,
+        deterministic_direct_add_candidates_count: 0,
+        deterministic_confirmed_followup_candidates_count: 0,
+        deterministic_exact_selection_candidates_count: 0,
+        deterministic_correction_recovery_candidates_count: 0,
+        live_products_cached: !!liveProductResult.cached,
+        model: "controller-local"
+      };
+
+      const directPersistence = await persistOdooKitAiConversationTurn({
+        sessionId: normalizedSessionId,
+        session: persistedSession,
+        question: safeQuestion,
+        answer: directPayload.answer,
+        projectState: directPayload.project_state,
+        kitContext: {
+          ...(kitContext || {}),
+          conversationState: directPayload.conversation_state
+        },
+        recommendedProducts: directPayload.recommended_products,
+        activeKitActions: directPayload.active_kit_actions,
+        imageSummary: ""
+      });
+      directPayload.persistence = directPersistence;
+
+      if (wantsStream) {
+        sendKitAiSse(res, "final", directPayload);
+        res.end();
+        return;
+      }
+
+      return res.json(directPayload);
+    }
 
     const projectStateResult = await extractKitAiProjectState({
       question: safeQuestion,
@@ -10762,6 +11196,19 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       }),
       "unrequested_integration_final_guard"
     );
+
+    const batteryVariantGuard = enforceLockedBatteryVariantOnOutput({
+      answer,
+      question: safeQuestion,
+      recommendedProducts,
+      activeKitActions,
+      conversationState: resolvedConversationState
+    });
+    if (batteryVariantGuard.changed) {
+      updateFinalAnswer(batteryVariantGuard.answer, "locked_battery_variant_guard");
+      recommendedProducts = batteryVariantGuard.recommendedProducts;
+      activeKitActions = batteryVariantGuard.activeKitActions;
+    }
 
     const finalPayload = {
       ok: true,
