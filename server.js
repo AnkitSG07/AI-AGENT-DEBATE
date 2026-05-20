@@ -14190,6 +14190,25 @@ app.post("/api/profile-logout", (req, res) => {
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured }));
+// ===================== RENDER 30-SECOND KEEP ALIVE =====================
+// Keeps the free Render server active by self-pinging /health every 30 seconds.
+
+const KEEP_ALIVE_URL = process.env.APP_URL
+  ? `${String(process.env.APP_URL).replace(/\/$/, "")}/health`
+  : "";
+
+if (KEEP_ALIVE_URL) {
+  setInterval(async () => {
+    try {
+      const response = await fetch(KEEP_ALIVE_URL);
+      console.log(`[Keep Alive] ${new Date().toISOString()} → ${response.status}`);
+    } catch (error) {
+      console.warn("[Keep Alive] Ping failed:", error?.message || error);
+    }
+  }, 30 * 1000);
+} else {
+  console.warn("[Keep Alive] APP_URL is missing, self-ping disabled.");
+}
 
 
 async function prewarmLiveOdooProducts() {
