@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
@@ -118,6 +119,29 @@ const ODOO_USERNAME = process.env.ODOO_USERNAME;
 const ODOO_PASS = process.env.ODOO_API_KEY_OR_PASSWORD;
 const odooConfigured = !!(ODOO_URL && ODOO_DB && ODOO_USERNAME && ODOO_PASS);
 
+// ===================== ZOHO MAIL CONFIG =====================
+// India data center defaults are used because Smart Handicrafts Zoho Mail runs on .in.
+const ZOHO_MAIL_CLIENT_ID = process.env.ZOHO_MAIL_CLIENT_ID || "";
+const ZOHO_MAIL_CLIENT_SECRET = process.env.ZOHO_MAIL_CLIENT_SECRET || "";
+const ZOHO_MAIL_REFRESH_TOKEN = process.env.ZOHO_MAIL_REFRESH_TOKEN || "";
+const ZOHO_MAIL_ACCOUNT_ID = process.env.ZOHO_MAIL_ACCOUNT_ID || "";
+const ZOHO_MAIL_ACCOUNT_EMAIL = process.env.ZOHO_MAIL_ACCOUNT_EMAIL || "care@smarthandicrafts.com";
+const ZOHO_MAIL_FROM_ADDRESS = process.env.ZOHO_MAIL_FROM_ADDRESS || ZOHO_MAIL_ACCOUNT_EMAIL;
+const ZOHO_MAIL_ACCOUNTS_BASE = String(process.env.ZOHO_MAIL_ACCOUNTS_BASE || "https://accounts.zoho.in").replace(/\/$/, "");
+const ZOHO_MAIL_API_BASE = String(process.env.ZOHO_MAIL_API_BASE || "https://mail.zoho.in").replace(/\/$/, "");
+const ZOHO_MAIL_REDIRECT_URI =
+  process.env.ZOHO_MAIL_REDIRECT_URI ||
+  `${String(process.env.APP_URL || "").replace(/\/$/, "")}/zoho/callback`;
+const ZOHO_MAIL_SCOPES =
+  process.env.ZOHO_MAIL_SCOPES ||
+  "ZohoMail.accounts.READ,ZohoMail.folders.READ,ZohoMail.messages.ALL";
+
+const zohoMailConfigured = !!(
+  ZOHO_MAIL_CLIENT_ID &&
+  ZOHO_MAIL_CLIENT_SECRET &&
+  ZOHO_MAIL_REFRESH_TOKEN
+);
+
 // ===================== STORES (in-memory) =====================
 const labelsStore = new Map(); // labelId -> record
 const labelDraftsBySO = new Map(); // sale_order_id -> draft
@@ -197,6 +221,361 @@ async function odooExecute(uid, model, method, params = [], kw = {}) {
     params,
     kw
   ]);
+}
+
+// ===================== ZOHO MAIL API HELPERS =====================
+const zohoAccessTokenCache = {
+  token: "",
+  expiresAt: 0
+};
+
+const zohoAccountCache = {
+  account: null,
+  expiresAt: 0
+};
+
+const zohoFolderCache = {
+  folders: null,
+  expiresAt: 0
+};
+
+const zohoOAuthStates = new Map();
+
+function zohoNowMs() {
+  return Date.now();
+}
+
+function cleanZohoOAuthStates() {
+  const nowMs = zohoNowMs();
+  for (const [state, expiresAt] of zohoOAuthStates.entries()) {
+    if (!expiresAt || expiresAt <= nowMs) zohoOAuthStates.delete(state);
+  }
+}
+
+function safeZohoString(value, max = 10000) {
+  return String(value || "").trim().slice(0, max);
+}
+
+function zohoEncodeQuery(query = {}) {
+  const params = new URLSearchParams();
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    params.set(key, String(value));
+  });
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function zohoApiUrl(path, query = {}) {
+  const normalizedPath = String(path || "").startsWith("/") ? String(path || "") : `/${path}`;
+  return `${ZOHO_MAIL_API_BASE}/api${normalizedPath}${zohoEncodeQuery(query)}`;
+}
+
+function zohoTokenUrl(query = {}, base = ZOHO_MAIL_ACCOUNTS_BASE) {
+  return `${String(base || ZOHO_MAIL_ACCOUNTS_BASE).replace(/\/$/, "")}/oauth/v2/token${zohoEncodeQuery(query)}`;
+}
+
+function getZohoAuthHeader(token) {
+  return {
+    Authorization: `Zoho-oauthtoken ${token}`
+  };
+}
+
+function normalizeZohoApiError(payload, fallback = "Zoho Mail API request failed.") {
+  return (
+    payload?.data?.moreInfo ||
+    payload?.status?.description ||
+    payload?.message ||
+    fallback
+  );
+}
+
+async function getZohoAccessToken({ force = false } = {}) {
+  if (!force && zohoAccessTokenCache.token && zohoNowMs() < zohoAccessTokenCache.expiresAt) {
+    return zohoAccessTokenCache.token;
+  }
+
+  if (!ZOHO_MAIL_CLIENT_ID || !ZOHO_MAIL_CLIENT_SECRET || !ZOHO_MAIL_REFRESH_TOKEN) {
+    throw new Error(
+      "Zoho Mail is not configured. Add ZOHO_MAIL_CLIENT_ID, ZOHO_MAIL_CLIENT_SECRET, and ZOHO_MAIL_REFRESH_TOKEN."
+    );
+  }
+
+  const resp = await fetch(
+    zohoTokenUrl({
+      refresh_token: ZOHO_MAIL_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+      client_id: ZOHO_MAIL_CLIENT_ID,
+      client_secret: ZOHO_MAIL_CLIENT_SECRET
+    }),
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json"
+      }
+    }
+  );
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.access_token) {
+    throw new Error(
+      `Zoho refresh token exchange failed: ${normalizeZohoApiError(data, `HTTP ${resp.status}`)}`
+    );
+  }
+
+  const expiresIn = Math.max(60, Number(data.expires_in || 3600));
+  zohoAccessTokenCache.token = data.access_token;
+  zohoAccessTokenCache.expiresAt = zohoNowMs() + Math.max(30, expiresIn - 90) * 1000;
+
+  return zohoAccessTokenCache.token;
+}
+
+async function zohoMailRequest(path, {
+  method = "GET",
+  query = {},
+  body = undefined,
+  raw = false,
+  retryOnAuth = true
+} = {}) {
+  const token = await getZohoAccessToken();
+  const url = zohoApiUrl(path, query);
+
+  const resp = await fetch(url, {
+    method,
+    headers: {
+      Accept: raw ? "*/*" : "application/json",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...getZohoAuthHeader(token)
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+
+  if (resp.status === 401 && retryOnAuth) {
+    zohoAccessTokenCache.token = "";
+    zohoAccessTokenCache.expiresAt = 0;
+    const refreshedToken = await getZohoAccessToken({ force: true });
+    const retryResp = await fetch(url, {
+      method,
+      headers: {
+        Accept: raw ? "*/*" : "application/json",
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...getZohoAuthHeader(refreshedToken)
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+
+    if (raw) {
+      if (!retryResp.ok) {
+        const message = await retryResp.text().catch(() => "");
+        throw new Error(`Zoho Mail raw API request failed: HTTP ${retryResp.status} ${message}`.trim());
+      }
+      return retryResp;
+    }
+
+    const retryData = await retryResp.json().catch(() => ({}));
+    if (!retryResp.ok || Number(retryData?.status?.code || retryResp.status) >= 400) {
+      throw new Error(
+        `Zoho Mail API error: ${normalizeZohoApiError(retryData, `HTTP ${retryResp.status}`)}`
+      );
+    }
+    return retryData;
+  }
+
+  if (raw) {
+    if (!resp.ok) {
+      const message = await resp.text().catch(() => "");
+      throw new Error(`Zoho Mail raw API request failed: HTTP ${resp.status} ${message}`.trim());
+    }
+    return resp;
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || Number(data?.status?.code || resp.status) >= 400) {
+    throw new Error(
+      `Zoho Mail API error: ${normalizeZohoApiError(data, `HTTP ${resp.status}`)}`
+    );
+  }
+
+  return data;
+}
+
+function zohoAccountEmailCandidates(account = {}) {
+  const emails = [];
+  if (account?.primaryEmailAddress) emails.push(account.primaryEmailAddress);
+  if (account?.mailboxAddress) emails.push(account.mailboxAddress);
+  if (account?.incomingUserName) emails.push(account.incomingUserName);
+  if (Array.isArray(account?.emailAddress)) {
+    account.emailAddress.forEach((row) => {
+      if (row?.mailId) emails.push(row.mailId);
+    });
+  }
+  return [...new Set(emails.map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))];
+}
+
+function normalizeZohoAccountList(payload) {
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.data?.accounts)) return payload.data.accounts;
+  if (Array.isArray(payload?.accounts)) return payload.accounts;
+  return [];
+}
+
+async function getZohoMailAccount({ force = false } = {}) {
+  if (!force && zohoAccountCache.account && zohoNowMs() < zohoAccountCache.expiresAt) {
+    return zohoAccountCache.account;
+  }
+
+  if (ZOHO_MAIL_ACCOUNT_ID) {
+    const payload = await zohoMailRequest(`/accounts/${encodeURIComponent(ZOHO_MAIL_ACCOUNT_ID)}`);
+    const account = payload?.data || { accountId: ZOHO_MAIL_ACCOUNT_ID };
+    zohoAccountCache.account = account;
+    zohoAccountCache.expiresAt = zohoNowMs() + 10 * 60 * 1000;
+    return account;
+  }
+
+  const payload = await zohoMailRequest("/accounts");
+  const accounts = normalizeZohoAccountList(payload);
+  if (!accounts.length) {
+    throw new Error(
+      "Zoho Mail account lookup returned no accounts. Set ZOHO_MAIL_ACCOUNT_ID in Render after authorization."
+    );
+  }
+
+  const wanted = String(ZOHO_MAIL_ACCOUNT_EMAIL || "").trim().toLowerCase();
+  const account =
+    accounts.find((row) => zohoAccountEmailCandidates(row).includes(wanted)) ||
+    accounts[0];
+
+  if (!account?.accountId) {
+    throw new Error("Could not resolve a Zoho Mail accountId from the Zoho accounts API.");
+  }
+
+  zohoAccountCache.account = account;
+  zohoAccountCache.expiresAt = zohoNowMs() + 10 * 60 * 1000;
+  return account;
+}
+
+async function getZohoMailFolders({ force = false } = {}) {
+  if (!force && zohoFolderCache.folders && zohoNowMs() < zohoFolderCache.expiresAt) {
+    return zohoFolderCache.folders;
+  }
+
+  const account = await getZohoMailAccount();
+  const payload = await zohoMailRequest(`/accounts/${encodeURIComponent(account.accountId)}/folders`);
+  const folders = Array.isArray(payload?.data) ? payload.data : [];
+
+  zohoFolderCache.folders = folders;
+  zohoFolderCache.expiresAt = zohoNowMs() + 5 * 60 * 1000;
+  return folders;
+}
+
+function findZohoFolderByType(folders = [], folderType = "Inbox") {
+  const wanted = String(folderType || "Inbox").trim().toLowerCase();
+  return (
+    folders.find((folder) => String(folder?.folderType || "").trim().toLowerCase() === wanted) ||
+    folders.find((folder) => String(folder?.folderName || "").trim().toLowerCase() === wanted) ||
+    null
+  );
+}
+
+async function resolveZohoFolderId({ folderId = "", folderType = "Inbox" } = {}) {
+  const explicit = safeZohoString(folderId, 120);
+  if (explicit) return explicit;
+
+  const folders = await getZohoMailFolders();
+  const folder = findZohoFolderByType(folders, folderType);
+  if (!folder?.folderId) {
+    throw new Error(`Could not find Zoho Mail folder: ${folderType || "Inbox"}`);
+  }
+  return String(folder.folderId);
+}
+
+function normalizeZohoMessageListQuery(reqQuery = {}) {
+  const start = Math.max(1, Number(reqQuery.start || 1));
+  const limit = Math.max(1, Math.min(200, Number(reqQuery.limit || 30)));
+  const query = {
+    folderId: undefined,
+    start,
+    limit,
+    status: safeZohoString(reqQuery.status || "all", 20) || "all",
+    sortBy: safeZohoString(reqQuery.sortBy || "date", 40) || "date",
+    sortorder: safeZohoString(reqQuery.sortorder || "false", 10) || "false",
+    includeto: safeZohoString(reqQuery.includeto || "true", 10) || "true",
+    includesent: safeZohoString(reqQuery.includesent || "", 10),
+    includearchive: safeZohoString(reqQuery.includearchive || "", 10),
+    attachedMails: safeZohoString(reqQuery.attachedMails || "", 10),
+    inlinedMails: safeZohoString(reqQuery.inlinedMails || "", 10),
+    flaggedMails: safeZohoString(reqQuery.flaggedMails || "", 10),
+    respondedMails: safeZohoString(reqQuery.respondedMails || "", 10),
+    threadedMails: safeZohoString(reqQuery.threadedMails || "true", 10) || "true"
+  };
+
+  Object.keys(query).forEach((key) => {
+    if (query[key] === "") delete query[key];
+  });
+
+  return query;
+}
+
+function buildZohoSendPayload(body = {}) {
+  const fromAddress = safeZohoString(body.fromAddress || ZOHO_MAIL_FROM_ADDRESS, 320);
+  const toAddress = safeZohoString(body.toAddress || body.to || "", 2000);
+  const subject = safeZohoString(body.subject || "", 1200);
+  const content = safeZohoString(body.content || body.body || "", 200000);
+
+  if (!fromAddress) throw new Error("fromAddress is required.");
+  if (!toAddress) throw new Error("toAddress is required.");
+  if (!subject) throw new Error("subject is required.");
+  if (!content) throw new Error("content is required.");
+
+  return {
+    fromAddress,
+    toAddress,
+    ccAddress: safeZohoString(body.ccAddress || body.cc || "", 2000),
+    bccAddress: safeZohoString(body.bccAddress || body.bcc || "", 2000),
+    subject,
+    content,
+    mailFormat: safeZohoString(body.mailFormat || "html", 40) || "html",
+    askReceipt: safeZohoString(body.askReceipt || "", 20)
+  };
+}
+
+function buildZohoReplyPayload(body = {}) {
+  const base = buildZohoSendPayload(body);
+  return {
+    ...base,
+    action: "Reply"
+  };
+}
+
+function renderZohoCallbackPage({ ok, title, lines = [], details = null }) {
+  const safe = (value) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${safe(title)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#f5f7fb;color:#101828;margin:0;padding:32px}
+    .card{max-width:860px;margin:0 auto;background:#fff;border-radius:22px;padding:28px;box-shadow:0 18px 60px rgba(15,23,42,.12)}
+    h1{margin:0 0 12px;font-size:28px}
+    p,li{line-height:1.6}
+    code,pre{background:#f1f5f9;border-radius:12px;padding:3px 7px}
+    pre{padding:14px;white-space:pre-wrap;overflow:auto}
+    .ok{color:#067647}.bad{color:#b42318}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1 class="${ok ? "ok" : "bad"}">${safe(title)}</h1>
+    ${lines.map((line) => `<p>${safe(line)}</p>`).join("")}
+    ${details ? `<pre>${safe(details)}</pre>` : ""}
+  </main>
+</body>
+</html>`;
 }
 
 async function odooFindOrCreatePartner(uid, companyName) {
@@ -13493,6 +13872,291 @@ app.get("/api/odoo/delivery-orders", async (req, res) => {
   }
 });
 
+// ===================== ZOHO MAIL OAUTH + API ROUTES =====================
+app.get("/zoho/auth", (req, res) => {
+  try {
+    if (!ZOHO_MAIL_CLIENT_ID || !ZOHO_MAIL_REDIRECT_URI || !ZOHO_MAIL_ACCOUNTS_BASE) {
+      return res.status(500).send(
+        renderZohoCallbackPage({
+          ok: false,
+          title: "Zoho Mail authorization is not configured",
+          lines: [
+            "Add ZOHO_MAIL_CLIENT_ID, APP_URL, and ZOHO_MAIL_REDIRECT_URI in Render first."
+          ]
+        })
+      );
+    }
+
+    cleanZohoOAuthStates();
+    const state = randomUUID();
+    zohoOAuthStates.set(state, zohoNowMs() + 10 * 60 * 1000);
+
+    const authorizeUrl =
+      `${ZOHO_MAIL_ACCOUNTS_BASE}/oauth/v2/auth` +
+      zohoEncodeQuery({
+        client_id: ZOHO_MAIL_CLIENT_ID,
+        response_type: "code",
+        redirect_uri: ZOHO_MAIL_REDIRECT_URI,
+        scope: ZOHO_MAIL_SCOPES,
+        access_type: "offline",
+        prompt: "consent",
+        state
+      });
+
+    return res.redirect(authorizeUrl);
+  } catch (error) {
+    return res.status(500).send(
+      renderZohoCallbackPage({
+        ok: false,
+        title: "Could not start Zoho Mail authorization",
+        lines: [String(error?.message || error || "Unknown error")]
+      })
+    );
+  }
+});
+
+app.get("/zoho/callback", async (req, res) => {
+  try {
+    cleanZohoOAuthStates();
+
+    const code = safeZohoString(req.query?.code || "", 4000);
+    const state = safeZohoString(req.query?.state || "", 4000);
+    const accountsServer = safeZohoString(req.query?.["accounts-server"] || "", 500);
+
+    if (!code) throw new Error("Zoho did not return an authorization code.");
+    if (!state || !zohoOAuthStates.has(state)) {
+      throw new Error("Zoho OAuth state check failed or expired. Open /zoho/auth again.");
+    }
+    zohoOAuthStates.delete(state);
+
+    const tokenBase =
+      /^https:\/\/accounts\.zoho\.[a-z.]+$/i.test(accountsServer)
+        ? accountsServer
+        : ZOHO_MAIL_ACCOUNTS_BASE;
+
+    const tokenResp = await fetch(
+      zohoTokenUrl({
+        code,
+        grant_type: "authorization_code",
+        client_id: ZOHO_MAIL_CLIENT_ID,
+        client_secret: ZOHO_MAIL_CLIENT_SECRET,
+        redirect_uri: ZOHO_MAIL_REDIRECT_URI,
+        scope: ZOHO_MAIL_SCOPES
+      }, tokenBase),
+      {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      }
+    );
+
+    const tokenData = await tokenResp.json().catch(() => ({}));
+    if (!tokenResp.ok || !tokenData?.access_token) {
+      throw new Error(
+        `Zoho token exchange failed: ${normalizeZohoApiError(tokenData, `HTTP ${tokenResp.status}`)}`
+      );
+    }
+
+    let accountHint = "";
+    try {
+      zohoAccessTokenCache.token = tokenData.access_token;
+      zohoAccessTokenCache.expiresAt = zohoNowMs() + Math.max(30, Number(tokenData.expires_in || 3600) - 90) * 1000;
+      const account = await getZohoMailAccount({ force: true });
+      accountHint = account?.accountId
+        ? `Detected account ID: ${account.accountId}`
+        : "Account ID detection did not return a value.";
+    } catch (lookupError) {
+      accountHint = `Account lookup could not be completed yet: ${String(lookupError?.message || lookupError)}`;
+    }
+
+    const refreshToken = tokenData.refresh_token || "";
+    const lines = refreshToken
+      ? [
+          "Authorization succeeded.",
+          "Copy the refresh token below and add it in Render as ZOHO_MAIL_REFRESH_TOKEN.",
+          accountHint,
+          "After saving Render environment variables and redeploying, open /api/zoho-mail/status to verify."
+        ]
+      : [
+          "Authorization returned an access token, but Zoho did not include a refresh token.",
+          "Open /zoho/auth again and approve with prompt=consent, or revoke the old consent and retry.",
+          accountHint
+        ];
+
+    return res.send(
+      renderZohoCallbackPage({
+        ok: !!refreshToken,
+        title: refreshToken ? "Zoho Mail authorization complete" : "Zoho Mail refresh token missing",
+        lines,
+        details: refreshToken
+          ? `ZOHO_MAIL_REFRESH_TOKEN=${refreshToken}\n${accountHint}`
+          : JSON.stringify(tokenData, null, 2)
+      })
+    );
+  } catch (error) {
+    return res.status(500).send(
+      renderZohoCallbackPage({
+        ok: false,
+        title: "Zoho Mail authorization failed",
+        lines: [String(error?.message || error || "Unknown error")]
+      })
+    );
+  }
+});
+
+app.get("/api/zoho-mail/status", async (req, res) => {
+  try {
+    if (!zohoMailConfigured) {
+      return res.status(503).json({
+        ok: false,
+        configured: false,
+        error: "Zoho Mail is not fully configured yet.",
+        requiredEnv: [
+          "ZOHO_MAIL_CLIENT_ID",
+          "ZOHO_MAIL_CLIENT_SECRET",
+          "ZOHO_MAIL_REFRESH_TOKEN"
+        ],
+        optionalEnv: [
+          "ZOHO_MAIL_ACCOUNT_ID",
+          "ZOHO_MAIL_ACCOUNT_EMAIL",
+          "ZOHO_MAIL_FROM_ADDRESS",
+          "ZOHO_MAIL_ACCOUNTS_BASE",
+          "ZOHO_MAIL_API_BASE",
+          "ZOHO_MAIL_REDIRECT_URI",
+          "ZOHO_MAIL_SCOPES"
+        ]
+      });
+    }
+
+    const account = await getZohoMailAccount();
+    return res.json({
+      ok: true,
+      configured: true,
+      dataCenterApiBase: ZOHO_MAIL_API_BASE,
+      accountsBase: ZOHO_MAIL_ACCOUNTS_BASE,
+      account: {
+        accountId: account?.accountId || ZOHO_MAIL_ACCOUNT_ID || "",
+        mailboxAddress: account?.mailboxAddress || account?.primaryEmailAddress || ZOHO_MAIL_ACCOUNT_EMAIL || "",
+        displayName: account?.displayName || account?.accountDisplayName || ""
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      configured: zohoMailConfigured,
+      error: String(error?.message || error || "Unknown error")
+    });
+  }
+});
+
+app.get("/api/zoho-mail/account", async (req, res) => {
+  try {
+    const account = await getZohoMailAccount({ force: String(req.query?.refresh || "") === "1" });
+    return res.json({ ok: true, account });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/zoho-mail/folders", async (req, res) => {
+  try {
+    const folders = await getZohoMailFolders({ force: String(req.query?.refresh || "") === "1" });
+    return res.json({ ok: true, folders });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/zoho-mail/messages", async (req, res) => {
+  try {
+    const account = await getZohoMailAccount();
+    const folderId = await resolveZohoFolderId({
+      folderId: req.query?.folderId,
+      folderType: req.query?.folderType || "Inbox"
+    });
+    const query = normalizeZohoMessageListQuery(req.query || {});
+    query.folderId = folderId;
+
+    const payload = await zohoMailRequest(
+      `/accounts/${encodeURIComponent(account.accountId)}/messages/view`,
+      { query }
+    );
+
+    return res.json({
+      ok: true,
+      accountId: account.accountId,
+      folderId,
+      messages: Array.isArray(payload?.data) ? payload.data : []
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/zoho-mail/message/:messageId", async (req, res) => {
+  try {
+    const account = await getZohoMailAccount();
+    const messageId = safeZohoString(req.params?.messageId || "", 160);
+    const folderId = await resolveZohoFolderId({
+      folderId: req.query?.folderId,
+      folderType: req.query?.folderType || "Inbox"
+    });
+
+    if (!messageId) return res.status(400).json({ ok: false, error: "messageId is required." });
+
+    const payload = await zohoMailRequest(
+      `/accounts/${encodeURIComponent(account.accountId)}/folders/${encodeURIComponent(folderId)}/messages/${encodeURIComponent(messageId)}/content`,
+      {
+        query: {
+          includeBlockContent: safeZohoString(req.query?.includeBlockContent || "true", 10) || "true"
+        }
+      }
+    );
+
+    return res.json({
+      ok: true,
+      accountId: account.accountId,
+      folderId,
+      messageId,
+      message: payload?.data || {}
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.post("/api/zoho-mail/send", async (req, res) => {
+  try {
+    const account = await getZohoMailAccount();
+    const payload = buildZohoSendPayload(req.body || {});
+    const result = await zohoMailRequest(
+      `/accounts/${encodeURIComponent(account.accountId)}/messages`,
+      { method: "POST", body: payload }
+    );
+
+    return res.json({ ok: true, result: result?.data || result });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.post("/api/zoho-mail/reply", async (req, res) => {
+  try {
+    const account = await getZohoMailAccount();
+    const messageId = safeZohoString(req.body?.messageId || "", 160);
+    if (!messageId) return res.status(400).json({ ok: false, error: "messageId is required." });
+
+    const payload = buildZohoReplyPayload(req.body || {});
+    const result = await zohoMailRequest(
+      `/accounts/${encodeURIComponent(account.accountId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: "POST", body: payload }
+    );
+
+    return res.json({ ok: true, result: result?.data || result });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
 app.post("/api/profile-login", (req, res) => {
   const profile = String(req.body?.profile || "").trim();
   const password = String(req.body?.password || "");
@@ -13525,7 +14189,7 @@ app.post("/api/profile-logout", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured }));
+app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured }));
 
 
 async function prewarmLiveOdooProducts() {
