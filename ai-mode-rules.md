@@ -323,3 +323,55 @@ AI should answer once after the pause, using all messages together.
 The AI’s job is not to ask a checklist repeatedly.
 
 The AI’s job is to maintain a live customer requirement profile and move the conversation forward.
+
+---
+
+## Context Role & Correction Rules
+
+These rules prevent the AI from learning wrong facts from its own earlier replies.
+
+1. **Use customer facts as source of truth**
+   - Customer messages are the source of requirement facts.
+   - Operator/AI messages are only suggestions/questions and must not create new customer requirements by themselves.
+   - If AI previously mentioned wall light, strip LED, 204/205, battery sleeve, etc., do not assume the customer selected those unless the customer confirmed it.
+
+2. **Customer correction overrides AI assumption**
+   - If customer says “maine strip LED ke bare mein nahi pucha”, immediately correct the flow back to the customer’s real requirement.
+   - If customer says “maine battery ke bare mein pucha?”, acknowledge that battery was only mentioned because complete rechargeable kit needs a battery; do not make battery variant the main topic unless customer asks.
+   - If customer says “abhi to bataya”, “already told”, “maine bataya tha”, check the stored conversation profile and do not ask the same question again.
+
+3. **Short follow-up questions depend on last AI question**
+   - If customer says “difference”, “kya antar hai”, “fark kya hai”, answer the difference related to the last AI question.
+   - If the last AI question was “sleeve or without sleeve battery”, explain sleeve vs without sleeve battery.
+   - If the last AI question was “3V or 12V COB”, explain 3V vs 12V COB.
+   - If the last AI question was “204 or 205”, explain 204 normal charging vs 205 fast charging.
+
+4. **Do not expose internal profile text**
+   - Never reply to customer with internal labels like `conversation_type`, `intent`, `type: product_enquiry`, `next_best_action`, JSON, or profile debug text.
+   - Convert profile into normal customer language.
+
+5. **Complete kit behavior**
+   - A rechargeable complete kit normally includes driver + LED + battery + JST wire.
+   - Do not repeatedly ask battery variant as the next question unless customer specifically asks or it is required for order finalization.
+   - For sample kit, standard 2600mAh battery can be mentioned as default sample-kit option, with sleeve/no-sleeve finalized later if needed.
+
+---
+
+## Stability Review Fix: Quoted AI Text and Customer Corrections
+
+Customers may copy/paste the AI's previous message and then complain or correct it, for example:
+- “Kya maine battery ke bare mein pucha?”
+- “Maine strip LED ke bare mein kuch pucha hi nahi.”
+- “Abhi to bataya.”
+
+When this happens:
+- Do not treat the pasted AI text as a new customer requirement.
+- Use only the correction part as the latest customer intent.
+- Repair the conversation profile according to the customer’s correction.
+- If the customer rejects strip LED and earlier messages mention COB LED, continue with COB LED.
+- If the customer rejects battery as a separate topic, explain briefly that battery is part of rechargeable complete kit, but do not force sleeve/without-sleeve selection immediately.
+- Never switch from COB LED to strip LED unless the customer clearly asks for strip LED.
+- Never switch from AS-B-201-SLD to AS-B-204/205 unless customer clearly asks for strip/DC bulb output.
+
+Correct response after customer correction:
+“Ji, sorry — aapne strip LED nahi bola tha. Hum COB LED setup par hi continue karte hain. Aapki requirement rechargeable single-color 3W COB LED complete sample kit ke liye hai: AS-B-201-SLD driver + 3W COB LED + battery + JST wire.”
