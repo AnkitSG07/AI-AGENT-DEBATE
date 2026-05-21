@@ -14374,6 +14374,30 @@ function aiModeDefaultResponse({ aiMode, source = "operator_hub", message = "" }
   };
 }
 
+
+// In AI Mode, normal customer-facing clarification questions are Level 1.
+// Example: "Need LED" or "3 watt LED chahiye" should get a direct customer reply
+// asking for COB/strip/voltage/use-case. Level 2 is only for internal team help.
+function aiModeShouldDowngradeCustomerClarification(message, aiResult = {}) {
+  const text = aiModeSafeString(message || "", 2000).toLowerCase();
+  const reply = aiModeSafeString(aiResult.customer_reply || aiResult.suggested_customer_reply || "", 4000).toLowerCase();
+  if (!text || !reply) return false;
+  if (aiResult.handover_required || aiResult.level === 3 || aiResult.action === "handover") return false;
+  if (!(aiResult.level === 2 || aiResult.clarification_required || aiResult.action === "internal_clarification")) return false;
+
+  // These topics need human/team escalation or special care; do not auto-downgrade.
+  const risky = /\b(custom|customi[sz]e|customisation|customization|pcb|circuit|schematic|new\s+product|oem|odm|complaint|not\s+working|replacement|refund|return|warranty|certificate|certification|ce\b|ul\b|fcc\b|rohs\b|legal|compliance|discount|best\s+price|final\s+price|negotiate|payment|paid|advance|dispatch|delivery\s+date|urgent|angry|issue|problem)\b/i;
+  if (risky.test(text)) return false;
+
+  // Normal product/category requests should be handled as Level 1 with a customer-facing question.
+  const normalProductAsk = /\b(hello|hi|hey|led|cob|strip|driver|module|battery|wire|jst|lamp|light|need|want|required|requirement|chahiye|chaiye|chaahiye|mujhe|mije|mijhe|watt|volt|3w|5w|2w|12v|24v)\b/i;
+  if (!normalProductAsk.test(text)) return false;
+
+  // The reply is clearly addressed to the customer and asks for missing product details.
+  const asksCustomer = /\b(please|could you|tell us|confirm|share|aap|apka|aapka|bataye|bataiye|which|what kind|what type|voltage|wattage|cob|strip|led|lamp|quantity)\b/i;
+  return asksCustomer.test(reply);
+}
+
 function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
   const fallback = aiModeDefaultResponse({ aiMode, source, message });
   const obj = parsed && typeof parsed === "object" ? parsed : {};
@@ -14406,6 +14430,17 @@ function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
   if (normalized.handover_required && !normalized.assigned_to) {
     normalized.assigned_to = "Vibhu";
     normalized.assigned_role = "Customization / New Product / Special Case";
+  }
+
+  if (aiModeShouldDowngradeCustomerClarification(message, normalized)) {
+    normalized.level = 1;
+    normalized.action = aiMode === "assist" ? "suggest_reply" : "send_direct_reply";
+    normalized.clarification_required = false;
+    normalized.handover_required = false;
+    normalized.assigned_to = "";
+    normalized.assigned_role = "";
+    normalized.handover_reason = "";
+    normalized.next_action = normalized.next_action || "ask_customer_clarification";
   }
 
   if (aiMode === "assist") {
@@ -14921,8 +14956,8 @@ MODE BEHAVIOR:
 - manual: return action "no_ai_action"; do not write a customer reply.
 - assist: suggest a reply only; never send directly.
 - chat: use 3 levels:
-  Level 1 = normal/safe: direct reply allowed.
-  Level 2 = medium/unclear: ask internal clarification; do not guess.
+  Level 1 = normal/safe: direct reply allowed. This includes asking the CUSTOMER one simple follow-up question.
+  Level 2 = internal/team clarification: use only when AI needs the internal team to clarify before replying. Do not use Level 2 just because the customer gave a generic product request.
   Level 3 = hard/risky/custom: handover to Khushagra or Vibhu.
 
 LANGUAGE:
@@ -14942,9 +14977,15 @@ HANDOVER:
 - Khushagra: normal sales, quotation, price, bulk price, regular existing-product enquiry.
 - Vibhu: customization, new product, custom PCB, custom driver, special development, deep technical/special case, unsure cases.
 
+LEVEL RULES FOR GENERIC PRODUCT REQUESTS:
+- Generic customer requests like "hello", "need led", "mujhe LED chahiye", "3 watt LED chahiye", "need driver", or "need rechargeable module" are Level 1, not Level 2.
+- For these, reply directly with the next useful customer-facing question or recommendation.
+- Missing customer details such as COB vs strip, wattage, voltage, quantity, lamp type, rechargeable vs USB are normal sales clarification questions and must be handled as Level 1.
+
 INTERNAL CLARIFICATION:
 - For Level 2, create internal_notification for the shared internal WhatsApp number.
-- Also create suggested_customer_reply if a safe customer question is possible.
+- Use Level 2 only when you need the internal team to clarify something before you can reply safely.
+- Do not use Level 2 for ordinary customer-facing questions such as asking LED type, wattage, voltage, quantity, or use case.
 
 RETURN JSON ONLY with exactly these keys:
 {
