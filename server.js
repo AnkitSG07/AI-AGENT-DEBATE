@@ -14982,6 +14982,15 @@ LEVEL RULES FOR GENERIC PRODUCT REQUESTS:
 - For these, reply directly with the next useful customer-facing question or recommendation.
 - Missing customer details such as COB vs strip, wattage, voltage, quantity, lamp type, rechargeable vs USB are normal sales clarification questions and must be handled as Level 1.
 
+CONVERSATION MEMORY RULES:
+- Read the entire recent conversation before replying. Treat already provided customer details as known facts.
+- Do NOT ask again for information already provided earlier in the same chat.
+- If customer already said table lamp, rechargeable, single color, COB LED, 3W, 3V, remember all of it.
+- When the customer says short follow-ups like "difference", "yes", "3 watt", "3v", "complete kit", resolve them using the previous conversation context.
+- If enough details are known, move forward with a recommendation instead of restarting questions.
+- If customer says "complete kit" after giving enough details, suggest a kit combination. Do not ask again whether it is table lamp/rechargeable/COB/3W/3V if those are already in history.
+- Avoid repeated loops. Ask only the next missing detail, preferably one question at a time.
+
 INTERNAL CLARIFICATION:
 - For Level 2, create internal_notification for the shared internal WhatsApp number.
 - Use Level 2 only when you need the internal team to clarify something before you can reply safely.
@@ -15231,6 +15240,12 @@ const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
   0,
   Number(process.env.AI_MODE_BACKGROUND_START_GRACE_MS || 5000)
 );
+// Wait for the customer to pause before AI replies. This prevents multiple replies
+// when the customer sends details in quick consecutive messages like "COB LED" then "3 watt".
+const AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS = Math.max(
+  3000,
+  Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 12000)
+);
 
 const aiModeGlobalState = {
   mode: aiModeNormalizeMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
@@ -15297,6 +15312,32 @@ async function aiModeBackgroundRememberProcessedId(messageId) {
     await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
   } catch (error) {
     console.warn("AI Mode worker processed-id save failed:", error?.message || error);
+  }
+}
+
+async function aiModeBackgroundRememberProcessedIds(messageIds = []) {
+  const ids = (Array.isArray(messageIds) ? messageIds : [])
+    .map((id) => aiModeBackgroundProcessedKey(id))
+    .filter(Boolean);
+  if (!ids.length) return;
+
+  ids.forEach((id) => aiModeBackgroundState.processed_ids.add(id));
+  if (aiModeBackgroundState.processed_ids.size > 1500) {
+    const keep = Array.from(aiModeBackgroundState.processed_ids).slice(-1000);
+    aiModeBackgroundState.processed_ids = new Set(keep);
+  }
+
+  try {
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    memory._background_worker = {
+      ...(memory._background_worker || {}),
+      updated_at: now(),
+      global_mode: aiModeGlobalState.mode,
+      processed_message_ids: Array.from(aiModeBackgroundState.processed_ids).slice(-1000)
+    };
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+  } catch (error) {
+    console.warn("AI Mode worker processed-id batch save failed:", error?.message || error);
   }
 }
 
@@ -15506,6 +15547,12 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     return { ok: false, skipped: "older_than_mode_enable_time" };
   }
 
+  // Debounce customer bursts. If customer is still typing/sending multiple short messages,
+  // wait and answer once using the full recent conversation.
+  if (messageTime && Date.now() - messageTime < AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS) {
+    return { ok: false, skipped: "waiting_for_customer_pause" };
+  }
+
   const payload = {
     aiMode: aiModeGlobalState.mode,
     source: "server_background_worker",
@@ -15539,7 +15586,13 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   if (decision.handover_required) aiModeBackgroundState.handover_count += 1;
   if (decision.clarification_required && !decision.handover_required) aiModeBackgroundState.clarification_count += 1;
 
-  await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+  const processedCustomerMessageIds = (messages || [])
+    .filter((message) => message?.id)
+    .filter((message) => !aiModeIsOwnOdooMessage(message, userContext))
+    .filter((message) => aiModeMessagePlainText(message))
+    .filter((message) => Number(message.id) <= Number(latestCustomerMessage.id))
+    .map((message) => message.id);
+  await aiModeBackgroundRememberProcessedIds(processedCustomerMessageIds.length ? processedCustomerMessageIds : [latestCustomerMessage.id]);
   return { ok: true, decision };
 }
 
