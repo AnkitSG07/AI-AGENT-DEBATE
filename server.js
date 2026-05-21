@@ -14487,12 +14487,12 @@ ${kitLines}
 
   if (/(difference|antar|farak|fark|kya\s+antar|kya\s+farak|compare|comparison)/i.test(msg)) {
     if (/sleeve.*without\s+sleeve|without\s+sleeve.*sleeve|with\s+sleeve/i.test(lastOperator)) {
-      return "Ji, sleeve aur without-sleeve battery ka simple difference ye hai:
+      return `Ji, sleeve aur without-sleeve battery ka simple difference ye hai:
 
 1. Sleeve battery: ready-to-connect hoti hai, JST wire attached hota hai, assembly easy hoti hai, sample/professional kit ke liye better option hai.
 2. Without sleeve / bare cell: iske liye holder ya extra wiring arrangement chahiye hota hai, assembly mein zyada space/planning lagti hai.
 
-Rechargeable sample kit ke liye sleeve battery usually easiest rahegi.";
+Rechargeable sample kit ke liye sleeve battery usually easiest rahegi.`;
     }
     if (/3v.*12v|12v.*3v/i.test(lastOperator) || /3v.*12v|12v.*3v/i.test(customerOnly)) {
       return "Ji, 3V aur 12V COB LED ka main difference operating voltage ka hai. 3V COB LED small rechargeable lamp drivers like AS-B-201-SLD ke saath common hoti hai. 12V COB LED ke liye 12V output driver/power source chahiye hota hai. Rechargeable single-color 3W lamp kit ke liye 3V COB LED + AS-B-201-SLD route suitable rahega.";
