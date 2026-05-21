@@ -14334,8 +14334,7 @@ function aiModeRecentHistoryText(history = [], maxItems = 12) {
       return content ? `${role}: ${content}` : "";
     })
     .filter(Boolean)
-    .join("
-");
+    .join("\n");
 }
 
 
@@ -14455,8 +14454,7 @@ function aiModeBuildKitLines(profile = {}) {
   if (profile.likely_driver || profile.likely_led || /complete/i.test(profile.need_type || "")) {
     lines.push("JST wire / connector wire");
   }
-  return lines.map((line, index) => `${index + 1}. ${line}`).join("
-");
+  return lines.map((line, index) => `${index + 1}. ${line}`).join("\n");
 }
 
 function aiModeContextualShortFollowupRepair({ latestMessage = "", history = [], profile = {}, aiResult = {} } = {}) {
