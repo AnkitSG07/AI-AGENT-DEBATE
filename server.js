@@ -14228,7 +14228,8 @@ const AI_MODE_MEMORY_FIELDS = {
   status: "x_studio_x_status",
   assignedTo: "x_studio_x_assigned_to",
   odooChannelId: "x_studio_x_odoo_channel_id",
-  lastMessageDate: "x_studio_x_last_message_date"
+  lastMessageDate: "x_studio_x_last_message_date",
+  contextJson: "x_studio_context_json"
 };
 
 const AI_MODE_HANDOVER_FIELDS = {
@@ -14485,7 +14486,7 @@ ${kitLines}
 ` : ""}Agar aap chahen to pehle standard sample kit proceed kar sakte hain; battery variant later finalize ho sakta hai.`;
   }
 
-  if (/(difference|antar|farak|fark|kya\s+antar|kya\s+farak|compare|comparison)/i.test(msg)) {
+  if (/\b(difference|antar|farak|fark|kya\s+antar|kya\s+farak|compare|comparison)\b/i.test(msg)) {
     if (/sleeve.*without\s+sleeve|without\s+sleeve.*sleeve|with\s+sleeve/i.test(lastOperator)) {
       return `Ji, sleeve aur without-sleeve battery ka simple difference ye hai:
 
@@ -14875,7 +14876,7 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   }
 
   if (aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, ab requirement clear hai: ${setup}.\n\nRecommended setup:\n${kitLines.join("\n")}\n\nNext step ke liye please bataye: aapko sample chahiye ya bulk quantity ke liye quotation?`;
+    return `Ji, requirement clear hai: ${setup}.\n\nRecommended setup:\n${kitLines.join("\n")}\n\nAap sample set chahte hain ya quantity/bulk pricing ke liye rate chahiye?`;
   }
 
   const missing = Array.isArray(profile.missing_details) ? profile.missing_details : [];
@@ -15090,6 +15091,25 @@ function aiModeOdooJson(value, max = 6000) {
   }
 }
 
+function aiModeOdooContextJson(value, max = 50000) {
+  try {
+    const source = value && typeof value === "object" ? value : {};
+    return JSON.stringify(source, null, 2).slice(0, max);
+  } catch {
+    return "{}";
+  }
+}
+
+function aiModeParseContextJson(value) {
+  if (!value || typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 async function aiModeFetchApprovedTrainingRulesFromOdoo() {
   if (!aiModeOdooEnabled()) return "";
   try {
@@ -15139,10 +15159,47 @@ async function aiModeOdooFindMemoryRecord(uid, chatId) {
     uid,
     AI_MODE_MEMORY_MODEL,
     "search_read",
-    [[[AI_MODE_MEMORY_FIELDS.chatId, "=", cleanChatId]], ["id", AI_MODE_MEMORY_FIELDS.chatId, AI_MODE_MEMORY_FIELDS.title]],
+    [[[AI_MODE_MEMORY_FIELDS.chatId, "=", cleanChatId]], [
+      "id",
+      AI_MODE_MEMORY_FIELDS.chatId,
+      AI_MODE_MEMORY_FIELDS.title,
+      AI_MODE_MEMORY_FIELDS.aiSummary,
+      AI_MODE_MEMORY_FIELDS.detectedProducts,
+      AI_MODE_MEMORY_FIELDS.missingDetails,
+      AI_MODE_MEMORY_FIELDS.status,
+      AI_MODE_MEMORY_FIELDS.assignedTo,
+      AI_MODE_MEMORY_FIELDS.contextJson
+    ]],
     { limit: 1, order: "write_date desc" }
   );
   return rows?.[0] || null;
+}
+
+async function aiModeOdooLoadMemoryContext(chatId) {
+  if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
+  const cleanChatId = aiModeSafeString(chatId, 160);
+  if (!cleanChatId) return { ok: false, skipped: true, reason: "missing_chat_id" };
+  try {
+    const uid = await odooLoginCached();
+    const record = await aiModeOdooFindMemoryRecord(uid, cleanChatId);
+    if (!record?.id) return { ok: true, found: false, memory: {}, record: null };
+
+    const contextJson = aiModeParseContextJson(record[AI_MODE_MEMORY_FIELDS.contextJson]);
+    const memory = {
+      odoo_memory_id: record.id,
+      last_summary: aiModeSafeString(record[AI_MODE_MEMORY_FIELDS.aiSummary] || "", 6000),
+      status: aiModeSafeString(record[AI_MODE_MEMORY_FIELDS.status] || "", 80),
+      assigned_to: aiModeSafeString(record[AI_MODE_MEMORY_FIELDS.assignedTo] || "", 80),
+      active_context: contextJson,
+      context_state: contextJson,
+      requirement_profile: contextJson?.legacy_profile || contextJson?.requirement_profile || {},
+      loaded_from_odoo_context_json: true
+    };
+    return { ok: true, found: true, record, contextJson, memory };
+  } catch (error) {
+    console.warn("AI Mode Odoo memory context load failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error), memory: {} };
+  }
 }
 
 async function aiModeOdooUpsertMemory({
@@ -15179,7 +15236,14 @@ async function aiModeOdooUpsertMemory({
       [AI_MODE_MEMORY_FIELDS.aiLevel]: Number(aiResult?.level || 0),
       [AI_MODE_MEMORY_FIELDS.status]: aiModeOdooMemoryStatus(aiResult),
       [AI_MODE_MEMORY_FIELDS.assignedTo]: assignedTo,
-      [AI_MODE_MEMORY_FIELDS.lastMessageDate]: aiModeOdooDatetime()
+      [AI_MODE_MEMORY_FIELDS.lastMessageDate]: aiModeOdooDatetime(),
+      [AI_MODE_MEMORY_FIELDS.contextJson]: aiModeOdooContextJson(
+        aiResult?.active_context ||
+        aiResult?.context_state ||
+        aiResult?.requirement_profile?.active_context ||
+        aiResult?.requirement_profile ||
+        {}
+      )
     };
 
     if (Number.isFinite(safeOdooChannelId) && safeOdooChannelId > 0) {
@@ -15521,6 +15585,255 @@ ${cleanMessage}`;
   };
 }
 
+
+// ===================== AI MODE: CHATGPT-STYLE TWO-STEP CONTEXT ENGINE =====================
+// This layer makes Gemini behave less like a one-shot reply bot and more like a context-aware assistant.
+// Step 1 silently interprets the latest customer message against the active context.
+// Step 2 generates the customer reply from the updated context.
+function aiModeBuildDefaultContextState(profile = {}, previousContext = {}) {
+  const prev = (previousContext && typeof previousContext === "object") ? previousContext : {};
+  const confirmed = { ...(prev.confirmed_facts || {}) };
+  const put = (k, v) => { if (v && !confirmed[k]) confirmed[k] = v; };
+  put("conversation_type", profile.conversation_type);
+  put("lamp_type", profile.lamp_type);
+  put("power_type", profile.power_type);
+  put("led_type", profile.led_type);
+  put("wattage", profile.wattage);
+  put("voltage", profile.voltage);
+  put("color_type", profile.color_type);
+  put("need_type", profile.need_type);
+  put("quantity", profile.quantity);
+  put("quantity_intent", profile.quantity_intent);
+  put("likely_driver", profile.likely_driver);
+  put("likely_led", profile.likely_led);
+
+  const activeBits = [
+    confirmed.power_type,
+    confirmed.lamp_type,
+    confirmed.color_type,
+    confirmed.wattage,
+    confirmed.voltage,
+    confirmed.led_type,
+    confirmed.need_type,
+    confirmed.quantity || confirmed.quantity_intent
+  ].filter(Boolean);
+
+  return {
+    schema_version: 2,
+    active_topic: prev.active_topic || activeBits.join(" · ") || profile.customer_intent || profile.conversation_type || "current enquiry",
+    conversation_type: profile.conversation_type || prev.conversation_type || "general",
+    conversation_stage: prev.conversation_stage || (profile.customer_intent || profile.lead_stage || "collecting"),
+    latest_customer_intent: profile.customer_intent || prev.latest_customer_intent || "",
+    confirmed_facts: confirmed,
+    unconfirmed_suggestions: prev.unconfirmed_suggestions || {},
+    rejected_facts: prev.rejected_facts || {},
+    last_ai_question: prev.last_ai_question || "",
+    last_customer_answer_target: prev.last_customer_answer_target || "",
+    next_best_action: profile.next_best_action || prev.next_best_action || "answer_latest_message_directly",
+    missing_details: Array.isArray(profile.missing_details) ? profile.missing_details : (prev.missing_details || []),
+    detected_products: Array.isArray(profile.detected_products) ? profile.detected_products : (prev.detected_products || []),
+    likely_driver: profile.likely_driver || prev.likely_driver || confirmed.likely_driver || "",
+    likely_led: profile.likely_led || prev.likely_led || confirmed.likely_led || "",
+    suggested_kit: Array.isArray(profile.suggested_kit) ? profile.suggested_kit : (prev.suggested_kit || []),
+    guardrails: {
+      customer_facts_only: true,
+      ai_suggestions_are_unconfirmed: true,
+      latest_customer_correction_wins: true,
+      ask_one_question_max: true
+    }
+  };
+}
+
+function aiModeNormalizeContextObject(value = {}, fallbackProfile = {}, previousContext = {}) {
+  const base = aiModeBuildDefaultContextState(fallbackProfile, previousContext);
+  const v = (value && typeof value === "object") ? value : {};
+  const merged = {
+    ...base,
+    ...v,
+    confirmed_facts: { ...(base.confirmed_facts || {}), ...(v.confirmed_facts || {}) },
+    unconfirmed_suggestions: { ...(base.unconfirmed_suggestions || {}), ...(v.unconfirmed_suggestions || {}) },
+    rejected_facts: { ...(base.rejected_facts || {}), ...(v.rejected_facts || {}) },
+    detected_products: Array.isArray(v.detected_products) ? v.detected_products : base.detected_products,
+    missing_details: Array.isArray(v.missing_details) ? v.missing_details : base.missing_details,
+    suggested_kit: Array.isArray(v.suggested_kit) ? v.suggested_kit : base.suggested_kit
+  };
+
+  // Hard correction repair. Latest customer correction must beat old memory.
+  const latest = String(v.latest_customer_message || "").toLowerCase();
+  const rejected = merged.rejected_facts || {};
+  const confirmed = merged.confirmed_facts || {};
+  if (/strip.*(nahi|not)|maine.*strip.*nahi|did\s*not.*strip|not.*strip/i.test(latest)) {
+    rejected.product_type = Array.from(new Set([...(Array.isArray(rejected.product_type) ? rejected.product_type : []), "strip LED"]));
+    if (confirmed.led_type === "strip LED") delete confirmed.led_type;
+    if (!confirmed.led_type) confirmed.led_type = "COB LED";
+    merged.led_type = "COB LED";
+  }
+  if (/battery.*(nahi|not)|battery.*pucha.*nahi|did\s*not.*battery/i.test(latest)) {
+    rejected.question_topic = Array.from(new Set([...(Array.isArray(rejected.question_topic) ? rejected.question_topic : []), "battery_variant_question_for_now"]));
+  }
+  merged.confirmed_facts = confirmed;
+  merged.rejected_facts = rejected;
+  return merged;
+}
+
+function aiModeBuildInterpreterPrompt({ latestMessage = "", recentConversation = "", previousContext = {}, heuristicProfile = {}, lastOperatorText = "" } = {}) {
+  return `
+You are the silent conversation-understanding layer for Smart Handicrafts WhatsApp/Odoo AI.
+Do NOT reply to the customer. Output JSON only.
+
+Your job is to update the active conversation context like ChatGPT would:
+- Understand the latest customer message using recent conversation and active topic.
+- Separate CUSTOMER-CONFIRMED FACTS from AI suggestions.
+- Previous AI messages are not customer facts unless customer accepted them.
+- Latest customer correction wins over everything.
+- Short replies like "yes", "sample", "poora kit", "kya antar hai", "3 watt", "3v", "same", "price" usually refer to the active topic or last AI question.
+- If customer says "kya antar hai" or "difference", decide the exact target from last AI question/current topic.
+- If customer copied an AI message and then complains/corrects, use only the correction as customer intent.
+
+Return this JSON schema only:
+{
+  "active_topic": "",
+  "conversation_type": "product_enquiry|kit_enquiry|quotation|custom_product|technical_help|complaint|dispatch|general",
+  "conversation_stage": "collecting|recommending|sample_confirmation|pricing|quotation|support|handover|order_status|general",
+  "latest_customer_intent": "",
+  "latest_customer_message": ${JSON.stringify(aiModeSafeString(latestMessage, 1200))},
+  "message_type": "new_info|answer_to_previous_question|question|correction|new_topic|complaint|dispatch_query|general",
+  "refers_to_last_ai_question": false,
+  "answer_target": "",
+  "is_new_topic": false,
+  "is_correction": false,
+  "confirmed_facts": {},
+  "unconfirmed_suggestions": {},
+  "rejected_facts": {},
+  "missing_details": [],
+  "detected_products": [],
+  "likely_driver": "",
+  "likely_led": "",
+  "suggested_kit": [],
+  "last_ai_question": "",
+  "last_customer_answer_target": "",
+  "next_best_action": "",
+  "should_reply_directly": true,
+  "should_ask_question": false,
+  "max_one_question": true,
+  "confidence": 0.0
+}
+
+PREVIOUS ACTIVE CONTEXT:
+${JSON.stringify(previousContext || {}, null, 2).slice(0, 6000)}
+
+HEURISTIC PROFILE FROM CUSTOMER-ONLY MESSAGES:
+${JSON.stringify(heuristicProfile || {}, null, 2).slice(0, 6000)}
+
+LAST AI/OPERATOR QUESTION OR MESSAGE:
+${lastOperatorText || "(none)"}
+
+RECENT CONVERSATION:
+${recentConversation || "(none)"}
+
+LATEST CUSTOMER MESSAGE:
+${latestMessage}
+`.trim();
+}
+
+async function aiModeInterpretConversationContext({ history = [], latestMessage = "", heuristicProfile = {}, chatMemory = {} } = {}) {
+  const previousContext = chatMemory?.active_context || chatMemory?.context_state || chatMemory?.requirement_profile || {};
+  const fallback = aiModeBuildDefaultContextState(heuristicProfile, previousContext);
+  const recentConversation = aiModeRecentHistoryText(history, 18);
+  const lastOperatorText = aiModeLastOperatorText(history);
+
+  // Fast deterministic fallback for empty/short service cases.
+  if (!latestMessage || !String(latestMessage).trim()) return fallback;
+
+  try {
+    const prompt = aiModeBuildInterpreterPrompt({
+      latestMessage,
+      recentConversation,
+      previousContext,
+      heuristicProfile,
+      lastOperatorText
+    });
+    const result = await callProductBotModel(
+      "You are a strict JSON-only conversation interpreter. Return JSON only. No markdown.",
+      prompt
+    );
+    const parsed = aiModeExtractJsonObject(result?.text) || {};
+    return aiModeNormalizeContextObject(parsed, heuristicProfile, previousContext);
+  } catch (error) {
+    console.warn("AI Mode interpreter failed; using heuristic context:", error?.message || error);
+    return aiModeNormalizeContextObject({ latest_customer_message: latestMessage }, heuristicProfile, previousContext);
+  }
+}
+
+function aiModeContextToLegacyProfile(context = {}, fallbackProfile = {}) {
+  const facts = context?.confirmed_facts || {};
+  const profile = {
+    ...fallbackProfile,
+    conversation_type: context.conversation_type || fallbackProfile.conversation_type,
+    customer_intent: context.latest_customer_intent || fallbackProfile.customer_intent,
+    lamp_type: facts.lamp_type || context.lamp_type || fallbackProfile.lamp_type || "",
+    power_type: facts.power_type || context.power_type || fallbackProfile.power_type || "",
+    led_type: facts.led_type || facts.product_type || context.led_type || fallbackProfile.led_type || "",
+    wattage: facts.wattage || context.wattage || fallbackProfile.wattage || "",
+    voltage: facts.voltage || context.voltage || fallbackProfile.voltage || "",
+    color_type: facts.color_type || context.color_type || fallbackProfile.color_type || "",
+    need_type: facts.need_type || facts.need || context.need_type || fallbackProfile.need_type || "",
+    quantity: facts.quantity || context.quantity || fallbackProfile.quantity || "",
+    quantity_intent: facts.quantity_intent || context.quantity_intent || fallbackProfile.quantity_intent || "",
+    likely_driver: context.likely_driver || facts.likely_driver || fallbackProfile.likely_driver || "",
+    likely_led: context.likely_led || facts.likely_led || fallbackProfile.likely_led || "",
+    suggested_kit: Array.isArray(context.suggested_kit) && context.suggested_kit.length ? context.suggested_kit : (fallbackProfile.suggested_kit || []),
+    detected_products: Array.isArray(context.detected_products) && context.detected_products.length ? context.detected_products : (fallbackProfile.detected_products || []),
+    missing_details: Array.isArray(context.missing_details) ? context.missing_details : (fallbackProfile.missing_details || []),
+    next_best_action: context.next_best_action || fallbackProfile.next_best_action || "answer_latest_message_directly",
+    active_context: context
+  };
+
+  // If customer explicitly rejected strip, never let fallback switch back to strip.
+  const rejectedProductTypes = context?.rejected_facts?.product_type || [];
+  if (Array.isArray(rejectedProductTypes) && rejectedProductTypes.includes("strip LED") && profile.led_type === "strip LED") {
+    profile.led_type = facts.led_type || "COB LED";
+    profile.likely_driver = /204|205/.test(profile.likely_driver || "") ? "" : profile.likely_driver;
+  }
+  return profile;
+}
+
+function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMessage = "") {
+  const msg = String(latestMessage || "").toLowerCase();
+  const facts = context.confirmed_facts || {};
+  const target = String(context.answer_target || context.last_customer_answer_target || "").toLowerCase();
+  const active = context.active_topic || aiModeHumanReadableProfileLine(profile);
+
+  if (context.is_correction || /abhi\s*to\s*bataya|maine.*nahi|wrong|galat|nahi\s*pucha|nahi\s*poocha/i.test(latestMessage)) {
+    if (/strip/i.test(latestMessage)) {
+      return "Ji, sorry — aapne strip LED nahi bola tha. Hum COB LED requirement par hi continue kar rahe hain. Aapke case mein 3W COB LED ke saath AS-B-201-SLD rechargeable single-color driver suitable rahega.";
+    }
+    if (/battery/i.test(latestMessage)) {
+      return "Ji, sorry — aapne battery variant ke baare mein nahi poocha tha. Complete rechargeable kit mein battery include hoti hai, lekin abhi main main setup par hi focus karta hoon: AS-B-201-SLD driver + 3W COB LED + JST wire + battery. Aap sample proceed karna chahte hain?";
+    }
+    return `Ji, sorry, samajh gaya. Main ${active} wali requirement par hi continue kar raha hoon.`;
+  }
+
+  if (/kya\s*antar|difference|farak|fark|compare|dono\s*mai/i.test(latestMessage)) {
+    if (/sleeve|without\s*sleeve|battery_variant|battery/i.test(target) || /sleeve|without\s*sleeve/i.test(context.last_ai_question || "")) {
+      return "Sleeve battery mein cell pack hokar ready JST wire ke saath aati hai, isliye fitting easy hoti hai. Without-sleeve battery ke liye holder/extra wiring aur thoda zyada space planning chahiye. Sample kit ke liye sleeve battery usually easier rahegi.";
+    }
+    if (/3v|12v|voltage/i.test(target) || /3v|12v/i.test(context.last_ai_question || "")) {
+      return "3V COB LED normally small rechargeable lamp drivers jaise AS-B-201-SLD ke saath use hoti hai. 12V COB LED ke liye 12V output driver/power source chahiye, jaise strip/DC bulb type applications. Rechargeable single-color table lamp ke liye 3V COB LED better match hai.";
+    }
+    if (/204|205|fast|normal/i.test(active + " " + (context.last_ai_question || ""))) {
+      return "204 normal/standard charging rechargeable strip driver hai, aur 205 fast-charging rechargeable strip driver hai. Dono strip/DC bulb type applications ke liye hote hain.";
+    }
+  }
+
+  if (/sample|trial|demo|testing|one\s*set|ek\s*set|poora\s*kit|complete\s*kit|full\s*kit/i.test(latestMessage) && aiModeProfileHasEnoughForKit(profile)) {
+    const kitLines = aiModeBuildKitLines(profile);
+    return `Ji, samajh gaya. Aapko ${aiModeHumanReadableProfileLine(profile)} ka sample/complete kit chahiye.\n\nSuitable setup:\n${kitLines}\n\nAap sample set proceed karna chahte hain ya iski price confirm karni hai?`;
+  }
+
+  return "";
+}
+
 function aiModeBuildPrompt({
   aiMode,
   message,
@@ -15563,6 +15876,19 @@ LANGUAGE:
 - If customer writes Hindi/Hinglish, reply in simple Hinglish, not heavy Hindi.
 - Keep technical words in English: driver, LED, COB, battery, JST wire, quotation, GST, dispatch, sample, bulk quantity.
 
+CHATGPT-LIKE RESPONSE STYLE:
+- Think like an experienced Smart Handicrafts employee, not a form-filling bot.
+- First understand what the customer is REALLY asking in the latest message using the active context.
+- Reply to the exact latest intent first. Do not restart the conversation.
+- Be short, useful, and to the point. Prefer 2-6 lines unless a list is genuinely useful.
+- Ask at most ONE question at the end, only if needed for the next step.
+- If enough context exists, give the answer/recommendation directly.
+- Never ask for details already confirmed by the customer.
+- Treat previous AI messages as suggestions only, not customer requirements. Customer confirmations/corrections are the source of truth.
+- If customer says “kya antar hai”, answer the difference of the exact thing you last asked or the thing currently under discussion.
+- If customer says “abhi to bataya”, “maine nahi pucha”, “wrong”, or similar, apologize briefly, repair the active context, and continue.
+- Do not expose internal labels such as product_enquiry, profile, confidence, action, level, or debug text to the customer.
+
 PRICING:
 - You may share approved listed prices and approved bulk slab prices only if found in product knowledge.
 - Do not invent prices.
@@ -15597,6 +15923,13 @@ INTERNAL CLARIFICATION:
 - For Level 2, create internal_notification for the shared internal WhatsApp number.
 - Use Level 2 only when you need the internal team to clarify something before you can reply safely.
 - Do not use Level 2 for ordinary customer-facing questions such as asking LED type, wattage, voltage, quantity, or use case.
+
+CUSTOMER REPLY QUALITY CHECK BEFORE RETURNING:
+- Does the reply answer the latest customer message directly? If not, rewrite it.
+- Is the reply asking something already answered? If yes, remove that question.
+- Is the reply based on an AI suggestion that the customer did not confirm? If yes, mark it as optional or remove it.
+- Is the customer correcting the AI? If yes, apologize and correct the context.
+- Is the reply longer than needed? If yes, shorten it.
 
 RETURN JSON ONLY with exactly these keys:
 {
@@ -15740,8 +16073,22 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       approvedTrainingRulesOdoo ? `# Approved AI Training Rules from Odoo\n${approvedTrainingRulesOdoo}` : ""
     ].filter(Boolean).join("\n\n");
     const productLinks = await aiModeReadJsonFile(PRODUCT_LINKS_PATH, {});
-    const chatMemory = chatId ? (memory[chatId] || {}) : {};
-    const requirementProfile = aiModeBuildRequirementProfile(history, message, chatMemory?.requirement_profile || {});
+    const localChatMemory = chatId ? (memory[chatId] || {}) : {};
+    const odooMemoryLoad = chatId ? await aiModeOdooLoadMemoryContext(chatId) : { ok: true, found: false, memory: {} };
+    const chatMemory = {
+      ...localChatMemory,
+      ...(odooMemoryLoad?.memory || {}),
+      local_memory: localChatMemory,
+      odoo_memory: odooMemoryLoad?.record || null
+    };
+    const heuristicProfile = aiModeBuildRequirementProfile(history, message, chatMemory?.requirement_profile || {});
+    const activeContext = await aiModeInterpretConversationContext({
+      history,
+      latestMessage: message,
+      heuristicProfile,
+      chatMemory
+    });
+    const requirementProfile = aiModeContextToLegacyProfile(activeContext, heuristicProfile);
 
     const prompt = aiModeBuildPrompt({
       aiMode,
@@ -15769,7 +16116,26 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     const parsed = aiModeExtractJsonObject(result?.text);
     let normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
 
-    const contextualRepairReply = aiModeContextualShortFollowupRepair({
+    const directContextReply = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
+    if (directContextReply) {
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: aiMode === "chat" ? directContextReply : "",
+        suggested_customer_reply: directContextReply,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        internal_summary: `${normalized.internal_summary || ""}
+Direct active-context reply applied.`.trim(),
+        next_action: "direct_active_context_reply"
+      };
+    }
+
+    const contextualRepairReply = !directContextReply && aiModeContextualShortFollowupRepair({
       latestMessage: message,
       history,
       profile: requirementProfile,
@@ -15830,6 +16196,7 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
     // Attach the universal profile to the result so Odoo memory and later internal queries
     // can search across product, kit, quotation, custom, support, dispatch, and general chats.
     normalized.requirement_profile = requirementProfile;
+    normalized.active_context = activeContext;
     normalized.quantity = requirementProfile?.quantity || normalized.quantity || "";
     normalized.missing_details = Array.isArray(requirementProfile?.missing_details)
       ? requirementProfile.missing_details.join(", ")
@@ -15883,6 +16250,8 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
         last_level: normalized.level,
         last_summary: normalized.internal_summary,
         requirement_profile: requirementProfile,
+        active_context: activeContext,
+        context_state: activeContext,
         assigned_to: normalized.assigned_to || memory[chatId]?.assigned_to || "",
         updated_at: now()
       };
@@ -15897,7 +16266,11 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
         product_chunks: productChunks.length,
         integration_chunks: integrationChunks.length
       },
-      odoo_persistence: odooPersistence
+      odoo_persistence: {
+        ...odooPersistence,
+        context_json_loaded_from_odoo: !!odooMemoryLoad?.found,
+        context_json_field: AI_MODE_MEMORY_FIELDS.contextJson
+      }
     });
   } catch (error) {
     console.error("AI Mode chat error:", error);
@@ -16436,6 +16809,7 @@ app.get("/api/ai-mode/status", async (req, res) => {
     odoo_memory: {
       enabled: aiModeOdooEnabled(),
       model: AI_MODE_MEMORY_MODEL,
+      context_json_field: AI_MODE_MEMORY_FIELDS.contextJson,
       handover_model: AI_MODE_HANDOVER_MODEL,
       training_model: AI_MODE_TRAINING_MODEL
     }
