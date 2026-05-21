@@ -14204,6 +14204,63 @@ const PRODUCT_LINKS_PATH = process.env.PRODUCT_LINKS_PATH || "./product-links.js
 const OPERATOR_MEMORY_PATH = process.env.OPERATOR_MEMORY_PATH || "./operator-memory.json";
 const INTERNAL_CONTROL_WHATSAPP = String(process.env.INTERNAL_CONTROL_WHATSAPP || "").replace(/\D/g, "");
 
+
+// ===================== AI MODE: ODOO MEMORY MODELS =====================
+// These are the Odoo Studio custom model/field names from your Model Overview PDFs.
+const AI_MODE_ODOO_ENABLED = String(process.env.AI_MODE_ODOO_ENABLED || "true").toLowerCase() !== "false";
+
+const AI_MODE_MEMORY_MODEL = process.env.AI_MODE_MEMORY_MODEL || "x_ai_operator_memory";
+const AI_MODE_HANDOVER_MODEL = process.env.AI_MODE_HANDOVER_MODEL || "x_ai_handover_log";
+const AI_MODE_TRAINING_MODEL = process.env.AI_MODE_TRAINING_MODEL || "x_ai_training";
+
+const AI_MODE_MEMORY_FIELDS = {
+  title: "x_name",
+  chatId: "x_studio_x_chat_id",
+  customerName: "x_studio_x_customer_name",
+  customerPhone: "x_studio_x_customer_phone",
+  channel: "x_studio_x_channel",
+  lastCustomerMessage: "x_studio_x_last_customer_message",
+  aiSummary: "x_studio_x_ai_summary",
+  detectedProducts: "x_studio_x_detected_products",
+  quantity: "x_studio_x_quantity",
+  missingDetails: "x_studio_x_missing_details",
+  aiLevel: "x_studio_x_ai_level",
+  status: "x_studio_x_status",
+  assignedTo: "x_studio_x_assigned_to",
+  odooChannelId: "x_studio_x_odoo_channel_id",
+  lastMessageDate: "x_studio_x_last_message_date"
+};
+
+const AI_MODE_HANDOVER_FIELDS = {
+  title: "x_name",
+  chatId: "x_studio_x_chat_id",
+  customerName: "x_studio_x_customer_name",
+  customerPhone: "x_studio_x_customer_phone",
+  reason: "x_studio_x_reason",
+  assignedTo: "x_studio_x_assigned_to",
+  assignedRole: "x_studio_x_assigned_role",
+  internalNotification: "x_studio_x_internal_notification",
+  suggestedNextAction: "x_studio_x_suggested_next_action",
+  status: "x_studio_x_status",
+  odooChannelId: "x_studio_x_odoo_channel_id",
+  createdDate: "x_studio_x_created_date",
+  resolvedDate: "x_studio_x_resolved_date"
+};
+
+const AI_MODE_TRAINING_FIELDS = {
+  title: "x_name",
+  ruleText: "x_studio_rule_text",
+  category: "x_studio_category",
+  relatedSku: "x_studio_related_sku",
+  source: "x_studio_source",
+  status: "x_studio_status",
+  active: "x_studio_active",
+  userMessage: "x_studio_user_message",
+  approvedBy: "x_studio_approved_by",
+  approvedDate: "x_studio_approved_date",
+  pageUrl: "x_studio_page_url"
+};
+
 function aiModeCleanPhone(value) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -14370,6 +14427,328 @@ function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
   return normalized;
 }
 
+
+function aiModeOdooEnabled() {
+  return !!(AI_MODE_ODOO_ENABLED && odooConfigured);
+}
+
+function aiModeOdooDatetime(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function aiModeOdooSelectionAssignedTo(value, fallback = "AI") {
+  const clean = aiModeSafeString(value, 80);
+  if (["Khushagra", "Vibhu", "AI", "Unassigned"].includes(clean)) return clean;
+  return fallback;
+}
+
+function aiModeOdooMemoryStatus(aiResult = {}) {
+  if (aiResult.handover_required || aiResult.level === 3) return "handed_over";
+  if (aiResult.clarification_required || aiResult.level === 2) return "clarification_needed";
+  if (aiResult.action === "resolved") return "resolved";
+  return "active";
+}
+
+function aiModeOdooJson(value, max = 6000) {
+  try {
+    return JSON.stringify(value || [], null, 2).slice(0, max);
+  } catch {
+    return "";
+  }
+}
+
+async function aiModeFetchApprovedTrainingRulesFromOdoo() {
+  if (!aiModeOdooEnabled()) return "";
+  try {
+    const uid = await odooLoginCached();
+    const fields = [
+      AI_MODE_TRAINING_FIELDS.title,
+      AI_MODE_TRAINING_FIELDS.ruleText,
+      AI_MODE_TRAINING_FIELDS.category,
+      AI_MODE_TRAINING_FIELDS.relatedSku,
+      AI_MODE_TRAINING_FIELDS.source,
+      AI_MODE_TRAINING_FIELDS.status,
+      AI_MODE_TRAINING_FIELDS.active,
+      AI_MODE_TRAINING_FIELDS.approvedBy,
+      AI_MODE_TRAINING_FIELDS.approvedDate,
+      AI_MODE_TRAINING_FIELDS.userMessage
+    ];
+
+    const rows = await odooExecute(
+      uid,
+      AI_MODE_TRAINING_MODEL,
+      "search_read",
+      [[
+        [AI_MODE_TRAINING_FIELDS.status, "=", "Approved"],
+        [AI_MODE_TRAINING_FIELDS.active, "=", true]
+      ], fields],
+      { limit: 200, order: "write_date desc" }
+    );
+
+    if (!Array.isArray(rows) || !rows.length) return "";
+    return rows.map((row, index) => {
+      const title = aiModeSafeString(row[AI_MODE_TRAINING_FIELDS.title] || `Rule ${index + 1}`, 160);
+      const rule = aiModeSafeString(row[AI_MODE_TRAINING_FIELDS.ruleText] || row[AI_MODE_TRAINING_FIELDS.userMessage] || "", 1600);
+      const category = aiModeSafeString(row[AI_MODE_TRAINING_FIELDS.category] || "", 80);
+      const sku = aiModeSafeString(row[AI_MODE_TRAINING_FIELDS.relatedSku] || "", 80);
+      return `- ${title}${category ? ` [${category}]` : ""}${sku ? ` SKU: ${sku}` : ""}\n  ${rule}`;
+    }).join("\n");
+  } catch (error) {
+    console.warn("AI Mode Odoo training fetch failed:", error?.message || error);
+    return "";
+  }
+}
+
+async function aiModeOdooFindMemoryRecord(uid, chatId) {
+  const cleanChatId = aiModeSafeString(chatId, 160);
+  if (!cleanChatId) return null;
+  const rows = await odooExecute(
+    uid,
+    AI_MODE_MEMORY_MODEL,
+    "search_read",
+    [[[AI_MODE_MEMORY_FIELDS.chatId, "=", cleanChatId]], ["id", AI_MODE_MEMORY_FIELDS.chatId, AI_MODE_MEMORY_FIELDS.title]],
+    { limit: 1, order: "write_date desc" }
+  );
+  return rows?.[0] || null;
+}
+
+async function aiModeOdooUpsertMemory({
+  chatId,
+  customerName,
+  customerPhone,
+  channel,
+  message,
+  aiResult,
+  odooChannelId
+} = {}) {
+  if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
+  const cleanChatId = aiModeSafeString(chatId, 160);
+  if (!cleanChatId) return { ok: false, skipped: true, reason: "missing_chat_id" };
+
+  try {
+    const uid = await odooLoginCached();
+    const assignedTo = aiModeOdooSelectionAssignedTo(aiResult?.assigned_to, aiResult?.level === 1 ? "AI" : "Unassigned");
+    const safeChannel = ["whatsapp", "livechat", "email", "manual"].includes(channel) ? channel : "manual";
+    const safeOdooChannelId = Number(odooChannelId || 0);
+    const titleParts = [customerName || customerPhone || cleanChatId, safeChannel, aiResult?.handover_required ? "Handover" : aiResult?.clarification_required ? "Clarification" : "AI Chat"].filter(Boolean);
+
+    const payload = {
+      [AI_MODE_MEMORY_FIELDS.title]: aiModeSafeString(titleParts.join(" - "), 250),
+      [AI_MODE_MEMORY_FIELDS.chatId]: cleanChatId,
+      [AI_MODE_MEMORY_FIELDS.customerName]: aiModeSafeString(customerName, 160),
+      [AI_MODE_MEMORY_FIELDS.customerPhone]: aiModeSafeString(customerPhone, 80),
+      [AI_MODE_MEMORY_FIELDS.channel]: safeChannel,
+      [AI_MODE_MEMORY_FIELDS.lastCustomerMessage]: aiModeSafeString(message, 6000),
+      [AI_MODE_MEMORY_FIELDS.aiSummary]: aiModeSafeString(aiResult?.internal_summary || "", 6000),
+      [AI_MODE_MEMORY_FIELDS.detectedProducts]: aiModeOdooJson(aiResult?.detected_products || [], 6000),
+      [AI_MODE_MEMORY_FIELDS.quantity]: aiModeSafeString(aiResult?.quantity || aiResult?.detected_quantity || "", 160),
+      [AI_MODE_MEMORY_FIELDS.missingDetails]: aiModeSafeString(aiResult?.missing_details || aiResult?.missingDetails || "", 4000),
+      [AI_MODE_MEMORY_FIELDS.aiLevel]: Number(aiResult?.level || 0),
+      [AI_MODE_MEMORY_FIELDS.status]: aiModeOdooMemoryStatus(aiResult),
+      [AI_MODE_MEMORY_FIELDS.assignedTo]: assignedTo,
+      [AI_MODE_MEMORY_FIELDS.lastMessageDate]: aiModeOdooDatetime()
+    };
+
+    if (Number.isFinite(safeOdooChannelId) && safeOdooChannelId > 0) {
+      payload[AI_MODE_MEMORY_FIELDS.odooChannelId] = safeOdooChannelId;
+    }
+
+    const existing = await aiModeOdooFindMemoryRecord(uid, cleanChatId);
+    if (existing?.id) {
+      await odooExecute(uid, AI_MODE_MEMORY_MODEL, "write", [[existing.id], payload]);
+      return { ok: true, action: "updated", id: existing.id };
+    }
+
+    const id = await odooExecute(uid, AI_MODE_MEMORY_MODEL, "create", [payload]);
+    return { ok: true, action: "created", id };
+  } catch (error) {
+    console.warn("AI Mode Odoo memory upsert failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function aiModeOdooCreateHandoverLog({
+  chatId,
+  customerName,
+  customerPhone,
+  aiResult,
+  odooChannelId,
+  kind = "handover"
+} = {}) {
+  if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
+  if (!aiResult?.handover_required && !aiResult?.clarification_required && aiResult?.level < 2) {
+    return { ok: false, skipped: true, reason: "not_handover_or_clarification" };
+  }
+
+  try {
+    const uid = await odooLoginCached();
+    const safeOdooChannelId = Number(odooChannelId || 0);
+    const assignedTo = aiModeOdooSelectionAssignedTo(aiResult?.assigned_to, aiResult?.level === 3 ? "Vibhu" : "AI");
+    const reason = aiModeSafeString(
+      aiResult?.handover_reason || aiResult?.next_action || (aiResult?.level === 2 ? "clarification_required" : "handover_required"),
+      220
+    );
+    const title = aiModeSafeString(`${customerName || customerPhone || chatId || "Customer"} - ${assignedTo} - ${reason}`, 250);
+    const notification = aiModeSafeString(aiResult?.internal_notification || aiResult?.internal_summary || "", 6000);
+    const nextAction = aiModeSafeString(aiResult?.next_action || aiResult?.suggested_customer_reply || "", 4000);
+
+    const payload = {
+      [AI_MODE_HANDOVER_FIELDS.title]: title,
+      [AI_MODE_HANDOVER_FIELDS.chatId]: aiModeSafeString(chatId, 160),
+      [AI_MODE_HANDOVER_FIELDS.customerName]: aiModeSafeString(customerName, 160),
+      [AI_MODE_HANDOVER_FIELDS.customerPhone]: aiModeSafeString(customerPhone, 80),
+      [AI_MODE_HANDOVER_FIELDS.reason]: reason,
+      [AI_MODE_HANDOVER_FIELDS.assignedTo]: assignedTo,
+      [AI_MODE_HANDOVER_FIELDS.assignedRole]: aiModeSafeString(aiResult?.assigned_role || (assignedTo === "Khushagra" ? "Main Sales / Quotation" : assignedTo === "Vibhu" ? "Customization / New Product / Special Case" : "AI Clarification"), 180),
+      [AI_MODE_HANDOVER_FIELDS.internalNotification]: notification,
+      [AI_MODE_HANDOVER_FIELDS.suggestedNextAction]: nextAction,
+      [AI_MODE_HANDOVER_FIELDS.status]: "pending",
+      [AI_MODE_HANDOVER_FIELDS.createdDate]: aiModeOdooDatetime()
+    };
+
+    if (Number.isFinite(safeOdooChannelId) && safeOdooChannelId > 0) {
+      payload[AI_MODE_HANDOVER_FIELDS.odooChannelId] = safeOdooChannelId;
+    }
+
+    const id = await odooExecute(uid, AI_MODE_HANDOVER_MODEL, "create", [payload]);
+    return { ok: true, action: "created", id, kind };
+  } catch (error) {
+    console.warn("AI Mode Odoo handover create failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+function aiModeInternalQuestionType(message = "") {
+  const text = String(message || "").toLowerCase();
+  if (/\b(who|which customer|kaun|kis customer|konsa customer|konse customer|customer.*asked|asked.*customer|pending|handover|assigned|khushagra|vibhu|quotation|quote|price|rate|201|202|204|205|driver|battery|strip|custom|customization)\b/i.test(text)) {
+    return "memory_lookup";
+  }
+  if (/\b(summary|summarize|what did|kya chahiye|what.*want|last customer|latest lead)\b/i.test(text)) {
+    return "memory_lookup";
+  }
+  return "instruction";
+}
+
+function aiModeScoreMemoryRow(row = {}, query = "") {
+  const q = String(query || "").toLowerCase();
+  const hay = [
+    row[AI_MODE_MEMORY_FIELDS.title],
+    row[AI_MODE_MEMORY_FIELDS.customerName],
+    row[AI_MODE_MEMORY_FIELDS.customerPhone],
+    row[AI_MODE_MEMORY_FIELDS.lastCustomerMessage],
+    row[AI_MODE_MEMORY_FIELDS.aiSummary],
+    row[AI_MODE_MEMORY_FIELDS.detectedProducts],
+    row[AI_MODE_MEMORY_FIELDS.quantity],
+    row[AI_MODE_MEMORY_FIELDS.missingDetails],
+    row[AI_MODE_MEMORY_FIELDS.status],
+    row[AI_MODE_MEMORY_FIELDS.assignedTo]
+  ].map((v) => String(v || "").toLowerCase()).join("\n");
+
+  let score = 0;
+  const importantTerms = Array.from(q.matchAll(/\b(201|202|204|205|206|101|102|103|quotation|quote|price|rate|khushagra|vibhu|custom|customization|battery|strip|driver|led|cob|handover|pending)\b/gi)).map((m) => m[1].toLowerCase());
+  for (const term of importantTerms) {
+    if (hay.includes(term)) score += 3;
+  }
+  for (const word of q.split(/\s+/).filter((w) => w.length > 3).slice(0, 12)) {
+    if (hay.includes(word)) score += 1;
+  }
+  return score;
+}
+
+async function aiModeAnswerInternalMemoryQuestion(message = "") {
+  if (!aiModeOdooEnabled()) {
+    return {
+      ok: true,
+      source: "internal_control",
+      action: "memory_lookup_unavailable",
+      internal_reply: "Odoo AI memory is not configured yet, so I cannot search customer memory. Please check Odoo env variables and AI Mode Odoo setup."
+    };
+  }
+
+  try {
+    const uid = await odooLoginCached();
+    const text = String(message || "").toLowerCase();
+    const fields = [
+      "id",
+      AI_MODE_MEMORY_FIELDS.title,
+      AI_MODE_MEMORY_FIELDS.chatId,
+      AI_MODE_MEMORY_FIELDS.customerName,
+      AI_MODE_MEMORY_FIELDS.customerPhone,
+      AI_MODE_MEMORY_FIELDS.channel,
+      AI_MODE_MEMORY_FIELDS.lastCustomerMessage,
+      AI_MODE_MEMORY_FIELDS.aiSummary,
+      AI_MODE_MEMORY_FIELDS.detectedProducts,
+      AI_MODE_MEMORY_FIELDS.quantity,
+      AI_MODE_MEMORY_FIELDS.missingDetails,
+      AI_MODE_MEMORY_FIELDS.aiLevel,
+      AI_MODE_MEMORY_FIELDS.status,
+      AI_MODE_MEMORY_FIELDS.assignedTo,
+      AI_MODE_MEMORY_FIELDS.odooChannelId,
+      AI_MODE_MEMORY_FIELDS.lastMessageDate
+    ];
+
+    const domain = [];
+    if (/khushagra/i.test(text)) domain.push([AI_MODE_MEMORY_FIELDS.assignedTo, "=", "Khushagra"]);
+    if (/vibhu/i.test(text)) domain.push([AI_MODE_MEMORY_FIELDS.assignedTo, "=", "Vibhu"]);
+    if (/pending|handover|handed/i.test(text)) domain.push([AI_MODE_MEMORY_FIELDS.status, "in", ["clarification_needed", "handed_over"]]);
+    if (/quotation|quote|price|rate/i.test(text) && !domain.some((d) => d[0] === AI_MODE_MEMORY_FIELDS.status)) {
+      // Keep broad; we score locally because Odoo Studio text search may miss mixed Hindi/English queries.
+    }
+
+    const rows = await odooExecute(
+      uid,
+      AI_MODE_MEMORY_MODEL,
+      "search_read",
+      [domain, fields],
+      { limit: 80, order: `${AI_MODE_MEMORY_FIELDS.lastMessageDate} desc, write_date desc` }
+    );
+
+    const scored = (rows || [])
+      .map((row) => ({ row, score: aiModeScoreMemoryRow(row, message) }))
+      .filter((x) => x.score > 0 || domain.length)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    if (!scored.length) {
+      return {
+        ok: true,
+        source: "internal_control",
+        action: "memory_lookup_empty",
+        internal_reply: "I could not find a matching customer in AI Operator Memory for this question. Try using product/SKU, customer name, phone, or assigned person."
+      };
+    }
+
+    const lines = scored.map(({ row }, index) => {
+      const name = row[AI_MODE_MEMORY_FIELDS.customerName] || row[AI_MODE_MEMORY_FIELDS.title] || "Unknown customer";
+      const phone = row[AI_MODE_MEMORY_FIELDS.customerPhone] || "";
+      const chat = row[AI_MODE_MEMORY_FIELDS.chatId] || "";
+      const assigned = row[AI_MODE_MEMORY_FIELDS.assignedTo] || "Unassigned";
+      const status = row[AI_MODE_MEMORY_FIELDS.status] || "active";
+      const summary = compactText(row[AI_MODE_MEMORY_FIELDS.aiSummary] || row[AI_MODE_MEMORY_FIELDS.lastCustomerMessage] || "", 280);
+      return `${index + 1}. ${name}${phone ? ` (${phone})` : ""}\n   Chat ID: ${chat || "-"}\n   Status: ${status} | Assigned: ${assigned}\n   Summary: ${summary || "No summary saved."}`;
+    });
+
+    return {
+      ok: true,
+      source: "internal_control",
+      action: "memory_lookup_result",
+      internal_reply: `I found these matching customer memories:\n\n${lines.join("\n\n")}`,
+      matches: scored.map(({ row, score }) => ({ id: row.id, score, chat_id: row[AI_MODE_MEMORY_FIELDS.chatId], customer_name: row[AI_MODE_MEMORY_FIELDS.customerName] }))
+    };
+  } catch (error) {
+    console.warn("AI Mode internal memory lookup failed:", error?.message || error);
+    return {
+      ok: false,
+      source: "internal_control",
+      action: "memory_lookup_failed",
+      error: error?.message || String(error),
+      internal_reply: "I could not search Odoo AI memory because of a backend/Odoo error."
+    };
+  }
+}
+
 function aiModeLooksLikePermanentTraining(message = "") {
   const text = String(message || "").trim().toLowerCase();
   if (!text) return false;
@@ -14379,9 +14758,43 @@ function aiModeLooksLikePermanentTraining(message = "") {
   );
 }
 
+
+async function aiModeOdooCreateTrainingRule({ rule, fromMessage = "", status = "Approved", source = "Admin", category = "policy general" } = {}) {
+  if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
+  const cleanRule = aiModeSafeString(rule, 4000);
+  if (!cleanRule) return { ok: false, skipped: true, reason: "missing_rule" };
+
+  try {
+    const uid = await odooLoginCached();
+    const title = compactText(cleanRule, 90) || "AI Training Rule";
+    const payload = {
+      [AI_MODE_TRAINING_FIELDS.title]: title,
+      [AI_MODE_TRAINING_FIELDS.ruleText]: cleanRule,
+      [AI_MODE_TRAINING_FIELDS.category]: category,
+      [AI_MODE_TRAINING_FIELDS.source]: source,
+      [AI_MODE_TRAINING_FIELDS.status]: status,
+      [AI_MODE_TRAINING_FIELDS.active]: true,
+      [AI_MODE_TRAINING_FIELDS.userMessage]: aiModeSafeString(fromMessage, 4000),
+      [AI_MODE_TRAINING_FIELDS.approvedBy]: "AI Mode Internal Control",
+      [AI_MODE_TRAINING_FIELDS.approvedDate]: aiModeOdooDatetime()
+    };
+    const id = await odooExecute(uid, AI_MODE_TRAINING_MODEL, "create", [payload]);
+    return { ok: true, id };
+  } catch (error) {
+    console.warn("AI Mode Odoo training create failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
 async function aiModeHandleInternalInstruction({ message, chatId = "internal", customerName = "", memory = {} } = {}) {
   const cleanMessage = aiModeSafeString(message, 3000);
   const lower = cleanMessage.toLowerCase();
+
+  // Natural internal questions from the shared WhatsApp number, for example:
+  // "Which customer was asking for 201 driver?", "Who needs Khushagra?", "Any pending handovers?"
+  if (aiModeInternalQuestionType(cleanMessage) === "memory_lookup" && !aiModeLooksLikePermanentTraining(cleanMessage)) {
+    return await aiModeAnswerInternalMemoryQuestion(cleanMessage);
+  }
   const yesLike = /^(yes|haan|ha|ok|okay|save|kar do|haan save|yes save)\b/i.test(lower);
   const noLike = /^(no|nahi|mat|cancel|nope)\b/i.test(lower);
   const pending = memory?._pending_training_rule;
@@ -14390,7 +14803,15 @@ async function aiModeHandleInternalInstruction({ message, chatId = "internal", c
     const oldRules = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH, "# Smart Handicrafts AI Approved Training Rules\n\n");
     const newRule = `\n- ${pending.rule}\n`;
     try {
-      await writeFile(APPROVED_TRAINING_RULES_PATH, `${oldRules.trim()}\n${newRule}`, "utf8");
+      await writeFile(APPROVED_TRAINING_RULES_PATH, `${oldRules.trim()}
+${newRule}`, "utf8");
+      await aiModeOdooCreateTrainingRule({
+        rule: pending.rule,
+        fromMessage: pending.from_message || "",
+        status: "Approved",
+        source: "Admin",
+        category: "policy general"
+      });
       delete memory._pending_training_rule;
       await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
     } catch (error) {
@@ -14587,6 +15008,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     const source = aiModeSafeString(req.body?.source || "operator_hub", 80);
     const channel = aiModeSafeString(req.body?.channel || "whatsapp", 80);
     const chatId = aiModeSafeString(req.body?.chatId || req.body?.conversationId || "", 160);
+    const odooChannelId = Number(req.body?.odooChannelId || req.body?.channelId || req.body?.odoo_channel_id || 0);
     const customerName = aiModeSafeString(req.body?.customerName || req.body?.name || "", 160);
     const customerPhone = aiModeSafeString(req.body?.customerPhone || req.body?.phone || "", 80);
     const senderPhone = aiModeCleanPhone(req.body?.senderPhone || req.body?.from || customerPhone);
@@ -14646,7 +15068,12 @@ app.post("/api/ai-mode/chat", async (req, res) => {
 
     const aiModeRules = await aiModeReadTextFile(AI_MODE_RULES_PATH);
     const handoverRules = await aiModeReadTextFile(HANDOVER_RULES_PATH);
-    const approvedTrainingRules = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH);
+    const approvedTrainingRulesFile = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH);
+    const approvedTrainingRulesOdoo = await aiModeFetchApprovedTrainingRulesFromOdoo();
+    const approvedTrainingRules = [
+      approvedTrainingRulesFile,
+      approvedTrainingRulesOdoo ? `# Approved AI Training Rules from Odoo\n${approvedTrainingRulesOdoo}` : ""
+    ].filter(Boolean).join("\n\n");
     const productLinks = await aiModeReadJsonFile(PRODUCT_LINKS_PATH, {});
     const chatMemory = chatId ? (memory[chatId] || {}) : {};
 
@@ -14675,6 +15102,33 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     const parsed = aiModeExtractJsonObject(result?.text);
     const normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
 
+    // Persist AI Mode result to Odoo Studio models, without blocking customer reply if Odoo fails.
+    // Memory model: x_ai_operator_memory
+    // Handover model: x_ai_handover_log
+    const odooPersistence = { memory: null, handover: null };
+    if (chatId) {
+      odooPersistence.memory = await aiModeOdooUpsertMemory({
+        chatId,
+        customerName,
+        customerPhone,
+        channel,
+        message,
+        aiResult: normalized,
+        odooChannelId
+      });
+
+      if (normalized.clarification_required || normalized.handover_required || normalized.level >= 2) {
+        odooPersistence.handover = await aiModeOdooCreateHandoverLog({
+          chatId,
+          customerName,
+          customerPhone,
+          aiResult: normalized,
+          odooChannelId,
+          kind: normalized.handover_required ? "handover" : "clarification"
+        });
+      }
+    }
+
     if (chatId) {
       memory[chatId] = {
         ...(memory[chatId] || {}),
@@ -14698,7 +15152,8 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       retrieved: {
         product_chunks: productChunks.length,
         integration_chunks: integrationChunks.length
-      }
+      },
+      odoo_persistence: odooPersistence
     });
   } catch (error) {
     console.error("AI Mode chat error:", error);
@@ -14726,7 +15181,13 @@ app.get("/api/ai-mode/status", async (req, res) => {
       product_links: PRODUCT_LINKS_PATH,
       operator_memory: OPERATOR_MEMORY_PATH
     },
-    memory_chats: Object.keys(memory || {}).filter((k) => !k.startsWith("_")).length
+    memory_chats: Object.keys(memory || {}).filter((k) => !k.startsWith("_")).length,
+    odoo_memory: {
+      enabled: aiModeOdooEnabled(),
+      model: AI_MODE_MEMORY_MODEL,
+      handover_model: AI_MODE_HANDOVER_MODEL,
+      training_model: AI_MODE_TRAINING_MODEL
+    }
   });
 });
 
