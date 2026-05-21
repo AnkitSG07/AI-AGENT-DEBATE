@@ -15799,10 +15799,24 @@ function aiModeContextToLegacyProfile(context = {}, fallbackProfile = {}) {
 }
 
 function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMessage = "") {
-  const msg = String(latestMessage || "").toLowerCase();
+  const rawLatest = String(latestMessage || "").trim();
+  const msg = rawLatest.toLowerCase();
   const facts = context.confirmed_facts || {};
   const target = String(context.answer_target || context.last_customer_answer_target || "").toLowerCase();
   const active = context.active_topic || aiModeHumanReadableProfileLine(profile);
+
+  // Broad fresh product enquiry should not be trapped inside old handover/pricing context.
+  // Example: after an old sample-kit discussion, customer says "Hello, I need some products from you".
+  // This is a new broad sales opening. Reply directly and ask one broad category question.
+  const broadProductNeed = /\b(i\s+need|need|want|looking\s+for|require|chahiye|chaiye|mujhe)\b[\s\S]{0,80}\b(product|products|items|material|saman|maal)\b/i.test(rawLatest) ||
+    /\b(product|products|items|material|saman|maal)\b[\s\S]{0,80}\b(chahiye|chaiye|need|want|require)\b/i.test(rawLatest);
+  const greetingOnlyOrBroad = /^(hi|hello|hey|hii|helo|namaste|namaskar)\b[\s!.]*$/i.test(rawLatest);
+  if (broadProductNeed) {
+    return "Sure, please tell me which product you need — LED, driver, battery, strip LED, or complete lamp kit? If you know the wattage/quantity, share that also.";
+  }
+  if (greetingOnlyOrBroad && !String(active || "").trim()) {
+    return "Hello ji, please tell me what you need — LED, driver, battery, strip LED, or complete lamp kit?";
+  }
 
   if (context.is_correction || /abhi\s*to\s*bataya|maine.*nahi|wrong|galat|nahi\s*pucha|nahi\s*poocha/i.test(latestMessage)) {
     if (/strip/i.test(latestMessage)) {
@@ -16169,6 +16183,32 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
         customer_reply: aiMode === "chat" ? repairedReply : "",
         suggested_customer_reply: repairedReply,
         next_action: "profile_based_next_step"
+      };
+    }
+
+    // Last-resort safe reply fallback: in Chat Mode, never silently mark a normal customer
+    // product/help message as processed without a customer-facing reply. This prevents cases
+    // where the silent interpreter runs but the final reply is empty or not sendable.
+    const currentReplyText = String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim();
+    const normalCustomerAsk = /\b(hello|hi|hey|need|want|looking\s+for|require|chahiye|chaiye|mujhe|product|products|led|driver|battery|strip|cob|kit|lamp|price|rate|sample)\b/i.test(message || "");
+    if (aiMode === "chat" && !currentReplyText && normalCustomerAsk && !normalized.handover_required && !normalized.clarification_required) {
+      const fallbackReply = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message) ||
+        aiModeBuildProfileBasedCustomerReply(requirementProfile, message) ||
+        "Ji, please tell me which product you need — LED, driver, battery, strip LED, or complete lamp kit?";
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: fallbackReply,
+        suggested_customer_reply: fallbackReply,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        next_action: "safe_customer_reply_fallback",
+        internal_summary: `${normalized.internal_summary || ""}
+Safe no-reply fallback applied.`.trim()
       };
     }
 
