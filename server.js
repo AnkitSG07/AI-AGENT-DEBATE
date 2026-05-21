@@ -14302,20 +14302,210 @@ async function aiModeWriteJsonFile(path, value) {
   }
 }
 
+function aiModeHistoryItemText(item = {}) {
+  return aiModeSafeString(
+    item?.content || item?.body || item?.message || item?.text || item?.preview || "",
+    2000
+  );
+}
+
+function aiModeHistoryRole(item = {}) {
+  return aiModeSafeString(item?.role || item?.author_role || item?.message_role || item?.author || "", 80).toLowerCase();
+}
+
+function aiModeIsCustomerHistoryItem(item = {}) {
+  const role = aiModeHistoryRole(item);
+  if (!role) return true;
+  return !/(operator|assistant|agent|admin|smart\s*handicrafts|system|bot|ai)/i.test(role);
+}
+
+function aiModeIsOperatorHistoryItem(item = {}) {
+  const role = aiModeHistoryRole(item);
+  return /(operator|assistant|agent|admin|smart\s*handicrafts|system|bot|ai)/i.test(role);
+}
+
 function aiModeRecentHistoryText(history = [], maxItems = 12) {
   if (!Array.isArray(history)) return "";
   return history
     .slice(-maxItems)
     .map((m) => {
       const role = aiModeSafeString(m?.role || m?.author || "user", 40);
-      const content = aiModeSafeString(m?.content || m?.body || m?.message || "", 1200);
+      const content = aiModeHistoryItemText(m).slice(0, 1200);
       return content ? `${role}: ${content}` : "";
     })
     .filter(Boolean)
-    .join("\n");
+    .join("
+");
 }
 
 
+function aiModeLooksLikeOurAssistantText(text = "") {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  const lower = t.toLowerCase();
+  const strongMarkers = [
+    "suitable setup:",
+    "recommended setup:",
+    "recommended complete sample kit:",
+    "current requirement:",
+    "suitable sample combination:",
+    "assigned to:",
+    "handover",
+    "internal notification",
+    "aap complete sample kit chahte hain",
+    "aap sample set chahte hain",
+    "battery ke liye, kya aapko",
+    "usme ye components honge",
+    "ji, samajh gaya. aapko",
+    "sure, i can help you with",
+    "to recommend the best option",
+    "ai status:",
+    "level 1",
+    "level 2",
+    "level 3"
+  ];
+  if (strongMarkers.some((m) => lower.includes(m))) return true;
+  // Common assistant-style list replies. Avoid treating them as customer-selected facts.
+  if (/^(ji|okay|sure|achha)[,\s]/i.test(t) && /\b(please|confirm|bataye|bataiye|share|suitable|recommend|option|components|driver|battery|jst|sample)\b/i.test(t) && t.length > 120) {
+    return true;
+  }
+  return false;
+}
+
+function aiModeExtractCorrectionPortion(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) return raw;
+  const lower = raw.toLowerCase();
+  const markers = [
+    "kya maine",
+    "maine",
+    "abhi to",
+    "maine strip",
+    "i did not",
+    "i didn't",
+    "i have not",
+    "not asked",
+    "nahi pucha",
+    "nahi poocha",
+    "kuch pucha hi nahi",
+    "pucha hi nahi",
+    "poocha hi nahi"
+  ];
+  const positions = markers
+    .map((m) => lower.lastIndexOf(m))
+    .filter((idx) => idx >= 0)
+    .sort((a, b) => b - a);
+  if (!positions.length) return raw;
+  const pos = positions[0];
+  // If customer pasted our old reply and then corrected it, keep only the correction part.
+  if (raw.length > 120 || pos > 40) return raw.slice(pos).trim();
+  return raw;
+}
+
+function aiModeCleanCustomerMessageForProfile(text = "") {
+  let raw = String(text || "").trim();
+  if (!raw) return "";
+  raw = aiModeExtractCorrectionPortion(raw);
+  if (aiModeLooksLikeOurAssistantText(raw)) return "";
+  return raw;
+}
+
+function aiModeCustomerOnlyHistoryText(history = [], latestMessage = "", maxItems = 30) {
+  const customerLines = (Array.isArray(history) ? history : [])
+    .filter(aiModeIsCustomerHistoryItem)
+    .slice(-maxItems)
+    .map((item) => aiModeCleanCustomerMessageForProfile(aiModeHistoryItemText(item)))
+    .filter(Boolean);
+  const cleanLatest = aiModeCleanCustomerMessageForProfile(latestMessage);
+  if (cleanLatest) customerLines.push(cleanLatest);
+  return customerLines.join("\n");
+}
+
+function aiModeLastOperatorText(history = []) {
+  const items = Array.isArray(history) ? history : [];
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (!aiModeIsOperatorHistoryItem(items[i])) continue;
+    const text = aiModeHistoryItemText(items[i]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function aiModeHumanReadableProfileLine(profile = {}) {
+  const parts = [];
+  if (profile.power_type) parts.push(profile.power_type === "usb-powered" ? "USB-C powered" : profile.power_type);
+  if (profile.lamp_type) parts.push(profile.lamp_type.replace(/_/g, " "));
+  if (profile.color_type) parts.push(profile.color_type);
+  if (profile.wattage) parts.push(profile.wattage);
+  if (profile.voltage) parts.push(profile.voltage);
+  if (profile.led_type) parts.push(profile.led_type);
+  if (profile.need_type) parts.push(profile.need_type.replace(/_/g, " "));
+  if (profile.quantity) parts.push(`quantity: ${profile.quantity}`);
+  if (profile.quantity_intent && !profile.quantity) parts.push(profile.quantity_intent);
+  return parts.join(" · ") || "current requirement";
+}
+
+function aiModeBuildKitLines(profile = {}) {
+  const lines = [];
+  if (profile.likely_driver) lines.push(profile.likely_driver);
+  if (profile.likely_led) lines.push(profile.likely_led);
+  if (profile.power_type === "rechargeable" && (profile.likely_driver || profile.likely_led || /complete/i.test(profile.need_type || ""))) {
+    lines.push("2600mAh battery as the standard sample-kit option");
+  }
+  if (profile.likely_driver || profile.likely_led || /complete/i.test(profile.need_type || "")) {
+    lines.push("JST wire / connector wire");
+  }
+  return lines.map((line, index) => `${index + 1}. ${line}`).join("
+");
+}
+
+function aiModeContextualShortFollowupRepair({ latestMessage = "", history = [], profile = {}, aiResult = {} } = {}) {
+  const msg = String(latestMessage || "").toLowerCase();
+  const lastOperator = aiModeLastOperatorText(history).toLowerCase();
+  const customerOnly = aiModeCustomerOnlyHistoryText(history, latestMessage).toLowerCase();
+  const line = aiModeHumanReadableProfileLine(profile);
+  const kitLines = aiModeBuildKitLines(profile);
+
+  if (/strip.*(nahi|not)|maine.*strip.*nahi|i.*not.*ask.*strip/i.test(msg)) {
+    const preferred = customerOnly.includes("cob") || profile.led_type === "COB LED" ? "COB LED" : "LED";
+    return `Ji, sorry — aapne strip LED nahi bola tha. Aapki requirement ${preferred} ke liye hi continue kar raha hoon.
+
+Current requirement: ${line}.
+${kitLines ? `
+Suitable setup:
+${kitLines}
+` : ""}Ab next step ke liye aap sample set proceed karna chahte hain ya price/quotation chahiye?`;
+  }
+
+  if (/battery.*(nahi|kyu|why)|kya.*battery|maine.*battery.*(pucha|nahi)|i.*not.*ask.*battery/i.test(msg)) {
+    return `Ji, sorry — aapne battery ke baare mein separately nahi poocha tha. Maine battery isliye mention ki thi kyunki rechargeable complete kit mein driver + LED ke saath battery aur JST wire bhi required hote hain.
+
+Current requirement: ${line}.
+${kitLines ? `
+Recommended complete sample kit:
+${kitLines}
+` : ""}Agar aap chahen to pehle standard sample kit proceed kar sakte hain; battery variant later finalize ho sakta hai.`;
+  }
+
+  if (/(difference|antar|farak|fark|kya\s+antar|kya\s+farak|compare|comparison)/i.test(msg)) {
+    if (/sleeve.*without\s+sleeve|without\s+sleeve.*sleeve|with\s+sleeve/i.test(lastOperator)) {
+      return "Ji, sleeve aur without-sleeve battery ka simple difference ye hai:
+
+1. Sleeve battery: ready-to-connect hoti hai, JST wire attached hota hai, assembly easy hoti hai, sample/professional kit ke liye better option hai.
+2. Without sleeve / bare cell: iske liye holder ya extra wiring arrangement chahiye hota hai, assembly mein zyada space/planning lagti hai.
+
+Rechargeable sample kit ke liye sleeve battery usually easiest rahegi.";
+    }
+    if (/3v.*12v|12v.*3v/i.test(lastOperator) || /3v.*12v|12v.*3v/i.test(customerOnly)) {
+      return "Ji, 3V aur 12V COB LED ka main difference operating voltage ka hai. 3V COB LED small rechargeable lamp drivers like AS-B-201-SLD ke saath common hoti hai. 12V COB LED ke liye 12V output driver/power source chahiye hota hai. Rechargeable single-color 3W lamp kit ke liye 3V COB LED + AS-B-201-SLD route suitable rahega.";
+    }
+    if (/204.*205|205.*204|fast.*normal|normal.*fast/i.test(lastOperator) || /204.*205|205.*204/i.test(customerOnly)) {
+      return "Ji, 204 aur 205 dono rechargeable strip LED driver category mein aate hain. Difference ye hai: 204 normal/standard charging option hai, aur 205 fast-charging option hai. Ye comparison strip LED application ke liye hai; COB LED kit mein AS-B-201-SLD/202 type driver use hota hai.";
+    }
+  }
+
+  return "";
+}
 
 function aiModeNormalizeSlotValue(value = "") {
   return String(value || "").trim();
@@ -14350,11 +14540,7 @@ function aiModeMergeProfiles(previous = {}, current = {}) {
 }
 
 function aiModeLatestCustomerText(history = [], latestMessage = "") {
-  const items = Array.isArray(history) ? history : [];
-  return items
-    .map((m) => String(m?.content || m?.body || m?.message || m?.text || ""))
-    .concat([String(latestMessage || "")])
-    .join("\n");
+  return aiModeCustomerOnlyHistoryText(history, latestMessage, 30);
 }
 
 function aiModeDetectConversationType(text = "") {
@@ -14387,7 +14573,7 @@ function aiModeDetectConversationType(text = "") {
 function aiModeBuildRequirementProfile(history = [], latestMessage = "", previousProfile = {}) {
   const historyRaw = aiModeLatestCustomerText(history, latestMessage);
   const historyText = historyRaw.toLowerCase();
-  const latestText = String(latestMessage || "").toLowerCase();
+  const latestText = aiModeCleanCustomerMessageForProfile(latestMessage).toLowerCase();
 
   const profile = {
     conversation_type: aiModeDetectConversationType(historyText),
@@ -14562,6 +14748,18 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
     profile.suggested_kit.push("JST wire / connector wire");
   }
 
+  // Customer correction guard: if customer explicitly rejects an AI assumption, clean the profile.
+  if (/strip.*(nahi|not)|maine.*strip.*nahi|i.*not.*ask.*strip/i.test(latestText)) {
+    if (historyText.includes("cob")) profile.led_type = "COB LED";
+    profile.likely_driver = profile.power_type === "rechargeable" && profile.color_type === "single color"
+      ? "AS-B-201-SLD rechargeable single-color touch dimmable driver"
+      : profile.likely_driver;
+    profile.confidence_notes.push("Customer corrected that strip LED was not requested; continue with COB LED context.");
+  }
+  if (/battery.*(nahi|kyu|why)|kya.*battery|maine.*battery.*(pucha|nahi)|i.*not.*ask.*battery/i.test(latestText)) {
+    profile.confidence_notes.push("Customer corrected that battery was not asked as a separate decision; mention battery only as a required part of rechargeable complete kit.");
+  }
+
   // Known facts mirror for prompt and internal search.
   profile.known_facts = {
     conversation_type: profile.conversation_type,
@@ -14581,6 +14779,18 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
   };
 
   let merged = aiModeMergeProfiles(previousProfile || {}, profile);
+
+  // Strong correction repair: do not preserve polluted previous profile fields when the customer explicitly rejects them.
+  if (/strip.*(nahi|not)|maine.*strip.*nahi|i.*not.*ask.*strip|strip\s*led\s*k\s*bare\s*mai\s*kuch\s*pucha/i.test(latestText)) {
+    if (historyText.includes("cob")) merged.led_type = "COB LED";
+    if (merged.led_type === "COB LED" && merged.power_type === "rechargeable" && merged.color_type === "single color") {
+      merged.likely_driver = "AS-B-201-SLD rechargeable single-color touch dimmable driver";
+      if (merged.wattage === "3W" && (!merged.voltage || merged.voltage === "3V")) merged.likely_led = "SH-COB-3W 3V 3W COB LED";
+      merged.suggested_kit = [merged.likely_driver, merged.likely_led].filter(Boolean);
+      if (merged.power_type === "rechargeable") merged.suggested_kit.push("2600mAh battery as primary standard option; LC/cost-sensitive kits may use 1200mAh if applicable");
+      merged.suggested_kit.push("JST wire / connector wire");
+    }
+  }
 
   // Re-evaluate missing facts after merge.
   const missing = [];
@@ -14623,8 +14833,7 @@ function aiModeProfileHasEnoughForKit(profile = {}) {
 
 function aiModeProfileSummaryLine(profile = {}) {
   const parts = [];
-  if (profile.conversation_type) parts.push(`type: ${profile.conversation_type}`);
-  if (profile.power_type) parts.push(profile.power_type);
+  if (profile.power_type) parts.push(profile.power_type === "usb-powered" ? "USB-C powered" : profile.power_type);
   if (profile.lamp_type) parts.push(profile.lamp_type);
   if (profile.color_type) parts.push(profile.color_type);
   if (profile.wattage) parts.push(profile.wattage);
@@ -14632,13 +14841,13 @@ function aiModeProfileSummaryLine(profile = {}) {
   if (profile.led_type) parts.push(profile.led_type);
   if (profile.need_type) parts.push(profile.need_type);
   if (profile.quantity) parts.push(`quantity: ${profile.quantity}`);
-  if (profile.customer_intent) parts.push(`intent: ${profile.customer_intent}`);
+  if (profile.quantity_intent && !profile.quantity) parts.push(profile.quantity_intent);
   return parts.join(" · ");
 }
 
 function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") {
   const msg = String(latestMessage || "").toLowerCase();
-  const setup = aiModeProfileSummaryLine(profile);
+  const setup = aiModeHumanReadableProfileLine(profile);
   const kitLines = [];
   if (profile.likely_driver) kitLines.push(`1. ${profile.likely_driver}`);
   if (profile.likely_led) kitLines.push(`${kitLines.length + 1}. ${profile.likely_led}`);
@@ -14656,11 +14865,11 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   }
 
   if (/sample|trial|demo|testing|one\s*set|ek\s*set/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, samajh gaya. Aapko ${setup} ka sample setup chahiye.\n\nSuitable sample combination:\n${kitLines.join("\n")}\n\nAap complete sample kit chahte hain ya sirf driver + LED sample?`;
+    return `Ji, samajh gaya. Aapko ${setup} ka sample setup chahiye.\n\nSuitable sample combination:\n${kitLines.join("\n")}\n\nAap sample set proceed karna chahte hain ya iski pricing/quotation chahiye?`;
   }
 
   if (/complete\s*kit|kit|set|combo/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, requirement clear hai: ${setup}.\n\nIske liye suitable kit combination hoga:\n${kitLines.join("\n")}\n\nAap sample set chahte hain ya bulk quantity ke liye pricing chahiye?`;
+    return `Ji, requirement clear hai: ${setup}.\n\nIske liye suitable kit combination hoga:\n${kitLines.join("\n")}\n\nAap sample set proceed karna chahte hain ya bulk quantity ke liye pricing chahiye?`;
   }
 
   if (/price|rate|cost|quotation|quote|kitna|kitne/i.test(msg) && (profile.likely_driver || profile.likely_led || profile.detected_products?.length)) {
@@ -15561,6 +15770,30 @@ app.post("/api/ai-mode/chat", async (req, res) => {
 
     const parsed = aiModeExtractJsonObject(result?.text);
     let normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
+
+    const contextualRepairReply = aiModeContextualShortFollowupRepair({
+      latestMessage: message,
+      history,
+      profile: requirementProfile,
+      aiResult: normalized
+    });
+    if (contextualRepairReply) {
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: aiMode === "chat" ? contextualRepairReply : "",
+        suggested_customer_reply: contextualRepairReply,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        internal_summary: `${normalized.internal_summary || ""}
+Contextual short-followup/correction repair applied.`.trim(),
+        next_action: "contextual_profile_repair"
+      };
+    }
 
     // Generic conversation-state repair: if the model asks for information already captured
     // in the requirement profile, replace the looped reply with a profile-aware next step.
