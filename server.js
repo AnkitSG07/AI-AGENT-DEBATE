@@ -15168,6 +15168,454 @@ app.post("/api/ai-mode/chat", async (req, res) => {
   }
 });
 
+
+// ===================== AI MODE: SERVER-SIDE BACKGROUND WORKER =====================
+// This makes AI Mode work even when the Operator Hub browser tab is closed.
+// The browser only sets the global mode; Render polls Odoo in the background.
+const AI_MODE_BACKGROUND_WORKER_ENABLED =
+  String(process.env.AI_MODE_BACKGROUND_WORKER_ENABLED || "true").toLowerCase() !== "false";
+const AI_MODE_BACKGROUND_INTERVAL_MS = Math.max(
+  7000,
+  Number(process.env.AI_MODE_BACKGROUND_INTERVAL_MS || 15000)
+);
+const AI_MODE_BACKGROUND_CHANNEL_LIMIT = Math.max(
+  5,
+  Math.min(120, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 40))
+);
+const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
+  3,
+  Math.min(30, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 10))
+);
+const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
+  0,
+  Number(process.env.AI_MODE_BACKGROUND_START_GRACE_MS || 5000)
+);
+
+const aiModeGlobalState = {
+  mode: aiModeNormalizeMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
+  updated_at: now(),
+  updated_by: "server_start",
+  enabled_since_ms: Date.now(),
+  note: "Global AI Mode controls background processing across WhatsApp and Live Chat."
+};
+
+const aiModeBackgroundState = {
+  running: false,
+  timer: null,
+  started_at: null,
+  last_tick_at: null,
+  last_success_at: null,
+  last_error: "",
+  processed_ids_loaded: false,
+  processed_ids: new Set(),
+  tick_count: 0,
+  processed_count: 0,
+  auto_sent_count: 0,
+  handover_count: 0,
+  clarification_count: 0
+};
+
+function aiModeBackgroundProcessedKey(messageId) {
+  return String(messageId || "").trim();
+}
+
+async function aiModeBackgroundLoadProcessedIds() {
+  if (aiModeBackgroundState.processed_ids_loaded) return;
+  aiModeBackgroundState.processed_ids_loaded = true;
+  try {
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    const stored = Array.isArray(memory?._background_worker?.processed_message_ids)
+      ? memory._background_worker.processed_message_ids
+      : [];
+    stored.slice(-1200).forEach((id) => {
+      const key = aiModeBackgroundProcessedKey(id);
+      if (key) aiModeBackgroundState.processed_ids.add(key);
+    });
+  } catch (error) {
+    console.warn("AI Mode worker processed-id load failed:", error?.message || error);
+  }
+}
+
+async function aiModeBackgroundRememberProcessedId(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (!key) return;
+  aiModeBackgroundState.processed_ids.add(key);
+  if (aiModeBackgroundState.processed_ids.size > 1500) {
+    const keep = Array.from(aiModeBackgroundState.processed_ids).slice(-1000);
+    aiModeBackgroundState.processed_ids = new Set(keep);
+  }
+
+  try {
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    memory._background_worker = {
+      ...(memory._background_worker || {}),
+      updated_at: now(),
+      global_mode: aiModeGlobalState.mode,
+      processed_message_ids: Array.from(aiModeBackgroundState.processed_ids).slice(-1000)
+    };
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+  } catch (error) {
+    console.warn("AI Mode worker processed-id save failed:", error?.message || error);
+  }
+}
+
+function aiModeBackgroundHasProcessed(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  return !!key && aiModeBackgroundState.processed_ids.has(key);
+}
+
+function aiModeParseOdooDateMs(value) {
+  if (!value) return 0;
+  const raw = String(value || "").trim();
+  const date = new Date(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z");
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function aiModeStripHtml(value) {
+  let text = String(value || "");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/?p[^>]*>/gi, "\n");
+  text = text.replace(/<[^>]+>/g, " ");
+  const entities = {
+    "&nbsp;": " ",
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#039;": "'"
+  };
+  Object.entries(entities).forEach(([entity, replacement]) => {
+    text = text.replaceAll(entity, replacement);
+  });
+  return text.replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
+}
+
+function aiModeMessagePlainText(message = {}) {
+  return (
+    aiModeStripHtml(message.body) ||
+    aiModeSafeString(message.preview || "", 4000)
+  ).trim();
+}
+
+const aiModeOdooUserContextCache = { uid: null, partnerId: null, expiresAt: 0 };
+async function aiModeGetOdooUserContext() {
+  const nowMs = Date.now();
+  if (aiModeOdooUserContextCache.uid && nowMs < aiModeOdooUserContextCache.expiresAt) {
+    return aiModeOdooUserContextCache;
+  }
+  const uid = await odooLoginCached();
+  let partnerId = null;
+  try {
+    const rows = await odooExecute(uid, "res.users", "read", [[uid], ["partner_id"]]);
+    partnerId = Array.isArray(rows?.[0]?.partner_id) ? Number(rows[0].partner_id[0]) : null;
+  } catch (error) {
+    console.warn("AI Mode worker could not resolve Odoo user partner:", error?.message || error);
+  }
+  aiModeOdooUserContextCache.uid = uid;
+  aiModeOdooUserContextCache.partnerId = partnerId;
+  aiModeOdooUserContextCache.expiresAt = nowMs + 20 * 60 * 1000;
+  return aiModeOdooUserContextCache;
+}
+
+function aiModeIsOwnOdooMessage(message = {}, userContext = {}) {
+  const authorId = Array.isArray(message.author_id) ? Number(message.author_id[0]) : null;
+  const creatorId = Array.isArray(message.create_uid) ? Number(message.create_uid[0]) : null;
+  return (
+    (!!userContext.partnerId && authorId === Number(userContext.partnerId)) ||
+    (!!userContext.uid && creatorId === Number(userContext.uid))
+  );
+}
+
+function aiModeChannelDisplayName(channel = {}) {
+  return String(channel.display_name || channel.name || "Conversation").trim();
+}
+
+function aiModeChannelPhone(channel = {}) {
+  if (channel.whatsapp_number) return "+" + String(channel.whatsapp_number).replace(/^\+/, "");
+  if (Array.isArray(channel.whatsapp_partner_id) && channel.whatsapp_partner_id[1]) {
+    const match = String(channel.whatsapp_partner_id[1]).match(/\+?\d[\d\s-]{7,}/);
+    if (match) return match[0].replace(/\s+/g, "");
+  }
+  return "";
+}
+
+function aiModeCanPostToChannel(channel = {}) {
+  if (channel.channel_type !== "whatsapp") return true;
+  if (channel.whatsapp_channel_active === false) return false;
+  const validUntil = aiModeParseOdooDateMs(channel.whatsapp_channel_valid_until);
+  if (!validUntil) return !!channel.whatsapp_channel_active;
+  return validUntil > Date.now();
+}
+
+async function aiModeFetchWorkerChannels(uid) {
+  const fields = [
+    "id",
+    "name",
+    "display_name",
+    "channel_type",
+    "active",
+    "write_date",
+    "last_interest_dt",
+    "whatsapp_number",
+    "whatsapp_channel_valid_until",
+    "whatsapp_partner_id",
+    "whatsapp_channel_active",
+    "livechat_visitor_id"
+  ];
+
+  const domain = [
+    "|",
+    ["channel_type", "=", "whatsapp"],
+    ["channel_type", "=", "livechat"]
+  ];
+
+  try {
+    return await odooExecute(uid, "discuss.channel", "search_read", [domain, fields], {
+      limit: AI_MODE_BACKGROUND_CHANNEL_LIMIT,
+      order: "last_interest_dt desc, write_date desc, id desc"
+    });
+  } catch (error) {
+    // Fallback for Odoo databases where one of the WhatsApp-specific fields is not exposed.
+    console.warn("AI Mode worker channel rich fetch failed, retrying minimal fields:", error?.message || error);
+    return await odooExecute(uid, "discuss.channel", "search_read", [domain, [
+      "id",
+      "name",
+      "display_name",
+      "channel_type",
+      "write_date",
+      "last_interest_dt"
+    ]], {
+      limit: AI_MODE_BACKGROUND_CHANNEL_LIMIT,
+      order: "write_date desc, id desc"
+    });
+  }
+}
+
+async function aiModeFetchWorkerMessages(uid, channelId) {
+  return await odooExecute(uid, "mail.message", "search_read", [[
+    ["model", "=", "discuss.channel"],
+    ["res_id", "=", Number(channelId)]
+  ], [
+    "id",
+    "date",
+    "body",
+    "preview",
+    "author_id",
+    "email_from",
+    "message_type",
+    "model",
+    "res_id",
+    "create_uid"
+  ]], {
+    limit: AI_MODE_BACKGROUND_MESSAGE_LIMIT,
+    order: "id desc"
+  });
+}
+
+function aiModeBuildWorkerConversationHistory(messages = [], userContext = {}) {
+  return [...messages]
+    .reverse()
+    .map((message) => ({
+      id: message.id,
+      role: aiModeIsOwnOdooMessage(message, userContext) ? "operator" : "customer",
+      text: aiModeMessagePlainText(message),
+      date: message.date || "",
+      author: Array.isArray(message.author_id) ? message.author_id[1] : ""
+    }))
+    .filter((row) => row.text)
+    .slice(-18);
+}
+
+async function aiModePostTextToOdooChannel(uid, channel, text) {
+  const body = aiModeSafeString(text, 8000);
+  if (!body) return { ok: false, reason: "empty_body" };
+  if (!channel?.id) return { ok: false, reason: "missing_channel" };
+  if (!aiModeCanPostToChannel(channel)) {
+    return { ok: false, reason: "whatsapp_reply_window_closed" };
+  }
+
+  const kwargs = channel.channel_type === "whatsapp"
+    ? { body, message_type: "whatsapp_message", subtype_xmlid: "mail.mt_comment" }
+    : { body, message_type: "comment", subtype_xmlid: "mail.mt_comment" };
+
+  await odooExecute(uid, "discuss.channel", "message_post", [[Number(channel.id)]], kwargs);
+  return { ok: true };
+}
+
+async function aiModeCallLocalDecisionEngine(payload) {
+  const response = await fetch(`http://127.0.0.1:${PORT}/api/ai-mode/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    throw new Error(data?.error || data?.message || `AI Mode local decision failed (${response.status})`);
+  }
+  return data;
+}
+
+async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages, latestCustomerMessage }) {
+  const messageText = aiModeMessagePlainText(latestCustomerMessage);
+  if (!messageText) return { ok: false, skipped: "empty_message" };
+
+  const messageTime = aiModeParseOdooDateMs(latestCustomerMessage.date);
+  if (messageTime && messageTime < (Number(aiModeGlobalState.enabled_since_ms || 0) - AI_MODE_BACKGROUND_START_GRACE_MS)) {
+    await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+    return { ok: false, skipped: "older_than_mode_enable_time" };
+  }
+
+  const payload = {
+    aiMode: aiModeGlobalState.mode,
+    source: "server_background_worker",
+    channel: channel.channel_type || "chat",
+    chatId: String(channel.id || ""),
+    odooChannelId: Number(channel.id || 0),
+    customerName: aiModeChannelDisplayName(channel),
+    customerPhone: aiModeChannelPhone(channel),
+    message: messageText,
+    conversationHistory: aiModeBuildWorkerConversationHistory(messages, userContext),
+    trigger: "server_background_worker",
+    backgroundWorker: true
+  };
+
+  const decision = await aiModeCallLocalDecisionEngine(payload);
+  aiModeBackgroundState.processed_count += 1;
+
+  if (aiModeGlobalState.mode === "chat") {
+    const shouldSendDirect = !!decision.send_to_customer;
+    const shouldSendHandoverHoldingReply =
+      !!decision.handover_required &&
+      !!String(decision.customer_reply || "").trim();
+
+    if (shouldSendDirect || shouldSendHandoverHoldingReply) {
+      const postResult = await aiModePostTextToOdooChannel(uid, channel, decision.customer_reply);
+      decision.background_post_result = postResult;
+      if (postResult.ok) aiModeBackgroundState.auto_sent_count += 1;
+    }
+  }
+
+  if (decision.handover_required) aiModeBackgroundState.handover_count += 1;
+  if (decision.clarification_required && !decision.handover_required) aiModeBackgroundState.clarification_count += 1;
+
+  await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+  return { ok: true, decision };
+}
+
+async function aiModeBackgroundTick() {
+  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
+  if (!odooConfigured) return;
+  if (!aiModeGlobalState || !["assist", "chat"].includes(aiModeGlobalState.mode)) return;
+  if (aiModeBackgroundState.running) return;
+
+  aiModeBackgroundState.running = true;
+  aiModeBackgroundState.tick_count += 1;
+  aiModeBackgroundState.last_tick_at = now();
+
+  try {
+    await aiModeBackgroundLoadProcessedIds();
+    const userContext = await aiModeGetOdooUserContext();
+    const uid = userContext.uid;
+    const channels = await aiModeFetchWorkerChannels(uid);
+
+    for (const channel of channels || []) {
+      if (!channel?.id || !["whatsapp", "livechat"].includes(channel.channel_type)) continue;
+
+      const messages = await aiModeFetchWorkerMessages(uid, channel.id).catch((error) => {
+        console.warn(`AI Mode worker message fetch failed for channel ${channel.id}:`, error?.message || error);
+        return [];
+      });
+      if (!messages.length) continue;
+
+      const latestCustomerMessage = (messages || []).find((message) => {
+        if (!message?.id) return false;
+        if (aiModeBackgroundHasProcessed(message.id)) return false;
+        if (aiModeIsOwnOdooMessage(message, userContext)) return false;
+        if (!aiModeMessagePlainText(message)) return false;
+        return true;
+      });
+
+      if (!latestCustomerMessage) continue;
+
+      try {
+        await aiModeProcessWorkerMessage({ uid, userContext, channel, messages, latestCustomerMessage });
+      } catch (error) {
+        console.warn(`AI Mode worker processing failed for channel ${channel.id}:`, error?.message || error);
+      }
+    }
+
+    aiModeBackgroundState.last_success_at = now();
+    aiModeBackgroundState.last_error = "";
+  } catch (error) {
+    aiModeBackgroundState.last_error = error?.message || String(error);
+    console.warn("AI Mode background worker tick failed:", error?.message || error);
+  } finally {
+    aiModeBackgroundState.running = false;
+  }
+}
+
+function startAiModeBackgroundWorker() {
+  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) {
+    console.warn("AI Mode background worker disabled by env.");
+    return;
+  }
+  if (!odooConfigured) {
+    console.warn("AI Mode background worker disabled because Odoo is not configured.");
+    return;
+  }
+  if (aiModeBackgroundState.timer) return;
+
+  aiModeBackgroundState.started_at = now();
+  aiModeBackgroundState.timer = setInterval(() => {
+    aiModeBackgroundTick().catch((error) => {
+      console.warn("AI Mode background worker uncaught tick error:", error?.message || error);
+    });
+  }, AI_MODE_BACKGROUND_INTERVAL_MS);
+
+  setTimeout(() => {
+    aiModeBackgroundTick().catch((error) => {
+      console.warn("AI Mode background worker initial tick error:", error?.message || error);
+    });
+  }, 3000);
+
+  console.log(`AI Mode background worker ready. Interval: ${AI_MODE_BACKGROUND_INTERVAL_MS}ms, current mode: ${aiModeGlobalState.mode}`);
+}
+
+app.get("/api/ai-mode/global", (req, res) => {
+  res.json({
+    ok: true,
+    global: aiModeGlobalState,
+    worker: {
+      enabled: AI_MODE_BACKGROUND_WORKER_ENABLED,
+      running: aiModeBackgroundState.running,
+      started_at: aiModeBackgroundState.started_at,
+      last_tick_at: aiModeBackgroundState.last_tick_at,
+      last_success_at: aiModeBackgroundState.last_success_at,
+      last_error: aiModeBackgroundState.last_error,
+      tick_count: aiModeBackgroundState.tick_count,
+      processed_count: aiModeBackgroundState.processed_count,
+      auto_sent_count: aiModeBackgroundState.auto_sent_count,
+      handover_count: aiModeBackgroundState.handover_count,
+      clarification_count: aiModeBackgroundState.clarification_count,
+      processed_ids: aiModeBackgroundState.processed_ids.size
+    }
+  });
+});
+
+app.post("/api/ai-mode/global", (req, res) => {
+  const nextMode = aiModeNormalizeMode(req.body?.aiMode || req.body?.mode || "manual");
+  const previousMode = aiModeGlobalState.mode;
+  aiModeGlobalState.mode = nextMode;
+  aiModeGlobalState.updated_at = now();
+  aiModeGlobalState.updated_by = aiModeSafeString(req.body?.updatedBy || req.body?.source || "operator_hub", 120);
+
+  if (previousMode !== nextMode) {
+    aiModeGlobalState.enabled_since_ms = Date.now();
+  }
+
+  res.json({ ok: true, previousMode, global: aiModeGlobalState });
+});
+
 app.get("/api/ai-mode/status", async (req, res) => {
   const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
   res.json({
@@ -15182,6 +15630,21 @@ app.get("/api/ai-mode/status", async (req, res) => {
       operator_memory: OPERATOR_MEMORY_PATH
     },
     memory_chats: Object.keys(memory || {}).filter((k) => !k.startsWith("_")).length,
+    global: aiModeGlobalState,
+    background_worker: {
+      enabled: AI_MODE_BACKGROUND_WORKER_ENABLED,
+      interval_ms: AI_MODE_BACKGROUND_INTERVAL_MS,
+      running: aiModeBackgroundState.running,
+      started_at: aiModeBackgroundState.started_at,
+      last_tick_at: aiModeBackgroundState.last_tick_at,
+      last_success_at: aiModeBackgroundState.last_success_at,
+      last_error: aiModeBackgroundState.last_error,
+      tick_count: aiModeBackgroundState.tick_count,
+      processed_count: aiModeBackgroundState.processed_count,
+      auto_sent_count: aiModeBackgroundState.auto_sent_count,
+      handover_count: aiModeBackgroundState.handover_count,
+      clarification_count: aiModeBackgroundState.clarification_count
+    },
     odoo_memory: {
       enabled: aiModeOdooEnabled(),
       model: AI_MODE_MEMORY_MODEL,
@@ -15227,4 +15690,7 @@ async function prewarmLiveOdooProducts() {
   }
 }
 
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  startAiModeBackgroundWorker();
+});
