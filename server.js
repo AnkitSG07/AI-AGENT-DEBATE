@@ -14917,7 +14917,7 @@ function aiModeFormatKnowledgeChunks(chunks = [], label = "Knowledge") {
   return chunks
     .map((chunk, index) => {
       const title = aiModeSafeString(chunk?.title || `${label} ${index + 1}`, 180);
-      const content = aiModeSafeString(chunk?.content || "", 1800);
+      const content = aiModeSafeString(chunk?.content || "", 700);
       return `[${label} ${index + 1}] ${title}\n${content}`;
     })
     .join("\n\n---\n\n");
@@ -15720,10 +15720,10 @@ Return this JSON schema only:
 }
 
 PREVIOUS ACTIVE CONTEXT:
-${JSON.stringify(previousContext || {}, null, 2).slice(0, 6000)}
+${JSON.stringify(aiModeSlimContextForPrompt(previousContext || {}), null, 2).slice(0, 2500)}
 
 HEURISTIC PROFILE FROM CUSTOMER-ONLY MESSAGES:
-${JSON.stringify(heuristicProfile || {}, null, 2).slice(0, 6000)}
+${JSON.stringify(aiModeSlimProfileForPrompt(heuristicProfile || {}), null, 2).slice(0, 2000)}
 
 LAST AI/OPERATOR QUESTION OR MESSAGE:
 ${lastOperatorText || "(none)"}
@@ -15739,7 +15739,7 @@ ${latestMessage}
 async function aiModeInterpretConversationContext({ history = [], latestMessage = "", heuristicProfile = {}, chatMemory = {} } = {}) {
   const previousContext = chatMemory?.active_context || chatMemory?.context_state || chatMemory?.requirement_profile || {};
   const fallback = aiModeBuildDefaultContextState(heuristicProfile, previousContext);
-  const recentConversation = aiModeRecentHistoryText(history, 18);
+  const recentConversation = aiModeRecentHistoryText(history, 8);
   const lastOperatorText = aiModeLastOperatorText(history);
 
   // Fast deterministic fallback for empty/short service cases.
@@ -15834,6 +15834,67 @@ function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMes
   return "";
 }
 
+function aiModeSlimContextForPrompt(context = {}) {
+  const c = context && typeof context === "object" ? context : {};
+  return {
+    active_topic: c.active_topic || "",
+    conversation_type: c.conversation_type || "",
+    conversation_stage: c.conversation_stage || "",
+    latest_customer_intent: c.latest_customer_intent || "",
+    confirmed_facts: c.confirmed_facts || {},
+    rejected_facts: c.rejected_facts || {},
+    unconfirmed_suggestions: c.unconfirmed_suggestions || {},
+    last_ai_question: c.last_ai_question || "",
+    last_customer_answer_target: c.last_customer_answer_target || "",
+    next_best_action: c.next_best_action || "",
+    missing_details: Array.isArray(c.missing_details) ? c.missing_details.slice(0, 6) : [],
+    detected_products: Array.isArray(c.detected_products) ? c.detected_products.slice(0, 6) : [],
+    likely_driver: c.likely_driver || "",
+    likely_led: c.likely_led || "",
+    suggested_kit: Array.isArray(c.suggested_kit) ? c.suggested_kit.slice(0, 6) : []
+  };
+}
+
+function aiModeSlimProfileForPrompt(profile = {}) {
+  const p = profile && typeof profile === "object" ? profile : {};
+  return {
+    conversation_type: p.conversation_type || "",
+    customer_intent: p.customer_intent || "",
+    lamp_type: p.lamp_type || "",
+    power_type: p.power_type || "",
+    led_type: p.led_type || "",
+    wattage: p.wattage || "",
+    voltage: p.voltage || "",
+    color_type: p.color_type || "",
+    need_type: p.need_type || "",
+    quantity: p.quantity || "",
+    quantity_intent: p.quantity_intent || "",
+    likely_driver: p.likely_driver || "",
+    likely_led: p.likely_led || "",
+    detected_products: Array.isArray(p.detected_products) ? p.detected_products.slice(0, 6) : [],
+    missing_details: Array.isArray(p.missing_details) ? p.missing_details.slice(0, 6) : [],
+    next_best_action: p.next_best_action || "",
+    suggested_kit: Array.isArray(p.suggested_kit) ? p.suggested_kit.slice(0, 6) : []
+  };
+}
+
+function aiModeCompactRulesForPrompt() {
+  return `
+Core rules:
+- Operator Hub chat only. Never use kit-builder/cart UI language.
+- Reply like Smart Handicrafts employee: short, direct, useful.
+- Latest customer correction wins. Customer facts are source of truth; AI suggestions are unconfirmed.
+- Never ask details already confirmed in ACTIVE CONTEXT.
+- Ask at most one question, only if needed.
+- "kya antar hai/difference" refers to last AI question/current topic.
+- Level 1: normal product/help/price/customer clarification. Level 2: only internal team clarification. Level 3: handover.
+- Khushagra = existing-product sales/quotation/price/special discount. Vibhu = custom/new/special technical/unsure. Never mention Ankit.
+- Prices only from relevant knowledge. Never invent price or stock/dispatch commitments.
+- USB drivers 101/102/103 do not use battery. 201 = rechargeable single COB driver. 202 = rechargeable dual/3-color. 204/205 = rechargeable strip drivers; 205 fast charging, 204 normal charging.
+- For rechargeable 3W single-color COB kit, likely setup is AS-B-201-SLD + 3W COB LED + 2600mAh battery + JST wire, unless customer says otherwise.
+`.trim();
+}
+
 function aiModeBuildPrompt({
   aiMode,
   message,
@@ -15851,94 +15912,57 @@ function aiModeBuildPrompt({
   memoryForChat,
   requirementProfile
 }) {
+  const slimContext = aiModeSlimContextForPrompt(requirementProfile?.active_context || memoryForChat?.active_context || memoryForChat?.context_state || {});
+  const slimProfile = aiModeSlimProfileForPrompt(requirementProfile || {});
+  const compactTraining = aiModeSafeString(approvedTrainingRules || "", 1800);
+  const compactProduct = aiModeSafeString(productSnippets || "", 2600);
+  const compactIntegration = aiModeSafeString(integrationSnippets || "", 1200);
+
   return `
-You are Smart Handicrafts AI Mode inside the Operator Hub.
+You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only. No markdown.
 
-CRITICAL SOURCE RULE:
-- This is OPERATOR HUB chat for WhatsApp/Odoo Live Chat, NOT the website Kit Builder.
-- Never say "added to kit", "review kit", "continue to battery", "cart", or UI-step language.
-- Behave like a trained Smart Handicrafts employee.
+AI MODE: ${aiMode}
+Customer: ${customerName || "unknown"} ${customerPhone ? `(${customerPhone})` : ""}
+Channel: ${channel || "unknown"} | Chat ID: ${chatId || "unknown"}
 
-AI MODE:
-${aiMode}
+${aiModeCompactRulesForPrompt()}
 
-MODE BEHAVIOR:
-- manual: return action "no_ai_action"; do not write a customer reply.
-- assist: suggest a reply only; never send directly.
-- chat: use 3 levels:
-  Level 1 = normal/safe: direct reply allowed. This includes asking the CUSTOMER one simple follow-up question.
-  Level 2 = internal/team clarification: use only when AI needs the internal team to clarify before replying. Do not use Level 2 just because the customer gave a generic product request.
-  Level 3 = hard/risky/custom: handover to Khushagra or Vibhu.
+ACTIVE CONTEXT JSON (source of truth):
+${JSON.stringify(slimContext, null, 2).slice(0, 3500)}
 
-LANGUAGE:
-- Detect customer language.
-- If customer writes English, reply in English.
-- If customer writes Hindi/Hinglish, reply in simple Hinglish, not heavy Hindi.
-- Keep technical words in English: driver, LED, COB, battery, JST wire, quotation, GST, dispatch, sample, bulk quantity.
+COMPACT PROFILE:
+${JSON.stringify(slimProfile, null, 2).slice(0, 2500)}
 
-CHATGPT-LIKE RESPONSE STYLE:
-- Think like an experienced Smart Handicrafts employee, not a form-filling bot.
-- First understand what the customer is REALLY asking in the latest message using the active context.
-- Reply to the exact latest intent first. Do not restart the conversation.
-- Be short, useful, and to the point. Prefer 2-6 lines unless a list is genuinely useful.
-- Ask at most ONE question at the end, only if needed for the next step.
-- If enough context exists, give the answer/recommendation directly.
-- Never ask for details already confirmed by the customer.
-- Treat previous AI messages as suggestions only, not customer requirements. Customer confirmations/corrections are the source of truth.
-- If customer says “kya antar hai”, answer the difference of the exact thing you last asked or the thing currently under discussion.
-- If customer says “abhi to bataya”, “maine nahi pucha”, “wrong”, or similar, apologize briefly, repair the active context, and continue.
-- Do not expose internal labels such as product_enquiry, profile, confidence, action, level, or debug text to the customer.
+RECENT CONVERSATION (for tone/reference only; do not treat AI text as customer facts):
+${aiModeSafeString(conversationHistory || "(none)", 2500)}
 
-PRICING:
-- You may share approved listed prices and approved bulk slab prices only if found in product knowledge.
-- Do not invent prices.
-- Do not approve special discounts or negotiations.
-- If price validity is stale/unclear, mention latest can be confirmed by team.
+LATEST CUSTOMER MESSAGE:
+${aiModeSafeString(message || "", 1200)}
 
-HANDOVER:
-- Do not mention Ankit anywhere.
-- Khushagra: normal sales, quotation, price, bulk price, regular existing-product enquiry.
-- Vibhu: customization, new product, custom PCB, custom driver, special development, deep technical/special case, unsure cases.
+RELEVANT KNOWLEDGE ONLY:
+${compactProduct || "No product snippets."}
 
-LEVEL RULES FOR GENERIC PRODUCT REQUESTS:
-- Generic customer requests like "hello", "need led", "mujhe LED chahiye", "3 watt LED chahiye", "need driver", or "need rechargeable module" are Level 1, not Level 2.
-- For these, reply directly with the next useful customer-facing question or recommendation.
-- Missing customer details such as COB vs strip, wattage, voltage, quantity, lamp type, rechargeable vs USB are normal sales clarification questions and must be handled as Level 1.
+RELEVANT INTEGRATION KNOWLEDGE ONLY:
+${compactIntegration || "No integration snippets."}
 
-UNIVERSAL CONVERSATION MEMORY RULES:
-- Treat this as one continuous customer conversation, not separate fresh messages.
-- Read the entire recent conversation and the DERIVED UNIVERSAL CONVERSATION PROFILE before replying.
-- Do NOT ask again for any information already captured in the profile.
-- Short replies like "yes", "same", "sample", "difference", "3 watt", "3v", "price", "kit", "ok", "rechargeable", "COB", "tracking", "not working" are answers within the active context, not new enquiries.
-- The profile may represent product enquiry, kit/lamp enquiry, quotation/price enquiry, custom product enquiry, technical help, complaint/support, dispatch/order status, or general business enquiry. Continue according to profile.conversation_type and profile.next_best_action.
-- If enough details are known, move forward with recommendation, price guidance, handover, support triage, or order-status clarification instead of restarting.
-- Ask only the next missing detail, preferably one clear question.
-- If customer asks sample/price/quantity after a product or kit has been discussed, apply it to the current discussed setup. Do not ask which product again when profile has product context.
-- If complaint/support, do not restart product sales flow; ask for order/product reference and handover where needed.
-- If dispatch/order status, do not invent status; ask for order reference if missing or log handover.
-- If custom/new product/custom PCB/special function, assign to Vibhu.
-- If existing product sales/quotation/price, assign to Khushagra only when human commercial follow-up is needed.
+APPROVED TRAINING HIGHLIGHTS:
+${compactTraining || "No extra training rules."}
 
-INTERNAL CLARIFICATION:
-- For Level 2, create internal_notification for the shared internal WhatsApp number.
-- Use Level 2 only when you need the internal team to clarify something before you can reply safely.
-- Do not use Level 2 for ordinary customer-facing questions such as asking LED type, wattage, voltage, quantity, or use case.
+TASK:
+- Answer the latest customer intent using ACTIVE CONTEXT.
+- If customer provided an answer to last_ai_question, continue from that answer.
+- If context is enough, confirm/recommend next step; do not restart qualification.
+- If hard/custom/risky, handover.
+- Keep customer reply 2-6 lines. One question max.
 
-CUSTOMER REPLY QUALITY CHECK BEFORE RETURNING:
-- Does the reply answer the latest customer message directly? If not, rewrite it.
-- Is the reply asking something already answered? If yes, remove that question.
-- Is the reply based on an AI suggestion that the customer did not confirm? If yes, mark it as optional or remove it.
-- Is the customer correcting the AI? If yes, apologize and correct the context.
-- Is the reply longer than needed? If yes, shorten it.
-
-RETURN JSON ONLY with exactly these keys:
+Return JSON exactly:
 {
   "ok": true,
   "source": "operator_hub",
   "aiMode": "${aiMode}",
-  "level": 0|1|2|3,
-  "action": "no_ai_action"|"send_direct_reply"|"suggest_reply"|"internal_clarification"|"handover",
-  "language": "english"|"hinglish"|"hindi"|"unknown",
+  "level": 0,
+  "action": "no_ai_action",
+  "language": "unknown",
   "customer_reply": "",
   "suggested_customer_reply": "",
   "internal_summary": "",
@@ -15948,57 +15972,12 @@ RETURN JSON ONLY with exactly these keys:
   "assigned_role": "",
   "handover_reason": "",
   "internal_notification": "",
-  "detected_products": [{"sku":"","name":"","confidence":0}],
+  "detected_products": [],
   "next_action": ""
 }
-
-AI MODE RULES:
-${aiModeRules || "(no ai-mode-rules.md found)"}
-
-HANDOVER RULES:
-${handoverRules || "(no handover-rules.md found)"}
-
-APPROVED TRAINING RULES:
-${approvedTrainingRules || "(no approved-training-rules.md found)"}
-
-PRODUCT LINKS JSON:
-${JSON.stringify(productLinks || {}, null, 2).slice(0, 6000)}
-
-RELEVANT PRODUCT KNOWLEDGE:
-${productSnippets}
-
-RELEVANT INTEGRATION KNOWLEDGE:
-${integrationSnippets}
-
-CURRENT CHAT MEMORY:
-${JSON.stringify(memoryForChat || {}, null, 2).slice(0, 5000)}
-
-DERIVED UNIVERSAL CONVERSATION PROFILE FROM FULL CHAT:
-${JSON.stringify(requirementProfile || {}, null, 2).slice(0, 7000)}
-
-IMPORTANT CONTEXT RULE:
-- Treat the DERIVED UNIVERSAL CONVERSATION PROFILE as the source of truth for the current conversation state.
-- Your first job is to continue the conversation from this profile, not restart qualification.
-- Never ask for a field that is already filled in the profile, even if the latest message is short or ambiguous.
-- If the profile is sufficient, recommend/confirm the setup and ask the next commercial/action question only.
-- Treat the DERIVED UNIVERSAL CONVERSATION PROFILE as already-known customer information.
-- If latest customer message is "sample", "kit", "complete kit", "price", "rate", "quantity", "yes", "ok", "difference", or any short follow-up, connect it to the profile and recent conversation.
-- Example: if profile says rechargeable + table lamp + COB LED + 3W + single color and the customer says "sample chahiye", it means sample of that setup, not a new unknown product.
-- Do not ask "which product sample?" when the current setup is clear from profile/history. Confirm the setup and ask only the next missing commercial/action detail.
-
-CONVERSATION:
-Customer name: ${customerName || "(unknown)"}
-Customer phone: ${customerPhone || "(unknown)"}
-Channel: ${channel || "(unknown)"}
-Chat ID: ${chatId || "(unknown)"}
-
-Recent conversation:
-${conversationHistory || "(none)"}
-
-Latest customer message:
-${message}
 `.trim();
 }
+
 
 app.post("/api/ai-mode/chat", async (req, res) => {
   try {
@@ -16050,18 +16029,18 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     const queryForRetrieval = [
       message,
       customerName,
-      aiModeRecentHistoryText(history, 6)
+      aiModeRecentHistoryText(history, 4)
     ].filter(Boolean).join("\n");
 
     const productChunks = productKnowledge
-      ? await retrieveRelevantChunks(queryForRetrieval, 10)
+      ? await retrieveRelevantChunks(queryForRetrieval, 4)
       : [];
 
     const integrationChunks = await retrieveRelevantKitIntegrationChunks({
       question: message,
       history,
       integrationConsultingMode: /\b(integrat|fit|mount|wiring|connect|connection|place|placement|battery|touch|panel|lamp|base|head|strip|wire|holder|shade)\b/i.test(queryForRetrieval),
-      topK: 5
+      topK: 2
     }).catch(() => []);
 
     const aiModeRules = await aiModeReadTextFile(AI_MODE_RULES_PATH);
@@ -16097,7 +16076,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       chatId,
       customerName,
       customerPhone,
-      conversationHistory: aiModeRecentHistoryText(history, 14),
+      conversationHistory: aiModeRecentHistoryText(history, 8),
       productSnippets: aiModeFormatKnowledgeChunks(productChunks, "Product Knowledge"),
       integrationSnippets: formatKitIntegrationChunksForPrompt(integrationChunks),
       aiModeRules,
@@ -16293,15 +16272,15 @@ const AI_MODE_BACKGROUND_WORKER_ENABLED =
   String(process.env.AI_MODE_BACKGROUND_WORKER_ENABLED || "true").toLowerCase() !== "false";
 const AI_MODE_BACKGROUND_INTERVAL_MS = Math.max(
   7000,
-  Number(process.env.AI_MODE_BACKGROUND_INTERVAL_MS || 15000)
+  Number(process.env.AI_MODE_BACKGROUND_INTERVAL_MS || 8000)
 );
 const AI_MODE_BACKGROUND_CHANNEL_LIMIT = Math.max(
   5,
-  Math.min(120, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 40))
+  Math.min(60, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 20))
 );
 const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
   8,
-  Math.min(40, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 24))
+  Math.min(20, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 10))
 );
 const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
   0,
@@ -16311,7 +16290,7 @@ const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
 // when the customer sends details in quick consecutive messages like "COB LED" then "3 watt".
 const AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS = Math.max(
   3000,
-  Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 12000)
+  Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 6000)
 );
 
 const aiModeGlobalState = {
@@ -16331,11 +16310,16 @@ const aiModeBackgroundState = {
   last_error: "",
   processed_ids_loaded: false,
   processed_ids: new Set(),
+  processing_ids: new Set(),
+  retry_after_by_id: new Map(),
+  failure_count_by_id: new Map(),
   tick_count: 0,
   processed_count: 0,
   auto_sent_count: 0,
   handover_count: 0,
-  clarification_count: 0
+  clarification_count: 0,
+  skipped_retry_count: 0,
+  failed_count: 0
 };
 
 function aiModeBackgroundProcessedKey(messageId) {
@@ -16411,6 +16395,74 @@ async function aiModeBackgroundRememberProcessedIds(messageIds = []) {
 function aiModeBackgroundHasProcessed(messageId) {
   const key = aiModeBackgroundProcessedKey(messageId);
   return !!key && aiModeBackgroundState.processed_ids.has(key);
+}
+
+function aiModeBackgroundIsProcessing(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  return !!key && aiModeBackgroundState.processing_ids.has(key);
+}
+
+function aiModeBackgroundIsInRetryCooldown(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (!key) return false;
+  const retryAfter = Number(aiModeBackgroundState.retry_after_by_id.get(key) || 0);
+  return retryAfter > Date.now();
+}
+
+function aiModeBackgroundCanAttempt(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (!key) return false;
+  if (aiModeBackgroundState.processed_ids.has(key)) return false;
+  if (aiModeBackgroundState.processing_ids.has(key)) return false;
+  if (aiModeBackgroundIsInRetryCooldown(key)) {
+    aiModeBackgroundState.skipped_retry_count += 1;
+    return false;
+  }
+  return true;
+}
+
+function aiModeBackgroundStartProcessing(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (key) aiModeBackgroundState.processing_ids.add(key);
+}
+
+function aiModeBackgroundFinishProcessing(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (key) aiModeBackgroundState.processing_ids.delete(key);
+}
+
+function aiModeBackgroundRegisterSuccess(messageId) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (!key) return;
+  aiModeBackgroundState.processing_ids.delete(key);
+  aiModeBackgroundState.retry_after_by_id.delete(key);
+  aiModeBackgroundState.failure_count_by_id.delete(key);
+}
+
+function aiModeBackgroundRegisterFailure(messageId, error) {
+  const key = aiModeBackgroundProcessedKey(messageId);
+  if (!key) return;
+  aiModeBackgroundState.processing_ids.delete(key);
+  const prev = Number(aiModeBackgroundState.failure_count_by_id.get(key) || 0);
+  const next = prev + 1;
+  aiModeBackgroundState.failure_count_by_id.set(key, next);
+  aiModeBackgroundState.failed_count += 1;
+  // Exponential backoff prevents repeated Gemini calls every worker tick when Gemini/Odoo returns 503.
+  const retryMs = Math.min(10 * 60 * 1000, 30 * 1000 * Math.pow(2, Math.min(next - 1, 5)));
+  aiModeBackgroundState.retry_after_by_id.set(key, Date.now() + retryMs);
+  aiModeBackgroundState.last_error = `Message ${key} failed attempt ${next}: ${error?.message || error || "unknown error"}. Retry in ${Math.round(retryMs / 1000)}s`;
+}
+
+function aiModeIsLikelySmartHandicraftsOutbound(message = {}) {
+  const author = Array.isArray(message.author_id) ? String(message.author_id[1] || "") : "";
+  const emailFrom = String(message.email_from || "");
+  const combined = `${author} ${emailFrom}`.toLowerCase();
+  // Extra guard for Odoo/WhatsApp outbound messages that are not attributed to the API user correctly.
+  return (
+    combined.includes("smart handicrafts") ||
+    combined.includes("vaidahi kala") ||
+    combined.includes("care@smarthandicrafts")
+  );
 }
 
 function aiModeParseOdooDateMs(value) {
@@ -16690,8 +16742,9 @@ async function aiModeBackgroundTick() {
 
       const latestCustomerMessage = (messages || []).find((message) => {
         if (!message?.id) return false;
-        if (aiModeBackgroundHasProcessed(message.id)) return false;
+        if (!aiModeBackgroundCanAttempt(message.id)) return false;
         if (aiModeIsOwnOdooMessage(message, userContext)) return false;
+        if (aiModeIsLikelySmartHandicraftsOutbound(message)) return false;
         if (!aiModeMessagePlainText(message)) return false;
         return true;
       });
@@ -16699,9 +16752,14 @@ async function aiModeBackgroundTick() {
       if (!latestCustomerMessage) continue;
 
       try {
+        aiModeBackgroundStartProcessing(latestCustomerMessage.id);
         await aiModeProcessWorkerMessage({ uid, userContext, channel, messages, latestCustomerMessage });
+        aiModeBackgroundRegisterSuccess(latestCustomerMessage.id);
       } catch (error) {
+        aiModeBackgroundRegisterFailure(latestCustomerMessage.id, error);
         console.warn(`AI Mode worker processing failed for channel ${channel.id}:`, error?.message || error);
+      } finally {
+        aiModeBackgroundFinishProcessing(latestCustomerMessage.id);
       }
     }
 
@@ -16758,6 +16816,10 @@ app.get("/api/ai-mode/global", (req, res) => {
       auto_sent_count: aiModeBackgroundState.auto_sent_count,
       handover_count: aiModeBackgroundState.handover_count,
       clarification_count: aiModeBackgroundState.clarification_count,
+      failed_count: aiModeBackgroundState.failed_count,
+      skipped_retry_count: aiModeBackgroundState.skipped_retry_count,
+      processing_ids: aiModeBackgroundState.processing_ids.size,
+      retry_cooldown_ids: aiModeBackgroundState.retry_after_by_id.size,
       processed_ids: aiModeBackgroundState.processed_ids.size
     }
   });
