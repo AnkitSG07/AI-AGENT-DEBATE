@@ -15024,6 +15024,16 @@ function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
     detected_products: Array.isArray(obj.detected_products) ? obj.detected_products.slice(0, 8) : []
   };
 
+  // Repair inconsistent model outputs. Gemini sometimes returns a customer_reply
+  // but keeps action as no_ai_action. In Chat/Assist this must still become a
+  // sendable/suggestable reply; otherwise the background worker marks the
+  // message processed without sending anything.
+  const hasCustomerFacingText = !!String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim();
+  if (hasCustomerFacingText && normalized.action === "no_ai_action" && ["chat", "assist"].includes(aiMode)) {
+    normalized.action = aiMode === "assist" ? "suggest_reply" : "send_direct_reply";
+    if (normalized.level === 0) normalized.level = 1;
+  }
+
   if (normalized.handover_required && !normalized.assigned_to) {
     normalized.assigned_to = "Vibhu";
     normalized.assigned_role = "Customization / New Product / Special Case";
@@ -15993,6 +16003,53 @@ Return JSON exactly:
 }
 
 
+function aiModeIsBroadNewProductInquiry(message = "", history = []) {
+  const text = aiModeSafeString(message || "", 500).toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+
+  const broadNeed = /\b(i\s+need|need|want|looking\s+for|require|mujhe|chahiye|chaiye)\b/.test(text) &&
+    /\b(product|products|item|items|maal|saman|goods)\b/.test(text);
+  const greetingProduct = /\b(hello|hi|hey)\b/.test(text) &&
+    /\b(product|products|need|want|mujhe|chahiye|chaiye)\b/.test(text);
+  if (broadNeed || greetingProduct) return true;
+
+  // If customer only sends hello/?? after an unanswered broad product request,
+  // answer the broad request instead of staying trapped in the older quotation context.
+  const isNudge = /^(hello+|hi+|hey+|\?\?+|please reply|reply)$/i.test(text);
+  if (isNudge && Array.isArray(history)) {
+    const recentCustomer = history
+      .filter((m) => String(m?.role || m?.author || "").toLowerCase().includes("customer") || String(m?.type || "").toLowerCase().includes("customer"))
+      .map((m) => aiModeSafeString(m?.text || m?.body || m?.message || "", 500))
+      .filter(Boolean)
+      .slice(-5)
+      .join("\n")
+      .toLowerCase();
+    return /\b(i\s+need|need|want|looking\s+for|require|mujhe|chahiye|chaiye)\b/.test(recentCustomer) &&
+      /\b(product|products|item|items|maal|saman|goods)\b/.test(recentCustomer);
+  }
+  return false;
+}
+
+function aiModeBroadNewProductReply(message = "") {
+  const hinglish = /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie)\b/i.test(message || "");
+  if (hinglish) {
+    return "Ji, zaroor. Aapko kis type ka product chahiye — LED, driver, battery, strip LED, panel mount connector, ya complete lamp kit? Agar wattage/quantity pata ho to woh bhi bata dijiye.";
+  }
+  return "Sure, please tell me which product you need — LED, driver, battery, strip LED, panel mount connector, or a complete lamp kit? If you know the wattage or quantity, share that too.";
+}
+
+function aiModeBuildEmergencyFallbackReply({ message = "", activeContext = {}, requirementProfile = {} } = {}) {
+  if (aiModeIsBroadNewProductInquiry(message, [])) return aiModeBroadNewProductReply(message);
+  const direct = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
+  if (direct) return direct;
+  if (aiModeProfileHasEnoughForKit(requirementProfile)) return aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
+  const hinglish = /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "");
+  return hinglish
+    ? "Ji, main help kar dunga. Aap please bataiye aapko LED, driver, battery, strip LED ya complete kit mein se kya chahiye?"
+    : "Sure, I can help. Please tell me whether you need an LED, driver, battery, strip LED, or a complete kit.";
+}
+
+
 app.post("/api/ai-mode/chat", async (req, res) => {
   try {
     const aiMode = aiModeNormalizeMode(req.body?.aiMode);
@@ -16101,15 +16158,74 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       requirementProfile
     });
 
-    const result = await callProductBotModel(
-      "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
-      prompt
-    );
+    let parsed = null;
+    let modelCallFailed = false;
+    let modelCallError = "";
+    try {
+      const result = await callProductBotModel(
+        "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
+        prompt
+      );
+      parsed = aiModeExtractJsonObject(result?.text);
+    } catch (modelErr) {
+      // Do not silently drop a normal customer message when Gemini is temporarily unavailable.
+      // Generate a deterministic safe reply from the already-built context/profile and allow
+      // the background worker to send it. This prevents 503 from creating no-reply gaps.
+      modelCallFailed = true;
+      modelCallError = modelErr?.message || String(modelErr || "Gemini unavailable");
+      console.warn("AI Mode final reply model failed; using deterministic fallback:", modelCallError);
+      const fallbackReply = aiModeBuildEmergencyFallbackReply({ message, activeContext, requirementProfile });
+      parsed = {
+        ok: true,
+        source: "operator_hub",
+        aiMode,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        language: /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "") ? "hinglish" : "english",
+        customer_reply: aiMode === "chat" ? fallbackReply : "",
+        suggested_customer_reply: fallbackReply,
+        internal_summary: `Deterministic fallback used because final Gemini reply failed: ${modelCallError}`,
+        clarification_required: false,
+        handover_required: false,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        internal_notification: "",
+        detected_products: [],
+        next_action: "deterministic_fallback_after_model_error"
+      };
+    }
 
-    const parsed = aiModeExtractJsonObject(result?.text);
     let normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
+    if (modelCallFailed) {
+      normalized.model_call_failed = true;
+      normalized.model_call_error = modelCallError;
+    }
 
-    const directContextReply = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
+    // High-priority fresh broad product enquiry override. If the customer says they
+    // need products generally, do not keep them trapped in an old quotation/handover
+    // context. Ask the next useful product-category question and send it.
+    if (aiModeIsBroadNewProductInquiry(message, history)) {
+      const broadReply = aiModeBroadNewProductReply(message);
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: aiMode === "chat" ? broadReply : "",
+        suggested_customer_reply: broadReply,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        internal_notification: "",
+        internal_summary: `${normalized.internal_summary || ""}
+Fresh broad product enquiry override applied.`.trim(),
+        next_action: "ask_product_category"
+      };
+    }
+
+    const directContextReply = !aiModeIsBroadNewProductInquiry(message, history) && aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
     if (directContextReply) {
       normalized = {
         ...normalized,
@@ -16211,6 +16327,11 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
 Safe no-reply fallback applied.`.trim()
       };
     }
+
+    // If this response hands the chat over to a human, record a hold window in context.
+    // During that window, the background worker will not keep replying to follow-up bumps
+    // like "??" or "hello"; it gives Khushagra/Vibhu time to respond.
+    aiModeApplyHandoverWaitToContext(activeContext, normalized);
 
     // Attach the universal profile to the result so Odoo memory and later internal queries
     // can search across product, kit, quotation, custom, support, dispatch, and general chats.
@@ -16333,6 +16454,14 @@ const AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS = Math.max(
   Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 6000)
 );
 
+// After AI sends a final handover/transfer reply, pause AI replies for a while
+// so the assigned human (Khushagra/Vibhu) gets time to respond.
+// If the customer clearly starts a new product/help topic, AI can still help.
+const AI_MODE_HANDOVER_WAIT_MS = Math.max(
+  60 * 1000,
+  Number(process.env.AI_MODE_HANDOVER_WAIT_MS || 10 * 60 * 1000)
+);
+
 const aiModeGlobalState = {
   mode: aiModeNormalizeMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
   updated_at: now(),
@@ -16359,6 +16488,8 @@ const aiModeBackgroundState = {
   handover_count: 0,
   clarification_count: 0,
   skipped_retry_count: 0,
+  skipped_handover_wait_count: 0,
+  already_answered_skip_count: 0,
   failed_count: 0
 };
 
@@ -16683,6 +16814,67 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
   return { ok: true };
 }
 
+
+function aiModeIsBumpOrFollowupDuringHandover(text = "") {
+  const clean = aiModeSafeString(text, 500).trim().toLowerCase();
+  if (!clean) return true;
+  if (/^(\?+|hi+|hello+|hey+|ok+|okay|haa+|haan+|yes|ji+|hmm+|hmmm+|waiting|wait kar raha|koi update|update\??|price\??|rate\??|quotation\??|quote\??)$/i.test(clean)) return true;
+  if (/\b(khushagra|vibhu|reply|connect|call|kab|when|update|quotation|quote|price|rate|waiting|wait|follow\s*up|remind)\b/i.test(clean)) return true;
+  return false;
+}
+
+function aiModeIsClearNewHelpTopic(text = "") {
+  const clean = aiModeSafeString(text, 1000).toLowerCase();
+  if (!clean) return false;
+  return /\b(new|another|different|else|aur|dusra|alag|fresh|product|products|led|driver|battery|strip|cob|kit|module|custom|pcb|need|want|chahiye|chaiye|mujhe)\b/i.test(clean) &&
+    !/\b(khushagra|vibhu|quotation|quote|price|rate|waiting|wait|follow\s*up|remind|connect)\b/i.test(clean);
+}
+
+function aiModeHasHandoverWaitActive(context = {}) {
+  const wait = context?.handover_wait || context?.handoverWait || {};
+  return !!wait.active && Number(wait.hold_until_ms || 0) > Date.now();
+}
+
+function aiModeShouldPauseForHandover(context = {}, latestText = "") {
+  if (!aiModeHasHandoverWaitActive(context)) return false;
+  // If customer clearly starts a new product/help request, let AI help even during handover wait.
+  if (aiModeIsClearNewHelpTopic(latestText)) return false;
+  return true;
+}
+
+function aiModeApplyHandoverWaitToContext(context = {}, aiResult = {}) {
+  const next = context && typeof context === "object" ? context : {};
+  if (aiResult?.handover_required || aiResult?.level === 3 || aiResult?.action === "handover") {
+    const nowMs = Date.now();
+    next.handover_wait = {
+      active: true,
+      assigned_to: aiModeSafeString(aiResult.assigned_to || "", 80) || "Unassigned",
+      assigned_role: aiModeSafeString(aiResult.assigned_role || "", 160),
+      reason: aiModeSafeString(aiResult.handover_reason || aiResult.next_action || "handover", 300),
+      started_at: new Date(nowMs).toISOString(),
+      started_at_ms: nowMs,
+      hold_until: new Date(nowMs + AI_MODE_HANDOVER_WAIT_MS).toISOString(),
+      hold_until_ms: nowMs + AI_MODE_HANDOVER_WAIT_MS,
+      final_transfer_reply_sent: !!String(aiResult.customer_reply || aiResult.suggested_customer_reply || "").trim()
+    };
+    next.conversation_stage = "handover";
+  } else if (next.handover_wait && Number(next.handover_wait.hold_until_ms || 0) <= Date.now()) {
+    next.handover_wait.active = false;
+    next.handover_wait.expired_at = new Date().toISOString();
+  }
+  return next;
+}
+
+function aiModeHasOperatorMessageAfter(messages = [], latestCustomerMessage = {}, userContext = {}) {
+  const latestId = Number(latestCustomerMessage?.id || 0);
+  if (!latestId) return false;
+  return (messages || []).some((message) => {
+    if (!message?.id || Number(message.id) <= latestId) return false;
+    if (!aiModeMessagePlainText(message)) return false;
+    return aiModeIsOwnOdooMessage(message, userContext) || aiModeIsLikelySmartHandicraftsOutbound(message);
+  });
+}
+
 async function aiModeCallLocalDecisionEngine(payload) {
   const response = await fetch(`http://127.0.0.1:${PORT}/api/ai-mode/chat`, {
     method: "POST",
@@ -16710,6 +16902,28 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   // wait and answer once using the full recent conversation.
   if (messageTime && Date.now() - messageTime < AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS) {
     return { ok: false, skipped: "waiting_for_customer_pause" };
+  }
+
+  // If any operator/Smart Handicrafts message already exists after this customer message,
+  // treat this customer message as answered and do not let AI reply again.
+  if (aiModeHasOperatorMessageAfter(messages, latestCustomerMessage, userContext)) {
+    aiModeBackgroundState.already_answered_skip_count += 1;
+    await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+    return { ok: false, skipped: "already_answered_by_operator" };
+  }
+
+  // After final handover/transfer reply, pause AI on follow-up bumps so the assigned
+  // person gets time to respond. Do not call Gemini during this pause.
+  const odooMemoryLoadForHold = await aiModeOdooLoadMemoryContext(String(channel.id || "")).catch(() => null);
+  const activeContextForHold = odooMemoryLoadForHold?.contextJson || {};
+  if (aiModeShouldPauseForHandover(activeContextForHold, messageText)) {
+    aiModeBackgroundState.skipped_handover_wait_count += 1;
+    return {
+      ok: false,
+      skipped: "handover_wait_active",
+      assigned_to: activeContextForHold?.handover_wait?.assigned_to || "",
+      hold_until: activeContextForHold?.handover_wait?.hold_until || ""
+    };
   }
 
   const payload = {
