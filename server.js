@@ -14315,6 +14315,395 @@ function aiModeRecentHistoryText(history = [], maxItems = 12) {
     .join("\n");
 }
 
+
+
+function aiModeNormalizeSlotValue(value = "") {
+  return String(value || "").trim();
+}
+
+function aiModeHasValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return value !== "" && value !== null && value !== undefined && value !== false;
+}
+
+function aiModeDeepMergeProfiles(previous = {}, current = {}) {
+  const merged = { ...(previous || {}) };
+  for (const [key, value] of Object.entries(current || {})) {
+    if (!aiModeHasValue(value)) continue;
+    if (Array.isArray(value)) {
+      const oldArray = Array.isArray(merged[key]) ? merged[key] : [];
+      merged[key] = Array.from(new Set([...oldArray, ...value].filter(aiModeHasValue)));
+      continue;
+    }
+    if (value && typeof value === "object") {
+      merged[key] = aiModeDeepMergeProfiles(merged[key] || {}, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function aiModeMergeProfiles(previous = {}, current = {}) {
+  return aiModeDeepMergeProfiles(previous, current);
+}
+
+function aiModeLatestCustomerText(history = [], latestMessage = "") {
+  const items = Array.isArray(history) ? history : [];
+  return items
+    .map((m) => String(m?.content || m?.body || m?.message || m?.text || ""))
+    .concat([String(latestMessage || "")])
+    .join("\n");
+}
+
+function aiModeDetectConversationType(text = "") {
+  const t = String(text || "").toLowerCase();
+  const scores = {
+    product_enquiry: 0,
+    kit_enquiry: 0,
+    quotation: 0,
+    custom_product: 0,
+    technical_help: 0,
+    complaint: 0,
+    dispatch: 0,
+    general: 0
+  };
+
+  if (/\b(led|cob|driver|battery|strip|dob|module|panel\s*mount|jst|wire|lens|holder|switch|cable|connector|201|202|204|205|206|101|102|103)\b/i.test(t)) scores.product_enquiry += 3;
+  if (/\b(table\s*lamp|floor\s*lamp|wall\s*lamp|lamp|kit|complete\s*set|complete\s*kit|set\s*chaiye|rechargeable|usb\s*powered|integration|fit\s*inside)\b/i.test(t)) scores.kit_enquiry += 3;
+  if (/\b(price|rate|cost|quotation|quote|proforma|invoice|bulk|discount|sample|order|buy|purchase|pcs|pieces|quantity|qty|kitna|bhav)\b/i.test(t)) scores.quotation += 3;
+  if (/\b(custom|customise|customize|new\s*product|not\s*in\s*(catalogue|catalog)|special\s*(size|function|feature)|oem|odm|custom\s*pcb|custom\s*driver|bluetooth|wifi|app\s*control|remote|rgb|flame\s*effect|different\s*connector)\b/i.test(t)) scores.custom_product += 5;
+  if (/\b(connect|connection|wiring|wire\s*kaise|install|installation|mount|fit|fitting|touch\s*point|charging\s*port|panel\s*mount|battery\s*backup|current|voltage|resistor|pcb|circuit|troubleshoot|flicker|blink)\b/i.test(t)) scores.technical_help += 3;
+  if (/\b(not\s*working|kaam\s*nahi|problem|issue|complaint|defect|replace|replacement|warranty|refund|return|damaged|faulty|charge\s*nahi|charging\s*nahi|blink|flicker)\b/i.test(t)) scores.complaint += 5;
+  if (/\b(dispatch|tracking|track|delivery|delivered|shipment|ship|courier|awb|kab\s*(mile|aayega|dispatch)|order\s*status|pending\s*order)\b/i.test(t)) scores.dispatch += 5;
+  if (/\b(hello|hi|hey|catalogue|catalog|address|location|where|contact|company|export|bulk\s*supply|dealer|distributor|business)\b/i.test(t)) scores.general += 1;
+
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const [top, topScore] = sorted[0] || ["general", 0];
+  return topScore > 0 ? top : "general";
+}
+
+function aiModeBuildRequirementProfile(history = [], latestMessage = "", previousProfile = {}) {
+  const historyRaw = aiModeLatestCustomerText(history, latestMessage);
+  const historyText = historyRaw.toLowerCase();
+  const latestText = String(latestMessage || "").toLowerCase();
+
+  const profile = {
+    conversation_type: aiModeDetectConversationType(historyText),
+    lead_stage: "new",
+    customer_intent: "",
+    lamp_type: "",
+    power_type: "",
+    led_type: "",
+    wattage: "",
+    voltage: "",
+    color_type: "",
+    need_type: "",
+    quantity: "",
+    quantity_intent: "",
+    likely_driver: "",
+    likely_led: "",
+    suggested_kit: [],
+    detected_products: [],
+    commercial: {
+      wants_price: false,
+      wants_quotation: false,
+      wants_sample: false,
+      wants_discount: false,
+      price_can_be_shared_if_available: true
+    },
+    custom_request: {
+      is_custom: false,
+      details: "",
+      assign_to: ""
+    },
+    support_issue: {
+      has_issue: false,
+      issue_type: "",
+      product: "",
+      needs_handover: false
+    },
+    dispatch_request: {
+      is_dispatch_query: false,
+      order_ref: "",
+      needs_handover: false
+    },
+    technical_help: {
+      is_technical: false,
+      depth: "basic",
+      topic: ""
+    },
+    known_facts: {},
+    missing_details: [],
+    next_best_action: "",
+    confidence_notes: []
+  };
+
+  // Conversation type / intent
+  if (/\b(price|rate|cost|quotation|quote|proforma|invoice|bulk|discount|sample|order|buy|purchase|kitna|bhav)\b/i.test(historyText)) profile.lead_stage = "commercial_discussion";
+  if (/\b(custom|customise|customize|new\s*product|custom\s*pcb|custom\s*driver|oem|odm|special\s*(size|feature|function))\b/i.test(historyText)) profile.lead_stage = "custom_or_special_case";
+  if (/\b(not\s*working|complaint|replacement|warranty|refund|return|defect|faulty|issue|problem)\b/i.test(historyText)) profile.lead_stage = "support_issue";
+  if (/\b(dispatch|tracking|delivery|shipment|courier|awb|order\s*status)\b/i.test(historyText)) profile.lead_stage = "order_status";
+
+  // Lamp / product type aliases
+  if (/table\s*lamp|टेबल|lamp k liye|lamp ke liye|lamp\s*hai|table wali|desk\s*lamp|study\s*lamp/i.test(historyText)) profile.lamp_type = "table lamp";
+  if (/floor\s*lamp|standing\s*lamp/i.test(historyText)) profile.lamp_type = "floor lamp";
+  if (/wall\s*(lamp|sconce|light)|wall\s*light/i.test(historyText)) profile.lamp_type = "wall light";
+  if (/decorative|showpiece|sculpture|gift|christmas|notebook/i.test(historyText)) profile.lamp_type = profile.lamp_type || "decorative lamp/product";
+
+  // Power aliases
+  if (/rechargeable|rechargable|battery|wireless|chargeable|charge\s*karke|battery\s*wala|portable|bina\s*wire|charging\s*wala/i.test(historyText)) profile.power_type = "rechargeable";
+  if (/usb|type\s*c|usb-c|direct\s*power|plug\s*in|adapter|charger\s*se|without\s*battery|no\s*battery/i.test(historyText)) profile.power_type = profile.power_type || "usb-powered";
+
+  // Product / SKU aliases
+  const skuDetections = [];
+  const addProduct = (sku, name, confidence = 0.9) => skuDetections.push({ sku, name, confidence });
+  if (/\b201\b|AS-B-201-SLD/i.test(historyText)) addProduct("AS-B-201-SLD", "Rechargeable 1 Colour Touch Dimmable Driver", 0.95);
+  if (/\b202\b|AS-B-202-DLD/i.test(historyText)) addProduct("AS-B-202-DLD", "Rechargeable 3 Colour Touch Dimmable Driver", 0.95);
+  if (/\b204\b|AS-B-204-LSD/i.test(historyText)) addProduct("AS-B-204-LSD", "Rechargeable Strip/DC Bulb Driver", 0.95);
+  if (/\b205\b|AS-B-205-LSD/i.test(historyText)) addProduct("AS-B-205-LSD", "Fast Charging Rechargeable Strip/DC Bulb Driver", 0.95);
+  if (/\b206\b|dob/i.test(historyText)) addProduct("AS-B-206", "Rechargeable 3 Color DOB Series", 0.8);
+  if (/\b101\b|AS-U-101-SLD/i.test(historyText)) addProduct("AS-U-101-SLD", "USB-C 1 Colour USB Powered Touch Dimmable Driver", 0.95);
+  if (/\b102\b|AS-U-102-DLD/i.test(historyText)) addProduct("AS-U-102-DLD", "USB-C 3 Colour USB Powered Touch Dimmable Driver", 0.95);
+  if (/\b103\b|AS-U-103-LSD/i.test(historyText)) addProduct("AS-U-103-LSD", "USB-C Strip Driver", 0.95);
+  profile.detected_products = skuDetections;
+
+  // Light source aliases
+  if (/\bcob\b|cob\s*led|round\s*led|35mm\s*led/i.test(historyText)) profile.led_type = "COB LED";
+  if (/strip|tape\s*light|edge\s*light|profile\s*light|linear/i.test(historyText)) profile.led_type = "strip LED";
+  if (/\bdob\b|driver\s*on\s*board|head\s*board/i.test(historyText)) profile.led_type = "DOB";
+  if (/dual\s*led|3\s*color\s*led|three\s*color\s*led|cct\s*led|warm\s*cool/i.test(historyText)) profile.led_type = profile.led_type || "dual / 3-color LED";
+
+  // Wattage and voltage. Keep latest explicit value if mentioned anywhere.
+  const wattMatches = Array.from(historyText.matchAll(/\b(0\.?5|1|1\.2|2|2\.4|3|3\.5|4|4\.8|5|7)\s*(w|watt|watts|वाट)\b/gi));
+  if (wattMatches.length) profile.wattage = `${wattMatches[wattMatches.length - 1][1].replace(/\.0$/, "")}W`;
+  const compactWattMatches = Array.from(historyText.matchAll(/\b(3w|5w|2w|7w)\b/gi));
+  if (compactWattMatches.length) profile.wattage = compactWattMatches[compactWattMatches.length - 1][1].toUpperCase();
+
+  const voltMatches = Array.from(historyText.matchAll(/\b(3|5|12|24)\s*(v|volt|volts)\b/gi));
+  if (voltMatches.length) profile.voltage = `${voltMatches[voltMatches.length - 1][1]}V`;
+  const compactVoltMatches = Array.from(historyText.matchAll(/\b(3v|5v|12v|24v)\b/gi));
+  if (compactVoltMatches.length) profile.voltage = compactVoltMatches[compactVoltMatches.length - 1][1].toUpperCase();
+
+  // Color / output aliases
+  if (/single\s*color|single\s*colour|1\s*color|one\s*color|single color chaiye|single colour chaiye|ek\s*color|ek hi color|warm\s*white only|single\s*led/i.test(historyText)) profile.color_type = "single color";
+  if (/3\s*color|three\s*color|tri\s*color|dual|warm\s*cool|cct|3c|ww\s*\+\s*cw/i.test(historyText)) profile.color_type = profile.color_type || "3-color / dual CCT";
+
+  // Need / commercial intent aliases
+  if (/complete\s*kit|full\s*kit|kit\s*chaiye|kit\s*chahiye|set\s*chaiye|set\s*chahiye|combo|complete\s*set|driver\s*led\s*battery|driver\s*\+\s*led/i.test(historyText)) profile.need_type = "complete kit";
+  if (/only\s*led|sirf\s*led|led\s*only/i.test(historyText)) profile.need_type = profile.need_type || "LED only";
+  if (/driver\s*only|sirf\s*driver/i.test(historyText)) profile.need_type = profile.need_type || "driver only";
+  if (/sample|sample\s*chaiye|sample\s*chahiye|trial|demo|testing|test\s*piece|one\s*set|ek\s*set|1\s*set|1\s*pc|one\s*piece/i.test(historyText)) {
+    profile.quantity = profile.quantity || "sample";
+    profile.quantity_intent = "sample";
+    profile.commercial.wants_sample = true;
+    profile.customer_intent = profile.customer_intent || "sample_request";
+  }
+  const qtyMatches = Array.from(historyText.matchAll(/\b(\d{2,6})\s*(pcs|pc|pieces|piece|qty|quantity|nos|units|set|sets)?\b/gi));
+  const usefulQty = qtyMatches
+    .map((m) => ({ raw: m[0], n: Number(m[1]) }))
+    .filter((m) => Number.isFinite(m.n))
+    .filter((m) => !/\b(3|5|12|24)\s*(v|w|watt)/i.test(m.raw))
+    .filter((m) => ![101, 102, 103, 201, 202, 204, 205, 206].includes(m.n) || /(pcs|pc|pieces|piece|qty|quantity|nos|units|set|sets)/i.test(m.raw))
+    .filter((m) => m.n >= 10 || /(pcs|pc|pieces|piece|qty|quantity|nos|units|set|sets)/i.test(m.raw));
+  if (usefulQty.length) {
+    profile.quantity = String(usefulQty[usefulQty.length - 1].n);
+    profile.quantity_intent = Number(profile.quantity) >= 50 ? "bulk" : profile.quantity_intent;
+  }
+  if (/price|rate|cost|quotation|quote|kitna|kitne ka|bhav|pricing|mrp/i.test(historyText)) {
+    profile.customer_intent = "pricing_or_quote";
+    profile.commercial.wants_price = true;
+  }
+  if (/quotation|quote|proforma|invoice/i.test(historyText)) profile.commercial.wants_quotation = true;
+  if (/discount|best\s*price|final\s*price|last\s*rate|negotiate/i.test(historyText)) profile.commercial.wants_discount = true;
+  if (/difference|compare|vs|dono\s*mai|farak|fark/i.test(historyText)) profile.customer_intent = profile.customer_intent || "comparison";
+  if (/complete\s*kit|kit\s*chaiye|kit\s*chahiye|set\s*chaiye|set\s*chahiye/i.test(historyText)) profile.customer_intent = profile.customer_intent || "complete_kit_selection";
+
+  // Custom / technical / support / dispatch signals
+  if (profile.conversation_type === "custom_product" || /custom|customise|customize|new\s*product|special\s*(size|function|feature)|oem|odm|custom\s*pcb|custom\s*driver/i.test(historyText)) {
+    profile.custom_request.is_custom = true;
+    profile.custom_request.details = historyRaw.slice(-1200);
+    profile.custom_request.assign_to = "Vibhu";
+  }
+  if (profile.conversation_type === "complaint") {
+    profile.support_issue.has_issue = true;
+    profile.support_issue.needs_handover = true;
+    profile.support_issue.issue_type = /replacement|replace/i.test(historyText) ? "replacement" : /warranty/i.test(historyText) ? "warranty" : /refund|return/i.test(historyText) ? "return_refund" : "product_issue";
+  }
+  if (profile.conversation_type === "dispatch") {
+    profile.dispatch_request.is_dispatch_query = true;
+    profile.dispatch_request.needs_handover = true;
+    const orderMatch = historyText.match(/\b(SO\d+|S\d+|ORD[-\s]?\d+|order\s*#?\s*\d+)\b/i);
+    if (orderMatch) profile.dispatch_request.order_ref = orderMatch[0];
+  }
+  if (profile.conversation_type === "technical_help") {
+    profile.technical_help.is_technical = true;
+    profile.technical_help.topic = /touch/i.test(historyText) ? "touch_point" : /battery/i.test(historyText) ? "battery" : /charging|panel/i.test(historyText) ? "charging_access" : /wire|connect/i.test(historyText) ? "wiring" : "integration";
+    if (/pcb|resistor|current|circuit|modify|modification|custom/i.test(historyText)) profile.technical_help.depth = "deep";
+  }
+
+  // Product mapping
+  if (profile.power_type === "rechargeable" && profile.led_type === "COB LED" && profile.color_type === "single color") profile.likely_driver = "AS-B-201-SLD rechargeable single-color touch dimmable driver";
+  if (profile.power_type === "rechargeable" && profile.led_type === "COB LED" && /dual|3-color/i.test(profile.color_type)) profile.likely_driver = "AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver";
+  if (profile.power_type === "usb-powered" && profile.led_type === "COB LED" && profile.color_type === "single color") profile.likely_driver = "AS-U-101-SLD USB-C single-color touch dimmable driver";
+  if (profile.power_type === "usb-powered" && profile.led_type === "COB LED" && /dual|3-color/i.test(profile.color_type)) profile.likely_driver = "AS-U-102-DLD USB-C 3-color/dual touch dimmable driver";
+  if (profile.power_type === "rechargeable" && profile.led_type === "strip LED") profile.likely_driver = "AS-B-204-LSD or AS-B-205-LSD rechargeable strip driver depending on normal vs fast charging";
+  if (profile.power_type === "usb-powered" && profile.led_type === "strip LED") profile.likely_driver = "AS-U-103-LSD USB-C strip driver";
+
+  if (profile.led_type === "COB LED" && profile.wattage === "3W" && (!profile.voltage || profile.voltage === "3V")) profile.likely_led = "SH-COB-3W 3V 3W COB LED";
+  if (profile.led_type === "COB LED" && profile.wattage === "3W" && profile.voltage === "12V") profile.likely_led = "SH-COB-S-3W 12V 3W COB LED";
+  if (profile.led_type === "COB LED" && profile.wattage === "5W" && (!profile.voltage || profile.voltage === "3V")) profile.likely_led = "SH-COB-5W 3V 5W COB LED";
+  if (profile.led_type === "COB LED" && profile.wattage === "5W" && profile.voltage === "24V") profile.likely_led = "SH-COB-S-5W 24V 5W COB LED";
+
+  if (profile.likely_driver && profile.likely_led) {
+    profile.suggested_kit = [profile.likely_driver, profile.likely_led];
+    if (profile.power_type === "rechargeable") profile.suggested_kit.push("2600mAh battery as primary standard option; LC/cost-sensitive kits may use 1200mAh if applicable");
+    profile.suggested_kit.push("JST wire / connector wire");
+  }
+
+  // Known facts mirror for prompt and internal search.
+  profile.known_facts = {
+    conversation_type: profile.conversation_type,
+    lead_stage: profile.lead_stage,
+    lamp_type: profile.lamp_type,
+    power_type: profile.power_type,
+    led_type: profile.led_type,
+    wattage: profile.wattage,
+    voltage: profile.voltage,
+    color_type: profile.color_type,
+    need_type: profile.need_type,
+    quantity: profile.quantity,
+    quantity_intent: profile.quantity_intent,
+    customer_intent: profile.customer_intent,
+    likely_driver: profile.likely_driver,
+    likely_led: profile.likely_led
+  };
+
+  let merged = aiModeMergeProfiles(previousProfile || {}, profile);
+
+  // Re-evaluate missing facts after merge.
+  const missing = [];
+  if (["complaint", "dispatch", "custom_product"].includes(merged.conversation_type)) {
+    if (merged.conversation_type === "complaint" && !merged.support_issue?.product && !merged.detected_products?.length) missing.push("product_or_order_reference");
+    if (merged.conversation_type === "dispatch" && !merged.dispatch_request?.order_ref) missing.push("order_reference");
+  } else if (["product_enquiry", "kit_enquiry", "quotation", "technical_help", "general"].includes(merged.conversation_type)) {
+    if (!merged.power_type && /rechargeable|usb|battery|driver|kit|lamp/i.test(historyText)) missing.push("power_type");
+    if (!merged.led_type && /led|driver|kit|lamp|strip|cob/i.test(historyText)) missing.push("led_type");
+    if (merged.led_type === "COB LED" && !merged.wattage) missing.push("wattage");
+    if (merged.led_type === "COB LED" && !merged.voltage) missing.push("voltage");
+    if (merged.led_type === "COB LED" && !merged.color_type && /driver|kit|lamp|rechargeable|usb/i.test(historyText)) missing.push("color_type");
+    if (!merged.lamp_type && /lamp|driver|kit/i.test(historyText)) missing.push("lamp_type");
+    if (!merged.quantity && /price|rate|quote|quotation|sample|order|buy|purchase/i.test(historyText)) missing.push("quantity");
+  }
+  merged.missing_details = Array.from(new Set(missing));
+
+  // Next best action, universal.
+  if (merged.custom_request?.is_custom) merged.next_best_action = "handover_to_vibhu_for_custom_requirement";
+  else if (merged.support_issue?.has_issue) merged.next_best_action = "collect_order_reference_and_handover_support";
+  else if (merged.dispatch_request?.is_dispatch_query) merged.next_best_action = "ask_order_reference_or_check_order_status";
+  else if (merged.commercial?.wants_discount) merged.next_best_action = "handover_to_khushagra_for_special_commercial_approval";
+  else if (merged.commercial?.wants_quotation && (merged.likely_driver || merged.likely_led || merged.detected_products?.length)) merged.next_best_action = "prepare_sales_followup_or_quote";
+  else if (aiModeProfileHasEnoughForKit(merged)) merged.next_best_action = "recommend_setup_and_ask_sample_or_quantity";
+  else if (merged.missing_details?.length) merged.next_best_action = `ask_customer_for_${merged.missing_details[0]}`;
+  else merged.next_best_action = "answer_normally_or_ask_one_relevant_question";
+
+  return merged;
+}
+
+function aiModeProfileHasEnoughForKit(profile = {}) {
+  return !!(
+    profile.power_type &&
+    profile.led_type &&
+    (profile.wattage || profile.led_type === "strip LED" || profile.led_type === "DOB") &&
+    (profile.color_type || profile.led_type === "strip LED" || profile.led_type === "DOB") &&
+    (profile.likely_driver || profile.likely_led || profile.suggested_kit?.length || profile.detected_products?.length)
+  );
+}
+
+function aiModeProfileSummaryLine(profile = {}) {
+  const parts = [];
+  if (profile.conversation_type) parts.push(`type: ${profile.conversation_type}`);
+  if (profile.power_type) parts.push(profile.power_type);
+  if (profile.lamp_type) parts.push(profile.lamp_type);
+  if (profile.color_type) parts.push(profile.color_type);
+  if (profile.wattage) parts.push(profile.wattage);
+  if (profile.voltage) parts.push(profile.voltage);
+  if (profile.led_type) parts.push(profile.led_type);
+  if (profile.need_type) parts.push(profile.need_type);
+  if (profile.quantity) parts.push(`quantity: ${profile.quantity}`);
+  if (profile.customer_intent) parts.push(`intent: ${profile.customer_intent}`);
+  return parts.join(" · ");
+}
+
+function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") {
+  const msg = String(latestMessage || "").toLowerCase();
+  const setup = aiModeProfileSummaryLine(profile);
+  const kitLines = [];
+  if (profile.likely_driver) kitLines.push(`1. ${profile.likely_driver}`);
+  if (profile.likely_led) kitLines.push(`${kitLines.length + 1}. ${profile.likely_led}`);
+  if (profile.power_type === "rechargeable" && (profile.likely_driver || profile.likely_led)) kitLines.push(`${kitLines.length + 1}. 2600mAh battery as standard option, or 1200mAh for LC/cost-sensitive kit if applicable`);
+  if (profile.likely_driver || profile.likely_led) kitLines.push(`${kitLines.length + 1}. JST wire / connector wire`);
+
+  if (profile.custom_request?.is_custom) {
+    return "Ji, ye requirement custom/new product type lag rahi hai. Isme feasibility check karna zaroori hoga, isliye main isko Vibhu ke liye handover mark kar raha hoon. Please exact size, function aur quantity share kar dijiye, taaki feasibility properly check ho sake.";
+  }
+  if (profile.support_issue?.has_issue) {
+    return "Ji, issue note kar liya. Please product/SKU, order reference ya invoice number, aur problem ka short detail share kar dijiye. Team check karke replacement/warranty/support ke liye guide karegi.";
+  }
+  if (profile.dispatch_request?.is_dispatch_query) {
+    return "Ji, dispatch/tracking check karne ke liye please order number, invoice number ya registered phone number share kar dijiye. Uske basis par team status confirm karegi.";
+  }
+
+  if (/sample|trial|demo|testing|one\s*set|ek\s*set/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
+    return `Ji, samajh gaya. Aapko ${setup} ka sample setup chahiye.\n\nSuitable sample combination:\n${kitLines.join("\n")}\n\nAap complete sample kit chahte hain ya sirf driver + LED sample?`;
+  }
+
+  if (/complete\s*kit|kit|set|combo/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
+    return `Ji, requirement clear hai: ${setup}.\n\nIske liye suitable kit combination hoga:\n${kitLines.join("\n")}\n\nAap sample set chahte hain ya bulk quantity ke liye pricing chahiye?`;
+  }
+
+  if (/price|rate|cost|quotation|quote|kitna|kitne/i.test(msg) && (profile.likely_driver || profile.likely_led || profile.detected_products?.length)) {
+    return `Ji, ${setup || "is requirement"} ke liye product identify ho raha hai. ${profile.likely_driver ? `Driver: ${profile.likely_driver}. ` : ""}${profile.likely_led ? `LED: ${profile.likely_led}. ` : ""}Please quantity confirm kar dijiye, uske hisaab se approved price slab ke according rate share kar denge.`;
+  }
+
+  if (aiModeProfileHasEnoughForKit(profile)) {
+    return `Ji, ab requirement clear hai: ${setup}.\n\nRecommended setup:\n${kitLines.join("\n")}\n\nNext step ke liye please bataye: aapko sample chahiye ya bulk quantity ke liye quotation?`;
+  }
+
+  const missing = Array.isArray(profile.missing_details) ? profile.missing_details : [];
+  if (missing.includes("order_reference")) return "Ji, order status check karne ke liye order number, invoice number ya registered phone number share kar dijiye.";
+  if (missing.includes("product_or_order_reference")) return "Ji, support ke liye product/SKU aur order reference share kar dijiye, saath mein problem ka short detail bhi bata dijiye.";
+  if (missing.includes("power_type")) return "Ji, aapko LED setup rechargeable chahiye ya directly USB-C powered?";
+  if (missing.includes("led_type")) return "Ji, aapko COB LED chahiye, strip LED chahiye, ya dual/3-color LED?";
+  if (missing.includes("wattage")) return "Ji, COB LED ke liye wattage confirm kar dijiye — 3W, 5W ya koi aur?";
+  if (missing.includes("voltage")) return "Ji, is COB LED ke liye voltage confirm kar dijiye — 3V, 12V ya 24V?";
+  if (missing.includes("color_type")) return "Ji, aapko single-color LED chahiye ya 3-color / warm-cool LED?";
+  if (missing.includes("lamp_type")) return "Ji, ye setup table lamp, wall lamp, floor lamp ya decorative product ke liye hai?";
+  if (missing.includes("quantity")) return "Ji, quantity confirm kar dijiye — sample chahiye ya bulk quantity?";
+  return "Ji, please requirement thoda aur clear kar dijiye — product type, power type aur quantity bata denge to main sahi option suggest kar dunga.";
+}
+
+function aiModeReplyRepeatsKnownQuestion(aiResult = {}, profile = {}) {
+  const reply = aiModeSafeString(aiResult.customer_reply || aiResult.suggested_customer_reply || "", 4000).toLowerCase();
+  if (!reply) return false;
+  const hasProductContext = !!(profile.likely_driver || profile.likely_led || profile.suggested_kit?.length || profile.detected_products?.length);
+  const asksKnown = [
+    profile.power_type && /rechargeable.*usb|usb.*rechargeable|battery.*usb|directly\s*usb|usb-c\s*powered/i.test(reply),
+    profile.led_type && /cob.*strip|strip.*cob|which.*led|what.*led|kis\s*type\s*ka\s*led/i.test(reply),
+    profile.wattage && /wattage|kitne\s*watt|kitna\s*watt|what\s*watt/i.test(reply),
+    profile.voltage && /voltage|kitne\s*volt|3v.*12v|12v.*3v/i.test(reply),
+    profile.color_type && /single.*3-?color|3-?color.*single|single.*dual|dual.*single/i.test(reply),
+    profile.lamp_type && /application|use\s*case|kis\s*use|kis\s*type\s*ki\s*lamp|table.*wall.*floor/i.test(reply),
+    profile.quantity && /quantity|kitni\s*quantity|sample.*bulk|bulk.*sample/i.test(reply),
+    hasProductContext && /kis\s*product\s*ka\s*sample|which\s*product\s*sample|what\s*product\s*sample|kya\s*aapko.*driver.*led/i.test(reply),
+    profile.dispatch_request?.order_ref && /order\s*number|invoice\s*number|registered\s*phone/i.test(reply),
+    profile.support_issue?.product && /which\s*product|kaunsa\s*product|product\/sku/i.test(reply)
+  ];
+  return asksKnown.some(Boolean);
+}
+
+
 function aiModeFormatKnowledgeChunks(chunks = [], label = "Knowledge") {
   if (!Array.isArray(chunks) || !chunks.length) return `No relevant ${label.toLowerCase()} snippets retrieved.`;
   return chunks
@@ -14939,7 +15328,8 @@ function aiModeBuildPrompt({
   handoverRules,
   approvedTrainingRules,
   productLinks,
-  memoryForChat
+  memoryForChat,
+  requirementProfile
 }) {
   return `
 You are Smart Handicrafts AI Mode inside the Operator Hub.
@@ -14982,14 +15372,19 @@ LEVEL RULES FOR GENERIC PRODUCT REQUESTS:
 - For these, reply directly with the next useful customer-facing question or recommendation.
 - Missing customer details such as COB vs strip, wattage, voltage, quantity, lamp type, rechargeable vs USB are normal sales clarification questions and must be handled as Level 1.
 
-CONVERSATION MEMORY RULES:
-- Read the entire recent conversation before replying. Treat already provided customer details as known facts.
-- Do NOT ask again for information already provided earlier in the same chat.
-- If customer already said table lamp, rechargeable, single color, COB LED, 3W, 3V, remember all of it.
-- When the customer says short follow-ups like "difference", "yes", "3 watt", "3v", "complete kit", resolve them using the previous conversation context.
-- If enough details are known, move forward with a recommendation instead of restarting questions.
-- If customer says "complete kit" after giving enough details, suggest a kit combination. Do not ask again whether it is table lamp/rechargeable/COB/3W/3V if those are already in history.
-- Avoid repeated loops. Ask only the next missing detail, preferably one question at a time.
+UNIVERSAL CONVERSATION MEMORY RULES:
+- Treat this as one continuous customer conversation, not separate fresh messages.
+- Read the entire recent conversation and the DERIVED UNIVERSAL CONVERSATION PROFILE before replying.
+- Do NOT ask again for any information already captured in the profile.
+- Short replies like "yes", "same", "sample", "difference", "3 watt", "3v", "price", "kit", "ok", "rechargeable", "COB", "tracking", "not working" are answers within the active context, not new enquiries.
+- The profile may represent product enquiry, kit/lamp enquiry, quotation/price enquiry, custom product enquiry, technical help, complaint/support, dispatch/order status, or general business enquiry. Continue according to profile.conversation_type and profile.next_best_action.
+- If enough details are known, move forward with recommendation, price guidance, handover, support triage, or order-status clarification instead of restarting.
+- Ask only the next missing detail, preferably one clear question.
+- If customer asks sample/price/quantity after a product or kit has been discussed, apply it to the current discussed setup. Do not ask which product again when profile has product context.
+- If complaint/support, do not restart product sales flow; ask for order/product reference and handover where needed.
+- If dispatch/order status, do not invent status; ask for order reference if missing or log handover.
+- If custom/new product/custom PCB/special function, assign to Vibhu.
+- If existing product sales/quotation/price, assign to Khushagra only when human commercial follow-up is needed.
 
 INTERNAL CLARIFICATION:
 - For Level 2, create internal_notification for the shared internal WhatsApp number.
@@ -15037,6 +15432,19 @@ ${integrationSnippets}
 
 CURRENT CHAT MEMORY:
 ${JSON.stringify(memoryForChat || {}, null, 2).slice(0, 5000)}
+
+DERIVED UNIVERSAL CONVERSATION PROFILE FROM FULL CHAT:
+${JSON.stringify(requirementProfile || {}, null, 2).slice(0, 7000)}
+
+IMPORTANT CONTEXT RULE:
+- Treat the DERIVED UNIVERSAL CONVERSATION PROFILE as the source of truth for the current conversation state.
+- Your first job is to continue the conversation from this profile, not restart qualification.
+- Never ask for a field that is already filled in the profile, even if the latest message is short or ambiguous.
+- If the profile is sufficient, recommend/confirm the setup and ask the next commercial/action question only.
+- Treat the DERIVED UNIVERSAL CONVERSATION PROFILE as already-known customer information.
+- If latest customer message is "sample", "kit", "complete kit", "price", "rate", "quantity", "yes", "ok", "difference", or any short follow-up, connect it to the profile and recent conversation.
+- Example: if profile says rechargeable + table lamp + COB LED + 3W + single color and the customer says "sample chahiye", it means sample of that setup, not a new unknown product.
+- Do not ask "which product sample?" when the current setup is clear from profile/history. Confirm the setup and ask only the next missing commercial/action detail.
 
 CONVERSATION:
 Customer name: ${customerName || "(unknown)"}
@@ -15126,6 +15534,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     ].filter(Boolean).join("\n\n");
     const productLinks = await aiModeReadJsonFile(PRODUCT_LINKS_PATH, {});
     const chatMemory = chatId ? (memory[chatId] || {}) : {};
+    const requirementProfile = aiModeBuildRequirementProfile(history, message, chatMemory?.requirement_profile || {});
 
     const prompt = aiModeBuildPrompt({
       aiMode,
@@ -15141,7 +15550,8 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       handoverRules,
       approvedTrainingRules,
       productLinks,
-      memoryForChat: chatMemory
+      memoryForChat: chatMemory,
+      requirementProfile
     });
 
     const result = await callProductBotModel(
@@ -15150,7 +15560,59 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     );
 
     const parsed = aiModeExtractJsonObject(result?.text);
-    const normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
+    let normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
+
+    // Generic conversation-state repair: if the model asks for information already captured
+    // in the requirement profile, replace the looped reply with a profile-aware next step.
+    // This prevents endless "which product / rechargeable or USB / wattage?" loops for any wording.
+    if (aiModeReplyRepeatsKnownQuestion(normalized, requirementProfile)) {
+      const repairedReply = aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: aiMode === "chat" ? repairedReply : "",
+        suggested_customer_reply: repairedReply,
+        internal_summary: `${normalized.internal_summary || ""}
+Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfile)}`.trim(),
+        next_action: "profile_based_next_step"
+      };
+    }
+
+    // If Gemini still returns an empty/weak reply but the profile is sufficient, create a deterministic next reply.
+    if (!String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim() && aiModeProfileHasEnoughForKit(requirementProfile)) {
+      const repairedReply = aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
+      normalized = {
+        ...normalized,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        clarification_required: false,
+        handover_required: false,
+        customer_reply: aiMode === "chat" ? repairedReply : "",
+        suggested_customer_reply: repairedReply,
+        next_action: "profile_based_next_step"
+      };
+    }
+
+    // Attach the universal profile to the result so Odoo memory and later internal queries
+    // can search across product, kit, quotation, custom, support, dispatch, and general chats.
+    normalized.requirement_profile = requirementProfile;
+    normalized.quantity = requirementProfile?.quantity || normalized.quantity || "";
+    normalized.missing_details = Array.isArray(requirementProfile?.missing_details)
+      ? requirementProfile.missing_details.join(", ")
+      : (normalized.missing_details || "");
+    if (!Array.isArray(normalized.detected_products) || !normalized.detected_products.length) {
+      normalized.detected_products = Array.isArray(requirementProfile?.detected_products)
+        ? requirementProfile.detected_products.slice(0, 8)
+        : [];
+    }
+    normalized.internal_summary = [
+      normalized.internal_summary,
+      `Universal profile: ${aiModeProfileSummaryLine(requirementProfile)}`,
+      requirementProfile?.next_best_action ? `Next best action: ${requirementProfile.next_best_action}` : ""
+    ].filter(Boolean).join("\n").trim();
 
     // Persist AI Mode result to Odoo Studio models, without blocking customer reply if Odoo fails.
     // Memory model: x_ai_operator_memory
@@ -15189,6 +15651,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         last_ai_action: normalized.action,
         last_level: normalized.level,
         last_summary: normalized.internal_summary,
+        requirement_profile: requirementProfile,
         assigned_to: normalized.assigned_to || memory[chatId]?.assigned_to || "",
         updated_at: now()
       };
@@ -15233,8 +15696,8 @@ const AI_MODE_BACKGROUND_CHANNEL_LIMIT = Math.max(
   Math.min(120, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 40))
 );
 const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
-  3,
-  Math.min(30, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 10))
+  8,
+  Math.min(40, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 24))
 );
 const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
   0,
