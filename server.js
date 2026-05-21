@@ -2,7 +2,7 @@ import express from "express";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 dotenv.config();
@@ -14188,6 +14188,548 @@ app.post("/api/profile-logout", (req, res) => {
   res.setHeader("Set-Cookie", `${PROFILE_SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
   res.json({ ok: true });
 });
+
+
+
+// ===================== AI MODE: OPERATOR HUB CHAT =====================
+// AI Mode is separate from the website Kit Builder AI.
+// Modes:
+// - manual: AI does nothing
+// - assist: AI suggests only; operator sends manually
+// - chat: AI can send Level 1 replies directly, ask internal clarification for Level 2, and hand over Level 3 cases.
+const AI_MODE_RULES_PATH = process.env.AI_MODE_RULES_PATH || "./ai-mode-rules.md";
+const HANDOVER_RULES_PATH = process.env.HANDOVER_RULES_PATH || "./handover-rules.md";
+const APPROVED_TRAINING_RULES_PATH = process.env.APPROVED_TRAINING_RULES_PATH || "./approved-training-rules.md";
+const PRODUCT_LINKS_PATH = process.env.PRODUCT_LINKS_PATH || "./product-links.json";
+const OPERATOR_MEMORY_PATH = process.env.OPERATOR_MEMORY_PATH || "./operator-memory.json";
+const INTERNAL_CONTROL_WHATSAPP = String(process.env.INTERNAL_CONTROL_WHATSAPP || "").replace(/\D/g, "");
+
+function aiModeCleanPhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function aiModeNormalizeMode(value) {
+  const mode = String(value || "manual").trim().toLowerCase();
+  return ["manual", "assist", "chat"].includes(mode) ? mode : "manual";
+}
+
+function aiModeSafeString(value, max = 4000) {
+  return String(value || "").trim().slice(0, max);
+}
+
+async function aiModeReadTextFile(path, fallback = "") {
+  try {
+    const content = await readFile(path, "utf8");
+    return String(content || "").trim();
+  } catch {
+    return String(fallback || "").trim();
+  }
+}
+
+async function aiModeReadJsonFile(path, fallback = {}) {
+  try {
+    const content = await readFile(path, "utf8");
+    return JSON.parse(content || "{}");
+  } catch {
+    return fallback;
+  }
+}
+
+async function aiModeWriteJsonFile(path, value) {
+  try {
+    await writeFile(path, `${JSON.stringify(value || {}, null, 2)}\n`, "utf8");
+    return true;
+  } catch (error) {
+    console.warn("AI Mode memory write failed:", error?.message || error);
+    return false;
+  }
+}
+
+function aiModeRecentHistoryText(history = [], maxItems = 12) {
+  if (!Array.isArray(history)) return "";
+  return history
+    .slice(-maxItems)
+    .map((m) => {
+      const role = aiModeSafeString(m?.role || m?.author || "user", 40);
+      const content = aiModeSafeString(m?.content || m?.body || m?.message || "", 1200);
+      return content ? `${role}: ${content}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function aiModeFormatKnowledgeChunks(chunks = [], label = "Knowledge") {
+  if (!Array.isArray(chunks) || !chunks.length) return `No relevant ${label.toLowerCase()} snippets retrieved.`;
+  return chunks
+    .map((chunk, index) => {
+      const title = aiModeSafeString(chunk?.title || `${label} ${index + 1}`, 180);
+      const content = aiModeSafeString(chunk?.content || "", 1800);
+      return `[${label} ${index + 1}] ${title}\n${content}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+function aiModeExtractJsonObject(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {}
+  }
+
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    try {
+      return JSON.parse(text.slice(first, last + 1));
+    } catch {}
+  }
+
+  return null;
+}
+
+function aiModeDefaultResponse({ aiMode, source = "operator_hub", message = "" } = {}) {
+  return {
+    ok: true,
+    source,
+    aiMode,
+    level: aiMode === "manual" ? 0 : 2,
+    action: aiMode === "manual" ? "no_ai_action" : "internal_clarification",
+    language: "unknown",
+    customer_reply: "",
+    suggested_customer_reply: "",
+    internal_summary: aiModeSafeString(message, 500),
+    clarification_required: aiMode !== "manual",
+    handover_required: false,
+    assigned_to: "",
+    assigned_role: "",
+    handover_reason: "",
+    internal_notification: "",
+    detected_products: [],
+    next_action: aiMode === "manual" ? "manual_mode" : "operator_review_required"
+  };
+}
+
+function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
+  const fallback = aiModeDefaultResponse({ aiMode, source, message });
+  const obj = parsed && typeof parsed === "object" ? parsed : {};
+
+  const level = Math.max(0, Math.min(3, Number(obj.level ?? fallback.level)));
+  const action = aiModeSafeString(obj.action || fallback.action, 80) || fallback.action;
+
+  const normalized = {
+    ...fallback,
+    ...obj,
+    ok: true,
+    source: "operator_hub",
+    aiMode,
+    level,
+    action,
+    language: aiModeSafeString(obj.language || fallback.language, 40),
+    customer_reply: aiModeSafeString(obj.customer_reply || "", 4000),
+    suggested_customer_reply: aiModeSafeString(obj.suggested_customer_reply || obj.customer_reply || "", 4000),
+    internal_summary: aiModeSafeString(obj.internal_summary || fallback.internal_summary, 2000),
+    clarification_required: !!obj.clarification_required || action === "internal_clarification" || level === 2,
+    handover_required: !!obj.handover_required || action === "handover" || level === 3,
+    assigned_to: aiModeSafeString(obj.assigned_to || "", 80),
+    assigned_role: aiModeSafeString(obj.assigned_role || "", 120),
+    handover_reason: aiModeSafeString(obj.handover_reason || "", 200),
+    internal_notification: aiModeSafeString(obj.internal_notification || "", 6000),
+    next_action: aiModeSafeString(obj.next_action || "", 160),
+    detected_products: Array.isArray(obj.detected_products) ? obj.detected_products.slice(0, 8) : []
+  };
+
+  if (normalized.handover_required && !normalized.assigned_to) {
+    normalized.assigned_to = "Vibhu";
+    normalized.assigned_role = "Customization / New Product / Special Case";
+  }
+
+  if (aiMode === "assist") {
+    normalized.send_to_customer = false;
+    normalized.show_as_suggestion = true;
+  } else if (aiMode === "chat") {
+    normalized.send_to_customer =
+      normalized.level === 1 &&
+      normalized.action === "send_direct_reply" &&
+      !!normalized.customer_reply &&
+      !normalized.clarification_required &&
+      !normalized.handover_required;
+    normalized.show_as_suggestion = !normalized.send_to_customer;
+  } else {
+    normalized.send_to_customer = false;
+    normalized.show_as_suggestion = false;
+  }
+
+  return normalized;
+}
+
+function aiModeLooksLikePermanentTraining(message = "") {
+  const text = String(message || "").trim().toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(always|from now|future|next time|rule|remember|yaad|dhyan|training|train|save|permanent)\b/i.test(text) ||
+    /\b(should|must|never|first suggest|priority|prioritize)\b/i.test(text)
+  );
+}
+
+async function aiModeHandleInternalInstruction({ message, chatId = "internal", customerName = "", memory = {} } = {}) {
+  const cleanMessage = aiModeSafeString(message, 3000);
+  const lower = cleanMessage.toLowerCase();
+  const yesLike = /^(yes|haan|ha|ok|okay|save|kar do|haan save|yes save)\b/i.test(lower);
+  const noLike = /^(no|nahi|mat|cancel|nope)\b/i.test(lower);
+  const pending = memory?._pending_training_rule;
+
+  if (pending?.rule && yesLike) {
+    const oldRules = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH, "# Smart Handicrafts AI Approved Training Rules\n\n");
+    const newRule = `\n- ${pending.rule}\n`;
+    try {
+      await writeFile(APPROVED_TRAINING_RULES_PATH, `${oldRules.trim()}\n${newRule}`, "utf8");
+      delete memory._pending_training_rule;
+      await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+    } catch (error) {
+      return {
+        ok: false,
+        source: "internal_control",
+        action: "training_save_failed",
+        error: error?.message || String(error)
+      };
+    }
+    return {
+      ok: true,
+      source: "internal_control",
+      action: "training_saved",
+      internal_reply: "Saved. I will use this as a permanent Smart Handicrafts AI rule from now."
+    };
+  }
+
+  if (pending?.rule && noLike) {
+    delete memory._pending_training_rule;
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+    return {
+      ok: true,
+      source: "internal_control",
+      action: "training_cancelled",
+      internal_reply: "Okay, I will not save this permanently. I will treat it only as a temporary instruction."
+    };
+  }
+
+  if (aiModeLooksLikePermanentTraining(cleanMessage)) {
+    const rulePrompt = `Convert this internal WhatsApp instruction into one clean Smart Handicrafts AI training rule.
+Return JSON only: {"rule":"...","confidence":0.0 to 1.0}
+
+Instruction:
+${cleanMessage}`;
+
+    let rule = cleanMessage;
+    let confidence = 0.65;
+    try {
+      const result = await callProductBotModel("You extract concise permanent training rules. Return only JSON.", rulePrompt);
+      const parsed = aiModeExtractJsonObject(result?.text);
+      if (parsed?.rule) {
+        rule = aiModeSafeString(parsed.rule, 1000);
+        confidence = Number(parsed.confidence || confidence);
+      }
+    } catch {}
+
+    memory._pending_training_rule = {
+      rule,
+      from_message: cleanMessage,
+      confidence,
+      created_at: now(),
+      chatId
+    };
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+
+    return {
+      ok: true,
+      source: "internal_control",
+      action: "training_confirmation_required",
+      training_confirmation_required: true,
+      proposed_rule: rule,
+      internal_reply:
+        `Should I save this as a permanent Smart Handicrafts AI rule?\n\nRule:\n${rule}\n\nReply yes to save, or no to use only for this chat.`
+    };
+  }
+
+  return {
+    ok: true,
+    source: "internal_control",
+    action: "internal_instruction_received",
+    internal_reply:
+      "Instruction received. I will use it for the related active clarification/handover context. If you want it saved permanently, tell me it should be a permanent rule.",
+    internal_instruction: cleanMessage,
+    target_chat_id: chatId || ""
+  };
+}
+
+function aiModeBuildPrompt({
+  aiMode,
+  message,
+  channel,
+  chatId,
+  customerName,
+  customerPhone,
+  conversationHistory,
+  productSnippets,
+  integrationSnippets,
+  aiModeRules,
+  handoverRules,
+  approvedTrainingRules,
+  productLinks,
+  memoryForChat
+}) {
+  return `
+You are Smart Handicrafts AI Mode inside the Operator Hub.
+
+CRITICAL SOURCE RULE:
+- This is OPERATOR HUB chat for WhatsApp/Odoo Live Chat, NOT the website Kit Builder.
+- Never say "added to kit", "review kit", "continue to battery", "cart", or UI-step language.
+- Behave like a trained Smart Handicrafts employee.
+
+AI MODE:
+${aiMode}
+
+MODE BEHAVIOR:
+- manual: return action "no_ai_action"; do not write a customer reply.
+- assist: suggest a reply only; never send directly.
+- chat: use 3 levels:
+  Level 1 = normal/safe: direct reply allowed.
+  Level 2 = medium/unclear: ask internal clarification; do not guess.
+  Level 3 = hard/risky/custom: handover to Khushagra or Vibhu.
+
+LANGUAGE:
+- Detect customer language.
+- If customer writes English, reply in English.
+- If customer writes Hindi/Hinglish, reply in simple Hinglish, not heavy Hindi.
+- Keep technical words in English: driver, LED, COB, battery, JST wire, quotation, GST, dispatch, sample, bulk quantity.
+
+PRICING:
+- You may share approved listed prices and approved bulk slab prices only if found in product knowledge.
+- Do not invent prices.
+- Do not approve special discounts or negotiations.
+- If price validity is stale/unclear, mention latest can be confirmed by team.
+
+HANDOVER:
+- Do not mention Ankit anywhere.
+- Khushagra: normal sales, quotation, price, bulk price, regular existing-product enquiry.
+- Vibhu: customization, new product, custom PCB, custom driver, special development, deep technical/special case, unsure cases.
+
+INTERNAL CLARIFICATION:
+- For Level 2, create internal_notification for the shared internal WhatsApp number.
+- Also create suggested_customer_reply if a safe customer question is possible.
+
+RETURN JSON ONLY with exactly these keys:
+{
+  "ok": true,
+  "source": "operator_hub",
+  "aiMode": "${aiMode}",
+  "level": 0|1|2|3,
+  "action": "no_ai_action"|"send_direct_reply"|"suggest_reply"|"internal_clarification"|"handover",
+  "language": "english"|"hinglish"|"hindi"|"unknown",
+  "customer_reply": "",
+  "suggested_customer_reply": "",
+  "internal_summary": "",
+  "clarification_required": false,
+  "handover_required": false,
+  "assigned_to": "",
+  "assigned_role": "",
+  "handover_reason": "",
+  "internal_notification": "",
+  "detected_products": [{"sku":"","name":"","confidence":0}],
+  "next_action": ""
+}
+
+AI MODE RULES:
+${aiModeRules || "(no ai-mode-rules.md found)"}
+
+HANDOVER RULES:
+${handoverRules || "(no handover-rules.md found)"}
+
+APPROVED TRAINING RULES:
+${approvedTrainingRules || "(no approved-training-rules.md found)"}
+
+PRODUCT LINKS JSON:
+${JSON.stringify(productLinks || {}, null, 2).slice(0, 6000)}
+
+RELEVANT PRODUCT KNOWLEDGE:
+${productSnippets}
+
+RELEVANT INTEGRATION KNOWLEDGE:
+${integrationSnippets}
+
+CURRENT CHAT MEMORY:
+${JSON.stringify(memoryForChat || {}, null, 2).slice(0, 5000)}
+
+CONVERSATION:
+Customer name: ${customerName || "(unknown)"}
+Customer phone: ${customerPhone || "(unknown)"}
+Channel: ${channel || "(unknown)"}
+Chat ID: ${chatId || "(unknown)"}
+
+Recent conversation:
+${conversationHistory || "(none)"}
+
+Latest customer message:
+${message}
+`.trim();
+}
+
+app.post("/api/ai-mode/chat", async (req, res) => {
+  try {
+    const aiMode = aiModeNormalizeMode(req.body?.aiMode);
+    const source = aiModeSafeString(req.body?.source || "operator_hub", 80);
+    const channel = aiModeSafeString(req.body?.channel || "whatsapp", 80);
+    const chatId = aiModeSafeString(req.body?.chatId || req.body?.conversationId || "", 160);
+    const customerName = aiModeSafeString(req.body?.customerName || req.body?.name || "", 160);
+    const customerPhone = aiModeSafeString(req.body?.customerPhone || req.body?.phone || "", 80);
+    const senderPhone = aiModeCleanPhone(req.body?.senderPhone || req.body?.from || customerPhone);
+    const message = aiModeSafeString(req.body?.message || req.body?.text || "", 8000);
+    const history = Array.isArray(req.body?.conversationHistory)
+      ? req.body.conversationHistory
+      : (Array.isArray(req.body?.history) ? req.body.history : []);
+
+    if (!message && aiMode !== "manual") {
+      return res.status(400).json({ ok: false, error: "message is required" });
+    }
+
+    if (aiMode === "manual") {
+      return res.json(aiModeNormalizeAiJson(
+        { level: 0, action: "no_ai_action", next_action: "manual_mode" },
+        { aiMode, source, message }
+      ));
+    }
+
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    const isInternalControl =
+      !!INTERNAL_CONTROL_WHATSAPP &&
+      !!senderPhone &&
+      senderPhone === INTERNAL_CONTROL_WHATSAPP;
+
+    if (isInternalControl || req.body?.messageSource === "internal_control") {
+      const internalResult = await aiModeHandleInternalInstruction({
+        message,
+        chatId,
+        customerName,
+        memory
+      });
+      return res.json(internalResult);
+    }
+
+    const productKnowledge = await readProductKnowledge();
+    if (productKnowledge) {
+      await ensureKnowledgeIndex(productKnowledge);
+    }
+
+    const queryForRetrieval = [
+      message,
+      customerName,
+      aiModeRecentHistoryText(history, 6)
+    ].filter(Boolean).join("\n");
+
+    const productChunks = productKnowledge
+      ? await retrieveRelevantChunks(queryForRetrieval, 10)
+      : [];
+
+    const integrationChunks = await retrieveRelevantKitIntegrationChunks({
+      question: message,
+      history,
+      integrationConsultingMode: /\b(integrat|fit|mount|wiring|connect|connection|place|placement|battery|touch|panel|lamp|base|head|strip|wire|holder|shade)\b/i.test(queryForRetrieval),
+      topK: 5
+    }).catch(() => []);
+
+    const aiModeRules = await aiModeReadTextFile(AI_MODE_RULES_PATH);
+    const handoverRules = await aiModeReadTextFile(HANDOVER_RULES_PATH);
+    const approvedTrainingRules = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH);
+    const productLinks = await aiModeReadJsonFile(PRODUCT_LINKS_PATH, {});
+    const chatMemory = chatId ? (memory[chatId] || {}) : {};
+
+    const prompt = aiModeBuildPrompt({
+      aiMode,
+      message,
+      channel,
+      chatId,
+      customerName,
+      customerPhone,
+      conversationHistory: aiModeRecentHistoryText(history, 14),
+      productSnippets: aiModeFormatKnowledgeChunks(productChunks, "Product Knowledge"),
+      integrationSnippets: formatKitIntegrationChunksForPrompt(integrationChunks),
+      aiModeRules,
+      handoverRules,
+      approvedTrainingRules,
+      productLinks,
+      memoryForChat: chatMemory
+    });
+
+    const result = await callProductBotModel(
+      "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
+      prompt
+    );
+
+    const parsed = aiModeExtractJsonObject(result?.text);
+    const normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
+
+    if (chatId) {
+      memory[chatId] = {
+        ...(memory[chatId] || {}),
+        customerName,
+        customerPhone,
+        channel,
+        last_message: message,
+        last_ai_action: normalized.action,
+        last_level: normalized.level,
+        last_summary: normalized.internal_summary,
+        assigned_to: normalized.assigned_to || memory[chatId]?.assigned_to || "",
+        updated_at: now()
+      };
+      await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+    }
+
+    return res.json({
+      ...normalized,
+      provider: result?.provider || "",
+      model_used: result?.model_used || "",
+      retrieved: {
+        product_chunks: productChunks.length,
+        integration_chunks: integrationChunks.length
+      }
+    });
+  } catch (error) {
+    console.error("AI Mode chat error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || String(error),
+      action: "internal_clarification",
+      clarification_required: true,
+      customer_reply: "",
+      internal_notification: "AI Mode error. Please handle this chat manually."
+    });
+  }
+});
+
+app.get("/api/ai-mode/status", async (req, res) => {
+  const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+  res.json({
+    ok: true,
+    modes: ["manual", "assist", "chat"],
+    internal_control_configured: !!INTERNAL_CONTROL_WHATSAPP,
+    paths: {
+      ai_mode_rules: AI_MODE_RULES_PATH,
+      handover_rules: HANDOVER_RULES_PATH,
+      approved_training_rules: APPROVED_TRAINING_RULES_PATH,
+      product_links: PRODUCT_LINKS_PATH,
+      operator_memory: OPERATOR_MEMORY_PATH
+    },
+    memory_chats: Object.keys(memory || {}).filter((k) => !k.startsWith("_")).length
+  });
+});
+
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured }));
 // ===================== RENDER 30-SECOND KEEP ALIVE =====================
