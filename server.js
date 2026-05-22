@@ -16463,6 +16463,13 @@ const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
   8,
   Math.min(20, Number(process.env.AI_MODE_BACKGROUND_MESSAGE_LIMIT || 10))
 );
+// Important: Odoo discuss.channel ordering may not update until an operator opens the chat.
+// This global mail.message scan lets the server detect new WhatsApp/Live Chat messages
+// even when the Operator Hub/WhatsApp page is closed.
+const AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT = Math.max(
+  30,
+  Math.min(200, Number(process.env.AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT || 80))
+);
 const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
   0,
   Number(process.env.AI_MODE_BACKGROUND_START_GRACE_MS || 5000)
@@ -16504,6 +16511,9 @@ const aiModeBackgroundState = {
   failure_count_by_id: new Map(),
   tick_count: 0,
   processed_count: 0,
+  recent_message_scan_count: 0,
+  candidate_channel_count: 0,
+  channel_scan_fallback_count: 0,
   auto_sent_count: 0,
   handover_count: 0,
   clarification_count: 0,
@@ -16783,6 +16793,62 @@ async function aiModeFetchWorkerChannels(uid) {
   }
 }
 
+async function aiModeFetchWorkerChannelsByIds(uid, channelIds = []) {
+  const ids = Array.from(new Set((Array.isArray(channelIds) ? channelIds : [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0)));
+  if (!ids.length) return [];
+
+  const fields = [
+    "id",
+    "name",
+    "display_name",
+    "channel_type",
+    "active",
+    "write_date",
+    "last_interest_dt",
+    "whatsapp_number",
+    "whatsapp_channel_valid_until",
+    "whatsapp_partner_id",
+    "whatsapp_channel_active",
+    "livechat_visitor_id"
+  ];
+
+  try {
+    return await odooExecute(uid, "discuss.channel", "read", [ids, fields]);
+  } catch (error) {
+    console.warn("AI Mode worker channel read by recent messages failed, retrying minimal fields:", error?.message || error);
+    return await odooExecute(uid, "discuss.channel", "read", [ids, [
+      "id",
+      "name",
+      "display_name",
+      "channel_type",
+      "write_date",
+      "last_interest_dt"
+    ]]);
+  }
+}
+
+async function aiModeFetchRecentWorkerMessages(uid) {
+  return await odooExecute(uid, "mail.message", "search_read", [[
+    ["model", "=", "discuss.channel"]
+  ], [
+    "id",
+    "date",
+    "body",
+    "preview",
+    "author_id",
+    "email_from",
+    "message_type",
+    "model",
+    "res_id",
+    "create_uid"
+  ]], {
+    limit: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT,
+    order: "id desc"
+  });
+}
+
 async function aiModeFetchWorkerMessages(uid, channelId) {
   return await odooExecute(uid, "mail.message", "search_read", [[
     ["model", "=", "discuss.channel"],
@@ -17003,7 +17069,37 @@ async function aiModeBackgroundTick() {
     await aiModeBackgroundLoadProcessedIds();
     const userContext = await aiModeGetOdooUserContext();
     const uid = userContext.uid;
-    const channels = await aiModeFetchWorkerChannels(uid);
+
+    // First scan recent mail.message records. This is the reliable background path:
+    // a new incoming WhatsApp message may exist in mail.message even if the discuss.channel
+    // row is not promoted to the top until an operator opens the chat.
+    let recentMessages = [];
+    try {
+      recentMessages = await aiModeFetchRecentWorkerMessages(uid);
+      aiModeBackgroundState.recent_message_scan_count += 1;
+    } catch (error) {
+      console.warn("AI Mode worker recent message scan failed:", error?.message || error);
+      recentMessages = [];
+    }
+
+    const recentCandidateChannelIds = [];
+    for (const message of recentMessages || []) {
+      if (!message?.id || !message?.res_id) continue;
+      if (!aiModeBackgroundCanAttempt(message.id)) continue;
+      if (aiModeIsOwnOdooMessage(message, userContext)) continue;
+      if (aiModeIsLikelySmartHandicraftsOutbound(message)) continue;
+      if (!aiModeMessagePlainText(message)) continue;
+      recentCandidateChannelIds.push(Number(message.res_id));
+    }
+
+    let channels = await aiModeFetchWorkerChannelsByIds(uid, recentCandidateChannelIds);
+    aiModeBackgroundState.candidate_channel_count = Array.isArray(channels) ? channels.length : 0;
+
+    // Fallback: keep the old channel scan for cases where recent messages were not enough.
+    if (!channels.length) {
+      aiModeBackgroundState.channel_scan_fallback_count += 1;
+      channels = await aiModeFetchWorkerChannels(uid);
+    }
 
     for (const channel of channels || []) {
       if (!channel?.id || !["whatsapp", "livechat"].includes(channel.channel_type)) continue;
@@ -17087,6 +17183,9 @@ app.get("/api/ai-mode/global", (req, res) => {
       last_error: aiModeBackgroundState.last_error,
       tick_count: aiModeBackgroundState.tick_count,
       processed_count: aiModeBackgroundState.processed_count,
+      recent_message_scan_count: aiModeBackgroundState.recent_message_scan_count,
+      candidate_channel_count: aiModeBackgroundState.candidate_channel_count,
+      channel_scan_fallback_count: aiModeBackgroundState.channel_scan_fallback_count,
       auto_sent_count: aiModeBackgroundState.auto_sent_count,
       handover_count: aiModeBackgroundState.handover_count,
       clarification_count: aiModeBackgroundState.clarification_count,
