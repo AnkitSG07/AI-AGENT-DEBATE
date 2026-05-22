@@ -16161,11 +16161,15 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     let parsed = null;
     let modelCallFailed = false;
     let modelCallError = "";
+    let modelProvider = "";
+    let modelUsed = "";
     try {
       const result = await callProductBotModel(
         "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
         prompt
       );
+      modelProvider = result?.provider || "";
+      modelUsed = result?.model_used || "";
       parsed = aiModeExtractJsonObject(result?.text);
     } catch (modelErr) {
       // Do not silently drop a normal customer message when Gemini is temporarily unavailable.
@@ -16400,8 +16404,8 @@ Safe no-reply fallback applied.`.trim()
 
     return res.json({
       ...normalized,
-      provider: result?.provider || "",
-      model_used: result?.model_used || "",
+      provider: modelProvider,
+      model_used: modelUsed,
       retrieved: {
         product_chunks: productChunks.length,
         integration_chunks: integrationChunks.length
