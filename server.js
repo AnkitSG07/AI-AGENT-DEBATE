@@ -1213,8 +1213,30 @@ async function callOpenRouter(system, prompt, debateText, modelName) {
 }
 
 function isRateLimitOrQuotaError(err) {
-  const text = String(err?.message || err || "").toLowerCase();
-  return text.includes("429") || text.includes("rate limit") || text.includes("quota") || text.includes("resource_exhausted");
+  const text = String(
+    err?.message ||
+    err?.status ||
+    err?.code ||
+    err ||
+    ""
+  ).toLowerCase();
+
+  return (
+    text.includes("429") ||
+    text.includes("rate limit") ||
+    text.includes("quota") ||
+    text.includes("resource_exhausted") ||
+    text.includes("503") ||
+    text.includes("502") ||
+    text.includes("504") ||
+    text.includes("service unavailable") ||
+    text.includes("unavailable") ||
+    text.includes("high demand") ||
+    text.includes("overloaded") ||
+    text.includes("temporarily") ||
+    text.includes("deadline exceeded") ||
+    text.includes("internal")
+  );
 }
 
 async function callProductBotModel(system, prompt) {
@@ -15689,6 +15711,27 @@ function aiModeNormalizeContextObject(value = {}, fallbackProfile = {}, previous
     if (!confirmed.led_type) confirmed.led_type = "COB LED";
     merged.led_type = "COB LED";
   }
+  if (/(202|as\s*-?\s*b\s*-?\s*202|dld)/i.test(latest) && /(dual|3\s*color|3-color|cct)/i.test(latest)) {
+    confirmed.driver = "AS-B-202-DLD";
+    confirmed.color_type = "dual/3-color";
+    confirmed.led_type = "COB LED";
+    merged.likely_driver = "AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver";
+    merged.color_type = "dual/3-color";
+    merged.led_type = "COB LED";
+    if (/3\s*w|3w|3\s*watt|3-watt/i.test(latest)) {
+      confirmed.wattage = "3W";
+      confirmed.led = "3W dual COB LED";
+      merged.wattage = "3W";
+      merged.likely_led = "3W dual / 3-color COB LED";
+    }
+    if (/5\s*w|5w|5\s*watt|5-watt/i.test(latest)) {
+      confirmed.wattage = "5W";
+      confirmed.led = "5W dual COB LED";
+      merged.wattage = "5W";
+      merged.likely_led = "5W dual / 3-color COB LED";
+    }
+    rejected.stale_ai_assumption = Array.from(new Set([...(Array.isArray(rejected.stale_ai_assumption) ? rejected.stale_ai_assumption : []), "4W dual COB if not customer-confirmed", "battery requirement if not customer-requested"]));
+  }
   if (/battery.*(nahi|not)|battery.*pucha.*nahi|did\s*not.*battery/i.test(latest)) {
     rejected.question_topic = Array.from(new Set([...(Array.isArray(rejected.question_topic) ? rejected.question_topic : []), "battery_variant_question_for_now"]));
   }
@@ -16059,14 +16102,109 @@ function aiModeBroadNewProductReply(message = "") {
 }
 
 
-function aiModeTryFastDeterministicReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const raw = String(message || "").trim();
+  const msg = raw.toLowerCase();
+
+  const asksPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price/i.test(msg);
+  if (!asksPrice) return "";
+
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 14).toLowerCase();
+  const fullHistoryText = Array.isArray(history)
+    ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n").toLowerCase()
+    : "";
+  const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
+  const contextText = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
+
+  const has202 = /\b202\b|as-b-202|202-dld|dld/.test(contextText);
+  const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
+  const hasBattery = /2600|battery|batt|mah/.test(contextText);
+  const hasWire = /jst|wire|connector/.test(contextText);
+
+  if (has202 && has3wDual) {
+    const rows = [
+      "1. AS-B-202-DLD rechargeable 3-color/dual LED driver — sample price ₹250",
+      "2. 3W dual COB LED — latest rate confirm karke total mein add hoga",
+      hasBattery ? "3. 2600mAh battery — latest rate confirm karke total mein add hoga" : "",
+      hasWire ? "4. JST wire — latest rate confirm karke total mein add hoga" : ""
+    ].filter(Boolean).join("\n");
+
+    return `Ji, pehle full set ka price breakdown bata deta hoon:\n\n${rows}\n\nDriver ka sample price ₹250 hai. LED, battery aur JST wire ka latest rate quantity ke hisaab se confirm hoga, isliye exact total quotation quantity ke saath final hoga.\n\nAap 1 sample set chahte hain ya bulk quantity? Quantity bata denge to exact total bana dunga.`;
+  }
+
+  return "";
+}
+
+
+function aiModeDetectExplicitProductRequest(message = "", history = [], activeContext = {}, requirementProfile = {}) {
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
   const historyText = aiModeCustomerOnlyHistoryText(history, message, 12).toLowerCase();
-  const activeText = `${activeContext?.active_topic || ""} ${activeContext?.last_ai_question || ""} ${requirementProfile?.led_type || ""} ${requirementProfile?.color_type || ""} ${requirementProfile?.likely_driver || ""}`.toLowerCase();
-  const likelyDualCob = /dual|3-?color|warm|cool|202|dld/.test(activeText + "\n" + historyText);
+  const activeText = `${activeContext?.active_topic || ""} ${activeContext?.last_ai_question || ""} ${requirementProfile?.led_type || ""} ${requirementProfile?.color_type || ""} ${requirementProfile?.likely_driver || ""} ${requirementProfile?.likely_led || ""}`.toLowerCase();
+  const combined = `${msg}\n${activeText}\n${historyText}`;
+
+  const wantsDriver = /\b(driver|202|as\s*-?\s*b\s*-?\s*202|as-b-202|dld)\b/i.test(raw);
+  const wantsLed = /\b(led|cob|dual\s*led|dual\s*cob|3\s*color|3-color|cct)\b/i.test(raw);
+  const wantsDriverAndLed = /\bdriver\b[\s\S]{0,60}\bled\b|\bled\b[\s\S]{0,60}\bdriver\b/i.test(raw);
+  const has202 = /\b202\b|as\s*-?\s*b\s*-?\s*202|as-b-202|202\s*driver|dld/i.test(combined);
+  const has201 = /\b201\b|as\s*-?\s*b\s*-?\s*201|as-b-201|201\s*driver|sld/i.test(combined);
+  const has3WDualLed = /3\s*w|3w|3\s*watt|3-watt/i.test(msg) && /dual|3\s*color|3-color|cct|warm\s*cool/i.test(msg);
+  const has5WDualLed = /5\s*w|5w|5\s*watt|5-watt/i.test(msg) && /dual|3\s*color|3-color|cct|warm\s*cool/i.test(msg);
+  const mentionsDualLed = /dual\s*(led|cob)|3\s*color|3-color|cct|warm\s*cool/i.test(combined);
+  const correction = /\b(nahi|nhi|no|not|wrong|galat|sirf|only|mujhe|muje)\b/i.test(raw);
+
+  return {
+    raw,
+    msg,
+    wantsDriver,
+    wantsLed,
+    wantsDriverAndLed,
+    has202,
+    has201,
+    has3WDualLed,
+    has5WDualLed,
+    mentionsDualLed,
+    correction,
+    likelyDualCob: /dual|3-?color|warm|cool|202|dld/.test(combined)
+  };
+}
+
+function aiModeTryFastDeterministicReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const raw = String(message || "").trim();
+  const msg = raw.toLowerCase();
+  const detected = aiModeDetectExplicitProductRequest(raw, history, activeContext, requirementProfile);
+  const likelyDualCob = detected.likelyDualCob;
 
   if (!raw) return "";
+
+  const priceFollowupReply = aiModeTryPriceFollowupReply({ message, history, activeContext, requirementProfile });
+  if (priceFollowupReply) return priceFollowupReply;
+
+  // Highest-priority exact product/correction handling.
+  // Latest customer message must beat stale AI context, especially during Gemini 503 fallback.
+  // Example: "Nahi muje 202 driver aur 3 w ki dual led chaiye"
+  if (detected.has202 && detected.has3WDualLed && (detected.wantsDriverAndLed || detected.wantsDriver || detected.wantsLed || detected.correction)) {
+    return "Ji bilkul. Aapko AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver aur 3W dual COB LED chahiye.\n\nIs setup ke liye:\n1. AS-B-202-DLD driver\n2. 3W dual / 3-color COB LED\n3. 3-pin JST LED wire for 202 driver connection\n\nBattery agar already hai to battery ki zarurat nahi hai. Aapko sample quantity chahiye ya bulk quantity?";
+  }
+
+  if (detected.has202 && detected.has5WDualLed && (detected.wantsDriverAndLed || detected.wantsDriver || detected.wantsLed || detected.correction)) {
+    return "Ji bilkul. Aapko AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver aur 5W dual COB LED chahiye.\n\nIs setup ke liye:\n1. AS-B-202-DLD driver\n2. 5W dual / 3-color COB LED\n3. 3-pin JST LED wire for 202 driver connection\n\nBattery agar already hai to battery ki zarurat nahi hai. Aapko sample quantity chahiye ya bulk quantity?";
+  }
+
+  // Customer says only "driver aur LED chahiye" after a 202/dual discussion.
+  // Do not add battery again. Ask the only missing useful detail.
+  if (detected.wantsDriverAndLed && detected.has202 && detected.mentionsDualLed && !detected.has3WDualLed && !detected.has5WDualLed) {
+    return "Ji, AS-B-202-DLD driver ke saath dual / 3-color COB LED lagegi. Ismein normal LED options 3W dual aur 5W dual hain.\n\nAapko 3W dual LED chahiye ya 5W dual LED?";
+  }
+
+  if (detected.has202 && detected.wantsDriver && !detected.has3WDualLed && !detected.has5WDualLed && /chahiye|chaiye|need|want|required|require/i.test(raw)) {
+    return "Ji, AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver available hai. Iske saath dual/3-color COB LED aur 3-pin JST LED wire use hota hai.\n\nAapko 3W dual LED chahiye ya 5W dual LED?";
+  }
+
+  if (detected.has3WDualLed && detected.wantsLed && likelyDualCob && !detected.has202) {
+    return "Ji, 3W dual / 3-color COB LED ke liye AS-B-202-DLD rechargeable 3-color/dual LED touch dimmable driver suitable rahega. Iske saath 3-pin JST LED wire bhi lagega.\n\nAapko driver + LED dono chahiye ya sirf LED?";
+  }
+
   if (aiModeIsBroadNewProductInquiry(raw, history)) return aiModeBroadNewProductReply(raw);
 
   if (/(dual\s*cob|dual\s*led|3\s*color|3-color|warm\s*cool).*(kya|what|matlab|meaning)|^(kya|what).*dual\s*cob/i.test(raw)) {
@@ -16442,47 +16580,57 @@ Safe no-reply fallback applied.`.trim()
     // Persist AI Mode result to Odoo Studio models, without blocking customer reply if Odoo fails.
     // Memory model: x_ai_operator_memory
     // Handover model: x_ai_handover_log
-    const odooPersistence = { memory: null, handover: null };
+    const odooPersistence = { memory: null, handover: null, error: null, local_memory_error: null };
     if (chatId) {
-      odooPersistence.memory = await aiModeOdooUpsertMemory({
-        chatId,
-        customerName,
-        customerPhone,
-        channel,
-        message,
-        aiResult: normalized,
-        odooChannelId
-      });
-
-      if (normalized.clarification_required || normalized.handover_required || normalized.level >= 2) {
-        odooPersistence.handover = await aiModeOdooCreateHandoverLog({
+      try {
+        odooPersistence.memory = await aiModeOdooUpsertMemory({
           chatId,
           customerName,
           customerPhone,
+          channel,
+          message,
           aiResult: normalized,
-          odooChannelId,
-          kind: normalized.handover_required ? "handover" : "clarification"
+          odooChannelId
         });
+
+        if (normalized.clarification_required || normalized.handover_required || normalized.level >= 2) {
+          odooPersistence.handover = await aiModeOdooCreateHandoverLog({
+            chatId,
+            customerName,
+            customerPhone,
+            aiResult: normalized,
+            odooChannelId,
+            kind: normalized.handover_required ? "handover" : "clarification"
+          });
+        }
+      } catch (odooErr) {
+        odooPersistence.error = odooErr?.message || String(odooErr);
+        console.warn("AI Mode Odoo persistence failed; returning customer reply anyway:", odooPersistence.error);
       }
     }
 
     if (chatId) {
-      memory[chatId] = {
-        ...(memory[chatId] || {}),
-        customerName,
-        customerPhone,
-        channel,
-        last_message: message,
-        last_ai_action: normalized.action,
-        last_level: normalized.level,
-        last_summary: normalized.internal_summary,
-        requirement_profile: requirementProfile,
-        active_context: activeContext,
-        context_state: activeContext,
-        assigned_to: normalized.assigned_to || memory[chatId]?.assigned_to || "",
-        updated_at: now()
-      };
-      await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+      try {
+        memory[chatId] = {
+          ...(memory[chatId] || {}),
+          customerName,
+          customerPhone,
+          channel,
+          last_message: message,
+          last_ai_action: normalized.action,
+          last_level: normalized.level,
+          last_summary: normalized.internal_summary,
+          requirement_profile: requirementProfile,
+          active_context: activeContext,
+          context_state: activeContext,
+          assigned_to: normalized.assigned_to || memory[chatId]?.assigned_to || "",
+          updated_at: now()
+        };
+        await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+      } catch (memoryErr) {
+        odooPersistence.local_memory_error = memoryErr?.message || String(memoryErr);
+        console.warn("AI Mode local memory write failed; returning customer reply anyway:", odooPersistence.local_memory_error);
+      }
     }
 
     return res.json({
@@ -17142,7 +17290,13 @@ async function aiModeCallLocalDecisionEngine(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
-  const data = await response.json().catch(() => ({}));
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`AI Mode local decision returned non-JSON (${response.status}): ${text.slice(0, 300)}`);
+  }
   if (!response.ok || data?.ok === false) {
     throw new Error(data?.error || data?.message || `AI Mode local decision failed (${response.status})`);
   }
