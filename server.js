@@ -16739,13 +16739,25 @@ function aiModeBackgroundRegisterFailure(messageId, error) {
 function aiModeIsLikelySmartHandicraftsOutbound(message = {}) {
   const author = Array.isArray(message.author_id) ? String(message.author_id[1] || "") : "";
   const emailFrom = String(message.email_from || "");
-  const combined = `${author} ${emailFrom}`.toLowerCase();
-  // Extra guard for Odoo/WhatsApp outbound messages that are not attributed to the API user correctly.
-  return (
-    combined.includes("smart handicrafts") ||
-    combined.includes("vaidahi kala") ||
-    combined.includes("care@smarthandicrafts")
-  );
+  const createUidName = Array.isArray(message.create_uid) ? String(message.create_uid[1] || "") : "";
+  const authorLower = author.toLowerCase();
+  const emailLower = emailFrom.toLowerCase();
+  const creatorLower = createUidName.toLowerCase();
+
+  // IMPORTANT:
+  // In Odoo WhatsApp, incoming customer messages created by the WhatsApp/public route
+  // can have author names like "Smart Handicrafts, Ankit garia". That text includes
+  // "Smart Handicrafts" but is still the CUSTOMER message, not our outbound reply.
+  // Therefore never classify a message as outbound from author_id text alone.
+  // Use strong signals only: create_uid/email_from, or an exact operator author without a comma/customer name.
+  if (emailLower.includes("care@smarthandicrafts") || emailLower.includes("@smarthandicrafts.com")) return true;
+  if (creatorLower.includes("smart handicrafts") || creatorLower.includes("vaidahi kala")) return true;
+  if (/^\s*(smart handicrafts|vaidahi kala(?: pvt\.? ltd\.?)?)\s*$/i.test(author)) return true;
+
+  // Author strings like "Smart Handicrafts, Ankit garia" are treated as inbound customer messages.
+  if (authorLower.includes("smart handicrafts,") || authorLower.includes("vaidahi kala,")) return false;
+
+  return false;
 }
 
 function aiModeParseOdooDateMs(value) {
