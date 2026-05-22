@@ -1,27 +1,49 @@
-# Smart Handicrafts® — Product Knowledge Base (2026)
-Version: 2026-03
-Last_Updated: 2026-03-02
-Use: Gemini RAG website chatbot + B2B sales assistant + export compliance assistant + sales automation copilot.
+# Smart Handicrafts — Product Knowledge Base
+
+Version: 2026-05-22
+Use: AI product explanation, compatibility guidance, WhatsApp/Odoo Operator Hub, website chatbot, export-compliance support, CRM/sales automation, and handover support.
 
 ---
 
-## IMPORTANT BOT RULES
-- Answer ONLY using the RETRIEVED KNOWLEDGE snippets provided at runtime.
-- If a detail is not in retrieved snippets, say you don’t have it and suggest contacting support.
-- Never guess certifications, approvals, test reports, HS codes, or legal compliance for a customer’s final product.
-- Never invent pricing, discounts, MOQ, lead time, warranty, or contractual terms.
-- If pricing/policies might be stale: say “Confirm latest with support.”
-- End responses with: "Sources: [x][y]" based on retrieved snippet numbers.
+## Critical price source rule
+
+This markdown file is **not a pricing source**.
+
+For every price, slab, stock, website link, SKU commercial detail, quotation, or kit calculation, the AI must use:
+
+1. `odoo-product-pricelist-authority.json` / `odoo-product-pricelist-export.json`
+2. Live Odoo `product.template` and `product.pricelist.item` data, when available
+
+If a price is not found in the Odoo pricing source, reply that the exact price needs team confirmation.
+
+Do **not** use old markdown prices, catalogue text, screenshots, or memory as final pricing. Do **not** quote a complete kit price by using only the driver price. Complete kit pricing must come from a kit SKU or from per-component Odoo prices.
 
 ---
 
-# Company Overview
-Brand Name: Smart Handicrafts®  
-Business Model: B2B tech-modules + integration support for artisans, exporters, lighting brands, and OEMs.  
-Mission: Empower Indian artisans by blending traditional craftsmanship with modern technology; train, educate, and support tech integration into handcrafted products.  
-Positioning: Tech-enabled lighting modules for wireless table lamps and DIY lighting projects.
+## Important bot rules
 
-## Contact & Address
+- Reply like a Smart Handicrafts sales/support employee: short, direct, practical.
+- Use this file only for product explanation, compatibility, product selection, policy guidance, workflow guidance, and handover logic.
+- Never invent price, discount, MOQ, lead time, warranty, stock, dispatch commitment, certification, HS code, or legal compliance.
+- Customer's latest correction wins over old AI memory.
+- If the customer says “maine ye nahi pucha / abhi to bataya / wrong / galat,” acknowledge and correct immediately.
+- Ask only one clear question at a time.
+- Do not restart the full decision tree if facts are already confirmed.
+- For final commercial confirmation, special discount, bulk negotiation, sample order finalization, or exact quotation, hand over to sales.
+- For custom electronics, new development, risky electrical compatibility, or special mechanical integration, hand over to technical.
+- In Operator Hub/WhatsApp chat mode, do not use “Sources: [x][y]” in customer replies unless specifically needed. Keep replies natural.
+
+---
+
+# Company overview
+
+Brand Name: Smart Handicrafts
+Business Model: B2B tech modules and integration support for artisans, exporters, lighting brands, and OEMs.
+Mission: Empower Indian artisans by blending traditional craftsmanship with modern technology.
+Positioning: Plug-and-play smart electronics for table lamps, decorative lighting, handicrafts, and export-oriented products.
+
+## Contact and address
+
 - Address: A-23, 1st Floor, Okhla Phase-1, New Delhi, India, 110020
 - Phone: +91-9315155031
 - Email: care@smarthandicrafts.com
@@ -29,768 +51,724 @@ Positioning: Tech-enabled lighting modules for wireless table lamps and DIY ligh
 
 ---
 
-# Safety & Compliance (Component-Level)
-Validity: stable_guidance (review yearly)
+# Safety and compliance guidance
 
-Smart Handicrafts prioritizes safety and reliability with compliance to international standards.
+Smart Handicrafts focuses on component-level safety and reliability.
 
-## Claimed/Referenced Standards (Component-level)
-- CE, UKCA, UL (component-level where applicable)
-- BIS (India) where applicable
-- RoHS
-- LED drivers/modules designed to meet safety benchmarks including IEC 61347 and IEC 62031.
+## Component-level standards referenced
 
-## General Testing Orientation
+- CE, UKCA, UL where applicable
+- BIS where applicable
+- RoHS where applicable
+- LED drivers/modules are designed around relevant safety benchmarks such as IEC 61347 and IEC 62031 where applicable.
+
+## General testing orientation
+
 - Thermal management
 - Electrical stability
 - Controlled emissions
-- Photobiological safety orientation (as referenced across product range)
+- Photobiological safety orientation where applicable
 
-## Compliance Assistant Guardrails
-- Always clarify: component certifications support export readiness, but end-product compliance depends on final lamp design, enclosure, wiring, battery pack construction, and testing lab evaluation.
-- For any legal/regulatory uncertainty: recommend validation with a compliance officer or testing lab.
-- If user asks for a specific certificate or test report number: ask them to request documents via support.
+## Compliance guardrails
 
----
-
-# How to Choose the Right Driver (Quick Decision Tree)
-Validity: stable_logic (review quarterly)
-
-Ask the user:
-1) LED type: COB / Dual COB / Strip / DOB board  
-2) Power: USB powered or Rechargeable  
-3) Load (watts): 0.5W / 2W / 3W / 5W / 7W etc.  
-4) Color: 1-color or 3-color (dual CCT / warm-white / etc.)  
-5) Quantity: Sample / 60+ / 100+ / 500+ / 1000+ (or sets)  
-6) Market: India / Export (EU/UK/US/other)
-
-## Recommendation logic (high-confidence)
-- Single COB up to 5W (rechargeable): AS-B-201-SLD
-- Dual/3-color COB up to 5W dual (rechargeable): AS-B-202-DLD
-- Strip/DC bulb (rechargeable): AS-B-204-LSD or AS-B-205-LSD
-- USB powered single COB: AS-U-101-SLD
-- USB powered dual/3-color: AS-U-102-DLD
-- USB strip driver: AS-U-103-LSD
-- Lowest cost bundle for cost-sensitive products: LC Sets
+- Component-level compliance does not automatically certify the customer's final lamp.
+- Final lamp compliance depends on enclosure, wiring, battery pack construction, installation quality, heat management, mechanical design, and testing.
+- If customer asks for certificates, test reports, or country-specific compliance, collect product SKUs and route to support/sales.
+- Do not declare a final HS code. Recommend confirmation with customs broker/CHA.
+- For legal/regulatory uncertainty, recommend validation with a compliance officer or testing lab.
 
 ---
 
-# Product Categories Index
-1) Rechargeable LED Drivers  
-2) Rechargeable Strip/Dimmer Drivers  
-3) LC Series Sets (Driver + LED + Battery)  
-4) USB Powered LED Drivers  
-5) Rechargeable DOB (Driver on Board)  
-6) DC LED COB (Single)  
-7) Dual LED COB  
-8) COB LED Strip  
-9) Decorative LEDs (Flame LED, Fairy Lights)  
-10) Flexible Filament LEDs  
-11) Batteries (Li-ion 18650)  
-12) Battery Holders  
-13) USB Cables  
-14) USB-C Panel Mount Connectors  
-15) Switches  
-16) Add-ons & Accessories (lens, touch parts, wires, enclosures, holders)
+# Product selection decision tree
+
+Ask only missing details:
+
+1. Application: table lamp, wall lamp, floor lamp, decorative product, strip light, DOB board, candle warmer, etc.
+2. Power type: rechargeable, USB powered, direct DC/AC-DC, or battery-only.
+3. LED type: single COB, dual COB / 3-colour, strip LED, DOB, filament, flame LED, fairy light.
+4. Wattage/load: 0.5W, 2W, 3W, 5W, 7W, strip length, etc.
+5. Colour type: single colour, warm/cool dual CCT, 3-colour, RGB/RGBCW/RGBCCT.
+6. Quantity: sample, small batch, bulk.
+7. Market/destination: India or export, only if compliance/shipping matters.
+8. Timeline: prototype, pilot, production, urgent sample, etc.
+
+Do not ask all questions at once. Ask only the next missing question needed to recommend correctly.
 
 ---
 
-# CANONICAL SKU RULE (FOR RETRIEVAL)
-- Each SKU should appear only once in this file.
-- If catalog uses the same label for variants (example: 12V vs 24V), we create a canonical variant SKU and note alias.
+# High-confidence recommendation logic
+
+## Rechargeable drivers
+
+- Single COB up to 5W rechargeable: `AS-B-201-SLD`
+- Dual/3-colour COB rechargeable: `AS-B-202-DLD`
+- Strip/DC bulb rechargeable standard charging: `AS-B-204-LSD`
+- Strip/DC bulb rechargeable fast charging: `AS-B-205-LSD`
+
+## USB powered drivers
+
+- USB powered single COB: `AS-U-101-SLD`
+- USB powered dual/3-colour COB: `AS-U-102-DLD`
+- USB powered strip/DC bulb: `AS-U-103-LSD`
+
+## Rechargeable DOB
+
+- 115mm 3-colour rechargeable DOB: `AS-B-206-115-DLD`
+- 75mm 3-colour rechargeable DOB: `AS-B-206-75-DLD`
+- 55mm 3-colour rechargeable DOB: confirm exact Odoo SKU before quoting.
+
+## Lowest cost / LC
+
+- LC series is for cost-sensitive products and faster assembly.
+- LC composition and price must be confirmed from Odoo by exact SKU before quoting.
 
 ---
 
-# 1) Rechargeable LED Drivers (Touch Dimmable)
+# Important product rules
 
-## SKU: AS-B-201-SLD — Rechargeable 1 Colour Touch Dimmable Driver
-Type: Rechargeable LED driver, 1 color  
+## Driver 201
+
+`AS-B-201-SLD` is a rechargeable single-colour / single-output LED driver.
+
+Use it for:
+- 3W single COB
+- 5W single COB
+- single-colour rechargeable lamp applications
+
+Do not use it for:
+- dual CCT / 3-colour control
+- strip LED / 12V-24V strip applications
+- two separate independently controlled LEDs
+
+## Driver 202
+
+`AS-B-202-DLD` is a rechargeable dual LED / 3-colour driver.
+
+Use it for:
+- dual COB / warm-cool LED setup
+- 3-colour lamp control
+- touch sequence where LED1 / LED2 / both can be controlled depending on wiring/design
+
+Normal dual COB discussion should focus on available Odoo/catalogue products such as 3W dual and 5W dual. Do not assume a generic 4W dual COB option unless a specific Odoo product/kit SKU is matched.
+
+## Driver 204 vs 205
+
+`AS-B-204-LSD` = rechargeable strip/DC bulb driver, normal/standard charging.
+`AS-B-205-LSD` = rechargeable strip/DC bulb driver, fast-charging option.
+
+Both are for strip/DC bulb applications and can support 12V/24V output families depending on application.
+
+## USB drivers
+
+USB drivers do not use batteries.
+
+- `AS-U-101-SLD` = USB powered single-colour driver
+- `AS-U-102-DLD` = USB powered dual/3-colour driver
+- `AS-U-103-LSD` = USB powered strip driver
+
+## LC series
+
+LC series is for cost-sensitive products and fast assembly.
+
+LC set and normal driver are different concepts:
+- Normal driver price is driver-only.
+- LC set may include driver, LED, battery, and connector wire depending on exact SKU.
+- Always confirm exact LC SKU from Odoo before quoting composition or price.
+- Do not treat LC set price as the price for all normal non-LC kit combinations.
+- Do not present 4W dual COB as a normal standalone dual COB option unless Odoo has an exact product/kit match.
+
+## Battery recommendation
+
+For normal rechargeable kits, recommend 2600mAh first.
+For LC/cost-sensitive kits, 1200mAh can be considered.
+5200mAh is a larger dual-cell sleeve pack and should not be recommended first unless longer backup or bigger size is requested.
+
+Sleeve battery is easier to install because it is a ready pack with wire/JST.
+Without-sleeve battery requires holder/extra wiring and more fitting planning.
+
+## Complete kit pricing rule
+
+For a complete kit, AI must either:
+- use a specific Odoo kit SKU, or
+- calculate per-component price from Odoo pricing data.
+
+Never say “complete kit price” by using the driver-only price.
+
+Example normal rechargeable 3W single COB kit components:
+- Driver 201
+- 3W COB LED
+- 2600mAh battery or 2600mAh sleeve battery
+- JST wire
+- optional touch nut, USB-C panel mount, lens, holder, etc.
+
+The exact price must be fetched from Odoo pricing JSON/live Odoo.
+
+---
+
+# Product categories
+
+## 1. Rechargeable LED drivers
+
+### AS-B-201-SLD — Rechargeable 1 Colour Touch Dimmable Driver
+
+Type: Rechargeable LED driver, single colour
+Use: single COB lamps
+
 Key features:
-- Single-color rechargeable LED driver
+- Single-colour rechargeable LED driver
 - Supports LED load up to 5W
-- Touch-based dimming control
-- Plug-and-play design for easy assembly
-- Best-in-class performance and reliability  
+- Touch-based dimming
+- Plug-and-play assembly
+- Suitable for table lamps, wall lamps, and decorative lamps where single-colour LED is needed
+
 Best paired with:
-- 3W LED COB
-- 5W LED COB  
+- 3W single COB
+- 5W single COB
+- 2600mAh battery for standard rechargeable kits
+- JST wire and touch accessories as required
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹250
-- 60+: ₹200
-- 100+: ₹163
-- 500+: ₹125
-- 1000+: ₹99
+Pricing: Use Odoo pricing source only.
 
-## SKU: AS-B-202-DLD — Rechargeable 3 Colour Touch Dimmable Driver
-Type: Rechargeable LED driver, 3 color / dual  
+### AS-B-202-DLD — Rechargeable 3 Colour / Dual LED Driver
+
+Type: Rechargeable dual LED / 3-colour driver
+Use: warm/cool dual COB, 3-colour lamp setup
+
 Key features:
-- Three-color rechargeable LED driver
-- Supports LED load up to 5W Dual
-- Touch-based dimming control
-- Plug-and-play design for easy assembly
-- Versatile driver for multi-CCT / dual LED use-cases  
+- Three-colour / dual LED rechargeable driver
+- Supports dual LED use-cases
+- Touch-based dimming
+- Plug-and-play assembly
+
 Best paired with:
-- 2 x 3W LED COB
-- 2 x 2W LED COB  
+- 3W dual COB
+- 5W dual COB
+- suitable battery and wiring as per design
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹250
-- 60+: ₹200
-- 100+: ₹163
-- 500+: ₹125
-- 1000+: ₹99
+Pricing: Use Odoo pricing source only.
 
----
+### AS-B-204-LSD — Rechargeable Strip/DC Bulb Driver
 
-# 2) Rechargeable Strip / DC Bulb Drivers (Touch Dimmable)
+Type: Rechargeable strip/DC bulb driver
+Use: LED strip or compatible 12V/24V DC LED applications
 
-## SKU: AS-B-204-LSD — LED Strip Dimmer Driver (Rechargeable)
-Type: Rechargeable strip/DC bulb driver  
 Key features:
-- Supports 12V/24V output
-- Best suitable for ~30cm strip length (typical use-case)
-- Touch-based dimming control
-- Plug-and-play design  
-Best paired with:
-- Strip LEDs
-- 12V 3W LED COB  
+- 12V/24V output family
+- Touch-based dimming
+- Plug-and-play assembly
+- Normal/standard charging option
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹255
-- 60+: ₹205
-- 100+: ₹168
-- 500+: ₹130
-- 1000+: ₹104
+Pricing: Use Odoo pricing source only.
 
-## SKU: AS-B-205-LSD — LED Strip Dimmer Driver (Rechargeable, Fast Charging)
-Type: Rechargeable strip/DC bulb driver (enhanced)  
+### AS-B-205-LSD — Rechargeable Strip/DC Bulb Driver, Fast Charging
+
+Type: Rechargeable strip/DC bulb driver
+Use: strip/DC bulb applications where fast charging is preferred
+
 Key features:
-- Supports 12V/24V output
-- Supports fast charging
-- Touch-based dimming control
-- Plug-and-play design  
-Best paired with:
-- Strip LEDs
-- 24V 5W LED COB (and similar)  
+- 12V/24V output family
+- Fast charging support
+- Touch-based dimming
+- Plug-and-play assembly
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹325
-- 60+: ₹260
-- 100+: ₹211
-- 500+: ₹163
-- 1000+: ₹130
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 3) LC Series Sets (Cost-Optimized Bundles)
-Definition: Each LC set includes LED driver + LED + battery + wire connector.  
-Target customers: cost-sensitive products, fast assembly, easy sourcing.
+## 2. USB powered LED drivers
 
-## SKU: AS-B-201-SLD-LC — Rechargeable 1 Colour LC Set
-Key features:
-- Single-color rechargeable LED driver
-- Supports LED load up to 3W
-- Touch dimming
-- Plug-and-play  
-Set contains:
-- LED driver + 2W LED + 1200 mAh Li-ion battery + connector wire  
+### AS-U-101-SLD — USB Powered 1 Colour Driver
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample Set: ₹250
-- 2000+ Sets: ₹150
+Use: single COB USB powered lamps.
+Does not use battery.
+Best paired with 3W/5W single COB, USB cable, USB-C panel mount connector if required.
 
-## SKU: AS-B-202-DLD-LC — Rechargeable 3 Colour LC Set
-Key features:
-- Three-color rechargeable LED driver
-- Supports up to 5W (dual)
-- Touch dimming
-- Plug-and-play  
-Set contains:
-- LED driver + 4W dual LED (2W+2W) + 1200 mAh Li-ion battery + connector wire  
+Pricing: Use Odoo pricing source only.
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample Set: ₹250
-- 2000+ Sets: ₹150
+### AS-U-102-DLD — USB Powered Dual LED Driver
+
+Use: dual COB / 3-colour USB powered lamps.
+Does not use battery.
+
+Pricing: Use Odoo pricing source only.
+
+### AS-U-103-LSD — USB Powered Strip Driver
+
+Use: strip LED / DC bulb type applications from USB input.
+Does not use battery.
+
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 4) USB Powered LED Drivers (Touch Dimmable)
+## 3. Rechargeable DOB boards
 
-## SKU: AS-U-101-SLD — USB-C 1 Colour USB Powered Touch Dimmable Driver
-Key features:
-- Single-color USB powered LED driver
-- Supports LED load up to 5W
-- Touch dimming
-- Plug-and-play  
-Best paired with:
-- 3W LED COB
-- 5W LED COB  
+DOB = LED and driver on board.
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹150
-- 60+: ₹120
-- 100+: ₹98
-- 500+: ₹83
-- 1000+: ₹74
+Use when customer wants a compact integrated LED-board solution instead of separate driver + LED.
 
-## SKU: AS-U-102-DLD — USB-C 3 Colour USB Powered Touch Dimmable Driver
-Key features:
-- Three-color USB powered LED driver
-- Supports 5W dual
-- Touch dimming
-- Plug-and-play  
-Best paired with:
-- 3W dual LED
-- 5W dual LED  
+Typical variants:
+- 115mm 3-colour DOB
+- 75mm 3-colour DOB
+- 55mm 3-colour DOB
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹175
-- 60+: ₹140
-- 100+: ₹114
-- 500+: ₹96
-- 1000+: ₹86
+Ask diameter/brightness/application before recommending.
 
-## SKU: AS-U-103-LSD — USB-C Strip Driver (USB Powered Touch Dimmable Driver)
-Key features:
-- For strip/DC bulb use
-- Supports 12V/24V output
-- Touch dimming
-- Plug-and-play  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹175
-- 60+: ₹140
-- 100+: ₹114
-- 500+: ₹96
-- 1000+: ₹86
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 5) Rechargeable DOB (Driver On Board) — Touch Dimmable
+## 4. COB LEDs
 
-## SKU: AS-B-206-115-DLD — 206 Rechargeable 3 Color DOB (115mm)
-Key features:
-- 7W output (3.5W + 3.5W)
-- LED on board + driver
-- Touch dimming
-- Plug-and-play  
+### Single COB LEDs
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹349
-- 60+: ₹299
-- 100+: ₹249
-- 500+: ₹199
-- 1000+: ₹149
+Typical options:
+- 0.5W COB
+- 2W COB
+- 3W COB
+- 5W COB
+- 12V 3W COB
+- 24V 5W COB
 
-## SKU: AS-B-206-75-DLD — 206 Rechargeable 3 Color DOB (75mm)
-Key features:
-- 4.8W output (2.4W + 2.4W)
-- LED on board + driver
-- Touch dimming
-- Plug-and-play  
+For rechargeable 201 driver:
+- 3V 3W or 3V 5W COB are common choices.
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹299
-- 60+: ₹249
-- 100+: ₹219
-- 500+: ₹179
-- 1000+: ₹149
+For strip/DC bulb driver:
+- check voltage compatibility.
 
-## SKU: SH-DOB-206-DLD-LC — 206 Rechargeable 3 Color DOB (55mm)
-Key features:
-- 2.4W output (1.2W + 1.2W)
-- LED on board + driver
-- Touch dimming
-- Plug-and-play  
+Pricing: Use Odoo pricing source only.
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample (500+): ₹219
-- 1000+: ₹149
-- 5000+: ₹129
-- (Higher tier price may be available — confirm with support.)
+### Dual COB LEDs
+
+Dual COB means warm/cool or dual-output LED setup for 3-colour/dual CCT control.
+
+Typical options:
+- 3W dual COB
+- 5W dual COB
+- possible size variants depending on Odoo SKU
+
+Use with:
+- rechargeable `AS-B-202-DLD`
+- USB `AS-U-102-DLD`
+
+Do not assume 4W dual COB unless exact Odoo SKU/kit is matched.
+
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 6) DC LED COB (Single LED COBs)
+## 5. COB LED strips
 
-## SKU: SH-COB-0.5W — 0.5W LED COB (3V)
-CCT: 3000K  
-Spec:
-- Input power: 3V, 0.5W
-- 1 CREE LED, 11x11 mm  
+Typical families:
+- 3mm COB strip
+- 5mm COB strip
+- 8mm COB strip
+- 10mm CCT strip
+- RGB / RGBCW / RGBCCT strip
+- 12V / 24V variants
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹16
-- 100+: ₹12
+For rechargeable strip applications:
+- use `AS-B-204-LSD` for normal charging
+- use `AS-B-205-LSD` for fast charging
 
-## SKU: SH-COB-2W-20 — 2W LED COB (20mm)
-Spec:
-- Input power: 3V @ 0.6A  
+For USB strip applications:
+- use `AS-U-103-LSD`
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹60
-- 100+: ₹45
+Ask strip width, voltage, colour type, and length.
 
-## SKU: SH-COB-2W-35 (Catalog listing) — 2W LED COB (35mm)
-Note: Catalog lists “2W LED COB (35mm)” without an explicit SKU in this KB.  
-Spec:
-- Input power: 3V @ 0.5A  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹75
-- 100+: ₹56
-
-## SKU: SH-COB-3W — 3W LED COB (3V)
-CCT: 3000K  
-Spec:
-- Input power: 3V, 3W
-- 6 CREE LEDs, 35mm dia  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹30
-- 500+: ₹20
-
-## SKU: SH-COB-5W — 5W LED COB (3V)
-CCT: 3000K  
-Spec:
-- Input power: 3V, 5W
-- 10 CREE LEDs, 35mm dia  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹40
-- 500+: ₹25
-
-## SKU: SH-COB-S-3W — 12V 3W LED COB
-Spec:
-- Input power: 12V, 3W
-- 6 CREE LEDs, 35mm dia  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹65
-- 100+: ₹48
-
-## SKU: SH-COB-S-5W — 24V 5W LED COB
-Spec:
-- Input power: 24V, 5W
-- 10 CREE LEDs, 35mm dia  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹80
-- 100+: ₹45
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 7) Dual LED COB
+## 6. Decorative LEDs
 
-## SKU: SH-COB-D-3W — 3W Dual LED COB
-CCT: 2700K | 5700K  
-Spec:
-- 3V, 3W
-- 6 CREE LEDs, 35mm dia  
+Includes:
+- Flame LED
+- Fairy lights
+- decorative low-voltage lighting modules
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹35
-- 100+: ₹30
+Ask input voltage, size, colour, and application.
 
-## SKU: SH-COB-D-5W — 5W Dual LED COB
-CCT: 2700K | 5700K  
-Spec:
-- 3V, 5W
-- 10 CREE LEDs, 35mm dia  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹60
-- 100+: ₹49
-
-## SKU: SH-COB-D-50MM (Catalog listing) — Dual LED COB (50mm)
-CCT: 2700K | 5700K  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample: ₹80
-- 100+: ₹60
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 8) COB LED Strip
-Common specs:
-- widths: 3mm, 5mm, 8mm, 10mm, 12mm
-- voltage: 12V / 24V
-- types: Warm White, CCT, RGB, RGBCW, RGBCCT
-- densities: 120 LED/m, 320 LED/m, 400 LED/m
-Certifications listed on strip page: UL, CE, UKCA, BIS, ROHS
+## 7. Flexible filament LEDs
 
-## Strip examples (Canonical variant IDs)
-Validity: price_valid_until=2026-06-30 (confirm after)
+Includes flexible filament LED lengths/voltages such as 3V, 12V, and 24V families.
 
-- SKU: SH-COB-ST-3-400 — 3mm COB Strip, 400 chip, 12V (WW): Sample ₹150 / 1m
-- SKU: SH-COB-ST-5-400 — 5mm COB Strip, 400 chip, 12V (WW): Sample ₹150 / 1m
-- SKU: SH-COB-ST-8-320-12 — 8mm COB Strip, 320 chip, 12V (WW): Sample ₹200 / 1m
-- SKU: SH-COB-ST-8-320-24 — 8mm COB Strip, 320 chip, 24V (WW): Sample ₹210 / 1m
-- SKU: SH-COB-ST-CCT-12 — 10mm COB Strip, CCT, 12V, 120 LED/m: Sample ₹150 / 1m
-- SKU: SH-COB-ST-CCT-24 — 10mm COB Strip, CCT, 24V, 120 LED/m: Sample ₹200 / 1m
-- SKU: SH-COB-ST-RGB-10 — RGB COB Strip, 10mm, 24V, 400 LED/m: Sample ₹365 / 1m
-- SKU: SH-COB-ST-RGBCCT-12 — RGBCCT COB Strip, 12mm, 24V, 400 LED/m: Sample ₹700 / 1m
-- SKU: SH-COB-ST-RGBCW-8 — RGBCW COB Strip, 8mm, 24V, 320 LED/m: Sample ₹680 / 1m
+Ask length, voltage, colour temperature, and lamp design.
+
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 9) Decorative LEDs (5V)
+## 8. Batteries
 
-## SKU: SH-LED-F-S — Flame LED (2 inch)
-Input: 5V  
-CCT: 1300K  
+Typical rechargeable battery families:
+- 1200mAh Li-ion
+- 2600mAh Li-ion without sleeve
+- 2600mAh Li-ion with sleeve
+- 5200mAh dual pack sleeve
+- other capacities as per Odoo
 
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample (1–100m): ₹30/m
-- 100m+: ₹10/m
+Guidance:
+- Recommend 2600mAh first for most standard rechargeable lamp kits.
+- Recommend 1200mAh for LC/cost-sensitive products.
+- Recommend 5200mAh only for bigger size or longer backup needs.
+- Sleeve pack is easier for installation; without-sleeve requires holder/wiring.
 
-## SKU: SH-LED-F-B — Flame LED (3 inch)
-Input: 5V  
-CCT: 1300K  
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- Sample (1–100m): ₹30/m
-- 100m+: ₹10/m
-
-## Fairy Lights
-- SH-FL-WW — silver wire fairy light (10 LED/m; warm white/multicolour)
-- SH-FL-MC — copper wire fairy light (10 LED/m; warm white/multicolour)
-
-Pricing (INR)
-Validity: price_valid_until=2026-06-30 (confirm after)
-- silver wire fairy light: Sample ₹150, 50–1000+: ₹115
-- copper wire fairy light: Sample ₹160, 100–1000+: ₹125
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 10) Flexible Filament LEDs
-Validity: price_valid_until=2026-06-30 (confirm after)
+## 9. Battery holders
 
-- SH-FF-190 — Flexible Filament LED 190mm (3V), 2700K — ₹132
-- SH-FF-300 — Flexible Filament LED 300mm (3V), 2700K — ₹148
-- SH-FF-460 — Flexible Filament LED 460mm (12V), 2700K — ₹350
-- SH-FF-600 — Flexible Filament LED 600mm (24V), 2700K — ₹600
-- SH-FF-1200 — Flexible Filament LED 1200mm (24V), 2700K — ₹1200
+Includes:
+- 18650 battery holder
+- AA battery holder
+- AAA battery holder
+- parallel holder variants where available
 
----
+Ask battery type and lamp fitting space.
 
-# 11) Batteries (Li-ion 18650)
-Validity: price_valid_until=2026-06-30 (confirm after)
-
-- SH-BAT-12 — 18650 Li-ion 1200mAh — ₹50
-- SH-BAT-26 — 18650 Li-ion 2600mAh (DMEGC) — ₹100
-- SH-BAT-26-S — 18650 Li-ion 2600mAh (HLY, sleeve) — ₹125
-- SH-BAT-52 — 18650*2 Li-ion 5200mAh (sleeve dual pack) — ₹240
-
-Notes: UL/BIS referenced for batteries (component-level). Battery shipping restrictions vary by destination/courier.
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 12) Battery Holders
-Validity: review_as_needed
+## 10. USB cables
 
-- SH-AA-HLD — 3xAA battery holder (82mm dia), with ON/OFF switch
-- SH-AAA-HLD — 3xAAA battery holder (72mm dia), with ON/OFF switch
-- SH-18650-BAT-H — 18650 battery holder with cover, panel mount, brass terminals, ~6 inch wire
+Includes:
+- USB A to C
+- USB C to C
+- braided cables
+- cables with switch
+- black/white/golden variants
 
-Price note: holder category shows ₹25 fixed for AA/AAA (confirm if needed for 18650 holder).
+Ask required connector type, colour, length, and quantity.
 
----
-
-# 13) USB Cables
-Validity: price_valid_until=2026-06-30 (confirm after)
-
-## SKU: USB-A/C-01W — USB Cable (White)
-Type: Type A to C, 1.2m  
-Pricing: Sample ₹50; 100+ ₹40
-
-## SKU: USB-A/C-01W-B — USB Cable (Golden braided)
-Type: Type A to C, 1.2m  
-Pricing: Sample ₹100; 100+ ₹90
-
-## SKU: USB-C/C-01W-W — USB Cable (White, CE)
-Type: Type C to C, 1.2m  
-Pricing: Sample ₹120; 100+ ₹100
-
-## SKU: USB-A/C-02W — USB Cable (Black, UL)
-Type: A to C / C to C, 1.2m  
-Pricing: Sample ₹70; 100+ ₹65
-
-## SKU: TMP-USB-SWITCH-A-1P2M — USB cable with switch (temporary canonical ID)
-Type: Type A, 1.2m  
-Pricing: Sample ₹75; 100+ ₹70  
-Quote note: Temporary SKU; support confirmation is required before quoting.
-
-## SKU: TMP-USB-A2C-CE-1P2M — USB Cable (Type A to C, CE) (temporary canonical ID)
-Type: Type A to C, 1.2m, CE  
-Pricing: Sample ₹70; 100+ ₹60  
-Quote note: Temporary SKU; support confirmation is required before quoting.
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 14) USB-C Panel Mount Connectors
-Validity: price_valid_until=2026-06-30 (confirm after)
+## 11. USB-C panel mount connectors
 
-Common: CE certified, ~6 inch wire
-- SH-USB-PMC-B — Black (without indicator): Sample ₹45; 100+ ₹40
-- SH-USB-PMC-WI — Black (with indicator): Sample ₹70; 100+ ₹65
-- SH-USB-PMC-W — White (without indicator): Sample ₹45; 100+ ₹40
-- SH-USB-PMC-TP — Transparent (without indicator): Sample ₹65; 100+ ₹60
-- SH-USB-PMC-DU — Dual USB: Sample ₹45; 100+ ₹40
-- Push-fit variants also available (confirm exact SKU/price as needed).
+Includes:
+- black without indicator
+- black with indicator
+- white without indicator
+- transparent without indicator
+- push-fit / threaded variants
+- dual USB variants
 
----
+Ask panel thickness, colour, indicator requirement, fitting type, and cable length.
 
-# 15) Switches
-Validity: price_valid_until=2026-06-30 (confirm after)
-
-- SH-SWT-PBS — Push Button Switch — ₹25
-- SH-SWT-RPB — Round Push Button Switch — ₹25
-- SH-SWT-RS — Rocker Switch — ₹25
-- SH-SWT-SPST — Round Rocker SPST Switch — ₹25
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# 16) Add-ons & Accessories
-Validity: review_as_needed
+## 12. Switches
 
-## Lens
-- SH-COB-L-C — LED lens clear, PC material, 35mm dia
-- SH-COB-L-F — LED lens frosted, PC material, 35mm dia
-Compatible: 3W, 5W, 3W dual, 5W dual COBs
+Includes:
+- push button switch
+- round push button switch
+- rocker switch
+- round rocker SPST switch
 
-## Touch & wiring
-- SH-TN-18-MM — Brass touch nut (M4 thread length options), used as touch button (subject to availability)
-- SH-LUG-01 — Touch sensor (20cm wire) — ₹5
-- SH-LUG-02 — Touch sensor gold finish — Sample ₹25; 1000+ ₹23
-- SH-JST-WIRE — UL certified JST wire, custom length available
-  Pricing note: up to 6 inches ₹8; per inch ₹1
+Ask mounting hole, design, current/load, and application.
 
-## Enclosures
-- SH-C-ENC-M — Plastic USB-C enclosure (panel mount for PCB, 19mm dia) — ₹10
-  Compatible: AS-U-101-SLD, AS-U-102-DLD, AS-U-103-LSD
-- SH-C-ENC — Metal enclosure (panel mount, 16mm dia) — ₹50
-  Note: suitable for rechargeable drivers (confirm fitment per driver + lamp design)
-
-## LED holders
-- SH-COB-GLB-H — LED holder attachment for glass/stone, 10mm mounting hole, unfinished
-- SH-COB-LED-H — LED holder with shade ring for E27 shades, 10mm mounting hole, unfinished
-Price note: sample prices ~₹110–₹120 with quantity tier reductions (confirm per holder model).
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# Product Pairings / Compatibility (Sales Assistant)
-Validity: stable_logic
+## 13. Add-ons and accessories
 
-## Common Bundles (confirm wattage and use-case)
-- Rechargeable single-color lamp bundle:
-  AS-B-201-SLD + (2W/3W/5W COB) + 2600mAh battery + JST wire + touch nut + USB panel mount connector (optional)
-- Rechargeable 3-color lamp bundle:
-  AS-B-202-DLD + dual COB (2W+2W or 3W+3W) + 2600mAh battery + touch accessories
-- Budget set (fast procurement):
-  AS-B-201-SLD-LC or AS-B-202-DLD-LC
-- USB powered lamp bundle:
-  AS-U-101-SLD (or AS-U-102-DLD) + COB + USB cable + USB panel mount connector
-- Strip lighting bundle:
-  AS-B-204-LSD / AS-B-205-LSD OR AS-U-103-LSD + COB strip + wiring
+Includes:
+- LED lenses: clear/frosted
+- touch sensor lug
+- brass touch nut
+- JST wire
+- metal/plastic USB-C enclosures
+- LED holders and shade rings
+
+Compatibility:
+- Lenses and holders are usually paired with 3W/5W single and dual COBs.
+- JST wire length can be customized; confirm length before quotation.
+- LED holders depend on lamp material, mounting hole, shade type, and mechanical design.
+
+Pricing: Use Odoo pricing source only.
 
 ---
 
-# Integration Guides (Website / Commerce / ERP)
-Validity: stable_guidance
+# Product pairings and compatibility
 
-## Hardware Control APIs
-Smart Handicrafts modules are plug-and-play electronics. No public “device control API” is provided for drivers/modules.
+## Rechargeable single-colour table lamp
 
-## E-commerce compatibility (Product selling)
-- Shopify: supported for listing/catalog + lead capture + documentation request flows
-- WooCommerce: supported for listing/catalog
-- Amazon: suitable for component sellers (ensure correct listing compliance + battery shipping rules)
-- ERP/OMS/WMS: Odoo is compatible for product SKUs, price slabs, and CRM workflows
+Typical setup:
+- `AS-B-201-SLD`
+- 3W or 5W single COB
+- 2600mAh battery
+- JST wire
+- touch nut/sensor
+- optional USB-C panel mount connector
+- optional holder/lens
 
-## Odoo usage guidance (business ops)
+Ask only missing detail:
+- wattage/brightness
+- battery sleeve preference
+- quantity
+
+## Rechargeable dual/3-colour table lamp
+
+Typical setup:
+- `AS-B-202-DLD`
+- 3W dual or 5W dual COB
+- 2600mAh battery
+- JST wire
+- touch accessories
+
+Ask only missing detail:
+- 3W dual or 5W dual
+- quantity
+
+## USB powered single-colour lamp
+
+Typical setup:
+- `AS-U-101-SLD`
+- 3W or 5W COB
+- USB cable
+- USB-C panel mount connector if needed
+
+No battery.
+
+## USB powered dual/3-colour lamp
+
+Typical setup:
+- `AS-U-102-DLD`
+- 3W or 5W dual COB
+- USB cable
+- USB-C panel mount connector if needed
+
+No battery.
+
+## Rechargeable strip lamp
+
+Typical setup:
+- `AS-B-204-LSD` normal charging or `AS-B-205-LSD` fast charging
+- compatible 12V/24V strip
+- suitable battery setup
+- panel mount/connector/wire as required
+
+Ask strip voltage, strip length, and fast charging requirement.
+
+---
+
+# Integration guides: website, commerce, ERP
+
+## Hardware control APIs
+
+Smart Handicrafts modules are plug-and-play electronics. No public device-control API is provided for standard drivers/modules.
+
+## E-commerce compatibility
+
+- Shopify: suitable for listing/catalog + lead capture + documentation request flows
+- WooCommerce: suitable for listing/catalog
+- Amazon/marketplaces: suitable for component selling if listing compliance and battery shipping rules are handled properly
+- ERP/OMS/WMS: Odoo is compatible for SKUs, price slabs, and CRM workflows
+
+## Odoo usage guidance
+
 Suggested approach:
-1) Create products by SKU (AS-B-201-SLD, AS-B-202-DLD, etc.)
-2) Maintain price lists by quantity slab (sample / 60+ / 100+ / 500+ / 1000+)
-3) Use CRM for lead capture:
-   - application, wattage, power type, color, quantity, destination country
-4) If you manage BOM bundles: create kits as “bundle products” or use BOM/Manufacturing if applicable.
+1. Create products by SKU.
+2. Maintain quantity slabs in Odoo pricelists.
+3. Use CRM for lead capture: application, wattage, power type, colour, quantity, destination country.
+4. If managing BOM bundles, create kit products or use BOM/manufacturing where applicable.
 
-## Zapier / Make (automation ideas)
-- Website form → CRM lead in Odoo
-- Certificate request form → email + CRM activity
-- Quote request form → create opportunity + assign sales owner
-- Post-sales support ticket → service inbox routing
+Important Odoo fields:
+- `default_code` = SKU / internal reference
+- `name` / `display_name` = product name
+- `list_price` = base sales price
+- `qty_available` = stock signal
+- `website_url` = product page path
+- `pricelist_rule_ids` = linked quantity pricing rules
+- `description_sale` = sales description where available
+- `categ_id` = product category
+
+## Zapier / Make automation ideas
+
+- Website form to CRM lead in Odoo
+- Certificate request form to email + CRM activity
+- Quote request form to opportunity + assigned sales owner
+- Post-sales support ticket to service inbox routing
 
 ---
 
-# Policies and Company FAQs
-Validity: policy_review_required_every=90_days (confirm before quoting)
+# Policies and company FAQs
 
-## Shipping policy (general)
+Policy answers must be treated as general guidance and should be confirmed for formal quotation or legal use.
+
+## Shipping policy
+
 - Dispatch time depends on order quantity and stock availability.
 - Samples generally ship faster than bulk.
-- Export shipments depend on documentation and courier regulations (especially battery shipments).
+- Export shipments depend on documentation and courier regulations, especially battery shipments.
 
-## Returns policy (general)
+## Returns policy
+
 - Returns are generally applicable for manufacturing defects or wrong item supplied.
-- Custom or special assembly orders may be non-returnable (confirm case-by-case).
+- Custom or special assembly orders may be non-returnable; confirm case-by-case.
 
-## Warranty / SLA (general)
+## Warranty / SLA
+
 - Technical queries: aim to respond within 1–2 business days.
-- Production / dispatch SLA: depends on quantity and planning (confirm with support).
+- Production / dispatch SLA: depends on quantity and planning; confirm with support/sales.
 
-## Data / Privacy (general)
-- Customer data used only for quotations, support, and documentation sharing.
-- No resale of customer data (general commitment; confirm your formal policy if needed).
+## Data / privacy
+
+- Customer data is used for quotations, support, and documentation sharing.
+- Do not promise anything beyond the company's formal policy if the customer asks legal/privacy-specific questions.
 
 ---
 
-# Compliance & Export (Operational Guidance)
-Validity: stable_guidance
+# Compliance and export operational guidance
 
 ## What the bot can say
-- Component-level certifications and standards are referenced in the knowledge base.
+
+- Component-level certifications and standards are referenced for applicable products.
 - Final product compliance depends on final lamp design and testing.
 
-## Certificate request workflow (recommended)
-If user asks: “Send CE/UKCA/UL/RoHS documents”
-Collect:
-- Name, company, email, phone
+## Certificate request workflow
+
+If user asks for CE/UKCA/UL/RoHS documents, collect:
+- Name
+- Company
+- Email
+- Phone
 - Product SKUs required
 - Destination country
-Then route to: care@smarthandicrafts.com
+
+Then route to sales/support.
 
 ## HS codes
-HS codes depend on product configuration and packaging. The bot must not declare a final HS code.
-Recommend: confirm with customs broker / CHA.
+
+HS codes depend on product configuration and packaging. The bot must not declare a final HS code. Recommend confirmation with customs broker/CHA.
 
 ## Country-specific restrictions
+
 - Lithium-ion shipping rules vary by courier and destination.
 - Some marketplaces require additional battery compliance.
 
-## Export documents (typical)
-- Commercial Invoice
-- Packing List
-- Certificate of Origin (if required)
-- Requested component certificates (if applicable)
+## Export documents commonly needed
+
+- Commercial invoice
+- Packing list
+- Certificate of origin if required
+- Requested component certificates if applicable
 
 ## Incoterms
-- EXW (typical)
-- FOB / CIF (only if agreed in quotation)
+
+- EXW can be typical
+- FOB/CIF only if agreed in quotation
+
+Do not promise Incoterms without quotation confirmation.
 
 ---
 
-# Sales & Implementation Playbooks (B2B)
-Validity: stable_logic
+# Sales and implementation playbooks
 
-## Qualification questions (ask 3–5 max)
-- Application: table lamp / wall lamp / DIY / hospitality / decorative / strip
-- LED load (W): 0.5 / 2 / 3 / 5 / 7
+## Qualification questions
+
+Ask only missing fields, not all at once:
+
+- Application: table lamp, wall lamp, DIY, hospitality, decorative, strip
+- LED load: 0.5W, 2W, 3W, 5W, 7W, etc.
 - Power input: USB or rechargeable
-- Color: 1-color or 3-color
-- Quantity: sample / 60+ / 100+ / 500+ / 1000+
-- Destination market: India or export (which country)
-- Timeline: prototype / pilot / production
+- Colour: 1-colour or 3-colour
+- Quantity: sample, 60+, 100+, 500+, 1000+, etc.
+- Destination market: India or export
+- Timeline: prototype, pilot, production
 
 ## Suggested package by customer type
-- Artisan / DIY: LC series sets
-- Exporter: driver + 2600mAh battery + accessories + doc-request flow
-- OEM: bundle recommendations + technical review + consistent BOM/supply planning
 
-## Common objections (safe)
-- “China cheaper”: highlight reliability, support, compliance orientation, plug-and-play, consistent BOM supply.
-- “Need custom module”: suggest contacting support for engineering review.
+- Artisan / DIY: LC series or simple plug-and-play kit depending on budget
+- Exporter: driver + 2600mAh battery + accessories + documentation request workflow
+- OEM: bundle recommendation + technical review + consistent BOM/supply planning
+- Hospitality/project customer: clarify timeline, quantity, design, compliance and dispatch needs
+
+## Common objections
+
+- “China cheaper”: highlight reliability, support, compliance orientation, plug-and-play, consistent BOM supply, and local technical help.
+- “Need custom module”: route to technical review.
 - “Need certificates”: route to document request workflow.
+- “Need exact price/discount”: route to Odoo pricing or sales handover.
 
 ---
 
-# Sales Automation Playbook (CRM-ready)
-Validity: stable_logic
+# Sales automation playbook
 
 ## Lead stages
-1) Inquiry
-2) Qualified
-3) Technical Review
-4) Quote Sent
-5) Negotiation
-6) Closed Won / Closed Lost
+
+1. Inquiry
+2. Qualified
+3. Technical Review
+4. Quote Sent
+5. Negotiation
+6. Closed Won / Closed Lost
 
 ## Qualification rules
-- Must capture at least: application + power type + color requirement + quantity bracket
-- Export query → compliance assistant mode + document workflow
 
-## ICP tiers (routing)
+- Capture at least application, power type, colour requirement, and quantity bracket before a proper quote.
+- Export query should trigger compliance/document workflow if needed.
+
+## ICP tiers
+
 - Tier A: artisan / low volume
 - Tier B: exporter / medium volume
 - Tier C: OEM / high volume + repeat
-- Tier D: hospitality project / bulk with timelines
+- Tier D: hospitality/project/bulk with timelines
 
 ## Required CRM fields for handoff
-- Lead source (website / WhatsApp / referral / marketplace)
+
+- Lead source: website, WhatsApp, referral, marketplace, etc.
 - Name, company, phone, email
-- Country + city
+- Country and city
 - Application type
-- LED wattage + color type
-- Power type (USB/rechargeable)
+- LED wattage and colour type
+- Power type: USB/rechargeable/direct
 - Quantity bracket
 - Recommended SKU bundle
-- Compliance/document request (yes/no)
-- Next action (call / quote / sample dispatch / technical review)
+- Compliance/document request
+- Next action: call, quote, sample dispatch, technical review
 
-## Proposal / quotation workflow (recommended)
-1) Confirm requirements (wattage, power type, 1/3 color)
-2) Recommend SKUs + bundle
-3) Confirm quantity slab
-4) Confirm destination + shipping method
-5) Quote + timeline + doc requests
+## Proposal / quotation workflow
+
+1. Confirm requirements: wattage, power type, colour type
+2. Recommend SKUs / bundle
+3. Confirm quantity slab
+4. Confirm destination and shipping method if needed
+5. Quote through Odoo/live pricing and sales confirmation
 
 ---
 
-# Automation Intake Templates (STRICT FOR WORKFLOWS)
-Purpose: improve “sales_automation” bot outputs.
+# Automation intake template
 
-## Template A — Quote Intake
 Ask only missing fields:
+
 - customer_name
 - company_name
 - email
 - phone_or_whatsapp
-- application (table lamp / wall / DIY / hospitality / decorative / strip)
-- power_type (USB / rechargeable)
-- led_type (COB / dual COB / strip / DOB)
+- application
+- power_type
+- led_type
 - wattage
-- color (1-color / 3-color)
-- quantity_bracket (sample / 60+ / 100+ / 500+ / 1000+ / sets)
-- destination_country (if export)
-- timeline (prototype / pilot / production)
+- color
+- quantity_bracket
+- destination_country, if export
+- timeline
 
-Output format (for automation mode):
+For automation mode, structure internal output as:
+
 ```json
 {
   "workflow": "quote_intake",
@@ -798,11 +776,94 @@ Output format (for automation mode):
   "recommended_skus": [],
   "bundle_suggestion": "",
   "missing_fields": [],
-  "pricing_status": "valid|stale|unknown",
+  "pricing_status": "odoo_required|found|needs_confirmation",
   "policy_status": "current|review_required",
   "compliance_status": "component_level_only|needs_lab_validation",
   "disclaimer_required": true,
-  "next_action": "request_details|send_quote|book_call",
+  "next_action": "request_details|send_quote|book_call|handover",
   "support_contact": "care@smarthandicrafts.com"
 }
 ```
+
+---
+
+# Handover rules
+
+## Assign to sales / Khushagra
+
+Use for:
+- price confirmation
+- final quotation
+- special discount
+- bulk negotiation
+- sample order finalization
+- stock/dispatch commitment
+- existing product commercial follow-up
+
+Customer-facing wording:
+“Khushagra ji hamari sales team se hain. Woh aapko quotation/price details confirm kar denge. Agar aapko kisi aur product mein help chahiye ho to bata sakte hain.”
+
+After final handover reply, AI should wait before replying again unless the customer starts a new topic.
+
+## Assign to technical / Vibhu
+
+Use for:
+- custom PCB/driver
+- new feature development
+- unknown electrical compatibility
+- high-risk battery/charger/safety questions
+- wiring design needing review
+- special mechanical integration
+
+---
+
+# Conversation behaviour
+
+## Broad product need
+
+Examples:
+- “I need some products from you”
+- “Mujhe lamp ke liye electronics chahiye”
+- “Need LED”
+
+Reply:
+“Ji, aapko kis type ka product chahiye — LED, driver, battery, strip LED, panel mount connector, ya complete lamp kit? Agar lamp type/wattage/quantity pata ho to woh bhi bata dijiye.”
+
+## Difference question
+
+If customer asks “difference / kya antar hai / farak kya hai,” interpret based on the last AI question/current topic.
+
+Common difference topics:
+- 3V vs 12V COB
+- sleeve vs without-sleeve battery
+- 204 vs 205 driver
+- single-colour vs 3-colour
+- COB vs strip LED
+
+Do not ask “which difference?” if the previous context is clear.
+
+## Sample request
+
+If setup is already clear, do not ask again what sample. Confirm the setup and ask whether to proceed with quotation/quantity.
+
+## Correction
+
+If customer corrects AI, immediately acknowledge and correct:
+“Ji, sorry, aap sahi keh rahe hain. Main previous context par wapas aa raha hoon...”
+
+## Model fallback
+
+If Gemini/model is unavailable, use deterministic fallback based on active context. Avoid generic restart questions if the customer already gave details.
+
+---
+
+# Final pricing guardrail
+
+The AI must never answer a price from this markdown file.
+
+For every price/rate/quotation reply:
+1. Match the product/SKU from the customer message.
+2. Use Odoo pricing JSON/live Odoo.
+3. Apply quantity slab from Odoo `pricelist_rules`.
+4. If complete kit, use kit SKU or add per-component prices from Odoo.
+5. If product is not found, say price needs confirmation and hand over to sales.
