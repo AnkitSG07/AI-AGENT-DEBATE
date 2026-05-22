@@ -16435,7 +16435,6 @@ function shFindBestPricelistProduct(products = [], spec = {}) {
   return ranked[0]?.product || null;
 }
 
-async 
 function shFindProductByExactSku(products = [], sku = "") {
   const wanted = String(sku || "").trim().toLowerCase();
   if (!wanted) return null;
