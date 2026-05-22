@@ -1,0 +1,6029 @@
+[
+  {
+    "id": 1917,
+    "sku": "AS-B-201-DLD-K",
+    "name": "[AS-B-201-DLD-K] KIT - Rechargeable 3 Colour Lamp Development",
+    "category": "",
+    "sales_price": 499,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/rechargeable-3-color-led-lamp-development-kit-1917",
+    "description_sale": "",
+    "write_date": "2026-02-26 10:56:30",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1952,
+    "sku": "AS-B-201-SLD",
+    "name": "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color",
+    "category": "Driver",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": -2289,
+    "uom": "Units",
+    "website_url": "/shop/201-rechargeable-single-color-led-driver-1952",
+    "description_sale": "",
+    "write_date": "2026-05-18 14:24:16",
+    "pricelist_rules": [
+      {
+        "id": 10,
+        "product_tmpl_id": [
+          1952,
+          "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 250,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 11,
+        "product_tmpl_id": [
+          1952,
+          "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 200,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 12,
+        "product_tmpl_id": [
+          1952,
+          "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 163,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 13,
+        "product_tmpl_id": [
+          1952,
+          "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 125,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 14,
+        "product_tmpl_id": [
+          1952,
+          "[AS-B-201-SLD] DRIVER - 201 Rechargeable 1 Color"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 773,
+    "sku": "AS-B-201-SLD-CTM",
+    "name": "[AS-B-201-SLD-CTM] DRIVER - 201 Rechargeable 1 Color (Custom)",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-201-sld-ctm-driver-201-rechargeable-1-color-custom-773",
+    "description_sale": "DRIVER",
+    "write_date": "2026-01-31 07:26:35",
+    "pricelist_rules": [
+      {
+        "id": 1,
+        "product_tmpl_id": [
+          773,
+          "[AS-B-201-SLD-CTM] DRIVER - 201 Rechargeable 1 Color (Custom)"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 200,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          2,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 2,
+        "product_tmpl_id": [
+          773,
+          "[AS-B-201-SLD-CTM] DRIVER - 201 Rechargeable 1 Color (Custom)"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 163,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          2,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 3,
+        "product_tmpl_id": [
+          773,
+          "[AS-B-201-SLD-CTM] DRIVER - 201 Rechargeable 1 Color (Custom)"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 125,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          2,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 4,
+        "product_tmpl_id": [
+          773,
+          "[AS-B-201-SLD-CTM] DRIVER - 201 Rechargeable 1 Color (Custom)"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          2,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2068,
+    "sku": "AS-B-201-SLD-LC",
+    "name": "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color ",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 1998,
+    "uom": "Units",
+    "website_url": "/shop/lc-201-rechargeable-single-color-led-driver-2068",
+    "description_sale": "",
+    "write_date": "2026-04-21 11:48:53",
+    "pricelist_rules": [
+      {
+        "id": 15,
+        "product_tmpl_id": [
+          2068,
+          "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color "
+        ],
+        "min_quantity": 1,
+        "fixed_price": 150,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 16,
+        "product_tmpl_id": [
+          2068,
+          "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color "
+        ],
+        "min_quantity": 50,
+        "fixed_price": 127,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 17,
+        "product_tmpl_id": [
+          2068,
+          "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color "
+        ],
+        "min_quantity": 100,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 18,
+        "product_tmpl_id": [
+          2068,
+          "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color "
+        ],
+        "min_quantity": 500,
+        "fixed_price": 87,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 19,
+        "product_tmpl_id": [
+          2068,
+          "[AS-B-201-SLD-LC] DRIVER - 201 LC  Rechargeable 1 Color "
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 69,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 838,
+    "sku": "AS-B-202-DLD",
+    "name": "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER",
+    "category": "Driver",
+    "sales_price": 275,
+    "currency": "INR",
+    "qty_available": 30,
+    "uom": "Units",
+    "website_url": "/shop/202-rechargeable-3-color-led-driver-838",
+    "description_sale": "",
+    "write_date": "2026-04-21 12:08:02",
+    "pricelist_rules": [
+      {
+        "id": 20,
+        "product_tmpl_id": [
+          838,
+          "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 250,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 21,
+        "product_tmpl_id": [
+          838,
+          "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 200,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 22,
+        "product_tmpl_id": [
+          838,
+          "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 163,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 23,
+        "product_tmpl_id": [
+          838,
+          "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 125,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 24,
+        "product_tmpl_id": [
+          838,
+          "[AS-B-202-DLD] DRIVER- 202 DUAL LED DRIVER"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 747,
+    "sku": "AS-B-203-DeLD",
+    "name": "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/rechargeable-decorative-led-driver-747",
+    "description_sale": "USB+BATTERY",
+    "write_date": "2026-04-21 12:12:04",
+    "pricelist_rules": [
+      {
+        "id": 30,
+        "product_tmpl_id": [
+          747,
+          "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 250,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 31,
+        "product_tmpl_id": [
+          747,
+          "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 200,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 32,
+        "product_tmpl_id": [
+          747,
+          "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 163,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 33,
+        "product_tmpl_id": [
+          747,
+          "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 125,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 34,
+        "product_tmpl_id": [
+          747,
+          "[AS-B-203-DeLD] DRIVER- 203 DECORATIVE LED DRIVER"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1919,
+    "sku": "AS-B-203-DeLD-K",
+    "name": "[AS-B-203-DeLD-K] KIT - Rechargeable Decorative Lamp Development",
+    "category": "",
+    "sales_price": 499,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-203-deld-k-kit-rechargeable-decorative-lamp-development-1919",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2082,
+    "sku": "AS-B-206-115-DLD",
+    "name": "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)",
+    "category": "Driver",
+    "sales_price": 349,
+    "currency": "INR",
+    "qty_available": 313,
+    "uom": "Units",
+    "website_url": "/shop/115mm-rechargeable-3-color-dob-driver-2082",
+    "description_sale": "",
+    "write_date": "2026-04-21 12:32:01",
+    "pricelist_rules": [
+      {
+        "id": 76,
+        "product_tmpl_id": [
+          2082,
+          "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 349,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 77,
+        "product_tmpl_id": [
+          2082,
+          "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 299,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 78,
+        "product_tmpl_id": [
+          2082,
+          "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 249,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 79,
+        "product_tmpl_id": [
+          2082,
+          "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 199,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 80,
+        "product_tmpl_id": [
+          2082,
+          "[AS-B-206-115-DLD] DRIVER - 206 Rechargeable 3 Color DOB (115mm)"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 149,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2182,
+    "sku": "AS-B-206-55-DLD",
+    "name": "[AS-B-206-55-DLD] DRIVER - 206 Rechargeable 3 Color DOB (55mm)",
+    "category": "",
+    "sales_price": 219,
+    "currency": "INR",
+    "qty_available": 321,
+    "uom": "Units",
+    "website_url": "/shop/55mm-rechargeable-3-color-dob-driver-2182",
+    "description_sale": "",
+    "write_date": "2026-05-15 10:50:13",
+    "pricelist_rules": [
+      {
+        "id": 104,
+        "product_tmpl_id": [
+          2182,
+          "[AS-B-206-55-DLD] DRIVER - 206 Rechargeable 3 Color DOB (55mm)"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 149,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 103,
+        "product_tmpl_id": [
+          2182,
+          "[AS-B-206-55-DLD] DRIVER - 206 Rechargeable 3 Color DOB (55mm)"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 129,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 102,
+        "product_tmpl_id": [
+          2182,
+          "[AS-B-206-55-DLD] DRIVER - 206 Rechargeable 3 Color DOB (55mm)"
+        ],
+        "min_quantity": 5000,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2069,
+    "sku": "AS-B-206-75-DLD",
+    "name": "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)",
+    "category": "Driver",
+    "sales_price": 349,
+    "currency": "INR",
+    "qty_available": 43,
+    "uom": "Units",
+    "website_url": "/shop/75mm-rechargeable-3-color-dob-driver-2069",
+    "description_sale": "",
+    "write_date": "2026-04-21 12:19:41",
+    "pricelist_rules": [
+      {
+        "id": 41,
+        "product_tmpl_id": [
+          2069,
+          "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 299,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 42,
+        "product_tmpl_id": [
+          2069,
+          "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 249,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 43,
+        "product_tmpl_id": [
+          2069,
+          "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 219,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 44,
+        "product_tmpl_id": [
+          2069,
+          "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 179,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 45,
+        "product_tmpl_id": [
+          2069,
+          "[AS-B-206-75-DLD] DRIVER - 206 Rechargeable 3 Color DOB (75mm)"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 149,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2041,
+    "sku": "AS-B-RGB-KIT",
+    "name": "[AS-B-RGB-KIT] KIT - Rechargeable RGB Lamp Development",
+    "category": "",
+    "sales_price": 400,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-rgb-kit-kit-rechargeable-rgb-lamp-development-2041",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1915,
+    "sku": "AS-B-RK",
+    "name": "[AS-B-RK] KIT - Rechargeable 1 Colour Lamp Development",
+    "category": "",
+    "sales_price": 499,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-rk-kit-rechargeable-1-colour-lamp-development-1915",
+    "description_sale": "",
+    "write_date": "2026-01-12 14:42:53",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2005,
+    "sku": "AS-B-RK-AD",
+    "name": "[AS-B-RK-AD] KIT - Rechargeable 1 Colour Lamp Development (Advance)",
+    "category": "",
+    "sales_price": 1150,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-rk-ad-kit-rechargeable-1-colour-lamp-development-advance-2005",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2046,
+    "sku": "AS-B-RK-LC",
+    "name": "[AS-B-RK-LC] KIT - Rechargeable 1 Colour Lamp Development (LC)",
+    "category": "",
+    "sales_price": 499,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-b-rk-lc-kit-rechargeable-1-colour-lamp-development-lc-2046",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1920,
+    "sku": "AS-S-301-STM-K",
+    "name": "[AS-S-301-STM-K] KIT- 50mm Solar T Light Development",
+    "category": "",
+    "sales_price": 199,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-s-301-stm-k-kit-50mm-solar-t-light-development-1920",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1918,
+    "sku": "AS-U-101-DLD-K",
+    "name": "[AS-U-101-DLD-K] KIT - USB C 3 Colour Lamp Development",
+    "category": "",
+    "sales_price": 299,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-u-101-dld-k-kit-usb-c-3-colour-lamp-development-1918",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1949,
+    "sku": "AS-U-101-SLD",
+    "name": "[AS-U-101-SLD] DRIVER - 101 USB Powered 1 Color",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 17,
+    "uom": "Units",
+    "website_url": "/shop/usb-powered-single-color-led-driver-1949",
+    "description_sale": "",
+    "write_date": "2026-04-21 08:46:04",
+    "pricelist_rules": [
+      {
+        "id": 51,
+        "product_tmpl_id": [
+          1949,
+          "[AS-U-101-SLD] DRIVER - 101 USB Powered 1 Color"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 120,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 52,
+        "product_tmpl_id": [
+          1949,
+          "[AS-U-101-SLD] DRIVER - 101 USB Powered 1 Color"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 98,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 53,
+        "product_tmpl_id": [
+          1949,
+          "[AS-U-101-SLD] DRIVER - 101 USB Powered 1 Color"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 83,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 54,
+        "product_tmpl_id": [
+          1949,
+          "[AS-U-101-SLD] DRIVER - 101 USB Powered 1 Color"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 74,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1916,
+    "sku": "AS-U-101-SLD-K",
+    "name": "[AS-U-101-SLD-K] KIT - USB C 1 Colour Lamp Development",
+    "category": "",
+    "sales_price": 299,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/usb-led-lamp-development-kit-1916",
+    "description_sale": "",
+    "write_date": "2026-02-26 09:00:10",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1950,
+    "sku": "AS-U-102-DLD",
+    "name": "[AS-U-102-DLD] DRIVER - 102 USB Powered Dual LED",
+    "category": "",
+    "sales_price": 175,
+    "currency": "INR",
+    "qty_available": 48,
+    "uom": "Units",
+    "website_url": "/shop/usb-powered-dual-led-driver-1950",
+    "description_sale": "",
+    "write_date": "2026-04-21 08:35:05",
+    "pricelist_rules": [
+      {
+        "id": 55,
+        "product_tmpl_id": [
+          1950,
+          "[AS-U-102-DLD] DRIVER - 102 USB Powered Dual LED"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 140,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 56,
+        "product_tmpl_id": [
+          1950,
+          "[AS-U-102-DLD] DRIVER - 102 USB Powered Dual LED"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 114,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 57,
+        "product_tmpl_id": [
+          1950,
+          "[AS-U-102-DLD] DRIVER - 102 USB Powered Dual LED"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 96,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 58,
+        "product_tmpl_id": [
+          1950,
+          "[AS-U-102-DLD] DRIVER - 102 USB Powered Dual LED"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 86,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1928,
+    "sku": "AS-U-102-DLD-K",
+    "name": "[AS-U-102-DLD-K] KIT - 102 Dual_LED_Dimmable",
+    "category": "",
+    "sales_price": 299,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/as-u-102-dld-k-kit-102-dual-led-dimmable-1928",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1951,
+    "sku": "AS-U-103-LSD",
+    "name": "[AS-U-103-LSD] DRIVER - 103 LED STRIP",
+    "category": "",
+    "sales_price": 175,
+    "currency": "INR",
+    "qty_available": 22,
+    "uom": "Units",
+    "website_url": "/shop/usb-powered-strip-led-driver-1951",
+    "description_sale": "",
+    "write_date": "2026-02-26 09:03:44",
+    "pricelist_rules": [
+      {
+        "id": 59,
+        "product_tmpl_id": [
+          1951,
+          "[AS-U-103-LSD] DRIVER - 103 LED STRIP"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 140,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 60,
+        "product_tmpl_id": [
+          1951,
+          "[AS-U-103-LSD] DRIVER - 103 LED STRIP"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 114,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 61,
+        "product_tmpl_id": [
+          1951,
+          "[AS-U-103-LSD] DRIVER - 103 LED STRIP"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 96,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 62,
+        "product_tmpl_id": [
+          1951,
+          "[AS-U-103-LSD] DRIVER - 103 LED STRIP"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 86,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1975,
+    "sku": "AS-U-205-LSD",
+    "name": "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER",
+    "category": "",
+    "sales_price": 325,
+    "currency": "INR",
+    "qty_available": 225,
+    "uom": "Units",
+    "website_url": "/shop/205-fast-charging-strip-led-driver-1975",
+    "description_sale": "",
+    "write_date": "2026-04-14 14:05:57",
+    "pricelist_rules": [
+      {
+        "id": 114,
+        "product_tmpl_id": [
+          1975,
+          "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 325,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 115,
+        "product_tmpl_id": [
+          1975,
+          "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 260,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 116,
+        "product_tmpl_id": [
+          1975,
+          "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 211,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 117,
+        "product_tmpl_id": [
+          1975,
+          "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 163,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 118,
+        "product_tmpl_id": [
+          1975,
+          "[AS-U-205-LSD] DRIVER- 205 STRIP LED DRIVER"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 130,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1972,
+    "sku": "BAT-3200LI",
+    "name": "[BAT-3200LI] BATTERY - Li-ion 18650-3200mAh",
+    "category": "",
+    "sales_price": 125,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/bat-3200li-battery-li-ion-18650-3200mah-1972",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1966,
+    "sku": "M2-10-MM",
+    "name": "[M2-10-MM] M2*10mm screw",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 1000,
+    "uom": "Units",
+    "website_url": "/shop/m2-10-mm-m210mm-screw-1966",
+    "description_sale": "",
+    "write_date": "2025-12-15 09:02:11",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1955,
+    "sku": "SH-18650-BAT-H",
+    "name": "[SH-18650-BAT-H] HOLDER - 18650 BATTERY HOLDER",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 195,
+    "uom": "Units",
+    "website_url": "/shop/18650-battery-holder-1955",
+    "description_sale": "",
+    "write_date": "2026-04-22 06:57:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 789,
+    "sku": "SH-A-SHT-01",
+    "name": "[SH-A-SHT-01] ADD ON-  Acrylic Sheet",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 299,
+    "uom": "Units",
+    "website_url": "/shop/sh-a-sht-01-add-on-acrylic-sheet-789",
+    "description_sale": "",
+    "write_date": "2026-04-18 13:32:30",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1980,
+    "sku": "SH-ACDC-LD-122",
+    "name": "[SH-ACDC-LD-122] DRIVER- AC/DC  12V/2A",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-acdc-ld-122-driver-acdc-12v2a-1980",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 759,
+    "sku": "SH-ACDC-LD-123",
+    "name": "[SH-ACDC-LD-123] DRIVER- AC/DC 12V/3A",
+    "category": "",
+    "sales_price": 400,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-acdc-ld-123-driver-acdc-12v3a-759",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1981,
+    "sku": "SH-ACDC-LD-123",
+    "name": "[SH-ACDC-LD-123] DRIVER- AC/DC 12V/3A",
+    "category": "",
+    "sales_price": 400,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-acdc-ld-123-driver-acdc-12v3a-1981",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2067,
+    "sku": "SH-ACDC-LD-24V",
+    "name": "[SH-ACDC-LD-24V] DRIVER- AC/DC  24V",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-acdc-ld-24v-driver-acdc-24v-2067",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2002,
+    "sku": "SH-AL-GLB",
+    "name": "[SH-AL-GLB] GLOBE - Glass 4 inch",
+    "category": "",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-al-glb-globe-glass-4-inch-2002",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 770,
+    "sku": "SH-AL-GLB-3",
+    "name": "[SH-AL-GLB-3] GLOBE- Alabaster 3 inch",
+    "category": "",
+    "sales_price": 950,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-al-glb-3-globe-alabaster-3-inch-770",
+    "description_sale": "GLOBE",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2004,
+    "sku": "SH-AL-GLB-3",
+    "name": "[SH-AL-GLB-3] GLOBE- Alabaster 3 inch",
+    "category": "",
+    "sales_price": 950,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-al-glb-3-globe-alabaster-3-inch-2004",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2050,
+    "sku": "SH-AT-M-01",
+    "name": "[SH-AT-M-01] ADD ON- Acrylic Tube (milky)",
+    "category": "",
+    "sales_price": 680,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-at-m-01-add-on-acrylic-tube-milky-2050",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2061,
+    "sku": "SH-B-CTLR",
+    "name": "[SH-B-CTLR] CONTROLLER- Bluetooth LED Controller",
+    "category": "",
+    "sales_price": 115,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-b-ctlr-controller-bluetooth-led-controller-2061",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2178,
+    "sku": "SH-BAT-1200",
+    "name": "[SH-BAT-1200] BATTERY - Li-Ion-18650-1200mAh (Without Sleeve)",
+    "category": "",
+    "sales_price": 35,
+    "currency": "INR",
+    "qty_available": -3,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-1200-battery-li-ion-18650-1200mah-without-sleeve-2178",
+    "description_sale": "",
+    "write_date": "2026-04-28 07:39:01",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1943,
+    "sku": "SH-BAT-1200-S",
+    "name": "[SH-BAT-1200-S] BATTERY - Li-Ion-18650-1200mAh (Sleeve)",
+    "category": "Battery",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": -7502,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-1200-s-battery-li-ion-18650-1200mah-sleeve-1943",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:07:45",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1946,
+    "sku": "SH-BAT-21700-5000",
+    "name": "[SH-BAT-21700-5000] BATTERY - Li-Ion-21700-5000mAh",
+    "category": "",
+    "sales_price": 235,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-21700-5000-battery-li-ion-21700-5000mah-1946",
+    "description_sale": "",
+    "write_date": "2026-04-02 14:42:24",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2100,
+    "sku": "SH-BAT-26-WS",
+    "name": "[SH-BAT-26-WS] BATTERY - Li-Ion-18650-2600mAh Without Sleeve",
+    "category": "Battery",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 115,
+    "uom": "Units",
+    "website_url": "/shop/18650-li-ion-battery-2600mah-2100",
+    "description_sale": "",
+    "write_date": "2026-04-21 11:03:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 808,
+    "sku": "SH-BAT-26S",
+    "name": "[SH-BAT-26S] BATTERY - Li-Ion-18650-2600mAh With Sleeve",
+    "category": "Battery",
+    "sales_price": 140,
+    "currency": "INR",
+    "qty_available": -100,
+    "uom": "Units",
+    "website_url": "/shop/18650-battery-2600mah-with-sleeve-808",
+    "description_sale": "",
+    "write_date": "2026-04-24 12:34:09",
+    "pricelist_rules": [
+      {
+        "id": 88,
+        "product_tmpl_id": [
+          808,
+          "[SH-BAT-26S] BATTERY - Li-Ion-18650-2600mAh With Sleeve"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 140,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 89,
+        "product_tmpl_id": [
+          808,
+          "[SH-BAT-26S] BATTERY - Li-Ion-18650-2600mAh With Sleeve"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 140,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1957,
+    "sku": "SH-BAT-2900",
+    "name": "[SH-BAT-2900] BATTERY - Li-Ion-18650-2900mAh",
+    "category": "",
+    "sales_price": 135,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-2900-battery-li-ion-18650-2900mah-1957",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1945,
+    "sku": "SH-BAT-3500",
+    "name": "[SH-BAT-3500] BATTERY - Li-Ion-18650-3500mAh",
+    "category": "",
+    "sales_price": 140,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-3500-battery-li-ion-18650-3500mah-1945",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1947,
+    "sku": "SH-BAT-5000",
+    "name": "[SH-BAT-5000] BATTERY - Li-Ion-5200mAh",
+    "category": "",
+    "sales_price": 225,
+    "currency": "INR",
+    "qty_available": 416,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-5000-battery-li-ion-5200mah-1947",
+    "description_sale": "",
+    "write_date": "2026-04-21 11:16:42",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1942,
+    "sku": "SH-BAT-600",
+    "name": "[SH-BAT-600] BATTERY - Li-Ion-14500-600mAh",
+    "category": "",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": -2,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-600-battery-li-ion-14500-600mah-1942",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:46:40",
+    "pricelist_rules": []
+  },
+  {
+    "id": 751,
+    "sku": "SH-BH-2C-P",
+    "name": "[SH-BH-2C-P] HOLDER - 18650*2 Parallel Battery",
+    "category": "",
+    "sales_price": 45,
+    "currency": "INR",
+    "qty_available": 1000,
+    "uom": "Units",
+    "website_url": "/shop/sh-bh-2c-p-holder-186502-parallel-battery-751",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 749,
+    "sku": "SH-C-ENC",
+    "name": "[SH-C-ENC] USB C ENCLOSURE",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 97,
+    "uom": "Units",
+    "website_url": "/shop/nylon-66-usb-c-driver-enclosure-749",
+    "description_sale": "ADD-ONS",
+    "write_date": "2026-04-22 06:52:44",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2113,
+    "sku": "SH-C-ENC-M",
+    "name": "[SH-C-ENC-M] Metal PCB Mount (16mm) Unfinished",
+    "category": "Add-Ons",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": 304,
+    "uom": "Units",
+    "website_url": "/shop/metal-pcb-mount-16mm-led-driver-2113",
+    "description_sale": "",
+    "write_date": "2026-04-22 06:46:37",
+    "pricelist_rules": [
+      {
+        "id": 105,
+        "product_tmpl_id": [
+          2113,
+          "[SH-C-ENC-M] Metal PCB Mount (16mm) Unfinished"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 45,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2035,
+    "sku": "SH-CLS-01",
+    "name": "[SH-CLS-01] LAMP - Cylindrical Lamp With Shade",
+    "category": "",
+    "sales_price": 2499,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-cls-01-lamp-cylindrical-lamp-with-shade-2035",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1921,
+    "sku": "SH-COB-0.5",
+    "name": "[SH-COB-0.5] LED - 0.5 W cool white",
+    "category": "",
+    "sales_price": 16,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-05-led-05-w-cool-white-1921",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": [
+      {
+        "id": 35,
+        "product_tmpl_id": [
+          1921,
+          "[SH-COB-0.5] LED - 0.5 W cool white"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 16,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 36,
+        "product_tmpl_id": [
+          1921,
+          "[SH-COB-0.5] LED - 0.5 W cool white"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 12,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2177,
+    "sku": "SH-COB-0.5-WW",
+    "name": "[SH-COB-0.5-WW] [SH-COB-0.5] LED - 0.5 W",
+    "category": "",
+    "sales_price": 16,
+    "currency": "INR",
+    "qty_available": 46,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-05-ww-sh-cob-05-led-05-w-2177",
+    "description_sale": "",
+    "write_date": "2026-04-28 10:10:34",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1922,
+    "sku": "SH-COB-1.5",
+    "name": "[SH-COB-1.5] LED - 1.5 W ",
+    "category": "",
+    "sales_price": 53,
+    "currency": "INR",
+    "qty_available": 8,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-15-led-15-w-1922",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": [
+      {
+        "id": 37,
+        "product_tmpl_id": [
+          1922,
+          "[SH-COB-1.5] LED - 1.5 W "
+        ],
+        "min_quantity": 1,
+        "fixed_price": 53,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 38,
+        "product_tmpl_id": [
+          1922,
+          "[SH-COB-1.5] LED - 1.5 W "
+        ],
+        "min_quantity": 50,
+        "fixed_price": 40,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2250,
+    "sku": "SH-COB-20-2W",
+    "name": "[SH-COB-20-2W] LED - 2W  (20mm)",
+    "category": "",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": 2150,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-20-2w-led-2w-20mm-2250",
+    "description_sale": "",
+    "write_date": "2026-04-10 08:55:06",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2209,
+    "sku": "SH-COB-21-DLD",
+    "name": "[SH-COB-21-DLD] LED - COB 50mm 3 Color",
+    "category": "",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": -7510,
+    "uom": "Units",
+    "website_url": "/shop/50mm-3-color-led-cob-2209",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:08:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2093,
+    "sku": "SH-COB-2W-35",
+    "name": "[SH-COB-2W-35] LED - 2W 35mm",
+    "category": "LED",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 2,
+    "uom": "Units",
+    "website_url": "/shop/35mm-2w-single-color-led-cob-2093",
+    "description_sale": "",
+    "write_date": "2026-02-26 09:23:36",
+    "pricelist_rules": []
+  },
+  {
+    "id": 840,
+    "sku": "SH-COB-3",
+    "name": "[SH-COB-3] LED - CREE COB 3W",
+    "category": "LED COBB",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": 900,
+    "uom": "Units",
+    "website_url": "/shop/35mm-3w-single-color-led-cob-840",
+    "description_sale": "",
+    "write_date": "2026-04-30 08:35:11",
+    "pricelist_rules": [
+      {
+        "id": 39,
+        "product_tmpl_id": [
+          840,
+          "[SH-COB-3] LED - CREE COB 3W"
+        ],
+        "min_quantity": 1,
+        "fixed_price": 60,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 40,
+        "product_tmpl_id": [
+          840,
+          "[SH-COB-3] LED - CREE COB 3W"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 45,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1934,
+    "sku": "SH-COB-3D",
+    "name": "[SH-COB-3D] LED- CREE 3w Dual ",
+    "category": "",
+    "sales_price": 65,
+    "currency": "INR",
+    "qty_available": 69,
+    "uom": "Units",
+    "website_url": "/shop/35mm-3-color-cree-led-cob-1934",
+    "description_sale": "",
+    "write_date": "2026-04-21 10:10:16",
+    "pricelist_rules": [
+      {
+        "id": 67,
+        "product_tmpl_id": [
+          1934,
+          "[SH-COB-3D] LED- CREE 3w Dual "
+        ],
+        "min_quantity": 50,
+        "fixed_price": 49,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1935,
+    "sku": "SH-COB-5",
+    "name": "[SH-COB-5] LED - CREE COB 5W",
+    "category": "",
+    "sales_price": 75,
+    "currency": "INR",
+    "qty_available": 190,
+    "uom": "Units",
+    "website_url": "/shop/35mm-3w-single-color-cree-led-cob-1935",
+    "description_sale": "",
+    "write_date": "2026-04-21 10:46:41",
+    "pricelist_rules": [
+      {
+        "id": 69,
+        "product_tmpl_id": [
+          1935,
+          "[SH-COB-5] LED - CREE COB 5W"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 56,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2112,
+    "sku": "SH-COB-5-24V",
+    "name": "[SH-COB-5-24V] LED - CREE COB 5W (24V)",
+    "category": "",
+    "sales_price": 80,
+    "currency": "INR",
+    "qty_available": 280,
+    "uom": "Units",
+    "website_url": "/shop/cree-led-cob-5w-24v-2112",
+    "description_sale": "",
+    "write_date": "2026-02-26 07:02:18",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1936,
+    "sku": "SH-COB-5D",
+    "name": "[SH-COB-5D] LED- Cree 5w Dual",
+    "category": "",
+    "sales_price": 80,
+    "currency": "INR",
+    "qty_available": -55,
+    "uom": "Units",
+    "website_url": "/shop/35mm-5w-3-color-cree-led-cob-1936",
+    "description_sale": "",
+    "write_date": "2026-04-21 10:19:00",
+    "pricelist_rules": [
+      {
+        "id": 68,
+        "product_tmpl_id": [
+          1936,
+          "[SH-COB-5D] LED- Cree 5w Dual"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 60,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1982,
+    "sku": "SH-CS-01",
+    "name": "[SH-CS-01] ADD ON- Cabinet Switch",
+    "category": "",
+    "sales_price": 135,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-cs-01-add-on-cabinet-switch-1982",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2015,
+    "sku": "SH-DC-B-C",
+    "name": "[SH-DC-B-C] DC Barrel Connector",
+    "category": "",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": -1,
+    "uom": "Units",
+    "website_url": "/shop/sh-dc-b-c-dc-barrel-connector-2015",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2029,
+    "sku": "SH-DFF-LED",
+    "name": "[SH-DFF-LED] LED Strip Diffuser (silicon tube)",
+    "category": "",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dff-led-led-strip-diffuser-silicon-tube-2029",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 775,
+    "sku": "SH-DFF-LED",
+    "name": "[SH-DFF-LED] LED Strip Diffuser (silicon tube)",
+    "category": "",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "m",
+    "website_url": "/shop/sh-dff-led-led-strip-diffuser-silicon-tube-775",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2008,
+    "sku": "SH-DOB-11-SLD",
+    "name": "[SH-DOB-11-SLD] DRIVER - DOB 5V 4W LED Single Coloured",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dob-11-sld-driver-dob-5v-4w-led-single-coloured-2008",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": [
+      {
+        "id": 75,
+        "product_tmpl_id": [
+          2008,
+          "[SH-DOB-11-SLD] DRIVER - DOB 5V 4W LED Single Coloured"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 100,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 752,
+    "sku": "SH-DVLP-SVC-01",
+    "name": "[SH-DVLP-SVC-01] Smart Handicrafts Development Service",
+    "category": "Services",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dvlp-svc-01-smart-handicrafts-development-service-752",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1964,
+    "sku": "SH-DVLP-SVC-01",
+    "name": "[SH-DVLP-SVC-01] Smart Handicrafts Development Service",
+    "category": "Services / Events",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dvlp-svc-01-smart-handicrafts-development-service-1964",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2132,
+    "sku": "SH-E27-COB-CNC",
+    "name": "[SH-E27-COB-CNC] HOLDER - E27 LED COB (CNC Unfinished)",
+    "category": "",
+    "sales_price": 110,
+    "currency": "INR",
+    "qty_available": 15,
+    "uom": "Units",
+    "website_url": "/shop/sh-e27-cob-cnc-holder-e27-led-cob-cnc-unfinished-2132",
+    "description_sale": "",
+    "write_date": "2026-02-24 16:36:29",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2214,
+    "sku": "SH-ENC-55MM",
+    "name": "[SH-ENC-55MM] Enclosure (55mm DOB)",
+    "category": "",
+    "sales_price": 300,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-enc-55mm-enclosure-55mm-dob-2214",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 790,
+    "sku": "SH-FC-1000",
+    "name": "[SH-FC-1000] BATTERY - Flat cell 1000mAh",
+    "category": "",
+    "sales_price": 35,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-fc-1000-battery-flat-cell-1000mah-790",
+    "description_sale": "Battery",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2065,
+    "sku": "SH-FC-5000",
+    "name": "[SH-FC-5000] BATTERY - Flat cell 5000mAh",
+    "category": "",
+    "sales_price": 294,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-fc-5000-battery-flat-cell-5000mah-2065",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1932,
+    "sku": "SH-FF-190",
+    "name": "[SH-FF-190] LED- 190mm-Flexible Filament",
+    "category": "",
+    "sales_price": 132,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-ff-190-led-190mm-flexible-filament-1932",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": [
+      {
+        "id": 65,
+        "product_tmpl_id": [
+          1932,
+          "[SH-FF-190] LED- 190mm-Flexible Filament"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 99,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1933,
+    "sku": "SH-FF-300",
+    "name": "[SH-FF-300] LED- 300mm Flexible Filament (3V)",
+    "category": "LED",
+    "sales_price": 148,
+    "currency": "INR",
+    "qty_available": 99,
+    "uom": "Units",
+    "website_url": "/shop/sh-ff-300-led-300mm-flexible-filament-3v-1933",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": [
+      {
+        "id": 66,
+        "product_tmpl_id": [
+          1933,
+          "[SH-FF-300] LED- 300mm Flexible Filament (3V)"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 111,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1956,
+    "sku": "SH-FF-460",
+    "name": "[SH-FF-460] LED- 460MM FLEXIBLE FILAMENT (12V)",
+    "category": "",
+    "sales_price": 350,
+    "currency": "INR",
+    "qty_available": 20,
+    "uom": "Units",
+    "website_url": "/shop/sh-ff-460-led-460mm-flexible-filament-12v-1956",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1925,
+    "sku": "SH-FL-MC",
+    "name": "[SH-FL-MC] LED - Fairy Multi color",
+    "category": "",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-fl-mc-led-fairy-multi-color-1925",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1924,
+    "sku": "SH-FL-WW",
+    "name": "[SH-FL-WW] Fairy LED- Warm white",
+    "category": "",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "m",
+    "website_url": "/shop/sh-fl-ww-fairy-led-warm-white-1924",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 769,
+    "sku": "SH-FR-BTCR",
+    "name": "[SH-FR-BTCR] Fairy light (Bottle Cork)",
+    "category": "",
+    "sales_price": 34,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-fr-btcr-fairy-light-bottle-cork-769",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2003,
+    "sku": "SH-FR-BTCR",
+    "name": "[SH-FR-BTCR] Fairy light (Bottle Cork)",
+    "category": "",
+    "sales_price": 34,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-fr-btcr-fairy-light-bottle-cork-2003",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2129,
+    "sku": "SH-GLB-1",
+    "name": "[SH-GLB-1] GLOBE - Glass",
+    "category": "",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-glb-1-globe-glass-2129",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2014,
+    "sku": "SH-HLDR-2032",
+    "name": "[SH-HLDR-2032] HOLDER- 2032 with switch",
+    "category": "",
+    "sales_price": 55,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-hldr-2032-holder-2032-with-switch-2014",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1978,
+    "sku": "SH-HST",
+    "name": "[SH-HST] Heat Shrink Tube",
+    "category": "",
+    "sales_price": 15,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-hst-heat-shrink-tube-1978",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 754,
+    "sku": "SH-JST-WIRE",
+    "name": "[SH-JST-WIRE] JST(Dual) Wire (Custom Length)",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-jst-wire-jstdual-wire-custom-length-754",
+    "description_sale": "ADD-ON's",
+    "write_date": "2026-02-06 12:41:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 765,
+    "sku": "SH-JST-WIRE-S",
+    "name": "[SH-JST-WIRE-S] JST Wire - Single side Wire (Custom Length)",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 1270,
+    "uom": "Units",
+    "website_url": "/shop/sh-jst-wire-s-jst-wire-single-side-wire-custom-length-765",
+    "description_sale": "ADD-ON's",
+    "write_date": "2026-04-22 09:05:44",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2064,
+    "sku": "SH-LED-F-B",
+    "name": "[SH-LED-F-B] LED- Flame 3 inch",
+    "category": "",
+    "sales_price": 160,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-led-f-b-led-flame-3-inch-2064",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2063,
+    "sku": "SH-LED-F-S",
+    "name": "[SH-LED-F-S] LED- Flame 2 inch",
+    "category": "",
+    "sales_price": 140,
+    "currency": "INR",
+    "qty_available": 4,
+    "uom": "Units",
+    "website_url": "/shop/sh-led-f-s-led-flame-2-inch-2063",
+    "description_sale": "",
+    "write_date": "2026-01-16 12:53:58",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1974,
+    "sku": "SH-LED-HD",
+    "name": "[SH-LED-HD] HOLDER -  LED Head",
+    "category": "",
+    "sales_price": 115,
+    "currency": "INR",
+    "qty_available": 64,
+    "uom": "Units",
+    "website_url": "/shop/sh-led-hd-holder-led-head-1974",
+    "description_sale": "",
+    "write_date": "2026-01-27 10:55:44",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2092,
+    "sku": "SH-LNS-C",
+    "name": "[SH-LNS-C] Lens - Clear",
+    "category": "",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": -3373,
+    "uom": "Units",
+    "website_url": "/shop/35mm-led-cob-clear-lens-2092",
+    "description_sale": "",
+    "write_date": "2026-04-22 07:17:40",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2083,
+    "sku": "SH-LNS-F",
+    "name": "[SH-LNS-F] Lens - Frosted",
+    "category": "Add-Ons",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": 344,
+    "uom": "Units",
+    "website_url": "/shop/35mm-led-cob-frosted-lens-2083",
+    "description_sale": "",
+    "write_date": "2026-04-22 07:23:39",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1926,
+    "sku": "SH-LS-05",
+    "name": "[SH-LS-05] LED- 5W Strip Warm White",
+    "category": "",
+    "sales_price": 45,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-ls-05-led-5w-strip-warm-white-1926",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1937,
+    "sku": "SH-LS-12",
+    "name": "[SH-LS-12] LED - 12w Strip ",
+    "category": "",
+    "sales_price": 45,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-ls-12-led-12w-strip-1937",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1938,
+    "sku": "SH-LS-24",
+    "name": "[SH-LS-24] LED- 24w Strip",
+    "category": "",
+    "sales_price": 45,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-ls-24-led-24w-strip-1938",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 787,
+    "sku": "SH-MW-CSTM",
+    "name": "[SH-MW-CSTM] DRIVER - Meanwell (Custom)",
+    "category": "",
+    "sales_price": 823,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-cstm-driver-meanwell-custom-787",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2007,
+    "sku": "SH-MW-LD-243",
+    "name": "[SH-MW-LD-243] DRIVER - MEAN WELL 24V/3A",
+    "category": "",
+    "sales_price": 799,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-ld-243-driver-mean-well-24v3a-2007",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 771,
+    "sku": "SH-MW-LD-243",
+    "name": "[SH-MW-LD-243] DRIVER - MEAN WELL 24V/3A",
+    "category": "",
+    "sales_price": 799,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-ld-243-driver-mean-well-24v3a-771",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2042,
+    "sku": "SH-MW-RS-2512",
+    "name": "[SH-MW-RS-2512] DRIVER - Meanwell RS-25-12",
+    "category": "",
+    "sales_price": 823,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-rs-2512-driver-meanwell-rs-25-12-2042",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2049,
+    "sku": "SH-MW-RS-7512",
+    "name": "[SH-MW-RS-7512] DRIVER - Meanwell RS-75-12",
+    "category": "",
+    "sales_price": 1083,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-rs-7512-driver-meanwell-rs-75-12-2049",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2103,
+    "sku": "SH-MW-RS-812",
+    "name": "[SH-MW-RS-812] DRIVER - Meanwell RS-8-12",
+    "category": "",
+    "sales_price": 480,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-rs-812-driver-meanwell-rs-8-12-2103",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2120,
+    "sku": "SH-MW-RS-842",
+    "name": "[SH-MW-RS-842] DRIVER - Meanwell RS-8-24",
+    "category": "",
+    "sales_price": 480,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-mw-rs-842-driver-meanwell-rs-8-24-2120",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1927,
+    "sku": "SH-NC-8",
+    "name": "[SH-NC-8] LED - Neon Cover 8mm",
+    "category": "",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-nc-8-led-neon-cover-8mm-1927",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2110,
+    "sku": "SH-NUT-M2",
+    "name": "[SH-NUT-M2] NUT - M2 8mm",
+    "category": "Add-Ons",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 1000,
+    "uom": "Units",
+    "website_url": "/shop/sh-nut-m2-nut-m2-8mm-2110",
+    "description_sale": "",
+    "write_date": "2025-12-15 09:02:11",
+    "pricelist_rules": []
+  },
+  {
+    "id": 843,
+    "sku": "SH-NUT-M3",
+    "name": "[SH-NUT-M3] NUT - M3",
+    "category": "Add-Ons",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 817,
+    "uom": "Units",
+    "website_url": "/shop/sh-nut-m3-nut-m3-843",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1997,
+    "sku": "SH-NUT-M3",
+    "name": "[SH-NUT-M3] NUT - M3 (Yellow)",
+    "category": "Add-Ons",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 3557,
+    "uom": "Units",
+    "website_url": "/shop/sh-nut-m3-nut-m3-yellow-1997",
+    "description_sale": "",
+    "write_date": "2026-02-06 15:59:30",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1994,
+    "sku": "SH-NUT-M4",
+    "name": "[SH-NUT-M4] NUT - M4",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": -5865,
+    "uom": "Units",
+    "website_url": "/shop/sh-nut-m4-nut-m4-1994",
+    "description_sale": "",
+    "write_date": "2026-04-14 10:16:59",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2010,
+    "sku": "SH-P-11-CHRG",
+    "name": "[SH-P-11-CHRG] DOB- Power Board",
+    "category": "",
+    "sales_price": 99,
+    "currency": "INR",
+    "qty_available": 15,
+    "uom": "Units",
+    "website_url": "/shop/sh-p-11-chrg-dob-power-board-2010",
+    "description_sale": "",
+    "write_date": "2025-12-19 10:26:40",
+    "pricelist_rules": [
+      {
+        "id": 70,
+        "product_tmpl_id": [
+          2010,
+          "[SH-P-11-CHRG] DOB- Power Board"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 80,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 71,
+        "product_tmpl_id": [
+          2010,
+          "[SH-P-11-CHRG] DOB- Power Board"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 78,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 72,
+        "product_tmpl_id": [
+          2010,
+          "[SH-P-11-CHRG] DOB- Power Board"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 72,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 73,
+        "product_tmpl_id": [
+          2010,
+          "[SH-P-11-CHRG] DOB- Power Board"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 50,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2226,
+    "sku": "SH-PAD-12V-1A",
+    "name": "[SH-PAD-12V-1A] POWER ADAPTOR - AC/DC  12V/1A",
+    "category": "",
+    "sales_price": 465,
+    "currency": "INR",
+    "qty_available": -4,
+    "uom": "Units",
+    "website_url": "/shop/sh-pad-12v-1a-power-adaptor-acdc-12v1a-2226",
+    "description_sale": "",
+    "write_date": "2026-03-10 09:41:37",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2198,
+    "sku": "SH-PD-CHRG-01",
+    "name": "[SH-PD-CHRG-01] PD Charger",
+    "category": "",
+    "sales_price": 1000,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-pd-chrg-01-pd-charger-2198",
+    "description_sale": "",
+    "write_date": "2026-02-06 13:16:13",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2273,
+    "sku": "SH-PNL_L",
+    "name": "[SH-PNL_L] LED - Panel Light",
+    "category": "LED COBB",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/35mm-3w-single-color-led-cob-2273",
+    "description_sale": "",
+    "write_date": "2026-05-22 08:04:45",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2036,
+    "sku": "SH-PP-01",
+    "name": "[SH-PP-01] pogo",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-pp-01-pogo-2036",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 779,
+    "sku": "SH-PP-01",
+    "name": "[SH-PP-01] pogo",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-pp-01-pogo-779",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2059,
+    "sku": "SH-RE-RECH-3C",
+    "name": "[SH-RE-RECH-3C] Rechargeable 3 Color with remote",
+    "category": "",
+    "sales_price": 1999,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-re-rech-3c-rechargeable-3-color-with-remote-2059",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1930,
+    "sku": "SH-RF-26",
+    "name": "[SH-RF-26] LED- 26mm Rigid Filament",
+    "category": "",
+    "sales_price": 16,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-rf-26-led-26mm-rigid-filament-1930",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": [
+      {
+        "id": 63,
+        "product_tmpl_id": [
+          1930,
+          "[SH-RF-26] LED- 26mm Rigid Filament"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 12,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 1931,
+    "sku": "SH-RF-59",
+    "name": "[SH-RF-59] LED- 59mm Meteor Shower Filament (3V)",
+    "category": "LED",
+    "sales_price": 65,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/sh-rf-59-led-59mm-meteor-shower-filament-3v-1931",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": [
+      {
+        "id": 64,
+        "product_tmpl_id": [
+          1931,
+          "[SH-RF-59] LED- 59mm Meteor Shower Filament (3V)"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 25,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 842,
+    "sku": "SH-RG-6-MM",
+    "name": "[SH-RG-6-MM] Gromet (Rubber Gasket 6MM)",
+    "category": "Add-Ons",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 676,
+    "uom": "Units",
+    "website_url": "/shop/sh-rg-6-mm-gromet-rubber-gasket-6mm-842",
+    "description_sale": "",
+    "write_date": "2026-03-06 12:21:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2060,
+    "sku": "SH-RGB-PB",
+    "name": "[SH-RGB-PB] RGB Power Board",
+    "category": "",
+    "sales_price": 92,
+    "currency": "INR",
+    "qty_available": -256,
+    "uom": "Units",
+    "website_url": "/shop/sh-rgb-pb-rgb-power-board-2060",
+    "description_sale": "",
+    "write_date": "2026-02-24 16:14:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1995,
+    "sku": "SH-S-M3*10",
+    "name": "[SH-S-M3*10] SCREW - M3*10mm",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 390,
+    "uom": "Units",
+    "website_url": "/shop/sh-s-m310-screw-m310mm-1995",
+    "description_sale": "",
+    "write_date": "2025-12-27 12:49:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1996,
+    "sku": "SH-S-M3*10-ST",
+    "name": "[SH-S-M3*10-ST] SCREW - M3*10mm Self Thread",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-s-m310-st-screw-m310mm-self-thread-1996",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2028,
+    "sku": "SH-SLC-100",
+    "name": "[SH-SLC-100] Smart LED Controller",
+    "category": "",
+    "sales_price": 2000,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-slc-100-smart-led-controller-2028",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2234,
+    "sku": "SH-SPG-10",
+    "name": "[SH-SPG-10] Spiral Glow (10mm Rod)",
+    "category": "",
+    "sales_price": 499,
+    "currency": "INR",
+    "qty_available": -4,
+    "uom": "Unit",
+    "website_url": "/shop/sh-spg-10-spiral-glow-10mm-rod-2234",
+    "description_sale": "",
+    "write_date": "2026-03-19 11:36:03",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2233,
+    "sku": "SH-SS-18-MM",
+    "name": "[SH-SS-18-MM] Screw - SS M4 - 18mm",
+    "category": "Add-Ons",
+    "sales_price": 5,
+    "currency": "INR",
+    "qty_available": -7,
+    "uom": "Units",
+    "website_url": "/shop/sh-ss-18-mm-screw-ss-m4-18mm-2233",
+    "description_sale": "",
+    "write_date": "2026-03-19 07:55:49",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2242,
+    "sku": "SH-ST-COB-5V",
+    "name": "[SH-ST-COB-5V] COB LED STRIP - 5V",
+    "category": "",
+    "sales_price": 350,
+    "currency": "INR",
+    "qty_available": -2,
+    "uom": "m",
+    "website_url": "/shop/sh-st-cob-5v-cob-led-strip-5v-2242",
+    "description_sale": "",
+    "write_date": "2026-04-07 11:59:13",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2066,
+    "sku": "SH-STRP-120-LM",
+    "name": "[SH-STRP-120-LM] LED - Strip 120 LED/m",
+    "category": "",
+    "sales_price": 180,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "m",
+    "website_url": "/shop/sh-strp-120-lm-led-strip-120-ledm-2066",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2006,
+    "sku": "SH-STRP-264-LM",
+    "name": "[SH-STRP-264-LM] LED Strip 264 LED/m",
+    "category": "",
+    "sales_price": 1800,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "Units",
+    "website_url": "/shop/sh-strp-264-lm-led-strip-264-ledm-2006",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2101,
+    "sku": "SH-STRP-WW",
+    "name": "[SH-STRP-WW] LED Strip CW 120/m ",
+    "category": "",
+    "sales_price": 70,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-strp-ww-led-strip-cw-120m-2101",
+    "description_sale": "LED",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1976,
+    "sku": "SH-STRP-WW",
+    "name": "[SH-STRP-WW] LED Strip RGB",
+    "category": "",
+    "sales_price": 95,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-strp-ww-led-strip-rgb-1976",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 758,
+    "sku": "SH-STRP-WW",
+    "name": "[SH-STRP-WW] LED Strip WW 120/m",
+    "category": "",
+    "sales_price": 70,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-strp-ww-led-strip-ww-120m-758",
+    "description_sale": "LED",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2218,
+    "sku": "SH-SWT-PBS",
+    "name": "[SH-SWT-PBS] Push Button Switch",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-swt-pbs-push-button-switch-2218",
+    "description_sale": "",
+    "write_date": "2026-03-03 06:56:54",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2219,
+    "sku": "SH-SWT-RPB",
+    "name": "[SH-SWT-RPB] Round Push Button Switch",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-swt-rpb-round-push-button-switch-2219",
+    "description_sale": "",
+    "write_date": "2026-03-03 06:57:19",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2220,
+    "sku": "SH-SWT-RS",
+    "name": "[SH-SWT-RS] Rocker Switch",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-swt-rs-rocker-switch-2220",
+    "description_sale": "",
+    "write_date": "2026-03-03 07:00:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2221,
+    "sku": "SH-SWT-SPST",
+    "name": "[SH-SWT-SPST] Round Rocker SPST Switch (Round)",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 200,
+    "uom": "Units",
+    "website_url": "/shop/sh-swt-spst-round-rocker-spst-switch-round-2221",
+    "description_sale": "",
+    "write_date": "2026-03-03 07:00:23",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1979,
+    "sku": "SH-TMS-01",
+    "name": "[SH-TMS-01] Touch mirror switch",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-tms-01-touch-mirror-switch-1979",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1998,
+    "sku": "SH-TN-18-MM",
+    "name": "[SH-TN-18-MM] Brass Screw - M4 18mm (Thick Head)",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": -660,
+    "uom": "Units",
+    "website_url": "/shop/sh-tn-18-mm-brass-screw-m4-18mm-thick-head-1998",
+    "description_sale": "",
+    "write_date": "2026-04-24 11:36:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1958,
+    "sku": "SH-TN-22-MM",
+    "name": "[SH-TN-22-MM] Brass Nut - M4 22mm",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": -2834,
+    "uom": "Units",
+    "website_url": "/shop/sh-tn-22-mm-brass-nut-m4-22mm-1958",
+    "description_sale": "",
+    "write_date": "2026-04-09 10:58:31",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2094,
+    "sku": "SH-TN-23-MM",
+    "name": "[SH-TN-23-MM] Screw - Brass M3 - 23mm",
+    "category": "Add-Ons",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 159,
+    "uom": "Units",
+    "website_url": "/shop/sh-tn-23-mm-screw-brass-m3-23mm-2094",
+    "description_sale": "",
+    "write_date": "2026-02-09 09:42:43",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2062,
+    "sku": "SH-TOG-SW",
+    "name": "[SH-TOG-SW] Toggle Switch",
+    "category": "",
+    "sales_price": 12,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-tog-sw-toggle-switch-2062",
+    "description_sale": "",
+    "write_date": "2026-03-03 06:57:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 781,
+    "sku": "SH-U-CH-AD-1",
+    "name": "[SH-U-CH-AD-1] USB Adaptor/charger 5V/2A",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-u-ch-ad-1-usb-adaptorcharger-5v2a-781",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1977,
+    "sku": "SH-UL-WR",
+    "name": "[SH-UL-WR] U/L Wire (24 AWG)",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "m",
+    "website_url": "/shop/sh-ul-wr-ul-wire-24-awg-1977",
+    "description_sale": "",
+    "write_date": "2025-12-19 10:25:21",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2200,
+    "sku": "SH-USB-IN-SWTCH",
+    "name": "[SH-USB-IN-SWTCH] USB Cable With Inline Switch",
+    "category": "Add-Ons",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": 25,
+    "uom": "Units",
+    "website_url": "/shop/sh-usb-in-swtch-usb-cable-with-inline-switch-2200",
+    "description_sale": "",
+    "write_date": "2026-03-25 11:46:23",
+    "pricelist_rules": [
+      {
+        "id": 112,
+        "product_tmpl_id": [
+          2200,
+          "[SH-USB-IN-SWTCH] USB Cable With Inline Switch"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 55,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2230,
+    "sku": "SH-USB-JST-P-20",
+    "name": "[SH-USB-JST-P-20] USB-C with JST P2.0",
+    "category": "",
+    "sales_price": 12,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-usb-jst-p-20-usb-c-with-jst-p20-2230",
+    "description_sale": "",
+    "write_date": "2026-03-14 10:09:50",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2262,
+    "sku": "SH-USB-PM-PS-B",
+    "name": "[SH-USB-PM-PS-B] USB Panel Mount Connector Black Without Indicator (Pill Shaped Snapfit)",
+    "category": "Accessories",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-with-indicator-2262",
+    "description_sale": "",
+    "write_date": "2026-05-01 12:25:04",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2263,
+    "sku": "SH-USB-PM-PS-W",
+    "name": "[SH-USB-PM-PS-W] USB Panel Mount Connector White Without Indicator (Pill Shaped Snapfit)",
+    "category": "Accessories",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 4,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-with-indicator-2263",
+    "description_sale": "",
+    "write_date": "2026-05-01 12:23:02",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1991,
+    "sku": "SH-USB-PMC-B",
+    "name": "[SH-USB-PMC-B] USB Panel Mount Connector Black",
+    "category": "",
+    "sales_price": 45,
+    "currency": "INR",
+    "qty_available": 224,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-1991",
+    "description_sale": "",
+    "write_date": "2026-04-21 12:41:13",
+    "pricelist_rules": [
+      {
+        "id": 90,
+        "product_tmpl_id": [
+          1991,
+          "[SH-USB-PMC-B] USB Panel Mount Connector Black"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 45,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 101,
+        "product_tmpl_id": [
+          1991,
+          "[SH-USB-PMC-B] USB Panel Mount Connector Black"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 40,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 91,
+        "product_tmpl_id": [
+          1991,
+          "[SH-USB-PMC-B] USB Panel Mount Connector Black"
+        ],
+        "min_quantity": 5000,
+        "fixed_price": 35,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 839,
+    "sku": "SH-USB-PMC-B",
+    "name": "[SH-USB-PMC-B] USB Panel Mount Connector Black With Indicator",
+    "category": "Accessories",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": -2,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-with-indicator-839",
+    "description_sale": "",
+    "write_date": "2026-04-21 13:32:43",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2134,
+    "sku": "SH-USB-PMC-B-S",
+    "name": "[SH-USB-PMC-B-S] USB Panel Mount Connector Black (Snap Fit)",
+    "category": "Add-Ons",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 134,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-snap-fit-2134",
+    "description_sale": "",
+    "write_date": "2026-04-21 12:50:28",
+    "pricelist_rules": [
+      {
+        "id": 100,
+        "product_tmpl_id": [
+          2134,
+          "[SH-USB-PMC-B-S] USB Panel Mount Connector Black (Snap Fit)"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 40,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 99,
+        "product_tmpl_id": [
+          2134,
+          "[SH-USB-PMC-B-S] USB Panel Mount Connector Black (Snap Fit)"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 35,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 764,
+    "sku": "SH-WIRE",
+    "name": "[SH-WIRE] wire",
+    "category": "",
+    "sales_price": 4.5,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-wire-wire-764",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1993,
+    "sku": "SH-WIRE",
+    "name": "[SH-WIRE] wire",
+    "category": "",
+    "sales_price": 4.5,
+    "currency": "INR",
+    "qty_available": -2,
+    "uom": "Units",
+    "website_url": "/shop/sh-wire-wire-1993",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2197,
+    "sku": "SH-WL-CHRG-01",
+    "name": "[SH-WL-CHRG-01] Wireless Charger",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-wl-chrg-01-wireless-charger-2197",
+    "description_sale": "",
+    "write_date": "2026-02-06 13:13:53",
+    "pricelist_rules": []
+  },
+  {
+    "id": 750,
+    "sku": "USB-A/C-01W",
+    "name": "[USB-A/C-01W] USB-C Cable (A-C)",
+    "category": "",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": 109,
+    "uom": "Units",
+    "website_url": "/shop/usb-ac-01w-usb-c-cable-a-c-750",
+    "description_sale": "ADD-ON's",
+    "write_date": "2026-04-15 10:08:50",
+    "pricelist_rules": [
+      {
+        "id": 93,
+        "product_tmpl_id": [
+          750,
+          "[USB-A/C-01W] USB-C Cable (A-C)"
+        ],
+        "min_quantity": 60,
+        "fixed_price": 50,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2118,
+    "sku": "[SH-BAT-1800]",
+    "name": "[[SH-BAT-1800]] BATTERY - Li-Ion-18650-1800mAh (Sleeve)",
+    "category": "",
+    "sales_price": 75,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-1800-battery-li-ion-18650-1800mah-sleeve-2118",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:46:50",
+    "pricelist_rules": [
+      {
+        "id": 92,
+        "product_tmpl_id": [
+          2118,
+          "[[SH-BAT-1800]] BATTERY - Li-Ion-18650-1800mAh (Sleeve)"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 75,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2266,
+    "sku": "",
+    "name": "1.25m Waterproof LED Strips Assembly",
+    "category": "",
+    "sales_price": 310,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/125m-waterproof-led-strips-assembly-2266",
+    "description_sale": "",
+    "write_date": "2026-05-13 13:57:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2269,
+    "sku": "",
+    "name": "15mm Clear HST",
+    "category": "",
+    "sales_price": 20,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Meter",
+    "website_url": "/shop/15mm-clear-hst-2269",
+    "description_sale": "",
+    "write_date": "2026-05-13 14:14:29",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2206,
+    "sku": "",
+    "name": "2812",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/2812-2206",
+    "description_sale": "",
+    "write_date": "2026-02-06 16:33:13",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2270,
+    "sku": "",
+    "name": "2m Waterproof LED Strips Assembly",
+    "category": "",
+    "sales_price": 430,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/2m-waterproof-led-strips-assembly-2270",
+    "description_sale": "",
+    "write_date": "2026-05-18 06:39:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2160,
+    "sku": "",
+    "name": "3 Color DC Module with Cable",
+    "category": "LED",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/3-color-dc-module-with-cable-2160",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2126,
+    "sku": "",
+    "name": "3 Color Rechargeable Touch Module with 1200mAh Battery & USB to C Cable",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/3-color-rechargeable-touch-module-with-1200mah-battery-usb-to-c-cable-2126",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2205,
+    "sku": "",
+    "name": "3 Pin JST Wire P2.54",
+    "category": "",
+    "sales_price": 15,
+    "currency": "INR",
+    "qty_available": -320,
+    "uom": "Units",
+    "website_url": "/shop/3-pin-jst-wire-p254-2205",
+    "description_sale": "",
+    "write_date": "2026-02-28 13:23:02",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2203,
+    "sku": "",
+    "name": "3 Pin Toggle Switch Indian Make",
+    "category": "",
+    "sales_price": 20,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/3-pin-toggle-switch-indian-make-2203",
+    "description_sale": "",
+    "write_date": "2026-02-06 16:19:49",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2237,
+    "sku": "",
+    "name": "3.7V 10.4AH Li-ion Battery Pack",
+    "category": "",
+    "sales_price": 465,
+    "currency": "INR",
+    "qty_available": -5,
+    "uom": "Units",
+    "website_url": "/shop/37v-104ah-li-ion-battery-pack-2237",
+    "description_sale": "",
+    "write_date": "2026-04-15 14:29:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2238,
+    "sku": "",
+    "name": "3.7V 20.8AH Li-ion Battery Pack",
+    "category": "",
+    "sales_price": 875,
+    "currency": "INR",
+    "qty_available": -4,
+    "uom": "Units",
+    "website_url": "/shop/37v-208ah-li-ion-battery-pack-2238",
+    "description_sale": "",
+    "write_date": "2026-04-15 14:29:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2236,
+    "sku": "",
+    "name": "3.7V 7.8AH Li-ion Battery Pack",
+    "category": "",
+    "sales_price": 365,
+    "currency": "INR",
+    "qty_available": -6,
+    "uom": "Units",
+    "website_url": "/shop/37v-78ah-li-ion-battery-pack-2236",
+    "description_sale": "",
+    "write_date": "2026-03-26 07:34:29",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2167,
+    "sku": "",
+    "name": "3D Printed Model (Sampling)",
+    "category": "",
+    "sales_price": 9,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "g",
+    "website_url": "/shop/3d-printed-model-sampling-2167",
+    "description_sale": "",
+    "write_date": "2026-01-16 10:24:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2159,
+    "sku": "",
+    "name": "5V LED RGB PCB Board with IR 24key Remote",
+    "category": "LED",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "Units",
+    "website_url": "/shop/5v-led-rgb-pcb-board-with-ir-24key-remote-2159",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2179,
+    "sku": "",
+    "name": "AA Battery Holder",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/aa-battery-holder-2179",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:45:52",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2180,
+    "sku": "",
+    "name": "AAA Battery Holder",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/aaa-battery-holder-2180",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:45:59",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2104,
+    "sku": "",
+    "name": "ADD ON-  Acrylic 115mm",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 9,
+    "uom": "Units",
+    "website_url": "/shop/add-on-acrylic-115mm-2104",
+    "description_sale": "",
+    "write_date": "2025-12-19 10:28:16",
+    "pricelist_rules": []
+  },
+  {
+    "id": 820,
+    "sku": "",
+    "name": "ADD ON- Battery Wire",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/add-on-battery-wire-820",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2171,
+    "sku": "",
+    "name": "Acrylic Sheet Diffuser",
+    "category": "Add-Ons",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Inch",
+    "website_url": "/shop/acrylic-sheet-diffuser-2171",
+    "description_sale": "",
+    "write_date": "2026-02-03 11:40:23",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2175,
+    "sku": "",
+    "name": "BARE HOLDER - 18650 BATTERY HOLDER",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 1184,
+    "uom": "Units",
+    "website_url": "/shop/bare-holder-18650-battery-holder-2175",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:46:18",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2122,
+    "sku": "",
+    "name": "BATTERY - Li-Ion-18650-2000mAh (Sleeve) ",
+    "category": "",
+    "sales_price": 85,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/battery-li-ion-18650-2000mah-sleeve-2122",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:46:59",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2213,
+    "sku": "",
+    "name": "BATTERY - Li-Ion-5200mAh with BMS",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 20,
+    "uom": "Units",
+    "website_url": "/shop/dual-18650-5200mah-battery-pack-2213",
+    "description_sale": "",
+    "write_date": "2026-04-21 11:33:14",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2216,
+    "sku": "",
+    "name": "Battery (1200mAh Sleeve)+ 3 pin jst wire 560mm",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/battery-1200mah-sleeve-3-pin-jst-wire-560mm-2216",
+    "description_sale": "",
+    "write_date": "2026-02-26 08:49:54",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2136,
+    "sku": "",
+    "name": "Battery Patti Wire",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/battery-patti-wire-2136",
+    "description_sale": "",
+    "write_date": "2025-12-19 13:38:03",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2108,
+    "sku": "",
+    "name": "Bit 936/937",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/bit-936937-2108",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2085,
+    "sku": "",
+    "name": "Bond Solder Wire ROHS Led Free",
+    "category": "",
+    "sales_price": 5,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "g",
+    "website_url": "/shop/bond-solder-wire-rohs-led-free-2085",
+    "description_sale": "",
+    "write_date": "2026-01-09 11:54:49",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1,
+    "sku": "",
+    "name": "Booking Fees",
+    "category": "Services",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/booking-fees-1",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2098,
+    "sku": "",
+    "name": "Brass 20mm Threaded Pipe",
+    "category": "",
+    "sales_price": 20,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/brass-20mm-threaded-pipe-2098",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2227,
+    "sku": "",
+    "name": "Brass Finish 12mm Pipe",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": -1,
+    "uom": "Units",
+    "website_url": "/shop/brass-finish-12mm-pipe-2227",
+    "description_sale": "",
+    "write_date": "2026-03-19 11:25:05",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2181,
+    "sku": "",
+    "name": "Brass USB-C Sheet",
+    "category": "",
+    "sales_price": 18,
+    "currency": "INR",
+    "qty_available": 190,
+    "uom": "Units",
+    "website_url": "/shop/brass-usb-c-sheet-2181",
+    "description_sale": "",
+    "write_date": "2026-03-06 13:19:15",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2147,
+    "sku": "",
+    "name": "COB LED Strip 3mm 400 CHIP(12V,WW)",
+    "category": "LED",
+    "sales_price": 210,
+    "currency": "INR",
+    "qty_available": 23,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-3mm-400-chip12vww-2147",
+    "description_sale": "",
+    "write_date": "2026-04-22 08:52:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2145,
+    "sku": "",
+    "name": "COB LED Strip 5mm 400 CHIP(12V,WW)",
+    "category": "LED",
+    "sales_price": 200,
+    "currency": "INR",
+    "qty_available": 50,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-5mm-400-chip12vww-2145",
+    "description_sale": "",
+    "write_date": "2026-04-22 10:39:05",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2144,
+    "sku": "",
+    "name": "COB LED Strip 8mm 320 CHIP(12V,WW)",
+    "category": "LED",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 73,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-8mm-320-chip12vww-2144",
+    "description_sale": "",
+    "write_date": "2026-04-22 08:30:42",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2146,
+    "sku": "",
+    "name": "COB LED Strip 8mm 320 CHIP(24V,WW)",
+    "category": "LED",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 40,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-8mm-320-chip24vww-2146",
+    "description_sale": "",
+    "write_date": "2026-04-22 10:38:26",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2152,
+    "sku": "",
+    "name": "COB LED Strip CCT 10mm (12V)",
+    "category": "LED",
+    "sales_price": 365,
+    "currency": "INR",
+    "qty_available": 25,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-cct-10mm-12v-2152",
+    "description_sale": "",
+    "write_date": "2026-04-22 10:38:42",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2151,
+    "sku": "",
+    "name": "COB LED Strip CCT 10mm (24V)",
+    "category": "LED",
+    "sales_price": 365,
+    "currency": "INR",
+    "qty_available": 25,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-cct-10mm-24v-2151",
+    "description_sale": "",
+    "write_date": "2026-04-23 11:40:45",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2148,
+    "sku": "",
+    "name": "COB LED Strip RGB 10mm (24V)",
+    "category": "",
+    "sales_price": 400,
+    "currency": "INR",
+    "qty_available": 15,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-rgb-10mm-24v-2148",
+    "description_sale": "",
+    "write_date": "2026-04-22 09:43:19",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2150,
+    "sku": "",
+    "name": "COB LED Strip RGBCCT 12mm (24V)",
+    "category": "LED",
+    "sales_price": 700,
+    "currency": "INR",
+    "qty_available": 15,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-rgbcct-12mm-24v-2150",
+    "description_sale": "",
+    "write_date": "2026-04-23 11:51:03",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2149,
+    "sku": "",
+    "name": "COB LED Strip RGBCW 8mm (24V)",
+    "category": "LED",
+    "sales_price": 680,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "m",
+    "website_url": "/shop/cob-led-strip-rgbcw-8mm-24v-2149",
+    "description_sale": "",
+    "write_date": "2026-01-08 10:34:05",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2071,
+    "sku": "",
+    "name": "COMPONENT - 22NF Capacitor",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/component-22nf-capacitor-2071",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2224,
+    "sku": "",
+    "name": "Chaplin Portable Lamp",
+    "category": "Lamps",
+    "sales_price": 1300,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/chaplin-portable-lamp-2224",
+    "description_sale": "",
+    "write_date": "2026-03-06 09:46:45",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2169,
+    "sku": "",
+    "name": "Component P2.0 Connector",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/component-p20-connector-2169",
+    "description_sale": "",
+    "write_date": "2026-01-17 08:20:54",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2131,
+    "sku": "",
+    "name": "DRIVER- 204 STRIP LED DRIVER",
+    "category": "",
+    "sales_price": 255,
+    "currency": "INR",
+    "qty_available": -5,
+    "uom": "Units",
+    "website_url": "/shop/204-strip-led-driver-2131",
+    "description_sale": "",
+    "write_date": "2026-04-09 11:22:14",
+    "pricelist_rules": [
+      {
+        "id": 94,
+        "product_tmpl_id": [
+          2131,
+          "DRIVER- 204 STRIP LED DRIVER"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 255,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 95,
+        "product_tmpl_id": [
+          2131,
+          "DRIVER- 204 STRIP LED DRIVER"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 205,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 96,
+        "product_tmpl_id": [
+          2131,
+          "DRIVER- 204 STRIP LED DRIVER"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 168,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 97,
+        "product_tmpl_id": [
+          2131,
+          "DRIVER- 204 STRIP LED DRIVER"
+        ],
+        "min_quantity": 500,
+        "fixed_price": 130,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 98,
+        "product_tmpl_id": [
+          2131,
+          "DRIVER- 204 STRIP LED DRIVER"
+        ],
+        "min_quantity": 1000,
+        "fixed_price": 105,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2212,
+    "sku": "",
+    "name": "Diffuser 54mm",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/diffuser-54mm-2212",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:07:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2248,
+    "sku": "",
+    "name": "Duracell Li 1ct HSDC 2032 1X5 IN",
+    "category": "",
+    "sales_price": 80.5,
+    "currency": "INR",
+    "qty_available": -400,
+    "uom": "Units",
+    "website_url": "/shop/duracell-li-1ct-hsdc-2032-1x5-in-2248",
+    "description_sale": "",
+    "write_date": "2026-04-29 09:44:21",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2163,
+    "sku": "",
+    "name": "E27 LED COB Holder With Glass Attachment (Casting) - Brass Finish",
+    "category": "",
+    "sales_price": 110,
+    "currency": "INR",
+    "qty_available": 90,
+    "uom": "Units",
+    "website_url": "/shop/e27-led-cob-holder-with-glass-attachment-casting-brass-finish-2163",
+    "description_sale": "",
+    "write_date": "2026-01-22 13:56:57",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2139,
+    "sku": "",
+    "name": "E27 LED COB Holder With Glass Attachment (Casting) - Unfinished",
+    "category": "",
+    "sales_price": 110,
+    "currency": "INR",
+    "qty_available": 99,
+    "uom": "Units",
+    "website_url": "/shop/e27-led-cob-holder-with-glass-attachment-casting-unfinished-2139",
+    "description_sale": "",
+    "write_date": "2026-04-22 07:09:33",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2217,
+    "sku": "",
+    "name": "Enclosure (75mm DOB)",
+    "category": "",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/enclosure-75mm-dob-2217",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2165,
+    "sku": "",
+    "name": "Fairy LED- Warm white with Battery Box",
+    "category": "",
+    "sales_price": 125,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/fairy-led-warm-white-with-battery-box-2165",
+    "description_sale": "",
+    "write_date": "2026-04-08 09:42:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2166,
+    "sku": "",
+    "name": "Flame LED Rechargable Driver",
+    "category": "",
+    "sales_price": 135,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/flame-led-rechargable-driver-2166",
+    "description_sale": "",
+    "write_date": "2026-01-15 16:39:50",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2095,
+    "sku": "",
+    "name": "Gromet",
+    "category": "Add-Ons",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": -1128,
+    "uom": "Units",
+    "website_url": "/shop/gromet-2095",
+    "description_sale": "",
+    "write_date": "2026-04-06 14:41:18",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2127,
+    "sku": "",
+    "name": "Growhouse",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/growhouse-2127",
+    "description_sale": "",
+    "write_date": "2025-11-24 09:23:14",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2162,
+    "sku": "",
+    "name": "HOLDER - E27 LED COB With Shade Ring (Brass Finish)",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 89,
+    "uom": "Units",
+    "website_url": "/shop/e27-lamp-holder-35mm-led-cob-2162",
+    "description_sale": "",
+    "write_date": "2026-04-22 06:40:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2133,
+    "sku": "",
+    "name": "HOLDER - E27 LED COB With Shade Ring (Casting Unfinished)",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 54,
+    "uom": "Units",
+    "website_url": "/shop/holder-e27-led-cob-with-shade-ring-casting-unfinished-2133",
+    "description_sale": "",
+    "write_date": "2026-01-22 13:56:57",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2207,
+    "sku": "",
+    "name": "Hickey",
+    "category": "",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 2,
+    "uom": "Units",
+    "website_url": "/shop/hickey-2207",
+    "description_sale": "",
+    "write_date": "2026-02-07 09:42:24",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2114,
+    "sku": "",
+    "name": "Inline Switch ",
+    "category": "Accessories",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/inline-switch-2114",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2235,
+    "sku": "",
+    "name": "JST Dual 3 Pin P1.25",
+    "category": "",
+    "sales_price": 13,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/jst-dual-3-pin-p125-2235",
+    "description_sale": "",
+    "write_date": "2026-03-25 15:01:52",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2208,
+    "sku": "",
+    "name": "JST Dual 3 Pin P1.25- 22 inches",
+    "category": "Add-Ons",
+    "sales_price": 10,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/jst-dual-3-pin-p125-22-inches-2208",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:07:54",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2142,
+    "sku": "",
+    "name": "JST Wire - Dual 10cm (4\") ",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 100,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-10cm-4-2142",
+    "description_sale": "",
+    "write_date": "2026-02-13 07:12:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1969,
+    "sku": "",
+    "name": "JST Wire - Dual 15cm (6\")",
+    "category": "Add-Ons",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 551,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-15cm-6-1969",
+    "description_sale": "",
+    "write_date": "2026-02-16 09:39:05",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2087,
+    "sku": "",
+    "name": "JST Wire - Dual 20cm (8\")",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 148,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-20cm-8-2087",
+    "description_sale": "",
+    "write_date": "2026-02-05 09:02:33",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2091,
+    "sku": "",
+    "name": "JST Wire - Dual 30cm (12\")",
+    "category": "Add-Ons",
+    "sales_price": 12,
+    "currency": "INR",
+    "qty_available": -400,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-30cm-12-2091",
+    "description_sale": "",
+    "write_date": "2026-04-06 14:41:26",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2088,
+    "sku": "",
+    "name": "JST Wire - Dual 35cm (14\")",
+    "category": "",
+    "sales_price": 12,
+    "currency": "INR",
+    "qty_available": 221,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-35cm-14-2088",
+    "description_sale": "",
+    "write_date": "2026-03-06 12:12:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2089,
+    "sku": "",
+    "name": "JST Wire - Dual 40cm (16\")",
+    "category": "",
+    "sales_price": 15,
+    "currency": "INR",
+    "qty_available": 297,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-40cm-16-2089",
+    "description_sale": "",
+    "write_date": "2026-02-09 09:13:54",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2141,
+    "sku": "",
+    "name": "JST Wire - Dual 45cm (18\")",
+    "category": "",
+    "sales_price": 15,
+    "currency": "INR",
+    "qty_available": 55,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-45cm-18-2141",
+    "description_sale": "",
+    "write_date": "2026-02-05 09:54:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2090,
+    "sku": "",
+    "name": "JST Wire - Dual 50cm (20\")",
+    "category": "",
+    "sales_price": 15,
+    "currency": "INR",
+    "qty_available": 350,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-dual-50cm-20-2090",
+    "description_sale": "",
+    "write_date": "2026-03-17 10:07:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 1968,
+    "sku": "",
+    "name": "JST Wire - Dual Side (Custom Length)",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 70,
+    "uom": "Units",
+    "website_url": "/shop/ul-certified-dual-jst-wire-1968",
+    "description_sale": "",
+    "write_date": "2026-02-26 07:37:06",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2189,
+    "sku": "",
+    "name": "JST Wire - Dual Side (Custom Length) copy",
+    "category": "",
+    "sales_price": 2,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Inch",
+    "website_url": "/shop/jst-wire-dual-side-custom-length-copy-2189",
+    "description_sale": "",
+    "write_date": "2026-02-13 07:12:46",
+    "pricelist_rules": [
+      {
+        "id": 109,
+        "product_tmpl_id": [
+          2189,
+          "JST Wire - Dual Side (Custom Length) copy"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 2,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2173,
+    "sku": "",
+    "name": "JST Wire - Single side Wire 6 inch",
+    "category": "",
+    "sales_price": 8,
+    "currency": "INR",
+    "qty_available": 1047,
+    "uom": "Units",
+    "website_url": "/shop/jst-wire-single-side-wire-6-inch-2173",
+    "description_sale": "ADD-ON's",
+    "write_date": "2026-04-30 07:56:34",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2137,
+    "sku": "",
+    "name": "Jobwork",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/jobwork-2137",
+    "description_sale": "",
+    "write_date": "2025-12-19 08:52:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2210,
+    "sku": "",
+    "name": "KIT - Rechargeable 3 Colour Lamp Development (LC)",
+    "category": "",
+    "sales_price": 143,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/kit-rechargeable-3-colour-lamp-development-lc-2210",
+    "description_sale": "",
+    "write_date": "2026-02-13 07:24:37",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2143,
+    "sku": "",
+    "name": "LED - CREE COB 3W (12V) ",
+    "category": "",
+    "sales_price": 60,
+    "currency": "INR",
+    "qty_available": 18,
+    "uom": "Units",
+    "website_url": "/shop/cree-led-cob-3w-12v-2143",
+    "description_sale": "",
+    "write_date": "2026-04-21 06:52:23",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2130,
+    "sku": "",
+    "name": "LED Strip 240 LED/m",
+    "category": "",
+    "sales_price": 1800,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/led-strip-240-ledm-2130",
+    "description_sale": "",
+    "write_date": "2025-12-04 06:26:03",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2202,
+    "sku": "",
+    "name": "LED Strip Light RGB 2812",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 45,
+    "uom": "m",
+    "website_url": "/shop/led-strip-light-rgb-2812-2202",
+    "description_sale": "",
+    "write_date": "2026-02-06 16:14:22",
+    "pricelist_rules": []
+  },
+  {
+    "id": 819,
+    "sku": "",
+    "name": "Lug wire (10cm)",
+    "category": "",
+    "sales_price": 2,
+    "currency": "INR",
+    "qty_available": 498,
+    "uom": "Units",
+    "website_url": "/shop/lug-wire-10cm-819",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:08:20",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2255,
+    "sku": "",
+    "name": "Lug wire (12.5cm)",
+    "category": "",
+    "sales_price": 4,
+    "currency": "INR",
+    "qty_available": 4700,
+    "uom": "Units",
+    "website_url": "/shop/lug-wire-125cm-2255",
+    "description_sale": "",
+    "write_date": "2026-04-30 07:52:14",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2225,
+    "sku": "",
+    "name": "Lug wire (15cm)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 632,
+    "uom": "Units",
+    "website_url": "/shop/lug-wire-15cm-2225",
+    "description_sale": "",
+    "write_date": "2026-03-06 12:12:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2228,
+    "sku": "",
+    "name": "Lug wire (20cm)",
+    "category": "",
+    "sales_price": 2,
+    "currency": "INR",
+    "qty_available": 772,
+    "uom": "Units",
+    "website_url": "/shop/lug-wire-20cm-2228",
+    "description_sale": "",
+    "write_date": "2026-03-17 10:07:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2261,
+    "sku": "",
+    "name": "Lug wire (Custom)",
+    "category": "",
+    "sales_price": 5,
+    "currency": "INR",
+    "qty_available": -40,
+    "uom": "Units",
+    "website_url": "/shop/lug-wire-custom-2261",
+    "description_sale": "",
+    "write_date": "2026-04-23 07:47:17",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2256,
+    "sku": "",
+    "name": "MCPCB 3W",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/mcpcb-3w-2256",
+    "description_sale": "",
+    "write_date": "2026-04-21 05:21:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2097,
+    "sku": "",
+    "name": "Metal - Crown Hat ",
+    "category": "Metal Parts",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 200,
+    "uom": "Units",
+    "website_url": "/shop/metal-crown-hat-2097",
+    "description_sale": "",
+    "write_date": "2025-12-19 10:24:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2164,
+    "sku": "",
+    "name": "Metal Base 100mm-Dia Brass Finish",
+    "category": "",
+    "sales_price": 250,
+    "currency": "INR",
+    "qty_available": 65,
+    "uom": "Units",
+    "website_url": "/shop/metal-base-100mm-dia-brass-finish-2164",
+    "description_sale": "",
+    "write_date": "2026-01-22 13:56:57",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2193,
+    "sku": "",
+    "name": "Metal End Cap Cylindrical (Black)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/metal-end-cap-cylindrical-black-2193",
+    "description_sale": "",
+    "write_date": "2026-02-06 07:33:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2192,
+    "sku": "",
+    "name": "Metal End Cap Cylindrical (Brass Finish)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/metal-end-cap-cylindrical-brass-finish-2192",
+    "description_sale": "",
+    "write_date": "2026-02-06 07:33:28",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2191,
+    "sku": "",
+    "name": "Metal End Cap Round (Black)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/metal-end-cap-round-black-2191",
+    "description_sale": "",
+    "write_date": "2026-02-06 07:34:28",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2190,
+    "sku": "",
+    "name": "Metal End Cap Round (Brass Finish)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/metal-end-cap-round-brass-finish-2190",
+    "description_sale": "",
+    "write_date": "2026-02-06 07:36:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2222,
+    "sku": "",
+    "name": "Mykonos Portable Lamp",
+    "category": "Lamps",
+    "sales_price": 1300,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/mykonos-portable-lamp-2222",
+    "description_sale": "",
+    "write_date": "2026-03-06 09:45:27",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2257,
+    "sku": "",
+    "name": "NSRC",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/nsrc-2257",
+    "description_sale": "",
+    "write_date": "2026-04-21 05:34:05",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2244,
+    "sku": "",
+    "name": "PCB with FR4, 1.2mm, 35Micron, OSP Finish",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/pcb-with-fr4-12mm-35micron-osp-finish-2244",
+    "description_sale": "",
+    "write_date": "2026-04-08 08:27:25",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2241,
+    "sku": "",
+    "name": "POWER ADAPTOR - AC/DC  24V/1A",
+    "category": "",
+    "sales_price": 500,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/power-adaptor-acdc-24v1a-2241",
+    "description_sale": "",
+    "write_date": "2026-04-07 08:39:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2223,
+    "sku": "",
+    "name": "Paros Portable Lamp",
+    "category": "Lamps",
+    "sales_price": 1300,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/paros-portable-lamp-2223",
+    "description_sale": "",
+    "write_date": "2026-03-06 09:46:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2271,
+    "sku": "",
+    "name": "Power Cord With Inline Switch 2 Pin 2Core EU Offwhite 3 Mtr Selv Power Adaptor, Connector(Removable) 1.25 Mtr Led Rope Light(warm white)",
+    "category": "",
+    "sales_price": 560,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/power-cord-with-inline-switch-2-pin-2core-eu-offwhite-3-mtr-selv-power-adaptor-connectorremovable-125-mtr-led-rope-lightwarm-white-2271",
+    "description_sale": "",
+    "write_date": "2026-05-22 06:05:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2272,
+    "sku": "",
+    "name": "Power Cord With Inline Switch 2 Pin 2Core EU Offwhite 3 Mtr Selv Power Adaptor, Connector(Removable) 2 Mtr Led Rope Light(warm white)",
+    "category": "",
+    "sales_price": 680,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/power-cord-with-inline-switch-2-pin-2core-eu-offwhite-3-mtr-selv-power-adaptor-connectorremovable-2-mtr-led-rope-lightwarm-white-2272",
+    "description_sale": "",
+    "write_date": "2026-05-22 06:07:06",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2161,
+    "sku": "",
+    "name": "RGB DC Module with Cable & IR Remote",
+    "category": "LED",
+    "sales_price": 200,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/rgb-dc-module-with-cable-ir-remote-2161",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2258,
+    "sku": "",
+    "name": "SH COB-3W",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-3w-2258",
+    "description_sale": "",
+    "write_date": "2026-04-21 05:46:49",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2245,
+    "sku": "",
+    "name": "SH-DOB-12-DLD - SH06F24-0090",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dob-12-dld-sh06f24-0090-2245",
+    "description_sale": "",
+    "write_date": "2026-04-08 08:33:07",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2246,
+    "sku": "",
+    "name": "SH-DOB-21-DLD",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dob-21-dld-2246",
+    "description_sale": "",
+    "write_date": "2026-04-14 07:19:38",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2204,
+    "sku": "",
+    "name": "SP621 RGB Bluetooth Controller",
+    "category": "",
+    "sales_price": 150,
+    "currency": "INR",
+    "qty_available": 691,
+    "uom": "Units",
+    "website_url": "/shop/sp621-rgb-bluetooth-controller-2204",
+    "description_sale": "",
+    "write_date": "2026-02-24 16:12:31",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2187,
+    "sku": "",
+    "name": "Shipping Charge",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/shipping-charge-2187",
+    "description_sale": "",
+    "write_date": "2026-02-03 10:37:22",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2084,
+    "sku": "",
+    "name": "Siron Soldering Iron 30W",
+    "category": "Tools",
+    "sales_price": 350,
+    "currency": "INR",
+    "qty_available": 1,
+    "uom": "Units",
+    "website_url": "/shop/siron-soldering-iron-30w-2084",
+    "description_sale": "",
+    "write_date": "2026-01-09 11:56:00",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2243,
+    "sku": "",
+    "name": "SmartLife WiFi LED Controller (CCT)",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/smartlife-wifi-led-controller-cct-2243",
+    "description_sale": "",
+    "write_date": "2026-04-08 08:07:59",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2267,
+    "sku": "",
+    "name": "String Lights (20 Leds) 2M CE",
+    "category": "",
+    "sales_price": 58,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/string-lights-20-leds-2m-ce-2267",
+    "description_sale": "",
+    "write_date": "2026-05-13 14:09:59",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2268,
+    "sku": "",
+    "name": "Tea Light (White) CE",
+    "category": "",
+    "sales_price": 35,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/tea-light-white-ce-2268",
+    "description_sale": "",
+    "write_date": "2026-05-13 14:08:12",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2247,
+    "sku": "",
+    "name": "Tooling Charges",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/tooling-charges-2247",
+    "description_sale": "",
+    "write_date": "2026-04-14 07:51:31",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2259,
+    "sku": "",
+    "name": "Touch Screw (SS)",
+    "category": "",
+    "sales_price": 5,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/touch-screw-ss-2259",
+    "description_sale": "",
+    "write_date": "2026-04-21 13:40:30",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2138,
+    "sku": "",
+    "name": "Touch Sensor (Gold Finish)",
+    "category": "Add-Ons",
+    "sales_price": 18,
+    "currency": "INR",
+    "qty_available": 1442,
+    "uom": "Units",
+    "website_url": "/shop/led-touch-sensor-wire-2138",
+    "description_sale": "",
+    "write_date": "2026-02-26 07:44:13",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2153,
+    "sku": "",
+    "name": "Touch Sensor Plastic Nut",
+    "category": "Add-Ons",
+    "sales_price": 7,
+    "currency": "INR",
+    "qty_available": 446,
+    "uom": "Units",
+    "website_url": "/shop/touch-sensor-plastic-nut-2153",
+    "description_sale": "",
+    "write_date": "2026-01-31 07:29:26",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2254,
+    "sku": "",
+    "name": "UL 10161 28 AWG",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "meter",
+    "website_url": "/shop/ul-10161-28-awg-2254",
+    "description_sale": "",
+    "write_date": "2026-04-13 07:13:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2253,
+    "sku": "",
+    "name": "UL 1061 24 AWG",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "meter",
+    "website_url": "/shop/ul-1061-24-awg-2253",
+    "description_sale": "",
+    "write_date": "2026-04-13 07:13:35",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2201,
+    "sku": "",
+    "name": "USB A+C Panel Mount",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 50,
+    "uom": "Units",
+    "website_url": "/shop/usb-ac-panel-mount-2201",
+    "description_sale": "",
+    "write_date": "2026-02-06 15:56:41",
+    "pricelist_rules": [
+      {
+        "id": 113,
+        "product_tmpl_id": [
+          2201,
+          "USB A+C Panel Mount"
+        ],
+        "min_quantity": 100,
+        "fixed_price": 90,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2116,
+    "sku": "",
+    "name": "USB Cable CtoC (UL)",
+    "category": "Add-Ons",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 100,
+    "uom": "Units",
+    "website_url": "/shop/usb-cable-ctoc-ul-2116",
+    "description_sale": "",
+    "write_date": "2026-01-27 07:18:08",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2195,
+    "sku": "",
+    "name": "USB Panel Mount Connector Transparent",
+    "category": "",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 274,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-transparent-2195",
+    "description_sale": "",
+    "write_date": "2026-02-06 15:56:41",
+    "pricelist_rules": [
+      {
+        "id": 111,
+        "product_tmpl_id": [
+          2195,
+          "USB Panel Mount Connector Transparent"
+        ],
+        "min_quantity": 0,
+        "fixed_price": 45,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      },
+      {
+        "id": 110,
+        "product_tmpl_id": [
+          2195,
+          "USB Panel Mount Connector Transparent"
+        ],
+        "min_quantity": 50,
+        "fixed_price": 40,
+        "percent_price": 0,
+        "compute_price": "fixed",
+        "pricelist_id": [
+          1,
+          "Default (INR)"
+        ],
+        "currency_id": [
+          20,
+          "INR"
+        ],
+        "date_start": false,
+        "date_end": false
+      }
+    ]
+  },
+  {
+    "id": 2199,
+    "sku": "",
+    "name": "USB Panel Mount Connector White",
+    "category": "",
+    "sales_price": 40,
+    "currency": "INR",
+    "qty_available": 499,
+    "uom": "Units",
+    "website_url": "/shop/usb-panel-mount-connector-white-2199",
+    "description_sale": "",
+    "write_date": "2026-02-06 15:56:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2172,
+    "sku": "",
+    "name": "USB-C Cable Generic (A-C)",
+    "category": "Add-Ons",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": 302,
+    "uom": "Units",
+    "website_url": "/shop/usb-c-cable-generic-a-c-2172",
+    "description_sale": "",
+    "write_date": "2026-01-23 10:51:22",
+    "pricelist_rules": []
+  },
+  {
+    "id": 833,
+    "sku": "",
+    "name": "Wooden Geometrical Cone",
+    "category": "Wooden Parts",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-geometrical-cone-833",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 831,
+    "sku": "",
+    "name": "Wooden Geometrical Diamond",
+    "category": "Wooden Parts",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-geometrical-diamond-831",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 828,
+    "sku": "",
+    "name": "Wooden Geometrical Disc",
+    "category": "Wooden Parts",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-geometrical-disc-828",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 832,
+    "sku": "",
+    "name": "Wooden Geometrical Sphere",
+    "category": "Wooden Parts",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-geometrical-sphere-832",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 822,
+    "sku": "",
+    "name": "Wooden Mushroom Base (Large)",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-mushroom-base-large-822",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 835,
+    "sku": "",
+    "name": "Wooden Mushroom Head (Large)",
+    "category": "Wooden heads",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-mushroom-head-large-835",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 823,
+    "sku": "",
+    "name": "Wooden Mushroom Head (Medium)",
+    "category": "Wooden heads",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-mushroom-head-medium-823",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 827,
+    "sku": "",
+    "name": "Wooden Ribbed Cylinder",
+    "category": "Wooden Bases",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/wooden-ribbed-cylinder-827",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2123,
+    "sku": "",
+    "name": "[AS-B-202-DLD-LC] DRIVER - 202 LC  Rechargeable 3 Color",
+    "category": "",
+    "sales_price": 69,
+    "currency": "INR",
+    "qty_available": -20,
+    "uom": "Units",
+    "website_url": "/shop/rechargeable-3-color-led-driver-lc-2123",
+    "description_sale": "",
+    "write_date": "2026-05-07 06:08:03",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2186,
+    "sku": "",
+    "name": "[AS-B-202-DLD-LC] LED - 202 LC  Rechargeable 3 Color",
+    "category": "",
+    "sales_price": 69,
+    "currency": "INR",
+    "qty_available": 215,
+    "uom": "Units",
+    "website_url": "/shop/as-b-202-dld-lc-led-202-lc-rechargeable-3-color-2186",
+    "description_sale": "",
+    "write_date": "2026-02-03 09:39:26",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2231,
+    "sku": "",
+    "name": "[SH-BAT-1200] BATTERY - Li-Ion-18650-1200mAh (Sleeve) With BMS",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-1200-battery-li-ion-18650-1200mah-sleeve-with-bms-2231",
+    "description_sale": "",
+    "write_date": "2026-03-17 10:03:47",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2232,
+    "sku": "",
+    "name": "[SH-BAT-26S] BATTERY - Li-Ion-18650-2600mAh With Sleeve (With BMS)",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-bat-26s-battery-li-ion-18650-2600mah-with-sleeve-with-bms-2232",
+    "description_sale": "",
+    "write_date": "2026-03-17 10:03:47",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2183,
+    "sku": "",
+    "name": "[SH-COB-2W-35] LED - 2W 35mm",
+    "category": "",
+    "sales_price": 25,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "Units",
+    "website_url": "/shop/sh-cob-2w-35-led-2w-35mm-2183",
+    "description_sale": "",
+    "write_date": "2026-04-21 13:38:25",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2168,
+    "sku": "",
+    "name": "[SH-DVLP-SVC-01] Smart Handicrafts Development Sampling",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/sh-dvlp-svc-01-smart-handicrafts-development-sampling-2168",
+    "description_sale": "",
+    "write_date": "2026-05-13 13:33:02",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2140,
+    "sku": "",
+    "name": "[SH-E27-RIN-CAST] Shade Ring - E27 LED COB (Casting Unfinished)",
+    "category": "",
+    "sales_price": 30,
+    "currency": "INR",
+    "qty_available": 21,
+    "uom": "Units",
+    "website_url": "/shop/sh-e27-rin-cast-shade-ring-e27-led-cob-casting-unfinished-2140",
+    "description_sale": "",
+    "write_date": "2025-12-24 10:09:31",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2155,
+    "sku": "",
+    "name": "[SH-FF-1200] LED- 1200mm Flexible Filament (24V)",
+    "category": "LED",
+    "sales_price": 1200,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "Units",
+    "website_url": "/shop/sh-ff-1200-led-1200mm-flexible-filament-24v-2155",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2154,
+    "sku": "",
+    "name": "[SH-FF-600] LED- 600mm Flexible Filament (24V)",
+    "category": "LED",
+    "sales_price": 600,
+    "currency": "INR",
+    "qty_available": 5,
+    "uom": "Units",
+    "website_url": "/shop/sh-ff-600-led-600mm-flexible-filament-24v-2154",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2157,
+    "sku": "",
+    "name": "[SH-RF-40] LED- 40mm Meteor Shower Filament (3V)",
+    "category": "LED",
+    "sales_price": 65,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/sh-rf-40-led-40mm-meteor-shower-filament-3v-2157",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2158,
+    "sku": "",
+    "name": "[SH-RF-40] LED- 40mm Red Meteor Shower Filament (3V)",
+    "category": "LED",
+    "sales_price": 65,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/sh-rf-40-led-40mm-red-meteor-shower-filament-3v-2158",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2156,
+    "sku": "",
+    "name": "[SH-RF-59] LED- 59mm Red Meteor Shower Filament (3V)",
+    "category": "LED",
+    "sales_price": 65,
+    "currency": "INR",
+    "qty_available": 10,
+    "uom": "Units",
+    "website_url": "/shop/sh-rf-59-led-59mm-red-meteor-shower-filament-3v-2156",
+    "description_sale": "",
+    "write_date": "2026-01-08 11:14:56",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2125,
+    "sku": "",
+    "name": "[USB-A/C-01W] USB-C Cable U\\L",
+    "category": "",
+    "sales_price": 50,
+    "currency": "INR",
+    "qty_available": -7465,
+    "uom": "Units",
+    "website_url": "/shop/usb-ac-01w-usb-c-cable-ul-2125",
+    "description_sale": "",
+    "write_date": "2026-04-15 10:08:43",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2176,
+    "sku": "",
+    "name": "[USB-C/C-01W] USB-C Cable (C-C)",
+    "category": "",
+    "sales_price": 100,
+    "currency": "INR",
+    "qty_available": 6,
+    "uom": "Units",
+    "website_url": "/shop/usb-cc-01w-usb-c-cable-c-c-2176",
+    "description_sale": "",
+    "write_date": "2026-02-07 13:20:41",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2265,
+    "sku": "",
+    "name": "check ring",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/check-ring-2265",
+    "description_sale": "",
+    "write_date": "2026-05-07 10:11:16",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2105,
+    "sku": "",
+    "name": "discount",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/discount-2105",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2196,
+    "sku": "",
+    "name": "jst",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/jst-2196",
+    "description_sale": "",
+    "write_date": "2026-02-06 12:40:06",
+    "pricelist_rules": []
+  },
+  {
+    "id": 795,
+    "sku": "",
+    "name": "led",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/led-795",
+    "description_sale": "",
+    "write_date": "2025-11-15 09:03:55",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2188,
+    "sku": "",
+    "name": "led -",
+    "category": "",
+    "sales_price": 1,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/led-2188",
+    "description_sale": "",
+    "write_date": "2026-02-04 07:00:11",
+    "pricelist_rules": []
+  },
+  {
+    "id": 796,
+    "sku": "",
+    "name": "led 3 watt",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/led-3-watt-796",
+    "description_sale": "",
+    "write_date": "2026-01-28 09:56:48",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2229,
+    "sku": "",
+    "name": "panel mount",
+    "category": "",
+    "sales_price": 12,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/panel-mount-2229",
+    "description_sale": "",
+    "write_date": "2026-03-14 10:02:18",
+    "pricelist_rules": []
+  },
+  {
+    "id": 2260,
+    "sku": "",
+    "name": "thick\\",
+    "category": "",
+    "sales_price": 0,
+    "currency": "INR",
+    "qty_available": 0,
+    "uom": "Units",
+    "website_url": "/shop/thick-2260",
+    "description_sale": "",
+    "write_date": "2026-04-22 06:28:58",
+    "pricelist_rules": []
+  }
+]
