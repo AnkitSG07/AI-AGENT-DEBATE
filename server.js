@@ -97,6 +97,13 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 const AI_MODEL_TIMEOUT_MS = Math.max(3000, Number(process.env.AI_MODEL_TIMEOUT_MS || 8000));
 const AI_MODEL_OPENROUTER_TIMEOUT_MS = Math.max(3000, Number(process.env.AI_MODEL_OPENROUTER_TIMEOUT_MS || 8000));
 const AI_MODE_FAST_LOCAL_FIRST = String(process.env.AI_MODE_FAST_LOCAL_FIRST || "true").toLowerCase() !== "false";
+// Stability mode: keep the silent interpreter OFF by default. It was costing one extra
+// Gemini call per WhatsApp message and causing timeout -> heuristic -> bad old-context replies.
+// Turn it on only when you specifically need AI to reinterpret complex long chats.
+const AI_MODE_USE_MODEL_INTERPRETER = String(process.env.AI_MODE_USE_MODEL_INTERPRETER || "false").toLowerCase() === "true";
+const AI_MODE_RETRY_GEMINI_ON_TIMEOUT = String(process.env.AI_MODE_RETRY_GEMINI_ON_TIMEOUT || "true").toLowerCase() !== "false";
+const AI_MODE_GEMINI_RETRY_COUNT = Math.max(0, Number(process.env.AI_MODE_GEMINI_RETRY_COUNT || 1));
+const AI_MODE_SAFE_MODEL_FAILURE_FALLBACK = String(process.env.AI_MODE_SAFE_MODEL_FAILURE_FALLBACK || "true").toLowerCase() !== "false";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
 const AGENT_C_MODEL = process.env.OR_MODEL_GEMMA || process.env.OR_MODEL_MISTRAL || "google/gemma-3-4b-it";
 const PRODUCT_BOT_OR_MODEL = process.env.OR_MODEL_PRODUCT_BOT || process.env.OR_MODEL_GEMMA || AGENT_C_MODEL;
@@ -104,6 +111,11 @@ const AGENT_A_OR_MODEL = process.env.OR_MODEL_AGENT_A || process.env.OR_MODEL_DE
 const JUDGE_OR_MODEL = process.env.OR_MODEL_JUDGE || process.env.OR_MODEL_DEBATE_JUDGE || PRODUCT_BOT_OR_MODEL;
 
 const PRODUCT_KNOWLEDGE_PATH = process.env.PRODUCT_KNOWLEDGE_PATH || "./product-knowledge.md";
+const ODOO_PRODUCT_PRICELIST_EXPORT_PATH =
+  process.env.ODOO_PRODUCT_PRICELIST_EXPORT_PATH ||
+  process.env.PRODUCT_PRICELIST_EXPORT_PATH ||
+  "./odoo-product-pricelist-export.json";
+const GST_RATE = Number(process.env.SMART_HANDICRAFTS_GST_RATE || 18);
 const PRODUCT_BOT_FALLBACK_CONTEXT = process.env.PRODUCT_BOT_CONTEXT || "";
 
 // Dedicated Smart Handicrafts physical integration knowledge for the Kit Expert.
@@ -1118,6 +1130,10 @@ function withTimeout(promise, ms, label = "operation") {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function aiModeSleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
 async function callGemini(system, prompt, debateText) {
   if (!genAI) throw new Error("Gemini is not configured (missing GEMINI_API_KEY).");
   const fullPrompt =
@@ -1150,7 +1166,31 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
       };
     } catch (e) {
       geminiError = e;
-      if (!OPENROUTER_API_KEY || !isRateLimitOrQuotaError(e)) throw e;
+      const fallbackWorthy = isRateLimitOrQuotaError(e);
+      if (!fallbackWorthy) throw e;
+
+      // Retry Gemini once for temporary timeout/high-demand errors before provider fallback.
+      // This avoids jumping to broken local heuristics when Gemini only had a temporary slow call.
+      if (AI_MODE_RETRY_GEMINI_ON_TIMEOUT && AI_MODE_GEMINI_RETRY_COUNT > 0) {
+        for (let attempt = 1; attempt <= AI_MODE_GEMINI_RETRY_COUNT; attempt += 1) {
+          try {
+            await aiModeSleep(500 * attempt);
+            console.warn(`Retrying Gemini after temporary failure. Attempt ${attempt}/${AI_MODE_GEMINI_RETRY_COUNT}:`, e?.message || e);
+            const text = await callGemini(system, prompt, debateText);
+            return {
+              text,
+              provider: "gemini_retry",
+              model_used: GEMINI_MODEL,
+              fallback_from: GEMINI_MODEL
+            };
+          } catch (retryErr) {
+            geminiError = retryErr;
+            console.warn("Gemini retry failed:", retryErr?.message || retryErr);
+          }
+        }
+      }
+
+      if (!OPENROUTER_API_KEY) throw geminiError || e;
     }
   }
 
@@ -1258,7 +1298,13 @@ function isRateLimitOrQuotaError(err) {
     text.includes("overloaded") ||
     text.includes("temporarily") ||
     text.includes("deadline exceeded") ||
-    text.includes("internal")
+    text.includes("internal") ||
+    text.includes("timed out") ||
+    text.includes("timeout") ||
+    text.includes("abort") ||
+    text.includes("aborted") ||
+    text.includes("network") ||
+    text.includes("fetch failed")
   );
 }
 
@@ -1579,6 +1625,13 @@ const productKnowledgeCache = {
   embedError: null,
   skuCatalog: [],
   pricingCatalog: new Map()
+};
+
+const odooPricelistExportCache = {
+  loadedAt: 0,
+  raw: "",
+  products: [],
+  error: null
 };
 
 const kitIntegrationKnowledgeCache = {
@@ -15845,6 +15898,24 @@ async function aiModeInterpretConversationContext({ history = [], latestMessage 
   // Fast deterministic fallback for empty/short service cases.
   if (!latestMessage || !String(latestMessage).trim()) return fallback;
 
+  // Stability fix: do not spend one Gemini call on the silent interpreter by default.
+  // If the final reply model is already enough, this saves 8-16 seconds and prevents
+  // timeout-driven stale heuristic context from becoming a customer reply.
+  if (!AI_MODE_USE_MODEL_INTERPRETER) {
+    return aiModeNormalizeContextObject({
+      latest_customer_message: latestMessage,
+      latest_customer_intent: heuristicProfile?.customer_intent || "answer_latest_message_directly",
+      conversation_type: heuristicProfile?.conversation_type || fallback?.conversation_type || "product_enquiry",
+      conversation_stage: heuristicProfile?.conversation_stage || fallback?.conversation_stage || "collecting",
+      confirmed_facts: heuristicProfile || {},
+      detected_products: heuristicProfile?.detected_products || [],
+      likely_driver: heuristicProfile?.likely_driver || "",
+      likely_led: heuristicProfile?.likely_led || "",
+      next_best_action: heuristicProfile?.next_best_action || "answer_latest_message_directly",
+      confidence: 0.65
+    }, heuristicProfile, previousContext);
+  }
+
   try {
     const prompt = aiModeBuildInterpreterPrompt({
       latestMessage,
@@ -16138,6 +16209,215 @@ function aiModeBroadNewProductReply(message = "") {
 }
 
 
+
+function shNormalizePriceNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const text = String(value ?? "").replace(/[,₹\s]/g, "").trim();
+  if (!text) return null;
+  const num = Number(text);
+  return Number.isFinite(num) ? num : null;
+}
+
+function shFormatRupee(value) {
+  const num = Number(value || 0);
+  const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
+  return `₹${rounded.toLocaleString("en-IN", { maximumFractionDigits: Number.isInteger(rounded) ? 0 : 2 })}`;
+}
+
+function shTextFromAny(value, max = 4000) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value).slice(0, max);
+  if (Array.isArray(value)) return value.map((x) => shTextFromAny(x, 300)).join(" ").slice(0, max);
+  if (typeof value === "object") {
+    return Object.entries(value)
+      .filter(([k]) => !/image|avatar|thumbnail|description_sale|description_purchase|html/i.test(k))
+      .map(([k, v]) => `${k}: ${shTextFromAny(v, 300)}`)
+      .join(" ")
+      .slice(0, max);
+  }
+  return "";
+}
+
+function shExtractProductRowsFromAnyJson(node, out = []) {
+  if (!node || out.length > 20000) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) shExtractProductRowsFromAnyJson(item, out);
+    return out;
+  }
+  if (typeof node !== "object") return out;
+
+  const sku = String(
+    node.default_code ||
+    node.sku ||
+    node.SKU ||
+    node.internal_reference ||
+    node.product_code ||
+    node.code ||
+    ""
+  ).trim();
+
+  const name = String(
+    node.display_name ||
+    node.name ||
+    node.product_name ||
+    node.title ||
+    node.template_name ||
+    ""
+  ).trim();
+
+  const price = shNormalizePriceNumber(
+    node.list_price ??
+    node.lst_price ??
+    node.price_unit ??
+    node.price ??
+    node.sale_price ??
+    node.fixed_price ??
+    node.unit_price ??
+    node.mrp
+  );
+
+  const hasProductShape = (sku || name) && price !== null && price > 0;
+  if (hasProductShape) {
+    const haystack = shTextFromAny(node, 5000).toLowerCase();
+    out.push({
+      sku,
+      name,
+      price,
+      haystack,
+      source: "odoo-product-pricelist-export.json"
+    });
+  }
+
+  for (const [key, value] of Object.entries(node)) {
+    if (/image|avatar|thumbnail|binary|base64/i.test(key)) continue;
+    if (value && typeof value === "object") shExtractProductRowsFromAnyJson(value, out);
+  }
+  return out;
+}
+
+async function readOdooPricelistExportProducts({ force = false } = {}) {
+  const ttlMs = Math.max(10_000, Number(process.env.ODOO_PRODUCT_PRICELIST_CACHE_MS || 5 * 60 * 1000));
+  if (!force && odooPricelistExportCache.products.length && Date.now() - odooPricelistExportCache.loadedAt < ttlMs) {
+    return odooPricelistExportCache.products;
+  }
+
+  try {
+    const raw = await readFile(ODOO_PRODUCT_PRICELIST_EXPORT_PATH, "utf8");
+    if (!force && raw === odooPricelistExportCache.raw && odooPricelistExportCache.products.length) {
+      odooPricelistExportCache.loadedAt = Date.now();
+      return odooPricelistExportCache.products;
+    }
+    const parsed = JSON.parse(raw);
+    const rows = shExtractProductRowsFromAnyJson(parsed, [])
+      .filter((p, idx, arr) => {
+        const key = `${String(p.sku || "").toLowerCase()}|${String(p.name || "").toLowerCase()}|${p.price}`;
+        return arr.findIndex((x) => `${String(x.sku || "").toLowerCase()}|${String(x.name || "").toLowerCase()}|${x.price}` === key) === idx;
+      });
+    odooPricelistExportCache.raw = raw;
+    odooPricelistExportCache.products = rows;
+    odooPricelistExportCache.loadedAt = Date.now();
+    odooPricelistExportCache.error = null;
+    return rows;
+  } catch (e) {
+    odooPricelistExportCache.error = e?.message || String(e);
+    return [];
+  }
+}
+
+function shScorePricelistProduct(product = {}, spec = {}) {
+  const hay = `${product.sku || ""} ${product.name || ""} ${product.haystack || ""}`.toLowerCase();
+  if (!hay) return -999;
+  let score = 0;
+
+  for (const token of spec.must || []) {
+    const re = token instanceof RegExp ? token : new RegExp(String(token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    if (!re.test(hay)) return -999;
+    score += 30;
+  }
+  for (const token of spec.prefer || []) {
+    const re = token instanceof RegExp ? token : new RegExp(String(token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    if (re.test(hay)) score += 12;
+  }
+  for (const token of spec.avoid || []) {
+    const re = token instanceof RegExp ? token : new RegExp(String(token).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    if (re.test(hay)) score -= 20;
+  }
+  if (product.sku && spec.sku && String(product.sku).toUpperCase() === String(spec.sku).toUpperCase()) score += 120;
+  return score;
+}
+
+function shFindBestPricelistProduct(products = [], spec = {}) {
+  const ranked = products
+    .map((p) => ({ product: p, score: shScorePricelistProduct(p, spec) }))
+    .filter((x) => x.score > -999)
+    .sort((a, b) => b.score - a.score || (a.product.price || 0) - (b.product.price || 0));
+  return ranked[0]?.product || null;
+}
+
+async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const raw = String(message || "").trim();
+  const msg = raw.toLowerCase();
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
+  const fullHistoryText = Array.isArray(history)
+    ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n").toLowerCase()
+    : "";
+  const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
+  const contextText = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
+
+  const has202 = /\b202\b|as-b-202|202-dld|dld/.test(contextText);
+  const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
+  const has5wDual = /5\s*w|5w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
+  if (!has202 || (!has3wDual && !has5wDual)) return "";
+
+  const products = await readOdooPricelistExportProducts();
+  if (!products.length) return "";
+
+  const ledIs5w = has5wDual;
+  const wantsWithoutSleeve = /without\s+sleeve|no\s+sleeve|holder|bare\s+cell|without-sleeve|bina\s+sleeve/i.test(contextText);
+  const wantsWithSleeve = /with\s+sleeve|sleeve|ready\s*to\s*connect|jst\s*attached/i.test(contextText) && !wantsWithoutSleeve;
+
+  const driver = shFindBestPricelistProduct(products, {
+    sku: "AS-B-202-DLD",
+    must: [/\b202\b|as-b-202|202-dld|dld/],
+    prefer: [/driver/, /recharge/, /dual|3\s*color|3-color|cct/]
+  });
+  const led = shFindBestPricelistProduct(products, {
+    must: [ledIs5w ? /5\s*w|5w/ : /3\s*w|3w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/],
+    prefer: [/35\s*mm|35mm/, /3\s*v|3v/, /cob/],
+    avoid: [/strip/, /filament/, /dob/, /driver/]
+  });
+  const battery = shFindBestPricelistProduct(products, {
+    must: [/2600\s*mah|2600/, /battery|cell|18650/],
+    prefer: wantsWithoutSleeve ? [/without\s+sleeve|without-sleeve|holder|bare/] : [/sleeve|jst|pack/],
+    avoid: wantsWithoutSleeve ? [/with\s+sleeve/] : [/without\s+sleeve|without-sleeve|holder/]
+  });
+  const jst = shFindBestPricelistProduct(products, {
+    must: [/jst|connector\s*wire|wire/],
+    prefer: [/3\s*pin|3pin|dual|202|led/, /6\s*inch|150\s*mm/],
+    avoid: [/battery/, /panel\s*mount/, /usb/, /holder/]
+  });
+
+  const items = [
+    { label: "AS-B-202-DLD rechargeable 3-color driver", product: driver, qty: 1 },
+    { label: `${ledIs5w ? "5W" : "3W"} dual COB LED`, product: led, qty: 1 },
+    { label: wantsWithoutSleeve ? "2600mAh battery without sleeve" : "2600mAh battery with sleeve / standard sample option", product: battery, qty: 1 },
+    { label: "JST LED wire / connector wire", product: jst, qty: 1 }
+  ];
+
+  if (items.some((x) => !x.product || !Number.isFinite(Number(x.product.price)))) return "";
+
+  const subtotal = items.reduce((sum, item) => sum + Number(item.product.price || 0) * item.qty, 0);
+  const gstAmount = subtotal * (Number.isFinite(GST_RATE) ? GST_RATE : 18) / 100;
+  const total = subtotal + gstAmount;
+
+  const rows = items.map((item, idx) => {
+    const sku = item.product.sku ? ` (${item.product.sku})` : "";
+    return `${idx + 1}. ${item.label}${sku} — ${shFormatRupee(item.product.price)} × ${item.qty} = ${shFormatRupee(Number(item.product.price) * item.qty)}`;
+  }).join("\n");
+
+  return `Ji, sample set ka full price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${Number.isFinite(GST_RATE) ? GST_RATE : 18}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}\n\nIsme AS-B-202-DLD driver + ${ledIs5w ? "5W" : "3W"} dual COB LED + 2600mAh battery + JST wire include hai.`;
+}
+
 function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
@@ -16277,6 +16557,69 @@ function aiModeTryFastDeterministicReply({ message = "", history = [], activeCon
   return "";
 }
 
+function aiModeIsConfusionOrAck(message = "") {
+  const text = String(message || "").trim().toLowerCase();
+  return /^(ok|okay|k|hmm|acha|accha|theek|thik|haan|ha|yes|ji|kya\??|kyaa\??|kya bol raha hai|samajh nahi aaya|samajh nhi aaya|\?+)$/i.test(text);
+}
+
+function aiModeHasRecentPriceRequest(history = []) {
+  return (Array.isArray(history) ? history : []).slice(-12).some((h) => {
+    const role = String(h?.role || h?.author_type || h?.type || "").toLowerCase();
+    const text = aiModeHistoryItemText(h).toLowerCase();
+    const looksCustomer = !role || role.includes("user") || role.includes("customer") || role.includes("visitor") || role.includes("client");
+    return looksCustomer && /(price|rate|cost|kitna|kitne|padega|padhega|quotation|quote|sabka|sab ka|total|sample set ka price)/i.test(text);
+  });
+}
+
+function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const raw = String(message || "").trim();
+
+  // Highest priority: if the customer is asking price, never fall back to the old
+  // "recommended setup" loop. Give only a safe price-status reply.
+  const priceReply = aiModeTryPriceFollowupReply({ message, history, activeContext, requirementProfile });
+  if (priceReply) {
+    return {
+      reply: priceReply,
+      handoverRequired: true,
+      assignedTo: "Khushagra",
+      assignedRole: "Sales",
+      reason: "Customer asked for component/sample set pricing while AI model was unavailable.",
+      nextAction: "handover_for_price_confirmation"
+    };
+  }
+
+  if (aiModeHasRecentPriceRequest(history) || aiModeIsConfusionOrAck(raw)) {
+    return {
+      reply: "Ji sorry, main previous setup message repeat kar raha tha. Aap sample set ka price pooch rahe the. Abhi confirmed: AS-B-202-DLD driver ka sample price ₹250 hai. 3W dual COB LED, 2600mAh battery aur JST wire ka exact latest rate add karke total quotation confirm karna hoga. Main isko price confirmation ke liye Khushagra ji ko forward kar raha hoon.",
+      handoverRequired: true,
+      assignedTo: "Khushagra",
+      assignedRole: "Sales",
+      reason: "Customer needs exact price confirmation; model failed and old heuristic recommendation was blocked.",
+      nextAction: "handover_for_price_confirmation"
+    };
+  }
+
+  if (aiModeIsBroadNewProductInquiry(raw, history)) {
+    return {
+      reply: aiModeBroadNewProductReply(raw),
+      handoverRequired: false,
+      assignedTo: "",
+      assignedRole: "",
+      reason: "Broad product enquiry handled locally after model failure.",
+      nextAction: "ask_product_category"
+    };
+  }
+
+  return {
+    reply: "Ji, AI response abhi slow/timeout ho raha hai, isliye main galat recommendation repeat nahi karunga. Aapki latest requirement note kar li hai; team exact confirmation share karegi.",
+    handoverRequired: true,
+    assignedTo: "Khushagra",
+    assignedRole: "Sales",
+    reason: "AI model timeout/unavailable; blocked unsafe heuristic recommendation.",
+    nextAction: "human_review_after_model_timeout"
+  };
+}
+
 function aiModeBuildEmergencyFallbackReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const price = aiModeTryPriceFollowupReply({ message, history, activeContext, requirementProfile });
   if (price) return price;
@@ -16363,6 +16706,24 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     // Gemini interpreter, or final model call. This prevents simple WhatsApp replies from
     // taking 2-3 minutes when Gemini/Odoo is slow.
     if (AI_MODE_FAST_LOCAL_FIRST) {
+      const earlyPriceReply = await aiModeBuildSampleSetPriceFromJson({
+        message,
+        history,
+        activeContext: {},
+        requirementProfile: aiModeBuildRequirementProfile(history, message, {})
+      });
+      if (earlyPriceReply) {
+        const earlyParsed = aiModeBuildDeterministicResponseObject({
+          aiMode,
+          source,
+          message,
+          reply: earlyPriceReply,
+          modelUsed: "fast_json_price_first",
+          summary: "Fast sample-set price reply calculated from odoo-product-pricelist-export.json with GST before Odoo/Gemini."
+        });
+        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+      }
+
       const earlyHeuristicProfile = aiModeBuildRequirementProfile(history, message, {});
       const earlyFastReply = aiModeTryFastDeterministicReply({
         message,
@@ -16452,7 +16813,14 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     });
     const requirementProfile = aiModeContextToLegacyProfile(activeContext, heuristicProfile);
 
-    const fastDeterministicReply = aiModeTryFastDeterministicReply({
+    const jsonPriceReply = await aiModeBuildSampleSetPriceFromJson({
+      message,
+      history,
+      activeContext,
+      requirementProfile
+    });
+
+    const fastDeterministicReply = jsonPriceReply || aiModeTryFastDeterministicReply({
       message,
       history,
       activeContext,
@@ -16514,31 +16882,33 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       modelUsed = result?.model_used || "";
       parsed = aiModeExtractJsonObject(result?.text);
     } catch (modelErr) {
-      // Do not silently drop a normal customer message when Gemini is temporarily unavailable.
-      // Generate a deterministic safe reply from the already-built context/profile and allow
-      // the background worker to send it. This prevents 503 from creating no-reply gaps.
+      // Do not use old profile/kit recommendation when the model fails. That created
+      // repeated broken replies like "Recommended setup... aap sample chahte hain?".
+      // Use a safe model-failure reply only, and hand over pricing cases.
       modelCallFailed = true;
-      modelCallError = modelErr?.message || String(modelErr || "Gemini unavailable");
-      console.warn("AI Mode final reply model failed; using deterministic fallback:", modelCallError);
-      const fallbackReply = aiModeBuildEmergencyFallbackReply({ message, history, activeContext, requirementProfile });
+      modelCallError = modelErr?.message || String(modelErr || "Gemini/OpenRouter unavailable");
+      console.warn("AI Mode final reply model failed; using SAFE fallback only:", modelCallError);
+      const safeFailure = AI_MODE_SAFE_MODEL_FAILURE_FALLBACK
+        ? aiModeBuildSafeModelFailureReply({ message, history, activeContext, requirementProfile })
+        : { reply: "Ji, AI response abhi timeout ho raha hai. Team aapko confirm karegi.", handoverRequired: true, assignedTo: "Khushagra", assignedRole: "Sales", reason: "Model failed", nextAction: "human_review_after_model_timeout" };
       parsed = {
         ok: true,
         source: "operator_hub",
         aiMode,
-        level: 1,
+        level: safeFailure.handoverRequired ? 3 : 1,
         action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
         language: /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "") ? "hinglish" : "english",
-        customer_reply: aiMode === "chat" ? fallbackReply : "",
-        suggested_customer_reply: fallbackReply,
-        internal_summary: `Deterministic fallback used because final Gemini reply failed: ${modelCallError}`,
+        customer_reply: aiMode === "chat" ? safeFailure.reply : "",
+        suggested_customer_reply: safeFailure.reply,
+        internal_summary: `Safe fallback used because final model failed: ${modelCallError}. Old profile recommendation fallback blocked.`,
         clarification_required: false,
-        handover_required: false,
-        assigned_to: "",
-        assigned_role: "",
-        handover_reason: "",
-        internal_notification: "",
-        detected_products: [],
-        next_action: "deterministic_fallback_after_model_error"
+        handover_required: !!safeFailure.handoverRequired,
+        assigned_to: safeFailure.assignedTo || "",
+        assigned_role: safeFailure.assignedRole || "",
+        handover_reason: safeFailure.reason || "",
+        internal_notification: safeFailure.handoverRequired ? `Please review this chat. Reason: ${safeFailure.reason || modelCallError}` : "",
+        detected_products: Array.isArray(requirementProfile?.detected_products) ? requirementProfile.detected_products.slice(0, 8) : [],
+        next_action: safeFailure.nextAction || "safe_model_failure_fallback"
       };
     }
     }
@@ -16552,7 +16922,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     // High-priority fresh broad product enquiry override. If the customer says they
     // need products generally, do not keep them trapped in an old quotation/handover
     // context. Ask the next useful product-category question and send it.
-    if (aiModeIsBroadNewProductInquiry(message, history)) {
+    if (!modelCallFailed && aiModeIsBroadNewProductInquiry(message, history)) {
       const broadReply = aiModeBroadNewProductReply(message);
       normalized = {
         ...normalized,
@@ -16572,7 +16942,7 @@ Fresh broad product enquiry override applied.`.trim(),
       };
     }
 
-    const directContextReply = !aiModeIsBroadNewProductInquiry(message, history) && aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
+    const directContextReply = !modelCallFailed && !aiModeIsBroadNewProductInquiry(message, history) && aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
     if (directContextReply) {
       normalized = {
         ...normalized,
@@ -16591,7 +16961,7 @@ Direct active-context reply applied.`.trim(),
       };
     }
 
-    const contextualRepairReply = !directContextReply && aiModeContextualShortFollowupRepair({
+    const contextualRepairReply = !modelCallFailed && !directContextReply && aiModeContextualShortFollowupRepair({
       latestMessage: message,
       history,
       profile: requirementProfile,
@@ -16618,7 +16988,7 @@ Contextual short-followup/correction repair applied.`.trim(),
     // Generic conversation-state repair: if the model asks for information already captured
     // in the requirement profile, replace the looped reply with a profile-aware next step.
     // This prevents endless "which product / rechargeable or USB / wattage?" loops for any wording.
-    if (aiModeReplyRepeatsKnownQuestion(normalized, requirementProfile)) {
+    if (!modelCallFailed && aiModeReplyRepeatsKnownQuestion(normalized, requirementProfile)) {
       const repairedReply = aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
       normalized = {
         ...normalized,
@@ -16635,7 +17005,7 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
     }
 
     // If Gemini still returns an empty/weak reply but the profile is sufficient, create a deterministic next reply.
-    if (!String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim() && aiModeProfileHasEnoughForKit(requirementProfile)) {
+    if (!modelCallFailed && !String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim() && aiModeProfileHasEnoughForKit(requirementProfile)) {
       const repairedReply = aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
       normalized = {
         ...normalized,
@@ -16654,7 +17024,7 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
     // where the silent interpreter runs but the final reply is empty or not sendable.
     const currentReplyText = String(normalized.customer_reply || normalized.suggested_customer_reply || "").trim();
     const normalCustomerAsk = /\b(hello|hi|hey|need|want|looking\s+for|require|chahiye|chaiye|mujhe|product|products|led|driver|battery|strip|cob|kit|lamp|price|rate|sample)\b/i.test(message || "");
-    if (aiMode === "chat" && !currentReplyText && normalCustomerAsk && !normalized.handover_required && !normalized.clarification_required) {
+    if (!modelCallFailed && aiMode === "chat" && !currentReplyText && normalCustomerAsk && !normalized.handover_required && !normalized.clarification_required) {
       const fallbackReply = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message) ||
         aiModeBuildProfileBasedCustomerReply(requirementProfile, message) ||
         "Ji, please tell me which product you need — LED, driver, battery, strip LED, or complete lamp kit?";
