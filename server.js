@@ -14982,13 +14982,13 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   const saysSample = /sample|trial|demo|testing|one\s*set|ek\s*set/i.test(msg) || profile.quantity === "sample" || profile.quantity_intent === "sample";
 
   if (profile.custom_request?.is_custom) {
-    return "Ji, ye custom/new product type requirement lag rahi hai. Iske liye feasibility check zaroori hoga. Please exact size, function aur quantity share kar dijiye, main isko Vibhu ji ke liye mark kar raha hoon.";
+    return "Ji, ye custom/new product type requirement lag rahi hai. Feasibility check ke liye exact size, function, quantity aur use-case share kar dijiye.";
   }
   if (profile.support_issue?.has_issue) {
-    return "Ji, issue note kar liya. Please product/SKU, order reference ya invoice number, aur problem ka short detail share kar dijiye. Team check karke support/replacement/warranty ke liye guide karegi.";
+    return "Ji, issue check karne ke liye product/SKU, order reference ya invoice number, aur problem ka short detail share kar dijiye.";
   }
   if (profile.dispatch_request?.is_dispatch_query) {
-    return "Ji, dispatch/tracking check karne ke liye please order number, invoice number ya registered phone number share kar dijiye. Uske basis par team status confirm karegi.";
+    return "Ji, dispatch/tracking check karne ke liye order number, invoice number ya registered phone number share kar dijiye.";
   }
 
   // Price questions must not be answered with another product recommendation loop.
@@ -16009,7 +16009,7 @@ function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMes
       return "Ji, sorry — aapne strip LED nahi bola tha. Hum COB LED requirement par hi continue kar rahe hain. Aapke case mein 3W COB LED ke saath AS-B-201-SLD rechargeable single-color driver suitable rahega.";
     }
     if (/battery/i.test(latestMessage)) {
-      return "Ji, sorry — aapne battery variant ke baare mein nahi poocha tha. Complete rechargeable kit mein battery include hoti hai, lekin abhi main main setup par hi focus karta hoon: AS-B-201-SLD driver + 3W COB LED + JST wire + battery. Aap sample proceed karna chahte hain?";
+      return "Ji, sorry — battery variant main assumption tha. Aapki main requirement AS-B-201-SLD driver + 3W COB LED + JST wire ke liye continue kar raha hoon.";
     }
     return `Ji, sorry, samajh gaya. Main ${active} wali requirement par hi continue kar raha hoon.`;
   }
@@ -16028,7 +16028,7 @@ function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMes
 
   if (/sample|trial|demo|testing|one\s*set|ek\s*set|poora\s*kit|complete\s*kit|full\s*kit/i.test(latestMessage) && aiModeProfileHasEnoughForKit(profile)) {
     const kitLines = aiModeBuildKitLines(profile);
-    return `Ji, samajh gaya. Sample/complete kit requirement note kar li hai: ${aiModeHumanReadableProfileLine(profile)}.\n\nSetup:\n${kitLines}\n\nAgar aap price chahte hain to main JSON pricelist se sample-set total + GST calculate karke share karunga.`;
+    return `Ji, samajh gaya. Sample/complete kit requirement: ${aiModeHumanReadableProfileLine(profile)}.\n\nSetup:\n${kitLines}\n\nPrice ke liye main available pricelist se item-wise total + GST breakdown dunga.`;
   }
 
   return "";
@@ -16791,7 +16791,7 @@ function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeCo
   }
 
   return {
-    reply: "Ji, AI response abhi slow/timeout ho raha hai, isliye main galat recommendation repeat nahi karunga. Aapki latest requirement note kar li hai; team exact confirmation share karegi.",
+    reply: aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile }),
     handoverRequired: true,
     assignedTo: "Khushagra",
     assignedRole: "Sales",
@@ -16801,18 +16801,12 @@ function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeCo
 }
 
 function aiModeBuildEmergencyFallbackReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
-  const price = aiModeTryPriceFollowupReply({ message, history, activeContext, requirementProfile });
-  if (price) return price;
   const fast = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile });
   if (fast) return fast;
   if (aiModeIsBroadNewProductInquiry(message, history)) return aiModeBroadNewProductReply(message);
   const direct = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
   if (direct) return direct;
-  if (aiModeProfileHasEnoughForKit(requirementProfile)) return aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
-  const hinglish = /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "");
-  return hinglish
-    ? "Ji, main help kar dunga. Aap please bataiye aapko LED, driver, battery, strip LED ya complete kit mein se kya chahiye?"
-    : "Sure, I can help. Please tell me whether you need an LED, driver, battery, strip LED, or a complete kit.";
+  return aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile });
 }
 
 
@@ -16887,69 +16881,203 @@ function aiModeLooksLikeCustomerEcho(reply = "", latestMessage = "", history = [
     !/(ji|sir|madam|breakdown|subtotal|gst|total including|include|driver|led|battery|jst).{15,}/i.test(reply);
 }
 
-function aiModeLooksLikeUnsafeCustomerReply(reply = "") {
+
+function aiModeIsPriceIntentUniversal({ message = "", history = [] } = {}) {
+  const latest = String(message || "").toLowerCase();
+  const customerHistory = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
+  const text = `${latest}\n${customerHistory}`;
+  const directPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|amount|gst|bill|billing)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price|price\s+batao|rate\s+batao/i.test(latest);
+  const recentPrice = /sabka\s+price|sab\s+ka\s+price|price\s+batao|rate\s+batao|kitna\s+padega|kitna\s+padhega|full\s+set\s+price|total\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(customerHistory);
+  const shortNudge = /^(ok|okay|haan|ha|yes|y|kya\??|kyaa\??|ky\??|\?\?+|batao|tum\s+batao|reply|please reply|sample|sample set|sample-set)$/i.test(String(message || "").trim());
+  return !!(directPrice || (recentPrice && shortNudge));
+}
+
+function aiModeKnownProductContextText({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = String(message || "");
+  const customerHistory = aiModeCustomerOnlyHistoryText(history, message, 18);
+  const fullHistoryText = Array.isArray(history)
+    ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n")
+    : "";
+  const activeText = JSON.stringify({ activeContext, requirementProfile });
+  return `${latest}\n${customerHistory}\n${fullHistoryText}\n${activeText}`.toLowerCase();
+}
+
+function aiModeDetectUniversalPriceItems(contextText = "") {
+  const text = String(contextText || "").toLowerCase();
+  const specs = [];
+  const add = (key, label, sku, matcher = null) => {
+    if (!specs.some((x) => x.key === key)) specs.push({ key, label, sku, matcher });
+  };
+
+  if (/\b201\b|as-b-201|201\s*driver|201-sld/i.test(text)) add("driver201", "AS-B-201-SLD rechargeable 1-color driver", "AS-B-201-SLD");
+  if (/\b202\b|as-b-202|202\s*driver|202-dld|\bdld\b/i.test(text)) add("driver202", "AS-B-202-DLD rechargeable 3-color driver", "AS-B-202-DLD");
+  if (/\b204\b|as-b-204|204\s*driver|204-lsd/i.test(text)) add("driver204", "AS-B-204-LSD rechargeable strip LED driver", "AS-B-204-LSD");
+  if (/\b205\b|as-b-205|205\s*driver|205-lsd/i.test(text)) add("driver205", "AS-B-205-LSD fast-charging rechargeable strip LED driver", "AS-B-205-LSD");
+  if (/\b101\b|as-u-101|101\s*driver|101-sld/i.test(text)) add("driver101", "AS-U-101-SLD USB-C 1-color driver", "AS-U-101-SLD");
+  if (/\b102\b|as-u-102|102\s*driver|102-dld/i.test(text)) add("driver102", "AS-U-102-DLD USB-C 3-color driver", "AS-U-102-DLD");
+  if (/\b103\b|as-u-103|103\s*driver|103-lsd/i.test(text)) add("driver103", "AS-U-103-LSD USB strip LED driver", "AS-U-103-LSD");
+
+  if ((/3\s*w|3w|3\s*watt/i.test(text) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/i.test(text)) || /3w\s+dual|dual\s+3w/i.test(text)) {
+    add("cob3d", "3W dual COB LED", "SH-COB-3D", { must: [/3\s*w|3w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/], prefer: [/35\s*mm|35mm/, /cob/], avoid: [/strip/, /filament/, /dob/, /driver/] });
+  }
+  if (/5\s*w|5w|5\s*watt/i.test(text) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/i.test(text)) {
+    add("cob5d", "5W dual COB LED", "SH-COB-5D", { must: [/5\s*w|5w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/], prefer: [/35\s*mm|35mm/, /cob/], avoid: [/strip/, /filament/, /dob/, /driver/] });
+  }
+
+  if (/2600\s*mah|2600/i.test(text) && /battery|cell|18650|mah/i.test(text)) {
+    const withoutSleeve = /without\s+sleeve|no\s+sleeve|bare\s+cell|bina\s+sleeve|holder/i.test(text);
+    add(withoutSleeve ? "bat26ws" : "bat26s", withoutSleeve ? "2600mAh battery without sleeve" : "2600mAh battery with sleeve", withoutSleeve ? "SH-BAT-26-WS" : "SH-BAT-26S", withoutSleeve
+      ? { must: [/2600\s*mah|2600/, /battery|cell|18650/, /without\s+sleeve|without-sleeve|bare/], prefer: [/sh-bat-26-ws/] }
+      : { must: [/2600\s*mah|2600/, /battery|cell|18650/, /sleeve/], prefer: [/sh-bat-26s/, /with\s+sleeve/], avoid: [/without\s+sleeve|without-sleeve|holder/] });
+  }
+
+  if (/\bjst\b|connector\s*wire|wire/i.test(text)) {
+    if (/3\s*pin|3pin|202|dld|dual/i.test(text)) {
+      add("jst3", "3-pin JST LED wire", "", { must: [/jst/, /3\s*pin|3pin|p1\.?25/], prefer: [/jst\s+dual\s+3\s*pin\s+p1\.?25/i, /p1\.?25/i], avoid: [/22\s*inch|45\s*cm|50\s*cm|battery|panel\s*mount|usb|holder/] });
+    } else {
+      add("jst", "JST connector wire", "", { must: [/jst|connector\s*wire|wire/], prefer: [/6\s*inch|150\s*mm|led/], avoid: [/battery/, /panel\s*mount/, /usb/, /holder/] });
+    }
+  }
+
+  return specs;
+}
+
+async function aiModeBuildUniversalPriceReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  if (!aiModeIsPriceIntentUniversal({ message, history })) return "";
+
+  const knownSampleReply = await aiModeBuildSampleSetPriceFromJson({ message, history, activeContext, requirementProfile });
+  if (knownSampleReply) return knownSampleReply;
+
+  const contextText = aiModeKnownProductContextText({ message, history, activeContext, requirementProfile });
+  const specs = aiModeDetectUniversalPriceItems(contextText);
+  if (!specs.length) {
+    return "Ji, price batane ke liye product/SKU aur quantity confirm kar dijiye. Ek line mein product code likh sakte hain, jaise: 202 driver, 3W dual COB LED, 2600mAh battery, ya JST wire.";
+  }
+
+  const products = await readOdooPricelistExportProducts({ force: true }).catch(() => []);
+  const items = [];
+  const missing = [];
+
+  for (const spec of specs) {
+    let product = spec.sku ? await shFindProductByExactSku(products, spec.sku) : null;
+    if (!product && spec.matcher) product = shFindProductByNameMust(products, spec.matcher);
+    if (product && Number.isFinite(Number(product.price))) {
+      items.push({ label: spec.label, product, qty: 1 });
+    } else {
+      missing.push(spec.label);
+    }
+  }
+
+  if (!items.length) {
+    return "Ji, product identify ho gaya, lekin price JSON se match nahi ho pa raha. Please exact SKU/product code share kar dijiye taaki wrong price na jaaye.";
+  }
+
+  const subtotal = items.reduce((sum, item) => sum + Number(item.product.price || 0) * item.qty, 0);
+  const gstRate = Number.isFinite(GST_RATE) ? GST_RATE : 18;
+  const gstAmount = subtotal * gstRate / 100;
+  const total = subtotal + gstAmount;
+  const rows = items.map((item, idx) => {
+    const sku = item.product.sku ? ` (${item.product.sku})` : "";
+    return `${idx + 1}. ${item.label}${sku} — ${shFormatRupee(item.product.price)}`;
+  }).join("\n");
+  const missingNote = missing.length ? `\n\nNote: ${missing.join(", ")} ka exact price match nahi hua, isliye usko total mein include nahi kiya.` : "";
+  return `Ji, price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${gstRate}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}${missingNote}`;
+}
+
+function aiModeLooksLikeUnsafeCustomerReply(reply = "", { message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const text = String(reply || "").toLowerCase();
   if (!text) return false;
+  const priceIntent = aiModeIsPriceIntentUniversal({ message, history });
+  const hasKnownContext = !!(requirementProfile?.likely_driver || requirementProfile?.likely_led || requirementProfile?.detected_products?.length || /\b(201|202|204|205|101|102|103|3\s*w|5\s*w|2600|jst|cob|driver|led|battery)\b/i.test(aiModeKnownProductContextText({ message, history, activeContext, requirementProfile })));
+
   return (
     /price\s+to\s+be\s+added/i.test(text) ||
-    /latest\s+odoo\/pricelist\s+rates\s+attach/i.test(text) ||
+    /latest\s+odoo\/?pricelist\s+rates/i.test(text) ||
     /exact\s+total\s+tabhi\s+final/i.test(text) ||
-    /json\s+pricelist\s+load\/match/i.test(text) ||
+    /json\s+pricelist/i.test(text) ||
     /placeholder\s+price/i.test(text) ||
     /wrong\/half\s+price/i.test(text) ||
+    /model\s+failed|gemini|openrouter|timeout|timed\s+out|ai\s+response|ai\s+mode|heuristic/i.test(text) ||
+    /internal\s+(summary|notification|clarification|handover)/i.test(text) ||
+    /system\s+se\s+calculate\s+nahi/i.test(text) ||
+    /team\s+exact\s+total\s+confirm/i.test(text) ||
+    /team\s+aapko\s+confirm/i.test(text) ||
+    /khushagra\s+ji\s+exact\s+total/i.test(text) ||
+    /main\s+koi\s+half/i.test(text) ||
     /aap\s+sample\s+set\s+chahte\s+hain\s+ya\s+quantity\/bulk\s+pricing/i.test(text) ||
     /aap\s+sample\s+set\s+proceed\s+karna\s+chahte/i.test(text) ||
     /sample\s+set\s+proceed.*price\/?quotation/i.test(text) ||
+    /aap\s+sample\s+proceed/i.test(text) ||
     /sample\s+set\s+proceed.*price\s+confirm/i.test(text) ||
+    (priceIntent && /recommended\s+setup:|suitable\s+setup:|suitable\s+sample\s+combination:|requirement\s+clear\s+hai:/i.test(text)) ||
+    (priceIntent && /quantity\s+(bata|confirm)|sample\s+ya\s+bulk|bulk\s+quantity|rate\s+chahiye/i.test(text)) ||
+    (hasKnownContext && /please\s+ek\s+line\s+mein\s+bata|driver,\s*led,\s*battery,\s*strip\s*led\s*ya\s*complete\s*kit|which\s+product\s+do\s+you\s+need/i.test(text)) ||
     (/recommended\s+setup:/i.test(text) && /sample\s+set\s+chahte|pricing|rate\s+chahiye|price\s+confirm/i.test(text)) ||
     (/requirement\s+clear\s+hai:/i.test(text) && /aap\s+sample\s+set|bulk\s+pricing|price\s+confirm/i.test(text))
   );
 }
 
+function aiModeBuildUniversalClarificationReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const text = aiModeKnownProductContextText({ message, history, activeContext, requirementProfile });
+  if (/dispatch|tracking|ship|courier|delivery|awb|order\s+status/i.test(text)) return "Ji, dispatch/tracking check karne ke liye order number ya invoice number share kar dijiye.";
+  if (/problem|issue|not\s+working|fault|warranty|replacement|return|burn|damage/i.test(text)) return "Ji, issue check karne ke liye product/SKU, order reference aur problem ka short detail share kar dijiye.";
+  if (/custom|customi[sz]e|new\s+product|develop|r&d|special/i.test(text)) return "Ji, custom requirement ke liye function, size, quantity aur use-case share kar dijiye.";
+  if (/driver/i.test(text) && !/led|cob|strip/i.test(text)) return "Ji, driver ke liye LED type confirm kar dijiye — single COB, dual/3-color COB, strip LED, ya DOB?";
+  if (/led|cob/i.test(text) && !/driver|battery|usb|recharge/i.test(text)) return "Ji, LED ke liye power type confirm kar dijiye — rechargeable driver ke saath chahiye ya USB-C powered?";
+  return "Ji, requirement clear karne ke liye product/SKU aur quantity share kar dijiye.";
+}
+
 async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, source, message, history = [], activeContext = {}, requirementProfile = {} } = {}) {
-  const currentReply = aiModeOutgoingTextFromResult(normalized);
-  const priceIntent = aiModeIsSampleSetPriceIntent({ message, history }) || aiModeHasRecentPriceRequest(history) || /price|rate|cost|kitna|padega|total|sabka|sab\s+ka/i.test(String(message || ""));
-  const unsafe = aiModeLooksLikeUnsafeCustomerReply(currentReply);
+  let currentReply = aiModeOutgoingTextFromResult(normalized);
+  const priceIntent = aiModeIsPriceIntentUniversal({ message, history });
+  const unsafe = aiModeLooksLikeUnsafeCustomerReply(currentReply, { message, history, activeContext, requirementProfile });
   const echo = aiModeLooksLikeCustomerEcho(currentReply, message, history);
+  const empty = !String(currentReply || "").trim();
 
-  if (!unsafe && !echo && currentReply) return normalized;
+  if (!unsafe && !echo && !empty) return normalized;
 
-  // Price intent: try JSON calculation one last time. If it fails, send only a safe no-placeholder reply.
+  let replacement = "";
+  let nextAction = "final_safety_repair";
+  let handoverRequired = false;
+  let assignedTo = "";
+  let assignedRole = "";
+  let handoverReason = "";
+
   if (priceIntent) {
-    const jsonPrice = await aiModeBuildSampleSetPriceFromJson({ message, history, activeContext, requirementProfile });
-    const replacement = jsonPrice || aiModeBuildPricelistUnavailableReply({ message, history, activeContext, requirementProfile });
-    return {
-      ...normalized,
-      level: jsonPrice ? 1 : 3,
-      action: aiMode === "assist" ? "suggest_reply" : (jsonPrice ? "send_direct_reply" : "handover"),
-      clarification_required: false,
-      handover_required: !jsonPrice,
-      assigned_to: jsonPrice ? "" : "Khushagra",
-      assigned_role: jsonPrice ? "" : "Sales",
-      handover_reason: jsonPrice ? "" : "Customer asked for sample-set price but JSON pricelist could not be matched safely.",
-      customer_reply: aiMode === "chat" ? replacement : "",
-      suggested_customer_reply: replacement,
-      internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/echo/empty price reply.`.trim(),
-      next_action: jsonPrice ? "json_price_reply" : "handover_for_manual_price_confirmation"
-    };
+    replacement = await aiModeBuildUniversalPriceReply({ message, history, activeContext, requirementProfile });
+    nextAction = replacement && /subtotal:|total including gst|gst @/i.test(replacement)
+      ? "universal_json_price_reply"
+      : "ask_exact_product_for_price";
   }
 
-  // Non-price unsafe or empty reply: try exact deterministic request handling, otherwise send a neutral clarification.
-  const deterministic = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile });
-  const replacement = deterministic || "Ji, sorry — previous reply clear nahi tha. Please ek line mein bata dijiye: aapko driver, LED, battery, strip LED ya complete kit mein se kya chahiye?";
+  if (!replacement) {
+    replacement = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile }) ||
+      aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message) ||
+      aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile });
+  }
+
+  // Absolute second-pass guard: never replace one bad reply with another bad reply.
+  if (
+    aiModeLooksLikeCustomerEcho(replacement, message, history) ||
+    aiModeLooksLikeUnsafeCustomerReply(replacement, { message, history, activeContext, requirementProfile })
+  ) {
+    replacement = aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile });
+    nextAction = "ask_one_safe_relevant_question";
+  }
+
   return {
     ...normalized,
-    level: 1,
+    level: handoverRequired ? 3 : 1,
     action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
-    clarification_required: false,
-    handover_required: false,
-    assigned_to: "",
-    assigned_role: "",
-    handover_reason: "",
+    clarification_required: !priceIntent && !/\?|confirm|share|bata|bataiye|dijiye/i.test(replacement) ? false : false,
+    handover_required: handoverRequired,
+    assigned_to: assignedTo,
+    assigned_role: assignedRole,
+    handover_reason: handoverReason,
     customer_reply: aiMode === "chat" ? replacement : "",
     suggested_customer_reply: replacement,
-    internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/echo/empty non-price reply.`.trim(),
-    next_action: deterministic ? "fast_deterministic_safety_repair" : "safe_clarification_after_bad_reply"
+    internal_summary: `${normalized.internal_summary || ""}\nFinal universal safety guard replaced ${empty ? "empty" : unsafe ? "unsafe" : "echo"} customer reply.`.trim(),
+    next_action: nextAction
   };
 }
 
@@ -17231,7 +17359,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       console.warn("AI Mode final reply model failed; using SAFE fallback only:", modelCallError);
       const safeFailure = AI_MODE_SAFE_MODEL_FAILURE_FALLBACK
         ? aiModeBuildSafeModelFailureReply({ message, history, activeContext, requirementProfile })
-        : { reply: "Ji, AI response abhi timeout ho raha hai. Team aapko confirm karegi.", handoverRequired: true, assignedTo: "Khushagra", assignedRole: "Sales", reason: "Model failed", nextAction: "human_review_after_model_timeout" };
+        : { reply: aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile }), handoverRequired: false, assignedTo: "", assignedRole: "", reason: "Model failed", nextAction: "safe_relevant_question_after_model_timeout" };
       parsed = {
         ok: true,
         source: "operator_hub",
@@ -18234,7 +18362,9 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
 
     if (shouldSendDirect || shouldSendHandoverHoldingReply) {
       const outboundReply = String(decision.customer_reply || "").trim();
-      if (aiModeLooksLikeCustomerEcho(outboundReply, messageText, payload.conversationHistory)) {
+      if (aiModeLooksLikeUnsafeCustomerReply(outboundReply, { message: messageText, history: payload.conversationHistory })) {
+        decision.background_post_result = { ok: false, reason: "unsafe_reply_blocked_before_post" };
+      } else if (aiModeLooksLikeCustomerEcho(outboundReply, messageText, payload.conversationHistory)) {
         decision.background_post_result = { ok: false, reason: "customer_echo_reply_blocked_before_post" };
       } else {
         const postResult = await aiModePostTextToOdooChannel(uid, channel, outboundReply);
