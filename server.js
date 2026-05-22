@@ -14361,8 +14361,16 @@ function aiModeHistoryRole(item = {}) {
 
 function aiModeIsCustomerHistoryItem(item = {}) {
   const role = aiModeHistoryRole(item);
-  if (!role) return true;
-  return !/(operator|assistant|agent|admin|smart\s*handicrafts|system|bot|ai)/i.test(role);
+  const text = aiModeHistoryItemText(item);
+
+  // Some Odoo/WhatsApp history payloads come without a clean role. In that case,
+  // do NOT treat our own previous bot messages as customer facts, otherwise the
+  // fallback keeps repeating stale recommendations like "sample set chahiye?".
+  if (!role) return !aiModeLooksLikeOurAssistantText(text);
+
+  if (/(operator|assistant|agent|admin|smart\s*handicrafts|system|bot|ai)/i.test(role)) return false;
+  if (aiModeLooksLikeOurAssistantText(text)) return false;
+  return true;
 }
 
 function aiModeIsOperatorHistoryItem(item = {}) {
@@ -14399,6 +14407,11 @@ function aiModeLooksLikeOurAssistantText(text = "") {
     "internal notification",
     "aap complete sample kit chahte hain",
     "aap sample set chahte hain",
+    "aap sample set proceed karna chahte hain",
+    "aap 1 sample set chahte hain",
+    "suitable sample combination:",
+    "requirement clear hai:",
+    "main kit pricing wali requirement",
     "battery ke liye, kya aapko",
     "usme ye components honge",
     "ji, samajh gaya. aapko",
@@ -16129,35 +16142,50 @@ function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
 
-  const asksPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price/i.test(msg);
-  if (!asksPrice) return "";
-
-  const historyText = aiModeCustomerOnlyHistoryText(history, message, 14).toLowerCase();
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
   const fullHistoryText = Array.isArray(history)
     ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n").toLowerCase()
     : "";
   const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
   const contextText = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
 
+  const asksPriceNow = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price/i.test(msg);
+  const recentPriceAsk = /sabka\s+price|sab\s+ka\s+price|price\s+batao|rate\s+batao|kitna\s+padega|kitna\s+padhega|full\s+set\s+price|total\s+price/.test(historyText) || /sabka\s+price|sab\s+ka\s+price|price\s+batao|rate\s+batao|kitna\s+padega|kitna\s+padhega|full\s+set\s+price|total\s+price/.test(fullHistoryText);
+  const shortNudgeAfterPrice = /^(ok|okay|haan|ha|yes|y|kya\??|kyaa\??|ky\??|\?\?+|reply|please reply|sample|sample set|sample-set)$/i.test(raw);
+  const frustrationAfterPrice = /kya\s+bol|kyaa|samajh\s+nahi|samajh\s+nhi|wrong|galat|repeat|phir\s+se/i.test(msg);
+
+  if (!asksPriceNow && !(recentPriceAsk && (shortNudgeAfterPrice || frustrationAfterPrice))) return "";
+
   const has202 = /\b202\b|as-b-202|202-dld|dld/.test(contextText);
   const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
+  const has5wDual = /5\s*w|5w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
   const hasBattery = /2600|battery|batt|mah/.test(contextText);
   const hasWire = /jst|wire|connector/.test(contextText);
 
-  if (has202 && has3wDual) {
+  // This must answer the customer's price question directly. Do not ask again
+  // whether they want sample/bulk if they already asked "sabka price batao".
+  if (has202 && (has3wDual || has5wDual)) {
+    const ledLine = has5wDual ? "5W dual COB LED" : "3W dual COB LED";
     const rows = [
-      "1. AS-B-202-DLD rechargeable 3-color/dual LED driver — sample price ₹250",
-      "2. 3W dual COB LED — latest rate confirm karke total mein add hoga",
-      hasBattery ? "3. 2600mAh battery — latest rate confirm karke total mein add hoga" : "",
-      hasWire ? "4. JST wire — latest rate confirm karke total mein add hoga" : ""
-    ].filter(Boolean).join("\n");
+      "1. AS-B-202-DLD rechargeable 3-color/dual LED driver — ₹250 sample price",
+      `2. ${ledLine} — price to be added from latest pricelist`,
+      hasBattery ? "3. 2600mAh battery — price to be added from latest pricelist" : "3. Battery — not included unless required",
+      hasWire ? "4. JST wire — price to be added from latest pricelist" : "4. JST wire — required for connection, price to be added"
+    ].join("\n");
 
-    return `Ji, pehle full set ka price breakdown bata deta hoon:\n\n${rows}\n\nDriver ka sample price ₹250 hai. LED, battery aur JST wire ka latest rate quantity ke hisaab se confirm hoga, isliye exact total quotation quantity ke saath final hoga.\n\nAap 1 sample set chahte hain ya bulk quantity? Quantity bata denge to exact total bana dunga.`;
+    const prefix = (shortNudgeAfterPrice || frustrationAfterPrice)
+      ? "Ji sorry, aap price pooch rahe the — main direct breakdown de raha hoon."
+      : "Ji, pehle full set ka price breakdown bata deta hoon.";
+
+    return `${prefix}\n\n${rows}\n\nConfirmed price abhi driver ka ₹250 hai. Exact total tabhi final bolna chahiye jab LED, battery aur JST wire ke latest Odoo/pricelist rates attach ho jaayen. Main isko quotation requirement ke roop mein mark kar raha hoon; Khushagra ji exact total confirm kar denge.\n\nAapke liye requirement: AS-B-202-DLD + ${ledLine} + ${hasBattery ? "2600mAh battery + " : ""}JST wire.`;
+  }
+
+  if (asksPriceNow) {
+    return "Ji, price requirement clear hai. Kripya product/SKU ya item list confirm kar dijiye, main component-wise price breakdown de dunga. Agar yeh AS-B-202-DLD + dual COB sample kit hai, driver ka confirmed sample price ₹250 hai; LED, battery aur JST wire ka exact rate latest pricelist se add hoga.";
   }
 
   return "";
 }
-
 
 function aiModeDetectExplicitProductRequest(message = "", history = [], activeContext = {}, requirementProfile = {}) {
   const raw = String(message || "").trim();
@@ -16250,6 +16278,8 @@ function aiModeTryFastDeterministicReply({ message = "", history = [], activeCon
 }
 
 function aiModeBuildEmergencyFallbackReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const price = aiModeTryPriceFollowupReply({ message, history, activeContext, requirementProfile });
+  if (price) return price;
   const fast = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile });
   if (fast) return fast;
   if (aiModeIsBroadNewProductInquiry(message, history)) return aiModeBroadNewProductReply(message);
