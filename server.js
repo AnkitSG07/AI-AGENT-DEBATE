@@ -116,6 +116,17 @@ const ODOO_PRODUCT_PRICELIST_EXPORT_PATH =
   process.env.PRODUCT_PRICELIST_EXPORT_PATH ||
   "./odoo-product-pricelist-export.json";
 const GST_RATE = Number(process.env.SMART_HANDICRAFTS_GST_RATE || 18);
+
+// Last safety net for the exact sample set we already audited from odoo-product-pricelist-export.json.
+// Used only when the JSON file is temporarily missing/unreadable on Render, so the bot never sends
+// placeholder prices or echoes the customer during pricing chats.
+const SH_AUDITED_SAMPLE_SET_PRICE_FALLBACK = String(process.env.SH_AUDITED_SAMPLE_SET_PRICE_FALLBACK || "true").toLowerCase() !== "false";
+const SH_AUDITED_SAMPLE_SET_202_3W = [
+  { label: "AS-B-202-DLD rechargeable 3-color driver", sku: "AS-B-202-DLD", price: 250 },
+  { label: "3W dual COB LED", sku: "SH-COB-3D", price: 65 },
+  { label: "2600mAh battery with sleeve", sku: "SH-BAT-26S", price: 140 },
+  { label: "3-pin JST LED wire", sku: "JST Dual 3 Pin P1.25", price: 13 }
+];
 const PRODUCT_BOT_FALLBACK_CONTEXT = process.env.PRODUCT_BOT_CONTEXT || "";
 
 // Dedicated Smart Handicrafts physical integration knowledge for the Kit Expert.
@@ -14983,7 +14994,7 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   // Price questions must not be answered with another product recommendation loop.
   // Actual sample-set price calculation is handled by aiModeBuildSampleSetPriceFromJson().
   if (asksPrice && (profile.likely_driver || profile.likely_led || profile.detected_products?.length)) {
-    return aiModeBuildPricelistUnavailableReply();
+    return aiModeBuildPricelistUnavailableReply({ message: latestMessage, history: [], activeContext: {}, requirementProfile: profile });
   }
 
   if (hasKit && aiModeProfileHasEnoughForKit(profile)) {
@@ -16228,6 +16239,27 @@ function shFormatRupee(value) {
   return `₹${rounded.toLocaleString("en-IN", { maximumFractionDigits: Number.isInteger(rounded) ? 0 : 2 })}`;
 }
 
+function shBuildAuditedSampleSet2023WPriceReply() {
+  if (!SH_AUDITED_SAMPLE_SET_PRICE_FALLBACK) return "";
+  const rows = SH_AUDITED_SAMPLE_SET_202_3W.map((item, idx) => {
+    const sku = item.sku ? ` (${item.sku})` : "";
+    return `${idx + 1}. ${item.label}${sku} — ${shFormatRupee(item.price)}`;
+  }).join("\n");
+  const subtotal = SH_AUDITED_SAMPLE_SET_202_3W.reduce((sum, item) => sum + Number(item.price || 0), 0);
+  const gstRate = Number.isFinite(GST_RATE) ? GST_RATE : 18;
+  const gstAmount = subtotal * gstRate / 100;
+  const total = subtotal + gstAmount;
+  return `Ji, sample set ka full price breakdown:
+
+${rows}
+
+Subtotal: ${shFormatRupee(subtotal)}
+GST @${gstRate}%: ${shFormatRupee(gstAmount)}
+Total including GST: ${shFormatRupee(total)}
+
+Isme AS-B-202-DLD driver + 3W dual COB LED + 2600mAh battery + 3-pin JST wire include hai.`;
+}
+
 function shTextFromAny(value, max = 4000) {
   if (value === null || value === undefined) return "";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value).slice(0, max);
@@ -16240,6 +16272,34 @@ function shTextFromAny(value, max = 4000) {
       .slice(0, max);
   }
   return "";
+}
+
+
+function shPickPriceForQuantityFromRules(product = {}, qty = 1) {
+  const rules = Array.isArray(product?.pricelist_rules) ? product.pricelist_rules : [];
+  const safeQty = Number.isFinite(Number(qty)) && Number(qty) > 0 ? Number(qty) : 1;
+  const validRules = rules
+    .map((rule) => ({
+      min_quantity: Number(rule?.min_quantity ?? 0),
+      fixed_price: shNormalizePriceNumber(rule?.fixed_price)
+    }))
+    .filter((rule) => Number.isFinite(rule.min_quantity) && rule.fixed_price !== null && rule.fixed_price > 0)
+    .filter((rule) => rule.min_quantity <= safeQty)
+    .sort((a, b) => b.min_quantity - a.min_quantity);
+
+  if (validRules[0]?.fixed_price) return validRules[0].fixed_price;
+
+  return shNormalizePriceNumber(
+    product.sales_price ??
+    product.list_price ??
+    product.lst_price ??
+    product.price_unit ??
+    product.price ??
+    product.sale_price ??
+    product.fixed_price ??
+    product.unit_price ??
+    product.mrp
+  );
 }
 
 function shExtractProductRowsFromAnyJson(node, out = []) {
@@ -16269,24 +16329,25 @@ function shExtractProductRowsFromAnyJson(node, out = []) {
     ""
   ).trim();
 
-  const price = shNormalizePriceNumber(
-    node.list_price ??
-    node.lst_price ??
-    node.price_unit ??
-    node.price ??
-    node.sale_price ??
-    node.fixed_price ??
-    node.unit_price ??
-    node.mrp
-  );
+  // IMPORTANT:
+  // Odoo export uses `sales_price` for most product rows and `pricelist_rules[].fixed_price`
+  // for slab/sample pricing. Older code did not read sales_price, so the JSON lookup failed
+  // even though the prices were present.
+  const price = shPickPriceForQuantityFromRules(node, 1);
 
   const hasProductShape = (sku || name) && price !== null && price > 0;
   if (hasProductShape) {
     const haystack = shTextFromAny(node, 5000).toLowerCase();
     out.push({
+      id: node.id ?? "",
       sku,
       name,
       price,
+      sales_price: shNormalizePriceNumber(node.sales_price),
+      category: String(node.category || "").trim(),
+      qty_available: Number(node.qty_available ?? 0),
+      uom: String(node.uom || "").trim(),
+      website_url: String(node.website_url || "").trim(),
       haystack,
       source: "odoo-product-pricelist-export.json"
     });
@@ -16374,6 +16435,17 @@ function shFindBestPricelistProduct(products = [], spec = {}) {
   return ranked[0]?.product || null;
 }
 
+async 
+function shFindProductByExactSku(products = [], sku = "") {
+  const wanted = String(sku || "").trim().toLowerCase();
+  if (!wanted) return null;
+  return products.find((p) => String(p?.sku || "").trim().toLowerCase() === wanted) || null;
+}
+
+function shFindProductByNameMust(products = [], { must = [], avoid = [], prefer = [] } = {}) {
+  return shFindBestPricelistProduct(products, { must, avoid, prefer });
+}
+
 async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
@@ -16384,58 +16456,114 @@ async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], a
   const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
   const contextText = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
 
+  const asksPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount|batao)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(contextText);
   const has202 = /\b202\b|as-b-202|202-dld|dld/.test(contextText);
-  const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
-  const has5wDual = /5\s*w|5w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/.test(contextText);
-  if (!has202 || (!has3wDual && !has5wDual)) return "";
+  const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/.test(contextText);
+  const has5wDual = /5\s*w|5w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/.test(contextText);
+  // Regression safety: in long WhatsApp chats, the latest price nudge may only say
+  // "sabka price batao" while the 202 + dual COB context is in previous messages
+  // or memory. If 5W is not explicit, default this known sample-set pricing path
+  // to the audited 202 + 3W dual COB sample set instead of failing into a vague reply.
+  const hasDualCobContext = /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob|led/.test(contextText);
+  if (!asksPrice || !has202 || (!has3wDual && !has5wDual && !hasDualCobContext)) return "";
 
-  const products = await readOdooPricelistExportProducts();
-  if (!products.length) return "";
-
+  const products = await readOdooPricelistExportProducts({ force: true });
   const ledIs5w = has5wDual;
+  if (!products.length) {
+    console.warn("AI Mode JSON sample price lookup found no products; using audited exact 202+3W sample fallback if allowed.", {
+      pricelistPath: odooPricelistExportCache.path || ODOO_PRODUCT_PRICELIST_EXPORT_PATH,
+      pricelistError: odooPricelistExportCache.error || null
+    });
+    return !ledIs5w ? shBuildAuditedSampleSet2023WPriceReply() : "";
+  }
+
   const wantsWithoutSleeve = /without\s+sleeve|no\s+sleeve|holder|bare\s+cell|without-sleeve|bina\s+sleeve/i.test(contextText);
   const wantsWithSleeve = /with\s+sleeve|sleeve|ready\s*to\s*connect|jst\s*attached/i.test(contextText) && !wantsWithoutSleeve;
 
-  const driver = shFindBestPricelistProduct(products, {
-    sku: "AS-B-202-DLD",
-    must: [/\b202\b|as-b-202|202-dld|dld/],
-    prefer: [/driver/, /recharge/, /dual|3\s*color|3-color|cct/]
-  });
-  const led = shFindBestPricelistProduct(products, {
-    must: [ledIs5w ? /5\s*w|5w/ : /3\s*w|3w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/],
-    prefer: [/35\s*mm|35mm/, /3\s*v|3v/, /cob/],
-    avoid: [/strip/, /filament/, /dob/, /driver/]
-  });
-  const battery = shFindBestPricelistProduct(products, {
-    must: [/2600\s*mah|2600/, /battery|cell|18650/],
-    prefer: wantsWithoutSleeve ? [/without\s+sleeve|without-sleeve|holder|bare/] : [/sleeve|jst|pack/],
-    avoid: wantsWithoutSleeve ? [/with\s+sleeve/] : [/without\s+sleeve|without-sleeve|holder/]
-  });
-  const jst = shFindBestPricelistProduct(products, {
-    must: [/jst|connector\s*wire|wire/],
-    prefer: [/3\s*pin|3pin|dual|202|led/, /6\s*inch|150\s*mm/],
-    avoid: [/battery/, /panel\s*mount/, /usb/, /holder/]
-  });
+  const driver =
+    shFindProductByExactSku(products, "AS-B-202-DLD") ||
+    shFindProductByNameMust(products, {
+      must: [/\b202\b|as-b-202|202-dld|dld/, /driver/],
+      prefer: [/recharge/, /dual|3\s*color|3-color|cct/]
+    });
+
+  const led = ledIs5w
+    ? (
+        shFindProductByExactSku(products, "SH-COB-5D") ||
+        shFindProductByNameMust(products, {
+          must: [/5\s*w|5w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/],
+          prefer: [/35\s*mm|35mm/, /cob/],
+          avoid: [/strip/, /filament/, /dob/, /driver/]
+        })
+      )
+    : (
+        shFindProductByExactSku(products, "SH-COB-3D") ||
+        shFindProductByNameMust(products, {
+          must: [/3\s*w|3w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/],
+          prefer: [/35\s*mm|35mm/, /cob/],
+          avoid: [/strip/, /filament/, /dob/, /driver/]
+        })
+      );
+
+  const battery = wantsWithoutSleeve
+    ? (
+        shFindProductByExactSku(products, "SH-BAT-26-WS") ||
+        shFindProductByNameMust(products, {
+          must: [/2600\s*mah|2600/, /battery|cell|18650/, /without\s+sleeve|without-sleeve/],
+          prefer: [/sh-bat-26-ws/]
+        })
+      )
+    : (
+        shFindProductByExactSku(products, "SH-BAT-26S") ||
+        shFindProductByNameMust(products, {
+          must: [/2600\s*mah|2600/, /battery|cell|18650/, /sleeve/],
+          prefer: [/sh-bat-26s/, /with\s+sleeve/],
+          avoid: [/without\s+sleeve|without-sleeve|holder/]
+        })
+      );
+
+  // For AS-B-202-DLD LED output, prefer the dedicated 3-pin P1.25 JST item.
+  const jst =
+    shFindProductByNameMust(products, {
+      must: [/jst/, /3\s*pin|3pin|p1\.?25/],
+      prefer: [/jst\s+dual\s+3\s*pin\s+p1\.?25/i, /p1\.?25/i],
+      avoid: [/22\s*inch|45\s*cm|50\s*cm|battery|panel\s*mount|usb|holder/]
+    }) ||
+    shFindProductByNameMust(products, {
+      must: [/jst|connector\s*wire|wire/],
+      prefer: [/3\s*pin|3pin|dual|202|led|6\s*inch|150\s*mm/],
+      avoid: [/battery/, /panel\s*mount/, /usb/, /holder/]
+    });
 
   const items = [
     { label: "AS-B-202-DLD rechargeable 3-color driver", product: driver, qty: 1 },
     { label: `${ledIs5w ? "5W" : "3W"} dual COB LED`, product: led, qty: 1 },
-    { label: wantsWithoutSleeve ? "2600mAh battery without sleeve" : "2600mAh battery with sleeve / standard sample option", product: battery, qty: 1 },
-    { label: "JST LED wire / connector wire", product: jst, qty: 1 }
+    { label: wantsWithoutSleeve ? "2600mAh battery without sleeve" : "2600mAh battery with sleeve", product: battery, qty: 1 },
+    { label: "3-pin JST LED wire", product: jst, qty: 1 }
   ];
 
-  if (items.some((x) => !x.product || !Number.isFinite(Number(x.product.price)))) return "";
+  const missing = items.filter((x) => !x.product || !Number.isFinite(Number(x.product.price)));
+  if (missing.length) {
+    console.warn("AI Mode JSON sample price matching failed.", {
+      missing: missing.map((x) => x.label),
+      productsLoaded: products.length,
+      pricelistPath: odooPricelistExportCache.path || ODOO_PRODUCT_PRICELIST_EXPORT_PATH,
+      pricelistError: odooPricelistExportCache.error || null
+    });
+    return !ledIs5w ? shBuildAuditedSampleSet2023WPriceReply() : "";
+  }
 
   const subtotal = items.reduce((sum, item) => sum + Number(item.product.price || 0) * item.qty, 0);
-  const gstAmount = subtotal * (Number.isFinite(GST_RATE) ? GST_RATE : 18) / 100;
+  const gstRate = Number.isFinite(GST_RATE) ? GST_RATE : 18;
+  const gstAmount = subtotal * gstRate / 100;
   const total = subtotal + gstAmount;
 
   const rows = items.map((item, idx) => {
     const sku = item.product.sku ? ` (${item.product.sku})` : "";
-    return `${idx + 1}. ${item.label}${sku} — ${shFormatRupee(item.product.price)} × ${item.qty} = ${shFormatRupee(Number(item.product.price) * item.qty)}`;
+    return `${idx + 1}. ${item.label}${sku} — ${shFormatRupee(item.product.price)}`;
   }).join("\n");
 
-  return `Ji, sample set ka full price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${Number.isFinite(GST_RATE) ? GST_RATE : 18}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}\n\nIsme AS-B-202-DLD driver + ${ledIs5w ? "5W" : "3W"} dual COB LED + 2600mAh battery + JST wire include hai.`;
+  return `Ji, sample set ka full price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${gstRate}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}\n\nIsme AS-B-202-DLD driver + ${ledIs5w ? "5W" : "3W"} dual COB LED + 2600mAh battery + 3-pin JST wire include hai.`;
 }
 
 
@@ -16454,8 +16582,34 @@ function aiModeIsSampleSetPriceIntent({ message = "", history = [] } = {}) {
   return !!((asksPriceNow || (recentPriceAsk && (shortNudgeAfterPrice || frustrationAfterPrice))) && hasSampleSetContext);
 }
 
-function aiModeBuildPricelistUnavailableReply() {
-  return "Ji, sorry — sample set ka exact price abhi system se calculate nahi ho paa raha. Main koi half/placeholder price nahi bhejunga. Aapki requirement AS-B-202-DLD + dual COB LED + battery + JST wire ke sample set ke liye note kar li hai; team exact total confirm karegi.";
+function aiModeHasKnown2023WSampleSetContext({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const msg = String(message || "").toLowerCase();
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
+  const fullHistoryText = Array.isArray(history)
+    ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n").toLowerCase()
+    : "";
+  const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
+  const text = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
+
+  const asksPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|amount|batao)\b|sabka\s+price|sab\s+ka\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(text);
+  const has202 = /\b202\b|as-b-202|202-dld|dld/i.test(text);
+  const hasDual3W = (/3\s*w|3w/i.test(text) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob|led/i.test(text));
+  const hasKnownSetParts = /2600|battery|jst|wire|sample\s+set/i.test(text) && /dual|cob|led|3\s*w|3w/i.test(text);
+
+  // Do not use the audited 3W sample-set price if the customer explicitly asks for a different setup.
+  const explicitDifferentProduct = /\b(201|204|205|206|101|102|103)\b|as-b-201|as-b-204|as-b-205|as-u-101|as-u-102|as-u-103|strip\s*led|12v|24v|5\s*w|5w|without\s+sleeve|bare\s+cell/i.test(text);
+
+  return !!(asksPrice && has202 && (hasDual3W || hasKnownSetParts) && !explicitDifferentProduct);
+}
+
+function aiModeBuildPricelistUnavailableReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  // Only use the audited hard fallback for the exact known AS-B-202-DLD + 3W dual COB + 2600mAh + 3-pin JST sample set.
+  // For any other product context, never guess or reuse the 202 sample price.
+  if (aiModeHasKnown2023WSampleSetContext({ message, history, activeContext, requirementProfile })) {
+    return shBuildAuditedSampleSet2023WPriceReply();
+  }
+
+  return "Ji, price batane ke liye product/SKU aur quantity confirm kar dijiye. Agar aap AS-B-202-DLD + 3W dual COB LED + 2600mAh battery + 3-pin JST wire sample set ka price pooch rahe hain, to main uska full GST-included breakdown de sakta hoon.";
 }
 
 function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
@@ -16616,7 +16770,7 @@ function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeCo
 
   if (aiModeHasRecentPriceRequest(history) || aiModeIsConfusionOrAck(raw)) {
     return {
-      reply: aiModeBuildPricelistUnavailableReply(),
+      reply: aiModeBuildPricelistUnavailableReply({ message, history, activeContext, requirementProfile }),
       handoverRequired: true,
       assignedTo: "Khushagra",
       assignedRole: "Sales",
@@ -16691,6 +16845,48 @@ function aiModeOutgoingTextFromResult(aiResult = {}) {
   return String(aiResult.customer_reply || aiResult.suggested_customer_reply || "").trim();
 }
 
+function aiModeNormalizeComparableReplyText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[“”"'`]/g, "")
+    .replace(/[^a-z0-9₹]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function aiModeCustomerTextsFromHistory(history = [], latestMessage = "") {
+  const texts = [];
+  if (latestMessage) texts.push(String(latestMessage || ""));
+  for (const h of Array.isArray(history) ? history.slice(-12) : []) {
+    const role = String(h?.role || h?.author_type || h?.type || "").toLowerCase();
+    const text = aiModeHistoryItemText(h);
+    const looksCustomer = !role || role.includes("user") || role.includes("customer") || role.includes("visitor") || role.includes("client");
+    if (looksCustomer && text) texts.push(text);
+  }
+  return Array.from(new Set(texts.map((x) => String(x || "").trim()).filter(Boolean)));
+}
+
+function aiModeLooksLikeCustomerEcho(reply = "", latestMessage = "", history = []) {
+  const normalizedReply = aiModeNormalizeComparableReplyText(reply);
+  if (!normalizedReply) return false;
+
+  const customerTexts = aiModeCustomerTextsFromHistory(history, latestMessage)
+    .map((x) => aiModeNormalizeComparableReplyText(x))
+    .filter(Boolean);
+
+  for (const customerText of customerTexts) {
+    if (!customerText) continue;
+    if (normalizedReply === customerText) return true;
+    if (normalizedReply.length <= 120 && customerText.length <= 120) {
+      if (normalizedReply.includes(customerText) || customerText.includes(normalizedReply)) return true;
+    }
+  }
+
+  // Generic short command echo guard: customer-like commands should never be posted as our answer.
+  return normalizedReply.length <= 140 && /\b(mujhe|muje|mai|maine|sample|price|rate|batao|sabka|sab\s+ka|kya|kyaa|tum)\b/i.test(reply) &&
+    !/(ji|sir|madam|breakdown|subtotal|gst|total including|include|driver|led|battery|jst).{15,}/i.test(reply);
+}
+
 function aiModeLooksLikeUnsafeCustomerReply(reply = "") {
   const text = String(reply || "").toLowerCase();
   if (!text) return false;
@@ -16714,13 +16910,14 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
   const currentReply = aiModeOutgoingTextFromResult(normalized);
   const priceIntent = aiModeIsSampleSetPriceIntent({ message, history }) || aiModeHasRecentPriceRequest(history) || /price|rate|cost|kitna|padega|total|sabka|sab\s+ka/i.test(String(message || ""));
   const unsafe = aiModeLooksLikeUnsafeCustomerReply(currentReply);
+  const echo = aiModeLooksLikeCustomerEcho(currentReply, message, history);
 
-  if (!unsafe && currentReply) return normalized;
+  if (!unsafe && !echo && currentReply) return normalized;
 
   // Price intent: try JSON calculation one last time. If it fails, send only a safe no-placeholder reply.
   if (priceIntent) {
     const jsonPrice = await aiModeBuildSampleSetPriceFromJson({ message, history, activeContext, requirementProfile });
-    const replacement = jsonPrice || aiModeBuildPricelistUnavailableReply();
+    const replacement = jsonPrice || aiModeBuildPricelistUnavailableReply({ message, history, activeContext, requirementProfile });
     return {
       ...normalized,
       level: jsonPrice ? 1 : 3,
@@ -16732,7 +16929,7 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
       handover_reason: jsonPrice ? "" : "Customer asked for sample-set price but JSON pricelist could not be matched safely.",
       customer_reply: aiMode === "chat" ? replacement : "",
       suggested_customer_reply: replacement,
-      internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/empty price reply.`.trim(),
+      internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/echo/empty price reply.`.trim(),
       next_action: jsonPrice ? "json_price_reply" : "handover_for_manual_price_confirmation"
     };
   }
@@ -16751,7 +16948,7 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
     handover_reason: "",
     customer_reply: aiMode === "chat" ? replacement : "",
     suggested_customer_reply: replacement,
-    internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/empty non-price reply.`.trim(),
+    internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/echo/empty non-price reply.`.trim(),
     next_action: deterministic ? "fast_deterministic_safety_repair" : "safe_clarification_after_bad_reply"
   };
 }
@@ -16819,7 +17016,15 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           modelUsed: "fast_json_price_first",
           summary: "Fast sample-set price reply calculated from odoo-product-pricelist-export.json with GST before Odoo/Gemini."
         });
-        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+        const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
+          aiMode,
+          source,
+          message,
+          history,
+          activeContext: {},
+          requirementProfile: earlyHeuristicProfile
+        });
+        return res.json(safeEarly);
       }
 
       if (earlyIsPriceIntent) {
@@ -16832,7 +17037,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           aiMode,
           source,
           message,
-          reply: aiModeBuildPricelistUnavailableReply(),
+          reply: aiModeBuildPricelistUnavailableReply({ message, history, activeContext: {}, requirementProfile: earlyHeuristicProfile }),
           modelUsed: "price_json_lookup_failed_no_placeholder",
           summary: "Sample-set price was requested, but JSON price lookup failed. Unsafe placeholder price reply was blocked."
         });
@@ -16841,7 +17046,15 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         earlyParsed.assigned_role = "Sales";
         earlyParsed.handover_reason = "JSON pricelist lookup failed for sample set pricing.";
         earlyParsed.internal_notification = "Customer asked for sample set price. JSON lookup failed; please verify odoo-product-pricelist-export.json path and product matching for AS-B-202-DLD, 3W dual COB LED, 2600mAh battery, JST wire.";
-        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+        const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
+          aiMode,
+          source,
+          message,
+          history,
+          activeContext: {},
+          requirementProfile: earlyHeuristicProfile
+        });
+        return res.json(safeEarly);
       }
 
       
@@ -16881,7 +17094,15 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           });
         }
 
-        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+        const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
+          aiMode,
+          source,
+          message,
+          history,
+          activeContext: {},
+          requirementProfile: earlyHeuristicProfile
+        });
+        return res.json(safeEarly);
       }
     }
 
@@ -17856,6 +18077,7 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
   if (!body) return { ok: false, reason: "empty_body" };
   if (!channel?.id) return { ok: false, reason: "missing_channel" };
   if (aiModeLooksLikeUnsafeCustomerReply(body)) return { ok: false, reason: "unsafe_reply_blocked" };
+  if (aiModeLooksLikeCustomerEcho(body, "", [])) return { ok: false, reason: "echo_like_reply_blocked" };
   if (aiModeShouldBlockDuplicateOutbound(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
   if (!aiModeCanPostToChannel(channel)) {
     return { ok: false, reason: "whatsapp_reply_window_closed" };
@@ -18011,9 +18233,14 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
       !!String(decision.customer_reply || "").trim();
 
     if (shouldSendDirect || shouldSendHandoverHoldingReply) {
-      const postResult = await aiModePostTextToOdooChannel(uid, channel, decision.customer_reply);
-      decision.background_post_result = postResult;
-      if (postResult.ok) aiModeBackgroundState.auto_sent_count += 1;
+      const outboundReply = String(decision.customer_reply || "").trim();
+      if (aiModeLooksLikeCustomerEcho(outboundReply, messageText, payload.conversationHistory)) {
+        decision.background_post_result = { ok: false, reason: "customer_echo_reply_blocked_before_post" };
+      } else {
+        const postResult = await aiModePostTextToOdooChannel(uid, channel, outboundReply);
+        decision.background_post_result = postResult;
+        if (postResult.ok) aiModeBackgroundState.auto_sent_count += 1;
+      }
     }
   }
 
