@@ -15039,6 +15039,14 @@ function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
     normalized.assigned_role = "Customization / New Product / Special Case";
   }
 
+  // Repair another common inconsistent model output: handover_required=true
+  // with action still no_ai_action/send_direct_reply. Treat it as a handover
+  // so the background worker can send the final holding/transfer reply and log it.
+  if (normalized.handover_required && hasCustomerFacingText && ["chat", "assist"].includes(aiMode)) {
+    normalized.action = "handover";
+    if (normalized.level < 3) normalized.level = 3;
+  }
+
   if (aiModeShouldDowngradeCustomerClarification(message, normalized)) {
     normalized.level = 1;
     normalized.action = aiMode === "assist" ? "suggest_reply" : "send_direct_reply";
@@ -15054,12 +15062,15 @@ function aiModeNormalizeAiJson(parsed, { aiMode, source, message } = {}) {
     normalized.send_to_customer = false;
     normalized.show_as_suggestion = true;
   } else if (aiMode === "chat") {
-    normalized.send_to_customer =
-      normalized.level === 1 &&
-      normalized.action === "send_direct_reply" &&
-      !!normalized.customer_reply &&
-      !normalized.clarification_required &&
-      !normalized.handover_required;
+    const hasReply = !!String(normalized.customer_reply || "").trim();
+    const isInternalOnlyClarification = normalized.action === "internal_clarification" || normalized.clarification_required;
+    // Send normal safe replies AND final handover/transfer holding replies.
+    // Do not send internal clarification notes to customers.
+    normalized.send_to_customer = hasReply && !isInternalOnlyClarification && (
+      normalized.action === "send_direct_reply" ||
+      normalized.action === "handover" ||
+      normalized.handover_required
+    );
     normalized.show_as_suggestion = !normalized.send_to_customer;
   } else {
     normalized.send_to_customer = false;
@@ -15979,17 +15990,17 @@ TASK:
 - If hard/custom/risky, handover.
 - Keep customer reply 2-6 lines. One question max.
 
-Return JSON exactly:
+Return valid JSON with exactly these keys. Choose the correct level/action; do NOT copy default values blindly:
 {
   "ok": true,
   "source": "operator_hub",
   "aiMode": "${aiMode}",
-  "level": 0,
-  "action": "no_ai_action",
-  "language": "unknown",
-  "customer_reply": "",
-  "suggested_customer_reply": "",
-  "internal_summary": "",
+  "level": 1,
+  "action": "send_direct_reply",
+  "language": "english|hinglish|hindi|unknown",
+  "customer_reply": "customer-facing reply here when a reply should be sent",
+  "suggested_customer_reply": "same as customer_reply unless assist mode",
+  "internal_summary": "short internal summary",
   "clarification_required": false,
   "handover_required": false,
   "assigned_to": "",
@@ -15999,6 +16010,11 @@ Return JSON exactly:
   "detected_products": [],
   "next_action": ""
 }
+
+Action rules:
+- If you write a customer_reply in chat mode, action must be "send_direct_reply" unless this is a true handover.
+- If a human must take over and you still write a final holding/transfer reply, action must be "handover" and handover_required must be true.
+- Use "no_ai_action" only when AI must truly do nothing and customer_reply is empty.
 `.trim();
 }
 
