@@ -16583,6 +16583,15 @@ const aiModeBackgroundState = {
   recent_message_scan_count: 0,
   recent_message_found_count: 0,
   recent_candidate_message_count: 0,
+  recent_skip_processed_count: 0,
+  recent_skip_processing_count: 0,
+  recent_skip_cooldown_count: 0,
+  recent_skip_own_count: 0,
+  recent_skip_outbound_count: 0,
+  recent_skip_empty_count: 0,
+  recent_skip_missing_channel_count: 0,
+  latest_recent_candidate_debug: [],
+  latest_skip_debug: [],
   active_memory_channel_scan_count: 0,
   active_memory_channel_count: 0,
   candidate_channel_count: 0,
@@ -16792,13 +16801,28 @@ async function aiModeGetOdooUserContext() {
   return aiModeOdooUserContextCache;
 }
 
-function aiModeIsOwnOdooMessage(message = {}, userContext = {}) {
+function aiModeIsOwnOdooMessage(message = {}, userContext = {}, options = {}) {
+  const trustAuthorId = options.trustAuthorId !== false;
   const authorId = Array.isArray(message.author_id) ? Number(message.author_id[0]) : null;
   const creatorId = Array.isArray(message.create_uid) ? Number(message.create_uid[0]) : null;
-  return (
-    (!!userContext.partnerId && authorId === Number(userContext.partnerId)) ||
-    (!!userContext.uid && creatorId === Number(userContext.uid))
-  );
+
+  // In background WhatsApp scanning, author_id can sometimes equal the logged-in
+  // Odoo partner when the test/customer number is also saved as the operator/contact.
+  // If we trust author_id there, every incoming customer message gets skipped.
+  // create_uid is the safer signal for messages actually created by our API/Odoo user.
+  if (!!userContext.uid && creatorId === Number(userContext.uid)) {
+    return true;
+  }
+
+  if (trustAuthorId && !!userContext.partnerId && authorId === Number(userContext.partnerId)) {
+    return true;
+  }
+
+  return false;
+}
+
+function aiModeIsOwnOdooMessageForWorker(message = {}, userContext = {}) {
+  return aiModeIsOwnOdooMessage(message, userContext, { trustAuthorId: false });
 }
 
 function aiModeChannelDisplayName(channel = {}) {
@@ -16966,7 +16990,7 @@ async function aiModeFetchRecentWorkerMessages(uid) {
 
 async function aiModeFetchWorkerMessages(uid, channelId) {
   return await odooExecute(uid, "mail.message", "search_read", [[
-    ["model", "=", "discuss.channel"],
+    ["model", "in", ["discuss.channel", "mail.channel"]],
     ["res_id", "=", Number(channelId)]
   ], [
     "id",
@@ -16990,7 +17014,7 @@ function aiModeBuildWorkerConversationHistory(messages = [], userContext = {}) {
     .reverse()
     .map((message) => ({
       id: message.id,
-      role: aiModeIsOwnOdooMessage(message, userContext) ? "operator" : "customer",
+      role: aiModeIsOwnOdooMessageForWorker(message, userContext) || aiModeIsLikelySmartHandicraftsOutbound(message) ? "operator" : "customer",
       text: aiModeMessagePlainText(message),
       date: message.date || "",
       author: Array.isArray(message.author_id) ? message.author_id[1] : ""
@@ -17072,7 +17096,7 @@ function aiModeHasOperatorMessageAfter(messages = [], latestCustomerMessage = {}
   return (messages || []).some((message) => {
     if (!message?.id || Number(message.id) <= latestId) return false;
     if (!aiModeMessagePlainText(message)) return false;
-    return aiModeIsOwnOdooMessage(message, userContext) || aiModeIsLikelySmartHandicraftsOutbound(message);
+    return aiModeIsOwnOdooMessageForWorker(message, userContext) || aiModeIsLikelySmartHandicraftsOutbound(message);
   });
 }
 
@@ -17162,7 +17186,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
 
   const processedCustomerMessageIds = (messages || [])
     .filter((message) => message?.id)
-    .filter((message) => !aiModeIsOwnOdooMessage(message, userContext))
+    .filter((message) => !aiModeIsOwnOdooMessageForWorker(message, userContext))
     .filter((message) => aiModeMessagePlainText(message))
     .filter((message) => Number(message.id) <= Number(latestCustomerMessage.id))
     .map((message) => message.id);
@@ -17201,16 +17225,78 @@ async function aiModeBackgroundTick() {
 
     const recentCandidateChannelIds = [];
     let recentCandidateMessageCount = 0;
+    let recentSkipProcessed = 0;
+    let recentSkipProcessing = 0;
+    let recentSkipCooldown = 0;
+    let recentSkipOwn = 0;
+    let recentSkipOutbound = 0;
+    let recentSkipEmpty = 0;
+    let recentSkipMissingChannel = 0;
+    const recentCandidateDebug = [];
+    const recentSkipDebug = [];
+
     for (const message of recentMessages || []) {
-      if (!message?.id || !message?.res_id) continue;
-      if (!aiModeBackgroundCanAttempt(message.id)) continue;
-      if (aiModeIsOwnOdooMessage(message, userContext)) continue;
-      if (aiModeIsLikelySmartHandicraftsOutbound(message)) continue;
-      if (!aiModeMessagePlainText(message)) continue;
+      const messageId = message?.id;
+      const channelId = Number(message?.res_id || 0);
+      const text = aiModeMessagePlainText(message);
+      const debugBase = {
+        id: messageId || null,
+        res_id: channelId || null,
+        model: message?.model || "",
+        date: message?.date || "",
+        author: Array.isArray(message?.author_id) ? message.author_id[1] : "",
+        create_uid: Array.isArray(message?.create_uid) ? message.create_uid[1] : "",
+        text: aiModeSafeString(text, 80)
+      };
+
+      if (!messageId || !channelId) {
+        recentSkipMissingChannel += 1;
+        if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "missing_message_or_channel_id" });
+        continue;
+      }
+      if (aiModeBackgroundHasProcessed(messageId)) {
+        recentSkipProcessed += 1;
+        continue;
+      }
+      if (aiModeBackgroundIsProcessing(messageId)) {
+        recentSkipProcessing += 1;
+        continue;
+      }
+      if (aiModeBackgroundIsInRetryCooldown(messageId)) {
+        recentSkipCooldown += 1;
+        aiModeBackgroundState.skipped_retry_count += 1;
+        continue;
+      }
+      if (aiModeIsOwnOdooMessageForWorker(message, userContext)) {
+        recentSkipOwn += 1;
+        if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "own_create_uid" });
+        continue;
+      }
+      if (aiModeIsLikelySmartHandicraftsOutbound(message)) {
+        recentSkipOutbound += 1;
+        if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "smart_handicrafts_outbound" });
+        continue;
+      }
+      if (!text) {
+        recentSkipEmpty += 1;
+        continue;
+      }
+
       recentCandidateMessageCount += 1;
-      recentCandidateChannelIds.push(Number(message.res_id));
+      recentCandidateChannelIds.push(channelId);
+      if (recentCandidateDebug.length < 8) recentCandidateDebug.push(debugBase);
     }
+
     aiModeBackgroundState.recent_candidate_message_count = recentCandidateMessageCount;
+    aiModeBackgroundState.recent_skip_processed_count = recentSkipProcessed;
+    aiModeBackgroundState.recent_skip_processing_count = recentSkipProcessing;
+    aiModeBackgroundState.recent_skip_cooldown_count = recentSkipCooldown;
+    aiModeBackgroundState.recent_skip_own_count = recentSkipOwn;
+    aiModeBackgroundState.recent_skip_outbound_count = recentSkipOutbound;
+    aiModeBackgroundState.recent_skip_empty_count = recentSkipEmpty;
+    aiModeBackgroundState.recent_skip_missing_channel_count = recentSkipMissingChannel;
+    aiModeBackgroundState.latest_recent_candidate_debug = recentCandidateDebug;
+    aiModeBackgroundState.latest_skip_debug = recentSkipDebug;
 
     // Important: include Odoo AI Operator Memory channels every tick.
     // Odoo may not promote old WhatsApp discuss.channel rows until an operator opens the UI,
@@ -17251,7 +17337,7 @@ async function aiModeBackgroundTick() {
       const latestCustomerMessage = (messages || []).find((message) => {
         if (!message?.id) return false;
         if (!aiModeBackgroundCanAttempt(message.id)) return false;
-        if (aiModeIsOwnOdooMessage(message, userContext)) return false;
+        if (aiModeIsOwnOdooMessageForWorker(message, userContext)) return false;
         if (aiModeIsLikelySmartHandicraftsOutbound(message)) return false;
         if (!aiModeMessagePlainText(message)) return false;
         return true;
@@ -17324,6 +17410,15 @@ app.get("/api/ai-mode/global", (req, res) => {
       recent_message_scan_count: aiModeBackgroundState.recent_message_scan_count,
       recent_message_found_count: aiModeBackgroundState.recent_message_found_count,
       recent_candidate_message_count: aiModeBackgroundState.recent_candidate_message_count,
+      recent_skip_processed_count: aiModeBackgroundState.recent_skip_processed_count,
+      recent_skip_processing_count: aiModeBackgroundState.recent_skip_processing_count,
+      recent_skip_cooldown_count: aiModeBackgroundState.recent_skip_cooldown_count,
+      recent_skip_own_count: aiModeBackgroundState.recent_skip_own_count,
+      recent_skip_outbound_count: aiModeBackgroundState.recent_skip_outbound_count,
+      recent_skip_empty_count: aiModeBackgroundState.recent_skip_empty_count,
+      recent_skip_missing_channel_count: aiModeBackgroundState.recent_skip_missing_channel_count,
+      latest_recent_candidate_debug: aiModeBackgroundState.latest_recent_candidate_debug,
+      latest_skip_debug: aiModeBackgroundState.latest_skip_debug,
       active_memory_channel_scan_count: aiModeBackgroundState.active_memory_channel_scan_count,
       active_memory_channel_count: aiModeBackgroundState.active_memory_channel_count,
       candidate_channel_count: aiModeBackgroundState.candidate_channel_count,
