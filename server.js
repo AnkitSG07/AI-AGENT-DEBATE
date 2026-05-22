@@ -16533,6 +16533,12 @@ const AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT = Math.max(
   30,
   Math.min(200, Number(process.env.AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT || 80))
 );
+// Also scan active AI memory records in Odoo. This catches old WhatsApp channels
+// whose discuss.channel row does not move to the top until an operator opens WhatsApp/Odoo UI.
+const AI_MODE_BACKGROUND_ACTIVE_MEMORY_LIMIT = Math.max(
+  20,
+  Math.min(300, Number(process.env.AI_MODE_BACKGROUND_ACTIVE_MEMORY_LIMIT || 120))
+);
 const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
   0,
   Number(process.env.AI_MODE_BACKGROUND_START_GRACE_MS || 5000)
@@ -16575,6 +16581,10 @@ const aiModeBackgroundState = {
   tick_count: 0,
   processed_count: 0,
   recent_message_scan_count: 0,
+  recent_message_found_count: 0,
+  recent_candidate_message_count: 0,
+  active_memory_channel_scan_count: 0,
+  active_memory_channel_count: 0,
   candidate_channel_count: 0,
   channel_scan_fallback_count: 0,
   auto_sent_count: 0,
@@ -16892,6 +16902,35 @@ async function aiModeFetchWorkerChannelsByIds(uid, channelIds = []) {
   }
 }
 
+async function aiModeFetchActiveMemoryChannelIds(uid) {
+  if (!aiModeOdooEnabled()) return [];
+  const channelField = AI_MODE_MEMORY_FIELDS.odooChannelId;
+  const statusField = AI_MODE_MEMORY_FIELDS.status;
+  try {
+    const rows = await odooExecute(uid, AI_MODE_MEMORY_MODEL, "search_read", [[
+      [channelField, ">", 0],
+      [statusField, "!=", "resolved"]
+    ], [
+      "id",
+      channelField,
+      statusField,
+      AI_MODE_MEMORY_FIELDS.chatId,
+      AI_MODE_MEMORY_FIELDS.lastMessageDate,
+      AI_MODE_MEMORY_FIELDS.contextJson
+    ]], {
+      limit: AI_MODE_BACKGROUND_ACTIVE_MEMORY_LIMIT,
+      order: "write_date desc"
+    });
+
+    return Array.from(new Set((Array.isArray(rows) ? rows : [])
+      .map((row) => Number(row?.[channelField] || 0))
+      .filter((id) => Number.isFinite(id) && id > 0)));
+  } catch (error) {
+    console.warn("AI Mode active memory channel scan failed:", error?.message || error);
+    return [];
+  }
+}
+
 async function aiModeFetchRecentWorkerMessages(uid) {
   const fields = [
     "id",
@@ -17158,20 +17197,43 @@ async function aiModeBackgroundTick() {
       recentMessages = [];
     }
 
+    aiModeBackgroundState.recent_message_found_count = Array.isArray(recentMessages) ? recentMessages.length : 0;
+
     const recentCandidateChannelIds = [];
+    let recentCandidateMessageCount = 0;
     for (const message of recentMessages || []) {
       if (!message?.id || !message?.res_id) continue;
       if (!aiModeBackgroundCanAttempt(message.id)) continue;
       if (aiModeIsOwnOdooMessage(message, userContext)) continue;
       if (aiModeIsLikelySmartHandicraftsOutbound(message)) continue;
       if (!aiModeMessagePlainText(message)) continue;
+      recentCandidateMessageCount += 1;
       recentCandidateChannelIds.push(Number(message.res_id));
     }
+    aiModeBackgroundState.recent_candidate_message_count = recentCandidateMessageCount;
 
-    let channels = await aiModeFetchWorkerChannelsByIds(uid, recentCandidateChannelIds);
+    // Important: include Odoo AI Operator Memory channels every tick.
+    // Odoo may not promote old WhatsApp discuss.channel rows until an operator opens the UI,
+    // so channel-order scans can miss old customers. Active memory keeps their channel IDs known.
+    let activeMemoryChannelIds = [];
+    try {
+      activeMemoryChannelIds = await aiModeFetchActiveMemoryChannelIds(uid);
+      aiModeBackgroundState.active_memory_channel_scan_count += 1;
+      aiModeBackgroundState.active_memory_channel_count = activeMemoryChannelIds.length;
+    } catch (error) {
+      console.warn("AI Mode worker active memory channel scan failed:", error?.message || error);
+      activeMemoryChannelIds = [];
+    }
+
+    const candidateChannelIds = Array.from(new Set([
+      ...recentCandidateChannelIds,
+      ...activeMemoryChannelIds
+    ].map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+
+    let channels = await aiModeFetchWorkerChannelsByIds(uid, candidateChannelIds);
     aiModeBackgroundState.candidate_channel_count = Array.isArray(channels) ? channels.length : 0;
 
-    // Fallback: keep the old channel scan for cases where recent messages were not enough.
+    // Fallback: keep the old channel scan for new chats not yet present in AI memory.
     if (!channels.length) {
       aiModeBackgroundState.channel_scan_fallback_count += 1;
       channels = await aiModeFetchWorkerChannels(uid);
@@ -17260,6 +17322,10 @@ app.get("/api/ai-mode/global", (req, res) => {
       tick_count: aiModeBackgroundState.tick_count,
       processed_count: aiModeBackgroundState.processed_count,
       recent_message_scan_count: aiModeBackgroundState.recent_message_scan_count,
+      recent_message_found_count: aiModeBackgroundState.recent_message_found_count,
+      recent_candidate_message_count: aiModeBackgroundState.recent_candidate_message_count,
+      active_memory_channel_scan_count: aiModeBackgroundState.active_memory_channel_scan_count,
+      active_memory_channel_count: aiModeBackgroundState.active_memory_channel_count,
       candidate_channel_count: aiModeBackgroundState.candidate_channel_count,
       channel_scan_fallback_count: aiModeBackgroundState.channel_scan_fallback_count,
       auto_sent_count: aiModeBackgroundState.auto_sent_count,
