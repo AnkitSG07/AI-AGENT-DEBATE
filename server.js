@@ -16054,8 +16054,40 @@ function aiModeBroadNewProductReply(message = "") {
   return "Sure, please tell me which product you need — LED, driver, battery, strip LED, panel mount connector, or a complete lamp kit? If you know the wattage or quantity, share that too.";
 }
 
-function aiModeBuildEmergencyFallbackReply({ message = "", activeContext = {}, requirementProfile = {} } = {}) {
-  if (aiModeIsBroadNewProductInquiry(message, [])) return aiModeBroadNewProductReply(message);
+
+function aiModeTryFastDeterministicReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const raw = String(message || "").trim();
+  const msg = raw.toLowerCase();
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 12).toLowerCase();
+  const activeText = `${activeContext?.active_topic || ""} ${activeContext?.last_ai_question || ""} ${requirementProfile?.led_type || ""} ${requirementProfile?.color_type || ""} ${requirementProfile?.likely_driver || ""}`.toLowerCase();
+  const likelyDualCob = /dual|3-?color|warm|cool|202|dld/.test(activeText + "\n" + historyText);
+
+  if (!raw) return "";
+  if (aiModeIsBroadNewProductInquiry(raw, history)) return aiModeBroadNewProductReply(raw);
+
+  if (/(dual\s*cob|dual\s*led|3\s*color|3-color|warm\s*cool).*(kya|what|matlab|meaning)|^(kya|what).*dual\s*cob/i.test(raw)) {
+    return "Dual COB LED ka matlab hai two-output / warm-cool type LED setup. Isme AS-B-202-DLD driver use hota hai: touch se LED 1, LED 2, ya dono saath ON ho sakte hain, aur dimming bhi support hoti hai. Aapko 3W dual COB chahiye ya 5W dual COB?";
+  }
+
+  if (/(kitne|kaunse|konsi|available|watt).*?(watt|available|hai)|to\s*batao/i.test(raw) && likelyDualCob) {
+    return "Dual COB LED mein 3W dual aur 5W dual options handle kiye ja sakte hain. AS-B-202-DLD driver dual 3W/5W LEDs ke liye suitable hai. 4W ko main confirmed option nahi bolunga — aap 3W dual chahte hain ya 5W dual?";
+  }
+
+  if (/4\s*w|4w/i.test(raw) && /(nhi|nahi|not|hai\s*hi\s*nhi|hai\s*hi\s*nahi|wrong|galat)/i.test(raw)) {
+    return "Ji, sorry — 4W ko confirmed option bolna galat tha. Dual COB ke liye 3W dual aur 5W dual route consider karna chahiye; AS-B-202-DLD driver dual LED setup ke liye suitable hai. Aap 3W dual chahte hain ya 5W dual?";
+  }
+
+  if (/(maine|abhi).*pucha|to\s*batao|answer\s*karo/i.test(msg) && likelyDualCob) {
+    return "Ji, sorry. Dual COB ke liye main direct answer deta hoon: 3W dual aur 5W dual options relevant hain, aur AS-B-202-DLD driver dual LED/3-color setup ke liye use hota hai. Aapko sample chahiye ya quantity ke liye rate?";
+  }
+
+  return "";
+}
+
+function aiModeBuildEmergencyFallbackReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const fast = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile });
+  if (fast) return fast;
+  if (aiModeIsBroadNewProductInquiry(message, history)) return aiModeBroadNewProductReply(message);
   const direct = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message);
   if (direct) return direct;
   if (aiModeProfileHasEnoughForKit(requirementProfile)) return aiModeBuildProfileBasedCustomerReply(requirementProfile, message);
@@ -16156,6 +16188,13 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     });
     const requirementProfile = aiModeContextToLegacyProfile(activeContext, heuristicProfile);
 
+    const fastDeterministicReply = aiModeTryFastDeterministicReply({
+      message,
+      history,
+      activeContext,
+      requirementProfile
+    });
+
     const prompt = aiModeBuildPrompt({
       aiMode,
       message,
@@ -16179,6 +16218,29 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     let modelCallError = "";
     let modelProvider = "";
     let modelUsed = "";
+    if (fastDeterministicReply) {
+      modelProvider = "deterministic";
+      modelUsed = "fast_context_rule";
+      parsed = {
+        ok: true,
+        source: "operator_hub",
+        aiMode,
+        level: 1,
+        action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+        language: /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "") ? "hinglish" : "english",
+        customer_reply: aiMode === "chat" ? fastDeterministicReply : "",
+        suggested_customer_reply: fastDeterministicReply,
+        internal_summary: "Fast deterministic context reply used before Gemini to avoid delay/503 and answer the exact latest customer question.",
+        clarification_required: false,
+        handover_required: false,
+        assigned_to: "",
+        assigned_role: "",
+        handover_reason: "",
+        internal_notification: "",
+        detected_products: [],
+        next_action: "fast_deterministic_context_reply"
+      };
+    } else {
     try {
       const result = await callProductBotModel(
         "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
@@ -16194,7 +16256,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       modelCallFailed = true;
       modelCallError = modelErr?.message || String(modelErr || "Gemini unavailable");
       console.warn("AI Mode final reply model failed; using deterministic fallback:", modelCallError);
-      const fallbackReply = aiModeBuildEmergencyFallbackReply({ message, activeContext, requirementProfile });
+      const fallbackReply = aiModeBuildEmergencyFallbackReply({ message, history, activeContext, requirementProfile });
       parsed = {
         ok: true,
         source: "operator_hub",
@@ -16214,6 +16276,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         detected_products: [],
         next_action: "deterministic_fallback_after_model_error"
       };
+    }
     }
 
     let normalized = aiModeNormalizeAiJson(parsed, { aiMode, source, message });
@@ -16830,9 +16893,7 @@ async function aiModeFetchWorkerChannelsByIds(uid, channelIds = []) {
 }
 
 async function aiModeFetchRecentWorkerMessages(uid) {
-  return await odooExecute(uid, "mail.message", "search_read", [[
-    ["model", "=", "discuss.channel"]
-  ], [
+  const fields = [
     "id",
     "date",
     "body",
@@ -16843,10 +16904,25 @@ async function aiModeFetchRecentWorkerMessages(uid) {
     "model",
     "res_id",
     "create_uid"
-  ]], {
-    limit: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT,
-    order: "id desc"
-  });
+  ];
+  // Odoo versions/custom modules may store Discuss messages under discuss.channel or mail.channel.
+  // Scan both so the backend does not depend on the browser opening the chat to update discuss.channel ordering.
+  try {
+    return await odooExecute(uid, "mail.message", "search_read", [[
+      ["model", "in", ["discuss.channel", "mail.channel"]]
+    ], fields], {
+      limit: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT,
+      order: "id desc"
+    });
+  } catch (error) {
+    console.warn("AI Mode recent message multi-model scan failed, retrying discuss.channel only:", error?.message || error);
+    return await odooExecute(uid, "mail.message", "search_read", [[
+      ["model", "=", "discuss.channel"]
+    ], fields], {
+      limit: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT,
+      order: "id desc"
+    });
+  }
 }
 
 async function aiModeFetchWorkerMessages(uid, channelId) {
