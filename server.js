@@ -15926,6 +15926,10 @@ Core rules:
 - Khushagra = existing-product sales/quotation/price/special discount. Vibhu = custom/new/special technical/unsure. Never mention Ankit.
 - Prices only from relevant knowledge. Never invent price or stock/dispatch commitments.
 - USB drivers 101/102/103 do not use battery. 201 = rechargeable single COB driver. 202 = rechargeable dual/3-color. 204/205 = rechargeable strip drivers; 205 fast charging, 204 normal charging.
+- AS-B-201-SLD is 1-colour/single COB only; never recommend 2+2W/4W dual LED with 201.
+- For normal dual COB enquiries, use 3W dual COB or 5W dual COB with AS-B-202-DLD. Do not say 4W dual COB is a normal option.
+- Only discuss LC set pricing/specs when customer explicitly asks for LC/cost-sensitive set; otherwise quote per product/component prices.
+- Driver sample prices are driver-only prices. Do not say a normal complete kit price is ₹250 unless it is explicitly an LC set from the catalogue.
 - For rechargeable 3W single-color COB kit, likely setup is AS-B-201-SLD + 3W COB LED + 2600mAh battery + JST wire, unless customer says otherwise.
 `.trim();
 }
@@ -16066,19 +16070,19 @@ function aiModeTryFastDeterministicReply({ message = "", history = [], activeCon
   if (aiModeIsBroadNewProductInquiry(raw, history)) return aiModeBroadNewProductReply(raw);
 
   if (/(dual\s*cob|dual\s*led|3\s*color|3-color|warm\s*cool).*(kya|what|matlab|meaning)|^(kya|what).*dual\s*cob/i.test(raw)) {
-    return "Dual COB LED ka matlab hai two-output / warm-cool type LED setup. Isme AS-B-202-DLD driver use hota hai: touch se LED 1, LED 2, ya dono saath ON ho sakte hain, aur dimming bhi support hoti hai. Aapko 3W dual COB chahiye ya 5W dual COB?";
+    return "Dual COB LED ka matlab warm/cool ya two-output COB setup hota hai. Iske liye AS-B-202-DLD driver use hota hai; AS-B-201-SLD dual LED ke liye nahi hai. Normal dual COB options 3W dual aur 5W dual hain — 4W ko normal dual COB option mat consider karein.";
   }
 
   if (/(kitne|kaunse|konsi|available|watt).*?(watt|available|hai)|to\s*batao/i.test(raw) && likelyDualCob) {
-    return "Dual COB LED mein 3W dual aur 5W dual options handle kiye ja sakte hain. AS-B-202-DLD driver dual 3W/5W LEDs ke liye suitable hai. 4W ko main confirmed option nahi bolunga — aap 3W dual chahte hain ya 5W dual?";
+    return "Dual COB LED mein normal available options 3W dual aur 5W dual hain. AS-B-202-DLD driver dual 3W/5W LEDs ke liye suitable hai; 201 driver dual LED ke liye nahi hai. Aap 3W dual chahte hain ya 5W dual?";
   }
 
   if (/4\s*w|4w/i.test(raw) && /(nhi|nahi|not|hai\s*hi\s*nhi|hai\s*hi\s*nahi|wrong|galat)/i.test(raw)) {
-    return "Ji, sorry — 4W ko confirmed option bolna galat tha. Dual COB ke liye 3W dual aur 5W dual route consider karna chahiye; AS-B-202-DLD driver dual LED setup ke liye suitable hai. Aap 3W dual chahte hain ya 5W dual?";
+    return "Ji, sorry — 4W ko normal dual COB option bolna galat tha. Normal dual COB ke liye 3W dual aur 5W dual options hain; AS-B-202-DLD driver dual LED setup ke liye suitable hai. Aap 3W dual chahte hain ya 5W dual?";
   }
 
   if (/(maine|abhi).*pucha|to\s*batao|answer\s*karo/i.test(msg) && likelyDualCob) {
-    return "Ji, sorry. Dual COB ke liye main direct answer deta hoon: 3W dual aur 5W dual options relevant hain, aur AS-B-202-DLD driver dual LED/3-color setup ke liye use hota hai. Aapko sample chahiye ya quantity ke liye rate?";
+    return "Ji, sorry. Dual COB ke liye direct answer: 3W dual aur 5W dual options relevant hain, aur AS-B-202-DLD driver dual LED/3-color setup ke liye use hota hai. Price per component diya jayega, complete normal kit ka ₹250 price nahi bolna hai.";
   }
 
   return "";
@@ -16558,6 +16562,16 @@ const AI_MODE_HANDOVER_WAIT_MS = Math.max(
   Number(process.env.AI_MODE_HANDOVER_WAIT_MS || 10 * 60 * 1000)
 );
 
+// Prevent the background worker from replying to old backlog messages after a deploy/restart.
+// Only new customer messages after server boot should be considered, unless explicitly disabled.
+const AI_MODE_WORKER_BOOT_MS = Date.now();
+const AI_MODE_BACKGROUND_IGNORE_PREBOOT_MESSAGES =
+  String(process.env.AI_MODE_BACKGROUND_IGNORE_PREBOOT_MESSAGES || "true").toLowerCase() !== "false";
+const AI_MODE_BACKGROUND_PREBOOT_GRACE_MS = Math.max(
+  0,
+  Number(process.env.AI_MODE_BACKGROUND_PREBOOT_GRACE_MS || 30000)
+);
+
 const aiModeGlobalState = {
   mode: aiModeNormalizeMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
   updated_at: now(),
@@ -16590,6 +16604,9 @@ const aiModeBackgroundState = {
   recent_skip_outbound_count: 0,
   recent_skip_empty_count: 0,
   recent_skip_missing_channel_count: 0,
+  recent_skip_preboot_count: 0,
+  recent_latest_channel_count: 0,
+  preboot_marked_processed_count: 0,
   latest_recent_candidate_debug: [],
   latest_skip_debug: [],
   active_memory_channel_scan_count: 0,
@@ -16765,6 +16782,13 @@ function aiModeParseOdooDateMs(value) {
   const raw = String(value || "").trim();
   const date = new Date(raw.includes("T") ? raw : raw.replace(" ", "T") + "Z");
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function aiModeIsPreBootWorkerMessage(message = {}) {
+  if (!AI_MODE_BACKGROUND_IGNORE_PREBOOT_MESSAGES) return false;
+  const messageMs = aiModeParseOdooDateMs(message?.date);
+  if (!messageMs) return false;
+  return messageMs < (AI_MODE_WORKER_BOOT_MS - AI_MODE_BACKGROUND_PREBOOT_GRACE_MS);
 }
 
 function aiModeStripHtml(value) {
@@ -17235,7 +17259,7 @@ async function aiModeBackgroundTick() {
 
     aiModeBackgroundState.recent_message_found_count = Array.isArray(recentMessages) ? recentMessages.length : 0;
 
-    const recentCandidateChannelIds = [];
+    const latestCandidateByChannel = new Map();
     let recentCandidateMessageCount = 0;
     let recentSkipProcessed = 0;
     let recentSkipProcessing = 0;
@@ -17244,6 +17268,8 @@ async function aiModeBackgroundTick() {
     let recentSkipOutbound = 0;
     let recentSkipEmpty = 0;
     let recentSkipMissingChannel = 0;
+    let recentSkipPreboot = 0;
+    const prebootProcessedIds = [];
     const recentCandidateDebug = [];
     const recentSkipDebug = [];
 
@@ -17264,6 +17290,12 @@ async function aiModeBackgroundTick() {
       if (!messageId || !channelId) {
         recentSkipMissingChannel += 1;
         if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "missing_message_or_channel_id" });
+        continue;
+      }
+      if (aiModeIsPreBootWorkerMessage(message)) {
+        recentSkipPreboot += 1;
+        prebootProcessedIds.push(messageId);
+        if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "preboot_backlog_ignored" });
         continue;
       }
       if (aiModeBackgroundHasProcessed(messageId)) {
@@ -17295,9 +17327,19 @@ async function aiModeBackgroundTick() {
       }
 
       recentCandidateMessageCount += 1;
-      recentCandidateChannelIds.push(channelId);
+      const existing = latestCandidateByChannel.get(channelId);
+      if (!existing || Number(messageId) > Number(existing.id || 0)) {
+        latestCandidateByChannel.set(channelId, message);
+      }
       if (recentCandidateDebug.length < 8) recentCandidateDebug.push(debugBase);
     }
+
+    if (prebootProcessedIds.length) {
+      await aiModeBackgroundRememberProcessedIds(prebootProcessedIds);
+      aiModeBackgroundState.preboot_marked_processed_count += prebootProcessedIds.length;
+    }
+
+    const recentCandidateChannelIds = Array.from(latestCandidateByChannel.keys());
 
     aiModeBackgroundState.recent_candidate_message_count = recentCandidateMessageCount;
     aiModeBackgroundState.recent_skip_processed_count = recentSkipProcessed;
@@ -17307,6 +17349,8 @@ async function aiModeBackgroundTick() {
     aiModeBackgroundState.recent_skip_outbound_count = recentSkipOutbound;
     aiModeBackgroundState.recent_skip_empty_count = recentSkipEmpty;
     aiModeBackgroundState.recent_skip_missing_channel_count = recentSkipMissingChannel;
+    aiModeBackgroundState.recent_skip_preboot_count = recentSkipPreboot;
+    aiModeBackgroundState.recent_latest_channel_count = latestCandidateByChannel.size;
     aiModeBackgroundState.latest_recent_candidate_debug = recentCandidateDebug;
     aiModeBackgroundState.latest_skip_debug = recentSkipDebug;
 
@@ -17346,8 +17390,17 @@ async function aiModeBackgroundTick() {
       });
       if (!messages.length) continue;
 
+      const prebootChannelMessageIds = (messages || [])
+        .filter((message) => message?.id && aiModeIsPreBootWorkerMessage(message))
+        .map((message) => message.id);
+      if (prebootChannelMessageIds.length) {
+        await aiModeBackgroundRememberProcessedIds(prebootChannelMessageIds);
+        aiModeBackgroundState.preboot_marked_processed_count += prebootChannelMessageIds.length;
+      }
+
       const latestCustomerMessage = (messages || []).find((message) => {
         if (!message?.id) return false;
+        if (aiModeIsPreBootWorkerMessage(message)) return false;
         if (!aiModeBackgroundCanAttempt(message.id)) return false;
         if (aiModeIsOwnOdooMessageForWorker(message, userContext)) return false;
         if (aiModeIsLikelySmartHandicraftsOutbound(message)) return false;
@@ -17356,6 +17409,20 @@ async function aiModeBackgroundTick() {
       });
 
       if (!latestCustomerMessage) continue;
+
+      // Process only the latest pending customer message for this channel.
+      // Older pending customer messages in the same channel are marked processed so the worker
+      // does not replay polluted backlog after every deploy.
+      const olderPendingCustomerIds = (messages || [])
+        .filter((message) => message?.id && Number(message.id) < Number(latestCustomerMessage.id))
+        .filter((message) => !aiModeBackgroundHasProcessed(message.id))
+        .filter((message) => !aiModeIsOwnOdooMessageForWorker(message, userContext))
+        .filter((message) => !aiModeIsLikelySmartHandicraftsOutbound(message))
+        .filter((message) => !!aiModeMessagePlainText(message))
+        .map((message) => message.id);
+      if (olderPendingCustomerIds.length) {
+        await aiModeBackgroundRememberProcessedIds(olderPendingCustomerIds);
+      }
 
       try {
         aiModeBackgroundStartProcessing(latestCustomerMessage.id);
@@ -17429,6 +17496,11 @@ app.get("/api/ai-mode/global", (req, res) => {
       recent_skip_outbound_count: aiModeBackgroundState.recent_skip_outbound_count,
       recent_skip_empty_count: aiModeBackgroundState.recent_skip_empty_count,
       recent_skip_missing_channel_count: aiModeBackgroundState.recent_skip_missing_channel_count,
+      recent_skip_preboot_count: aiModeBackgroundState.recent_skip_preboot_count,
+      recent_latest_channel_count: aiModeBackgroundState.recent_latest_channel_count,
+      preboot_marked_processed_count: aiModeBackgroundState.preboot_marked_processed_count,
+      worker_boot_at: new Date(AI_MODE_WORKER_BOOT_MS).toISOString(),
+      ignore_preboot_messages: AI_MODE_BACKGROUND_IGNORE_PREBOOT_MESSAGES,
       latest_recent_candidate_debug: aiModeBackgroundState.latest_recent_candidate_debug,
       latest_skip_debug: aiModeBackgroundState.latest_skip_debug,
       active_memory_channel_scan_count: aiModeBackgroundState.active_memory_channel_scan_count,
