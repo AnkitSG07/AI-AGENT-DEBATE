@@ -14584,7 +14584,7 @@ Current requirement: ${line}.
 ${kitLines ? `
 Suitable setup:
 ${kitLines}
-` : ""}Ab next step ke liye aap sample set proceed karna chahte hain ya price/quotation chahiye?`;
+` : ""}Aap price chahte hain to main sample-set total + GST calculate karke share karunga.`;
   }
 
   if (/battery.*(nahi|kyu|why)|kya.*battery|maine.*battery.*(pucha|nahi)|i.*not.*ask.*battery/i.test(msg)) {
@@ -14594,7 +14594,7 @@ Current requirement: ${line}.
 ${kitLines ? `
 Recommended complete sample kit:
 ${kitLines}
-` : ""}Agar aap chahen to pehle standard sample kit proceed kar sakte hain; battery variant later finalize ho sakta hai.`;
+` : ""}Agar battery nahi chahiye to main sirf driver + LED + required JST wire par focus karunga.`;
   }
 
   if (/\b(difference|antar|farak|fark|kya\s+antar|kya\s+farak|compare|comparison)\b/i.test(msg)) {
@@ -14961,33 +14961,37 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   const kitLines = [];
   if (profile.likely_driver) kitLines.push(`1. ${profile.likely_driver}`);
   if (profile.likely_led) kitLines.push(`${kitLines.length + 1}. ${profile.likely_led}`);
-  if (profile.power_type === "rechargeable" && (profile.likely_driver || profile.likely_led)) kitLines.push(`${kitLines.length + 1}. 2600mAh battery as standard option, or 1200mAh for LC/cost-sensitive kit if applicable`);
+  if (profile.power_type === "rechargeable" && (profile.likely_driver || profile.likely_led) && !/driver\s*(aur|and|\+)?\s*led|sirf\s*driver|sirf\s*led|battery\s*nahi/i.test(msg)) {
+    kitLines.push(`${kitLines.length + 1}. 2600mAh battery as standard sample-kit option`);
+  }
   if (profile.likely_driver || profile.likely_led) kitLines.push(`${kitLines.length + 1}. JST wire / connector wire`);
 
+  const hasKit = kitLines.length > 0;
+  const asksPrice = /price|rate|cost|quotation|quote|kitna|kitne|padega|padhega|amount|total|sabka|sab\s+ka/i.test(msg);
+  const saysSample = /sample|trial|demo|testing|one\s*set|ek\s*set/i.test(msg) || profile.quantity === "sample" || profile.quantity_intent === "sample";
+
   if (profile.custom_request?.is_custom) {
-    return "Ji, ye requirement custom/new product type lag rahi hai. Isme feasibility check karna zaroori hoga, isliye main isko Vibhu ke liye handover mark kar raha hoon. Please exact size, function aur quantity share kar dijiye, taaki feasibility properly check ho sake.";
+    return "Ji, ye custom/new product type requirement lag rahi hai. Iske liye feasibility check zaroori hoga. Please exact size, function aur quantity share kar dijiye, main isko Vibhu ji ke liye mark kar raha hoon.";
   }
   if (profile.support_issue?.has_issue) {
-    return "Ji, issue note kar liya. Please product/SKU, order reference ya invoice number, aur problem ka short detail share kar dijiye. Team check karke replacement/warranty/support ke liye guide karegi.";
+    return "Ji, issue note kar liya. Please product/SKU, order reference ya invoice number, aur problem ka short detail share kar dijiye. Team check karke support/replacement/warranty ke liye guide karegi.";
   }
   if (profile.dispatch_request?.is_dispatch_query) {
     return "Ji, dispatch/tracking check karne ke liye please order number, invoice number ya registered phone number share kar dijiye. Uske basis par team status confirm karegi.";
   }
 
-  if (/sample|trial|demo|testing|one\s*set|ek\s*set/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, samajh gaya. Aapko ${setup} ka sample setup chahiye.\n\nSuitable sample combination:\n${kitLines.join("\n")}\n\nAap sample set proceed karna chahte hain ya iski pricing/quotation chahiye?`;
+  // Price questions must not be answered with another product recommendation loop.
+  // Actual sample-set price calculation is handled by aiModeBuildSampleSetPriceFromJson().
+  if (asksPrice && (profile.likely_driver || profile.likely_led || profile.detected_products?.length)) {
+    return aiModeBuildPricelistUnavailableReply();
   }
 
-  if (/complete\s*kit|kit|set|combo/i.test(msg) && aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, requirement clear hai: ${setup}.\n\nIske liye suitable kit combination hoga:\n${kitLines.join("\n")}\n\nAap sample set proceed karna chahte hain ya bulk quantity ke liye pricing chahiye?`;
-  }
-
-  if (/price|rate|cost|quotation|quote|kitna|kitne/i.test(msg) && (profile.likely_driver || profile.likely_led || profile.detected_products?.length)) {
-    return `Ji, ${setup || "is requirement"} ke liye product identify ho raha hai. ${profile.likely_driver ? `Driver: ${profile.likely_driver}. ` : ""}${profile.likely_led ? `LED: ${profile.likely_led}. ` : ""}Please quantity confirm kar dijiye, uske hisaab se approved price slab ke according rate share kar denge.`;
-  }
-
-  if (aiModeProfileHasEnoughForKit(profile)) {
-    return `Ji, requirement clear hai: ${setup}.\n\nRecommended setup:\n${kitLines.join("\n")}\n\nAap sample set chahte hain ya quantity/bulk pricing ke liye rate chahiye?`;
+  if (hasKit && aiModeProfileHasEnoughForKit(profile)) {
+    const title = saysSample ? "sample setup" : "suitable setup";
+    const next = saysSample
+      ? "Quantity sample noted hai. Price chahiye to main sample-set price calculate karke breakdown share karunga."
+      : "Quantity bata dijiye — sample ya bulk — taaki price slab ke hisaab se next step clear ho sake.";
+    return `Ji, samajh gaya. Aapki requirement: ${setup}.\n\n${title}:\n${kitLines.join("\n")}\n\n${next}`;
   }
 
   const missing = Array.isArray(profile.missing_details) ? profile.missing_details : [];
@@ -15000,7 +15004,7 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   if (missing.includes("color_type")) return "Ji, aapko single-color LED chahiye ya 3-color / warm-cool LED?";
   if (missing.includes("lamp_type")) return "Ji, ye setup table lamp, wall lamp, floor lamp ya decorative product ke liye hai?";
   if (missing.includes("quantity")) return "Ji, quantity confirm kar dijiye — sample chahiye ya bulk quantity?";
-  return "Ji, please requirement thoda aur clear kar dijiye — product type, power type aur quantity bata denge to main sahi option suggest kar dunga.";
+  return "Ji, please requirement thoda aur clear kar dijiye — LED, driver, battery, strip LED ya complete kit mein se kya chahiye?";
 }
 
 function aiModeReplyRepeatsKnownQuestion(aiResult = {}, profile = {}) {
@@ -16013,7 +16017,7 @@ function aiModeBuildDirectReplyFromContext(context = {}, profile = {}, latestMes
 
   if (/sample|trial|demo|testing|one\s*set|ek\s*set|poora\s*kit|complete\s*kit|full\s*kit/i.test(latestMessage) && aiModeProfileHasEnoughForKit(profile)) {
     const kitLines = aiModeBuildKitLines(profile);
-    return `Ji, samajh gaya. Aapko ${aiModeHumanReadableProfileLine(profile)} ka sample/complete kit chahiye.\n\nSuitable setup:\n${kitLines}\n\nAap sample set proceed karna chahte hain ya iski price confirm karni hai?`;
+    return `Ji, samajh gaya. Sample/complete kit requirement note kar li hai: ${aiModeHumanReadableProfileLine(profile)}.\n\nSetup:\n${kitLines}\n\nAgar aap price chahte hain to main JSON pricelist se sample-set total + GST calculate karke share karunga.`;
   }
 
   return "";
@@ -16301,27 +16305,43 @@ async function readOdooPricelistExportProducts({ force = false } = {}) {
     return odooPricelistExportCache.products;
   }
 
-  try {
-    const raw = await readFile(ODOO_PRODUCT_PRICELIST_EXPORT_PATH, "utf8");
-    if (!force && raw === odooPricelistExportCache.raw && odooPricelistExportCache.products.length) {
+  const candidatePaths = Array.from(new Set([
+    ODOO_PRODUCT_PRICELIST_EXPORT_PATH,
+    "./odoo-product-pricelist-export.json",
+    "odoo-product-pricelist-export.json",
+    "./public/odoo-product-pricelist-export.json",
+    "./data/odoo-product-pricelist-export.json"
+  ].filter(Boolean)));
+
+  const errors = [];
+  for (const candidatePath of candidatePaths) {
+    try {
+      const raw = await readFile(candidatePath, "utf8");
+      if (!force && raw === odooPricelistExportCache.raw && odooPricelistExportCache.products.length) {
+        odooPricelistExportCache.loadedAt = Date.now();
+        return odooPricelistExportCache.products;
+      }
+      const parsed = JSON.parse(raw);
+      const rows = shExtractProductRowsFromAnyJson(parsed, [])
+        .filter((p, idx, arr) => {
+          const key = `${String(p.sku || "").toLowerCase()}|${String(p.name || "").toLowerCase()}|${p.price}`;
+          return arr.findIndex((x) => `${String(x.sku || "").toLowerCase()}|${String(x.name || "").toLowerCase()}|${x.price}` === key) === idx;
+        });
+      odooPricelistExportCache.raw = raw;
+      odooPricelistExportCache.products = rows;
       odooPricelistExportCache.loadedAt = Date.now();
-      return odooPricelistExportCache.products;
+      odooPricelistExportCache.error = null;
+      odooPricelistExportCache.path = candidatePath;
+      return rows;
+    } catch (e) {
+      errors.push(`${candidatePath}: ${e?.message || e}`);
     }
-    const parsed = JSON.parse(raw);
-    const rows = shExtractProductRowsFromAnyJson(parsed, [])
-      .filter((p, idx, arr) => {
-        const key = `${String(p.sku || "").toLowerCase()}|${String(p.name || "").toLowerCase()}|${p.price}`;
-        return arr.findIndex((x) => `${String(x.sku || "").toLowerCase()}|${String(x.name || "").toLowerCase()}|${x.price}` === key) === idx;
-      });
-    odooPricelistExportCache.raw = raw;
-    odooPricelistExportCache.products = rows;
-    odooPricelistExportCache.loadedAt = Date.now();
-    odooPricelistExportCache.error = null;
-    return rows;
-  } catch (e) {
-    odooPricelistExportCache.error = e?.message || String(e);
-    return [];
   }
+
+  odooPricelistExportCache.error = errors.join(" | ");
+  odooPricelistExportCache.products = [];
+  odooPricelistExportCache.loadedAt = Date.now();
+  return [];
 }
 
 function shScorePricelistProduct(product = {}, spec = {}) {
@@ -16418,6 +16438,26 @@ async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], a
   return `Ji, sample set ka full price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${Number.isFinite(GST_RATE) ? GST_RATE : 18}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}\n\nIsme AS-B-202-DLD driver + ${ledIs5w ? "5W" : "3W"} dual COB LED + 2600mAh battery + JST wire include hai.`;
 }
 
+
+function aiModeIsSampleSetPriceIntent({ message = "", history = [] } = {}) {
+  const raw = String(message || "").trim();
+  const msg = raw.toLowerCase();
+  const historyText = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
+  const fullText = `${msg}\n${historyText}`;
+
+  const asksPriceNow = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(msg);
+  const recentPriceAsk = /sabka\s+price|sab\s+ka\s+price|price\s+batao|rate\s+batao|kitna\s+padega|kitna\s+padhega|full\s+set\s+price|total\s+price|sample\s+set\s+ka\s+price/.test(historyText);
+  const shortNudgeAfterPrice = /^(ok|okay|haan|ha|yes|y|kya\??|kyaa\??|ky\??|\?\?+|reply|please reply|sample|sample set|sample-set)$/i.test(raw);
+  const frustrationAfterPrice = /kya\s+bol|kyaa|samajh\s+nahi|samajh\s+nhi|wrong|galat|repeat|phir\s+se/i.test(msg);
+
+  const hasSampleSetContext = /202|as-b-202|dld|3\s*w|3w|dual|cob|2600|battery|jst|wire|sample\s+set/.test(fullText);
+  return !!((asksPriceNow || (recentPriceAsk && (shortNudgeAfterPrice || frustrationAfterPrice))) && hasSampleSetContext);
+}
+
+function aiModeBuildPricelistUnavailableReply() {
+  return "Ji, sorry — sample set ka exact price abhi system se calculate nahi ho paa raha. Main koi half/placeholder price nahi bhejunga. Aapki requirement AS-B-202-DLD + dual COB LED + battery + JST wire ke sample set ke liye note kar li hai; team exact total confirm karegi.";
+}
+
 function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
@@ -16442,26 +16482,12 @@ function aiModeTryPriceFollowupReply({ message = "", history = [], activeContext
   const hasBattery = /2600|battery|batt|mah/.test(contextText);
   const hasWire = /jst|wire|connector/.test(contextText);
 
-  // This must answer the customer's price question directly. Do not ask again
-  // whether they want sample/bulk if they already asked "sabka price batao".
+  // IMPORTANT: Do NOT send placeholder component prices here.
+  // If the customer asks "sabka price batao", the answer must come from
+  // aiModeBuildSampleSetPriceFromJson() only. If JSON lookup fails, return empty
+  // so the route can block the unsafe old fallback and show an internal review message.
   if (has202 && (has3wDual || has5wDual)) {
-    const ledLine = has5wDual ? "5W dual COB LED" : "3W dual COB LED";
-    const rows = [
-      "1. AS-B-202-DLD rechargeable 3-color/dual LED driver — ₹250 sample price",
-      `2. ${ledLine} — price to be added from latest pricelist`,
-      hasBattery ? "3. 2600mAh battery — price to be added from latest pricelist" : "3. Battery — not included unless required",
-      hasWire ? "4. JST wire — price to be added from latest pricelist" : "4. JST wire — required for connection, price to be added"
-    ].join("\n");
-
-    const prefix = (shortNudgeAfterPrice || frustrationAfterPrice)
-      ? "Ji sorry, aap price pooch rahe the — main direct breakdown de raha hoon."
-      : "Ji, pehle full set ka price breakdown bata deta hoon.";
-
-    return `${prefix}\n\n${rows}\n\nConfirmed price abhi driver ka ₹250 hai. Exact total tabhi final bolna chahiye jab LED, battery aur JST wire ke latest Odoo/pricelist rates attach ho jaayen. Main isko quotation requirement ke roop mein mark kar raha hoon; Khushagra ji exact total confirm kar denge.\n\nAapke liye requirement: AS-B-202-DLD + ${ledLine} + ${hasBattery ? "2600mAh battery + " : ""}JST wire.`;
-  }
-
-  if (asksPriceNow) {
-    return "Ji, price requirement clear hai. Kripya product/SKU ya item list confirm kar dijiye, main component-wise price breakdown de dunga. Agar yeh AS-B-202-DLD + dual COB sample kit hai, driver ka confirmed sample price ₹250 hai; LED, battery aur JST wire ka exact rate latest pricelist se add hoga.";
+    return "";
   }
 
   return "";
@@ -16590,7 +16616,7 @@ function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeCo
 
   if (aiModeHasRecentPriceRequest(history) || aiModeIsConfusionOrAck(raw)) {
     return {
-      reply: "Ji sorry, main previous setup message repeat kar raha tha. Aap sample set ka price pooch rahe the. Abhi confirmed: AS-B-202-DLD driver ka sample price ₹250 hai. 3W dual COB LED, 2600mAh battery aur JST wire ka exact latest rate add karke total quotation confirm karna hoga. Main isko price confirmation ke liye Khushagra ji ko forward kar raha hoon.",
+      reply: aiModeBuildPricelistUnavailableReply(),
       handoverRequired: true,
       assignedTo: "Khushagra",
       assignedRole: "Sales",
@@ -16660,6 +16686,76 @@ function aiModeBuildDeterministicResponseObject({ aiMode, source = "operator_hub
   };
 }
 
+
+function aiModeOutgoingTextFromResult(aiResult = {}) {
+  return String(aiResult.customer_reply || aiResult.suggested_customer_reply || "").trim();
+}
+
+function aiModeLooksLikeUnsafeCustomerReply(reply = "") {
+  const text = String(reply || "").toLowerCase();
+  if (!text) return false;
+  return (
+    /price\s+to\s+be\s+added/i.test(text) ||
+    /latest\s+odoo\/pricelist\s+rates\s+attach/i.test(text) ||
+    /exact\s+total\s+tabhi\s+final/i.test(text) ||
+    /json\s+pricelist\s+load\/match/i.test(text) ||
+    /placeholder\s+price/i.test(text) ||
+    /wrong\/half\s+price/i.test(text) ||
+    /aap\s+sample\s+set\s+chahte\s+hain\s+ya\s+quantity\/bulk\s+pricing/i.test(text) ||
+    /aap\s+sample\s+set\s+proceed\s+karna\s+chahte/i.test(text) ||
+    /sample\s+set\s+proceed.*price\/?quotation/i.test(text) ||
+    /sample\s+set\s+proceed.*price\s+confirm/i.test(text) ||
+    (/recommended\s+setup:/i.test(text) && /sample\s+set\s+chahte|pricing|rate\s+chahiye|price\s+confirm/i.test(text)) ||
+    (/requirement\s+clear\s+hai:/i.test(text) && /aap\s+sample\s+set|bulk\s+pricing|price\s+confirm/i.test(text))
+  );
+}
+
+async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, source, message, history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const currentReply = aiModeOutgoingTextFromResult(normalized);
+  const priceIntent = aiModeIsSampleSetPriceIntent({ message, history }) || aiModeHasRecentPriceRequest(history) || /price|rate|cost|kitna|padega|total|sabka|sab\s+ka/i.test(String(message || ""));
+  const unsafe = aiModeLooksLikeUnsafeCustomerReply(currentReply);
+
+  if (!unsafe && currentReply) return normalized;
+
+  // Price intent: try JSON calculation one last time. If it fails, send only a safe no-placeholder reply.
+  if (priceIntent) {
+    const jsonPrice = await aiModeBuildSampleSetPriceFromJson({ message, history, activeContext, requirementProfile });
+    const replacement = jsonPrice || aiModeBuildPricelistUnavailableReply();
+    return {
+      ...normalized,
+      level: jsonPrice ? 1 : 3,
+      action: aiMode === "assist" ? "suggest_reply" : (jsonPrice ? "send_direct_reply" : "handover"),
+      clarification_required: false,
+      handover_required: !jsonPrice,
+      assigned_to: jsonPrice ? "" : "Khushagra",
+      assigned_role: jsonPrice ? "" : "Sales",
+      handover_reason: jsonPrice ? "" : "Customer asked for sample-set price but JSON pricelist could not be matched safely.",
+      customer_reply: aiMode === "chat" ? replacement : "",
+      suggested_customer_reply: replacement,
+      internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/empty price reply.`.trim(),
+      next_action: jsonPrice ? "json_price_reply" : "handover_for_manual_price_confirmation"
+    };
+  }
+
+  // Non-price unsafe or empty reply: try exact deterministic request handling, otherwise send a neutral clarification.
+  const deterministic = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile });
+  const replacement = deterministic || "Ji, sorry — previous reply clear nahi tha. Please ek line mein bata dijiye: aapko driver, LED, battery, strip LED ya complete kit mein se kya chahiye?";
+  return {
+    ...normalized,
+    level: 1,
+    action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+    clarification_required: false,
+    handover_required: false,
+    assigned_to: "",
+    assigned_role: "",
+    handover_reason: "",
+    customer_reply: aiMode === "chat" ? replacement : "",
+    suggested_customer_reply: replacement,
+    internal_summary: `${normalized.internal_summary || ""}\nFinal safety guard replaced unsafe/empty non-price reply.`.trim(),
+    next_action: deterministic ? "fast_deterministic_safety_repair" : "safe_clarification_after_bad_reply"
+  };
+}
+
 app.post("/api/ai-mode/chat", async (req, res) => {
   try {
     const aiMode = aiModeNormalizeMode(req.body?.aiMode);
@@ -16706,11 +16802,13 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     // Gemini interpreter, or final model call. This prevents simple WhatsApp replies from
     // taking 2-3 minutes when Gemini/Odoo is slow.
     if (AI_MODE_FAST_LOCAL_FIRST) {
+      const earlyHeuristicProfile = aiModeBuildRequirementProfile(history, message, {});
+      const earlyIsPriceIntent = aiModeIsSampleSetPriceIntent({ message, history });
       const earlyPriceReply = await aiModeBuildSampleSetPriceFromJson({
         message,
         history,
         activeContext: {},
-        requirementProfile: aiModeBuildRequirementProfile(history, message, {})
+        requirementProfile: earlyHeuristicProfile
       });
       if (earlyPriceReply) {
         const earlyParsed = aiModeBuildDeterministicResponseObject({
@@ -16724,7 +16822,29 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
       }
 
-      const earlyHeuristicProfile = aiModeBuildRequirementProfile(history, message, {});
+      if (earlyIsPriceIntent) {
+        console.warn("AI Mode sample-set price requested but JSON price lookup failed. Blocking unsafe placeholder reply.", {
+          pricelistPath: ODOO_PRODUCT_PRICELIST_EXPORT_PATH,
+          pricelistError: odooPricelistExportCache.error || null,
+          productsLoaded: odooPricelistExportCache.products?.length || 0
+        });
+        const earlyParsed = aiModeBuildDeterministicResponseObject({
+          aiMode,
+          source,
+          message,
+          reply: aiModeBuildPricelistUnavailableReply(),
+          modelUsed: "price_json_lookup_failed_no_placeholder",
+          summary: "Sample-set price was requested, but JSON price lookup failed. Unsafe placeholder price reply was blocked."
+        });
+        earlyParsed.handover_required = true;
+        earlyParsed.assigned_to = "Khushagra";
+        earlyParsed.assigned_role = "Sales";
+        earlyParsed.handover_reason = "JSON pricelist lookup failed for sample set pricing.";
+        earlyParsed.internal_notification = "Customer asked for sample set price. JSON lookup failed; please verify odoo-product-pricelist-export.json path and product matching for AS-B-202-DLD, 3W dual COB LED, 2600mAh battery, JST wire.";
+        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+      }
+
+      
       const earlyFastReply = aiModeTryFastDeterministicReply({
         message,
         history,
@@ -17044,6 +17164,17 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
 Safe no-reply fallback applied.`.trim()
       };
     }
+
+    // Final customer-reply safety gate. This runs after Gemini, deterministic repairs,
+    // and fallback logic, so no unsafe placeholder/loop reply can escape to WhatsApp.
+    normalized = await aiModeApplyFinalReplySafetyGuard(normalized, {
+      aiMode,
+      source,
+      message,
+      history,
+      activeContext,
+      requirementProfile
+    });
 
     // If this response hands the chat over to a human, record a hold window in context.
     // During that window, the background worker will not keep replying to follow-up bumps
@@ -17699,10 +17830,33 @@ function aiModeBuildWorkerConversationHistory(messages = [], userContext = {}) {
     .slice(-18);
 }
 
+const aiModeRecentOutboundReplyLock = new Map();
+
+function aiModeOutboundReplySignature(channelId, body = "") {
+  return `${String(channelId || "")}|${String(body || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 1200)}`;
+}
+
+function aiModeShouldBlockDuplicateOutbound(channelId, body = "") {
+  const signature = aiModeOutboundReplySignature(channelId, body);
+  if (!signature || signature.endsWith("|")) return false;
+  const nowMs = Date.now();
+  const prev = aiModeRecentOutboundReplyLock.get(signature);
+  if (prev && nowMs - prev < 180000) return true;
+  aiModeRecentOutboundReplyLock.set(signature, nowMs);
+  if (aiModeRecentOutboundReplyLock.size > 500) {
+    for (const [key, at] of aiModeRecentOutboundReplyLock.entries()) {
+      if (nowMs - at > 10 * 60 * 1000) aiModeRecentOutboundReplyLock.delete(key);
+    }
+  }
+  return false;
+}
+
 async function aiModePostTextToOdooChannel(uid, channel, text) {
   const body = aiModeSafeString(text, 8000);
   if (!body) return { ok: false, reason: "empty_body" };
   if (!channel?.id) return { ok: false, reason: "missing_channel" };
+  if (aiModeLooksLikeUnsafeCustomerReply(body)) return { ok: false, reason: "unsafe_reply_blocked" };
+  if (aiModeShouldBlockDuplicateOutbound(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
   if (!aiModeCanPostToChannel(channel)) {
     return { ok: false, reason: "whatsapp_reply_window_closed" };
   }
