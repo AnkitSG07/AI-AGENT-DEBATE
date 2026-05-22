@@ -94,6 +94,9 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const genAI = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 const GEMINI_MODEL = "gemini-2.5-flash";
+const AI_MODEL_TIMEOUT_MS = Math.max(3000, Number(process.env.AI_MODEL_TIMEOUT_MS || 8000));
+const AI_MODEL_OPENROUTER_TIMEOUT_MS = Math.max(3000, Number(process.env.AI_MODEL_OPENROUTER_TIMEOUT_MS || 8000));
+const AI_MODE_FAST_LOCAL_FIRST = String(process.env.AI_MODE_FAST_LOCAL_FIRST || "true").toLowerCase() !== "false";
 const LLAMA_MODEL = process.env.OR_MODEL_LLAMA || "meta-llama/llama-3.1-8b-instruct";
 const AGENT_C_MODEL = process.env.OR_MODEL_GEMMA || process.env.OR_MODEL_MISTRAL || "google/gemma-3-4b-it";
 const PRODUCT_BOT_OR_MODEL = process.env.OR_MODEL_PRODUCT_BOT || process.env.OR_MODEL_GEMMA || AGENT_C_MODEL;
@@ -1107,16 +1110,28 @@ UNCERTAIN OR CONFLICTING:
 ${BASE_RULES}
 `;
 
+function withTimeout(promise, ms, label = "operation") {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function callGemini(system, prompt, debateText) {
   if (!genAI) throw new Error("Gemini is not configured (missing GEMINI_API_KEY).");
   const fullPrompt =
     `${system}\n\nUSER PROMPT:\n${prompt}\n\n` +
     (debateText ? `DEBATE SO FAR:\n${debateText}` : "");
 
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: fullPrompt
-  });
+  const response = await withTimeout(
+    genAI.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: fullPrompt
+    }),
+    AI_MODEL_TIMEOUT_MS,
+    "Gemini"
+  );
 
   return response.text?.trim() || "";
 }
@@ -1167,28 +1182,36 @@ async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
 
   for (const m of fallbacks) {
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": process.env.APP_URL || "http://localhost",
-          "X-Title": "AI Agent Debate"
-        },
-        body: JSON.stringify({
-          model: m,
-          messages: [
-            { role: "system", content: system },
-            {
-              role: "user",
-              content:
-                `USER PROMPT:\n${prompt}\n\n` +
-                (debateText ? `DEBATE SO FAR:\n${debateText}` : "")
-            }
-          ],
-          temperature: 0.4
-        })
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), AI_MODEL_OPENROUTER_TIMEOUT_MS);
+      let response;
+      try {
+        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": process.env.APP_URL || "http://localhost",
+            "X-Title": "AI Agent Debate"
+          },
+          body: JSON.stringify({
+            model: m,
+            messages: [
+              { role: "system", content: system },
+              {
+                role: "user",
+                content:
+                  `USER PROMPT:\n${prompt}\n\n` +
+                  (debateText ? `DEBATE SO FAR:\n${debateText}` : "")
+              }
+            ],
+            temperature: 0.4
+          })
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const err = await response.text();
@@ -16240,6 +16263,30 @@ function aiModeBuildEmergencyFallbackReply({ message = "", history = [], activeC
 }
 
 
+function aiModeBuildDeterministicResponseObject({ aiMode, source = "operator_hub", message = "", reply = "", modelUsed = "fast_local_rule", summary = "Fast local deterministic reply used before expensive AI/Odoo retrieval." } = {}) {
+  return {
+    ok: true,
+    source,
+    aiMode,
+    level: 1,
+    action: aiMode === "assist" ? "suggest_reply" : "send_direct_reply",
+    language: /\b(mujhe|chahiye|chaiye|kya|hai|ji|haan|nahi|bata|batao|chahie|aap)\b/i.test(message || "") ? "hinglish" : "english",
+    customer_reply: aiMode === "chat" ? reply : "",
+    suggested_customer_reply: reply,
+    internal_summary: summary,
+    clarification_required: false,
+    handover_required: false,
+    assigned_to: "",
+    assigned_role: "",
+    handover_reason: "",
+    internal_notification: "",
+    detected_products: [],
+    model_provider: "deterministic",
+    model_used: modelUsed,
+    next_action: "fast_local_deterministic_reply"
+  };
+}
+
 app.post("/api/ai-mode/chat", async (req, res) => {
   try {
     const aiMode = aiModeNormalizeMode(req.body?.aiMode);
@@ -16280,6 +16327,51 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         memory
       });
       return res.json(internalResult);
+    }
+
+    // SPEED FIX: answer clear follow-ups locally before any file retrieval, Odoo memory load,
+    // Gemini interpreter, or final model call. This prevents simple WhatsApp replies from
+    // taking 2-3 minutes when Gemini/Odoo is slow.
+    if (AI_MODE_FAST_LOCAL_FIRST) {
+      const earlyHeuristicProfile = aiModeBuildRequirementProfile(history, message, {});
+      const earlyFastReply = aiModeTryFastDeterministicReply({
+        message,
+        history,
+        activeContext: {},
+        requirementProfile: earlyHeuristicProfile
+      });
+
+      if (earlyFastReply) {
+        const earlyParsed = aiModeBuildDeterministicResponseObject({
+          aiMode,
+          source,
+          message,
+          reply: earlyFastReply,
+          modelUsed: "fast_local_first",
+          summary: "Fast local deterministic reply used before product retrieval/Odoo/Gemini."
+        });
+
+        // Save minimal local context asynchronously; never delay the WhatsApp reply for memory writes.
+        if (chatId) {
+          Promise.resolve().then(async () => {
+            try {
+              const latestMemory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+              latestMemory[chatId] = {
+                ...(latestMemory[chatId] || {}),
+                requirement_profile: earlyHeuristicProfile,
+                last_ai_reply: earlyFastReply,
+                last_user_message: message,
+                updated_at: now()
+              };
+              await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, latestMemory);
+            } catch (memoryErr) {
+              console.warn("AI Mode early local memory save skipped:", memoryErr?.message || memoryErr);
+            }
+          });
+        }
+
+        return res.json(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }));
+      }
     }
 
     const productKnowledge = await readProductKnowledge();
@@ -16667,8 +16759,8 @@ Safe no-reply fallback applied.`.trim()
 const AI_MODE_BACKGROUND_WORKER_ENABLED =
   String(process.env.AI_MODE_BACKGROUND_WORKER_ENABLED || "true").toLowerCase() !== "false";
 const AI_MODE_BACKGROUND_INTERVAL_MS = Math.max(
-  7000,
-  Number(process.env.AI_MODE_BACKGROUND_INTERVAL_MS || 8000)
+  3000,
+  Number(process.env.AI_MODE_BACKGROUND_INTERVAL_MS || 4000)
 );
 const AI_MODE_BACKGROUND_CHANNEL_LIMIT = Math.max(
   5,
@@ -16698,8 +16790,8 @@ const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
 // Wait for the customer to pause before AI replies. This prevents multiple replies
 // when the customer sends details in quick consecutive messages like "COB LED" then "3 watt".
 const AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS = Math.max(
-  3000,
-  Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 6000)
+  1500,
+  Number(process.env.AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS || 2500)
 );
 
 // After AI sends a final handover/transfer reply, pause AI replies for a while
