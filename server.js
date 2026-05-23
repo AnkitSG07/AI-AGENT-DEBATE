@@ -14913,6 +14913,8 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
     }
   }
 
+  merged = aiModeApplyLatestProfileInvalidations(merged, latestMessage);
+
   // Re-evaluate missing facts after merge.
   const missing = [];
   if (["complaint", "dispatch", "custom_product"].includes(merged.conversation_type)) {
@@ -15016,6 +15018,61 @@ function aiModeBuildProfileBasedCustomerReply(profile = {}, latestMessage = "") 
   if (missing.includes("lamp_type")) return "Ji, ye setup table lamp, wall lamp, floor lamp ya decorative product ke liye hai?";
   if (missing.includes("quantity")) return "Ji, quantity confirm kar dijiye — sample chahiye ya bulk quantity?";
   return "Ji, please requirement thoda aur clear kar dijiye — LED, driver, battery, strip LED ya complete kit mein se kya chahiye?";
+}
+
+function aiModeApplyLatestProfileInvalidations(profile = {}, latestMessage = "") {
+  const merged = profile && typeof profile === "object" ? profile : {};
+  const latest = aiModeLatestMessageIntent(latestMessage);
+  const text = latest.lower;
+  merged.rejected_facts = merged.rejected_facts && typeof merged.rejected_facts === "object" ? merged.rejected_facts : {};
+
+  const rejectList = (key, value) => {
+    const current = Array.isArray(merged.rejected_facts[key]) ? merged.rejected_facts[key] : [];
+    merged.rejected_facts[key] = Array.from(new Set([...current, value].filter(Boolean)));
+  };
+
+  if (latest.rejectsBattery || /\b(without\s+battery|no\s+battery|battery\s+nahi|battery\s+nhi|sirf\s+driver|sirf\s+led|only\s+driver|only\s+led)\b/i.test(text)) {
+    rejectList("product", "battery");
+    merged.suggested_kit = Array.isArray(merged.suggested_kit)
+      ? merged.suggested_kit.filter((x) => !/battery|2600|mah|cell/i.test(String(x || "")))
+      : [];
+    if (merged.known_facts) merged.known_facts.battery_required = false;
+    if (merged.active_context?.confirmed_facts) merged.active_context.confirmed_facts.battery_required = false;
+    if (merged.active_context?.product_cart) aiModeCartRemove(merged.active_context.product_cart, "battery2600s", "Customer rejected battery in latest message");
+  }
+
+  if (/\b(strip)\b[\s\S]{0,40}\b(nahi|nhi|not|no|wrong|galat)\b|\b(nahi|nhi|not|no|wrong|galat)\b[\s\S]{0,40}\b(strip)\b/i.test(text)) {
+    rejectList("product_type", "strip LED");
+    if (merged.led_type === "strip LED") merged.led_type = text.includes("cob") ? "COB LED" : "";
+    merged.likely_driver = /204|205|strip/i.test(merged.likely_driver || "") ? "" : merged.likely_driver;
+    merged.suggested_kit = Array.isArray(merged.suggested_kit)
+      ? merged.suggested_kit.filter((x) => !/strip|204|205/i.test(String(x || "")))
+      : [];
+  }
+
+  if (/\b(sirf|only)\s+driver|driver\s+only/i.test(text)) {
+    rejectList("scope", "LED/accessories not requested");
+    merged.need_type = "driver only";
+    merged.likely_led = "";
+    merged.suggested_kit = Array.isArray(merged.suggested_kit)
+      ? merged.suggested_kit.filter((x) => /driver|AS-[BU]-/i.test(String(x || "")))
+      : [];
+  }
+
+  if (/\b(sirf|only)\s+(led|cob)|\b(led|cob)\s+only/i.test(text)) {
+    rejectList("scope", "driver/accessories not requested");
+    merged.need_type = "LED only";
+    merged.likely_driver = "";
+    merged.suggested_kit = Array.isArray(merged.suggested_kit)
+      ? merged.suggested_kit.filter((x) => /led|cob/i.test(String(x || "")))
+      : [];
+  }
+
+  if (latest.correction) {
+    merged.latest_customer_correction = latest.raw;
+    merged.next_best_action = "answer_latest_correction_directly";
+  }
+  return merged;
 }
 
 function aiModeReplyRepeatsKnownQuestion(aiResult = {}, profile = {}) {
@@ -15315,7 +15372,9 @@ async function aiModeOdooFindMemoryRecord(uid, chatId) {
       AI_MODE_MEMORY_FIELDS.missingDetails,
       AI_MODE_MEMORY_FIELDS.status,
       AI_MODE_MEMORY_FIELDS.assignedTo,
-      AI_MODE_MEMORY_FIELDS.contextJson
+      AI_MODE_MEMORY_FIELDS.contextJson,
+      AI_MODE_MEMORY_FIELDS.lastMessageDate,
+      "write_date"
     ]],
     { limit: 1, order: "write_date desc" }
   );
@@ -15340,7 +15399,8 @@ async function aiModeOdooLoadMemoryContext(chatId) {
       active_context: contextJson,
       context_state: contextJson,
       requirement_profile: contextJson?.legacy_profile || contextJson?.requirement_profile || {},
-      loaded_from_odoo_context_json: true
+      loaded_from_odoo_context_json: true,
+      updated_at: record.write_date || record[AI_MODE_MEMORY_FIELDS.lastMessageDate] || ""
     };
     return { ok: true, found: true, record, contextJson, memory };
   } catch (error) {
@@ -16083,7 +16143,11 @@ function aiModeCompactRulesForPrompt() {
 Core rules:
 - Operator Hub chat only. Never use kit-builder/cart UI language.
 - Reply like Smart Handicrafts employee: short, direct, useful.
+- This is live WhatsApp chat. Treat every message as a new live turn, not a static quotation task.
 - Latest customer correction wins. Customer facts are source of truth; AI suggestions are unconfirmed.
+- Latest customer message decides the reply type. Old memory/history can support details, but must never override, freeze, or replay an older answer.
+- Never repeat the previous price/recommendation block just because the context contains it. If the latest message is confusion/correction, clarify or update.
+- Never echo or lightly rephrase the customer's message as the full reply.
 - Never ask details already confirmed in ACTIVE CONTEXT.
 - Ask at most one question, only if needed.
 - "kya antar hai/difference" refers to last AI question/current topic.
@@ -16153,8 +16217,11 @@ APPROVED TRAINING HIGHLIGHTS:
 ${compactTraining || "No extra training rules."}
 
 TASK:
-- Answer the latest customer intent using ACTIVE CONTEXT.
+- First classify the LATEST CUSTOMER MESSAGE: greeting, new requirement, follow-up question, correction/removal, price request, support issue, dispatch query, confusion, or handover request.
+- Answer that latest intent using ACTIVE CONTEXT only as supporting context.
 - If customer provided an answer to last_ai_question, continue from that answer.
+- If the latest message removes/rejects something, update the answer around that removal; do not keep the old item.
+- If the latest message is "??", "kya?", or frustration, explain briefly what you meant or ask what they want changed; do not replay the previous long block.
 - If context is enough, confirm/recommend next step; do not restart qualification.
 - If hard/custom/risky, handover.
 - Keep customer reply 2-6 lines. One question max.
@@ -16445,9 +16512,273 @@ function shFindProductByNameMust(products = [], { must = [], avoid = [], prefer 
   return shFindBestPricelistProduct(products, { must, avoid, prefer });
 }
 
+function aiModeLatestMessageIntent(message = "") {
+  const raw = String(message || "").trim();
+  const lower = raw.toLowerCase();
+  return {
+    raw,
+    lower,
+    greeting: /^(hi+|hello+|hey+|namaste|namaskar|good\s*(morning|afternoon|evening)|salam|hii+)\b[\s!.]*$/i.test(raw),
+    thanks: /^(thanks|thank you|thx|ok thanks|okay thanks|dhanyawad|shukriya|thanku)\b/i.test(lower),
+    asksHuman: /\b(human|person|sales|team|khushagra|vibhu|call|phone|baat|connect|agent|executive)\b/i.test(lower),
+    asksPrice: /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount|gst|bill|billing)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price|price\s+batao|rate\s+batao/i.test(raw),
+    asksIncluded: /kya\s+kya\s+include|kya\s+include|included|isme\s+kya|ismein\s+kya|set\s+mein\s+kya|set\s+me\s+kya|components?|items?|andar\s+kya/i.test(lower),
+    confusion: /^(ok|okay|k|hmm|acha|accha|theek|thik|haan|ha|yes|ji|kya\??|kyaa\??|kya bol raha hai|samajh nahi aaya|samajh nhi aaya|\?+)$/i.test(raw),
+    frustration: /kya\s+bol|samajh\s+nahi|samajh\s+nhi|wrong|galat|repeat|phir\s+se|bakwas|clear\s+nahi|confus/i.test(lower),
+    correction: /\b(nahi|nhi|nahin|not|no|wrong|galat|instead|sirf|only|remove|hatao|hatado|skip|exclude|without|mat)\b/i.test(lower),
+    dispatch: /\b(dispatch|tracking|track|delivery|shipment|courier|awb|order\s*status|kab\s*(mile|aayega|dispatch))\b/i.test(lower),
+    support: /\b(not\s*working|kaam\s*nahi|problem|issue|complaint|defect|replace|replacement|warranty|refund|return|damaged|faulty|charge\s*nahi|charging\s*nahi|blink|flicker)\b/i.test(lower),
+    custom: /\b(custom|customise|customize|new\s*product|develop|r&d|special|oem|odm|custom\s*pcb|custom\s*driver)\b/i.test(lower),
+    rejectsBattery: /\b(battery|batteries|cell|2600|mah)\b[\s\S]{0,50}\b(nahi|nhi|nahin|not|no|mat|without|remove|hatado|hatao|skip|exclude)\b|\b(nahi|nhi|nahin|not|no|without|remove|skip|exclude|mat)\b[\s\S]{0,50}\b(battery|batteries|cell|2600|mah)\b|battery\s+nahi\s+chaiye|battery\s+nahi\s+chahiye/i.test(lower),
+    wantsBattery: /\b(battery|2600|mah|cell)\b/i.test(lower) && !/\b(nahi|nhi|nahin|not|no|without|remove|skip|exclude|mat)\b/i.test(lower),
+    asksOnlyDriverLed: /\b(driver)\b[\s\S]{0,60}\b(led|cob)\b|\b(led|cob)\b[\s\S]{0,60}\b(driver)\b/i.test(lower) && /\b(sirf|only|without\s+battery|battery\s+nahi|no\s+battery)\b/i.test(lower)
+  };
+}
+
+function aiModeCreateEmptyProductCart() {
+  return {
+    schema_version: 1,
+    source: "latest_customer_state",
+    items: [],
+    rejected: {},
+    updated_at: now()
+  };
+}
+
+function aiModeCartUpsert(cart = {}, item = {}) {
+  if (!item?.key) return cart;
+  if (!Array.isArray(cart.items)) cart.items = [];
+  const idx = cart.items.findIndex((x) => x.key === item.key);
+  const next = { qty: 1, ...item };
+  if (idx >= 0) cart.items[idx] = { ...cart.items[idx], ...next };
+  else cart.items.push(next);
+  return cart;
+}
+
+function aiModeCartRemove(cart = {}, key = "", reason = "") {
+  if (!Array.isArray(cart.items)) cart.items = [];
+  cart.items = cart.items.filter((x) => x.key !== key);
+  cart.rejected = cart.rejected && typeof cart.rejected === "object" ? cart.rejected : {};
+  if (key) cart.rejected[key] = reason || "Rejected by latest customer message";
+  cart.updated_at = now();
+  return cart;
+}
+
+function aiModeBuildProductCart({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = aiModeLatestMessageIntent(message);
+  const memoryCart = activeContext?.product_cart || requirementProfile?.active_context?.product_cart || null;
+  const hasExistingCart = memoryCart && Array.isArray(memoryCart.items) && memoryCart.items.length > 0;
+
+  const cart = {
+    ...aiModeCreateEmptyProductCart(),
+    ...(memoryCart && typeof memoryCart === "object" ? memoryCart : {}),
+    items: Array.isArray(memoryCart?.items) ? [...memoryCart.items] : [],
+    rejected: memoryCart?.rejected && typeof memoryCart.rejected === "object" ? { ...memoryCart.rejected } : {}
+  };
+
+  const latestText = latest.lower;
+  
+  // If we already have a cart, only use the latest text to mutate it. 
+  // Otherwise, we can scan history to build the initial cart.
+  const textToScan = hasExistingCart ? latestText : `${aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase()}\n${latestText}`;
+
+  const has202 = /\b202\b|as\s*-?\s*b\s*-?\s*202|as-b-202|202-dld|\bdld\b/i.test(textToScan);
+  const has3wDual = /3\s*w|3w|3\s*watt/i.test(textToScan) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob|led/i.test(textToScan);
+  const has5wDual = /5\s*w|5w|5\s*watt/i.test(textToScan) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob|led/i.test(textToScan);
+  const hasSampleSet = /sample|set|kit|combo|driver\s*\+?\s*led|driver.*led/i.test(textToScan);
+
+  if (has202) {
+    aiModeCartUpsert(cart, { key: "driver202", label: "AS-B-202-DLD rechargeable 3-color driver", sku: "AS-B-202-DLD", category: "driver", qty: 1 });
+  }
+  if (has3wDual) {
+    aiModeCartUpsert(cart, { key: "cob3d", label: "3W dual COB LED", sku: "SH-COB-3D", category: "led", qty: 1, matcher: { must: [/3\s*w|3w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/], prefer: [/35\s*mm|35mm/, /cob/], avoid: [/strip/, /filament/, /dob/, /driver/] } });
+  } else if (has5wDual) {
+    aiModeCartUpsert(cart, { key: "cob5d", label: "5W dual COB LED", sku: "SH-COB-5D", category: "led", qty: 1, matcher: { must: [/5\s*w|5w/, /dual|3\s*color|3-color|3\s*colour|cct|warm|cool/, /led|cob/], prefer: [/35\s*mm|35mm/, /cob/], avoid: [/strip/, /filament/, /dob/, /driver/] } });
+  }
+
+  const shouldIncludeKitAccessories = hasSampleSet || /\b(battery|2600|jst|wire|connector|full\s+set|complete)\b/i.test(textToScan);
+  
+  if (has202 && (has3wDual || has5wDual || cart.items.some((x) => x.category === "led")) && (shouldIncludeKitAccessories || !hasExistingCart)) {
+    if (!cart.rejected?.battery2600s) {
+      aiModeCartUpsert(cart, {
+        key: "battery2600s",
+        label: "2600mAh battery with sleeve",
+        sku: "SH-BAT-26S",
+        category: "battery",
+        qty: 1,
+        matcher: { must: [/2600\s*mah|2600/, /battery|cell|18650/, /sleeve/], prefer: [/sh-bat-26s/, /with\s+sleeve/], avoid: [/without\s+sleeve|without-sleeve|holder/] }
+      });
+    }
+    aiModeCartUpsert(cart, {
+      key: "jst3",
+      label: "3-pin JST LED wire",
+      sku: "",
+      category: "wire",
+      qty: 1,
+      matcher: { must: [/jst/, /3\s*pin|3pin|p1\.?25/], prefer: [/jst\s+dual\s+3\s*pin\s+p1\.?25/i, /p1\.?25/i], avoid: [/22\s*inch|45\s*cm|50\s*cm|battery|panel\s*mount|usb|holder/] }
+    });
+  }
+
+  if (latest.rejectsBattery || latest.asksOnlyDriverLed) {
+    aiModeCartRemove(cart, "battery2600s", "Customer said battery is not required in the latest message");
+  }
+  if (latest.wantsBattery && /2600/.test(latestText)) {
+    delete cart.rejected.battery2600s;
+    aiModeCartUpsert(cart, {
+      key: "battery2600s",
+      label: "2600mAh battery with sleeve",
+      sku: "SH-BAT-26S",
+      category: "battery",
+      qty: 1,
+      matcher: { must: [/2600\s*mah|2600/, /battery|cell|18650/, /sleeve/], prefer: [/sh-bat-26s/, /with\s+sleeve/], avoid: [/without\s+sleeve|without-sleeve|holder/] }
+    });
+  }
+
+  cart.items = (cart.items || []).filter((item, idx, arr) => item?.key && arr.findIndex((x) => x.key === item.key) === idx);
+  cart.latest_intent = {
+    asks_price: latest.asksPrice,
+    asks_included: latest.asksIncluded,
+    confusion: latest.confusion,
+    rejects_battery: latest.rejectsBattery
+  };
+  return cart;
+}
+
+function aiModeCartHasPricableContext(cart = {}) {
+  const items = Array.isArray(cart?.items) ? cart.items : [];
+  return items.some((x) => x.category === "driver") && items.some((x) => x.category === "led");
+}
+
+async function aiModeResolveCartPriceItems(cart = {}) {
+  const products = await readOdooPricelistExportProducts({ force: true }).catch(() => []);
+  const items = [];
+  const missing = [];
+  for (const item of Array.isArray(cart?.items) ? cart.items : []) {
+    let product = item.sku ? shFindProductByExactSku(products, item.sku) : null;
+    if (!product && item.matcher) product = shFindProductByNameMust(products, item.matcher);
+    if (product && Number.isFinite(Number(product.price))) items.push({ ...item, product, qty: Number(item.qty || 1) || 1 });
+    else missing.push(item.label || item.key);
+  }
+  return { items, missing, productsLoaded: products.length };
+}
+
+function aiModeFormatCartIncludedReply(cart = {}) {
+  const items = Array.isArray(cart?.items) ? cart.items : [];
+  if (!items.length) return "";
+  const labels = items.map((item, idx) => `${idx + 1}. ${item.label || item.sku || item.key}`).join("\n");
+  const batteryRemoved = cart?.rejected?.battery2600s ? "\n\nBattery include nahi hai, kyunki aapne battery nahi chahiye bola." : "";
+  return `Is setup mein ye items include hain:\n\n${labels}${batteryRemoved}`;
+}
+
+function aiModeBuildHumanLikeLiveFallbackReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = aiModeLatestMessageIntent(message);
+  const raw = latest.raw;
+  const lastOperator = aiModeLastOperatorText(history);
+  const cart = activeContext?.product_cart || requirementProfile?.product_cart || {};
+  const hasCart = Array.isArray(cart?.items) && cart.items.length > 0;
+
+  if (!raw) return "";
+  if (latest.greeting) {
+    return "Hello ji. Aapko LED, driver, battery, strip LED, ya complete lamp kit mein kya chahiye?";
+  }
+  if (latest.thanks) {
+    return "Welcome ji. Aur kuch product detail, price, ya compatibility check karna ho to bata dijiye.";
+  }
+  if (latest.dispatch) {
+    return "Ji, dispatch/tracking check karne ke liye order number, invoice number ya registered phone number share kar dijiye.";
+  }
+  if (latest.support) {
+    return "Ji, issue check karne ke liye product/SKU, order reference aur problem ka short detail share kar dijiye.";
+  }
+  if (latest.custom) {
+    return "Ji, custom requirement ke liye function, size, quantity aur use-case share kar dijiye. Uske basis par feasibility check karwa denge.";
+  }
+  if (latest.asksHuman) {
+    return "Ji, main note kar raha hoon. Aap apna exact product/issue ek line mein share kar dijiye, team ko clear context ke saath connect kar denge.";
+  }
+  if ((latest.confusion || latest.frustration) && hasCart) {
+    const included = aiModeFormatCartIncludedReply(cart);
+    return included ? `${included}\n\nMain old reply repeat nahi kar raha. Aap batayein: price chahiye, item remove karna hai, ya compatibility confirm karni hai?` : "";
+  }
+  if (latest.confusion || latest.frustration) {
+    const last = aiModeSafeString(lastOperator, 500);
+    if (last) return "Ji, sorry agar unclear hua. Aap latest requirement ek line mein bata dijiye, main usi hisaab se direct answer dunga.";
+    return "Ji, please ek line mein bata dijiye ki aapko price, product compatibility, order status, ya support mein kya help chahiye.";
+  }
+  if (latest.correction) {
+    if (hasCart) {
+      const included = aiModeFormatCartIncludedReply(cart);
+      if (included) return `${included}\n\nLatest correction ke hisaab se main isi updated setup par continue karunga.`;
+    }
+    return "Ji, samajh gaya. Latest correction ke hisaab se main old assumption use nahi karunga. Aap final product/SKU ya requirement ek line mein confirm kar dijiye.";
+  }
+  return "";
+}
+
+function aiModeBuildImmediateLiveControlReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = aiModeLatestMessageIntent(message);
+  if (
+    latest.greeting ||
+    latest.thanks ||
+    latest.dispatch ||
+    latest.support ||
+    latest.custom ||
+    latest.asksHuman ||
+    latest.confusion ||
+    latest.frustration
+  ) {
+    return aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile });
+  }
+  return "";
+}
+
+async function aiModeBuildCartPriceReply({ cart = {}, message = "", history = [] } = {}) {
+  if (!aiModeCartHasPricableContext(cart)) return "";
+  const resolved = await aiModeResolveCartPriceItems(cart);
+  if (!resolved.items.length) return "";
+
+  const subtotal = resolved.items.reduce((sum, item) => sum + Number(item.product.price || 0) * item.qty, 0);
+  const gstRate = Number.isFinite(GST_RATE) ? GST_RATE : 18;
+  const gstAmount = subtotal * gstRate / 100;
+  const total = subtotal + gstAmount;
+  const rows = resolved.items.map((item, idx) => {
+    const sku = item.product.sku ? ` (${item.product.sku})` : "";
+    return `${idx + 1}. ${item.label}${sku} - ${shFormatRupee(item.product.price)}`;
+  }).join("\n");
+  const missingNote = resolved.missing.length ? `\n\nNote: ${resolved.missing.join(", ")} ka exact price match nahi hua, isliye total mein include nahi kiya.` : "";
+  const batteryRemoved = cart?.rejected?.battery2600s ? "\n\nBattery remove kar di hai, is total mein battery include nahi hai." : "";
+  return `Ji, updated price breakdown:\n\n${rows}\n\nSubtotal: ${shFormatRupee(subtotal)}\nGST @${gstRate}%: ${shFormatRupee(gstAmount)}\nTotal including GST: ${shFormatRupee(total)}${batteryRemoved}${missingNote}`;
+}
+
+async function aiModeBuildLatestFirstDeterministicReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = aiModeLatestMessageIntent(message);
+  const cart = aiModeBuildProductCart({ message, history, activeContext, requirementProfile });
+  if (activeContext && typeof activeContext === "object") activeContext.product_cart = cart;
+  if (requirementProfile && typeof requirementProfile === "object") requirementProfile.product_cart = cart;
+
+  if (latest.rejectsBattery && aiModeCartHasPricableContext(cart)) {
+    return await aiModeBuildCartPriceReply({ cart, message, history });
+  }
+  if (latest.asksIncluded && cart.items?.length) {
+    return aiModeFormatCartIncludedReply(cart);
+  }
+  if (latest.confusion) {
+    if (cart.items?.length) {
+       return "Sir, main samajh gaya ki aapko is set ka price janna hai. Koi confusion hai toh bataiye, kya main isme se kuch remove karu?";
+    }
+    return "";
+  }
+  if (latest.asksPrice && aiModeCartHasPricableContext(cart)) {
+    return await aiModeBuildCartPriceReply({ cart, message, history });
+  }
+  return "";
+}
+
 async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const raw = String(message || "").trim();
   const msg = raw.toLowerCase();
+  const latestIntent = aiModeLatestMessageIntent(raw);
+  if (latestIntent.rejectsBattery || latestIntent.asksIncluded || latestIntent.confusion) return "";
   const historyText = aiModeCustomerOnlyHistoryText(history, message, 18).toLowerCase();
   const fullHistoryText = Array.isArray(history)
     ? history.map((m) => aiModeSafeString(m?.text || m?.body || m?.message || m?.content || "", 800)).join("\n").toLowerCase()
@@ -16455,7 +16786,7 @@ async function aiModeBuildSampleSetPriceFromJson({ message = "", history = [], a
   const activeText = JSON.stringify({ activeContext, requirementProfile }).toLowerCase();
   const contextText = `${msg}\n${historyText}\n${fullHistoryText}\n${activeText}`;
 
-  const asksPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount|batao)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(contextText);
+  const asksPrice = latestIntent.asksPrice;
   const has202 = /\b202\b|as-b-202|202-dld|dld/.test(contextText);
   const has3wDual = /3\s*w|3w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/.test(contextText);
   const has5wDual = /5\s*w|5w/.test(contextText) && /dual|3\s*color|3-color|3\s*colour|cct|warm|cool|cob/.test(contextText);
@@ -16752,6 +17083,17 @@ function aiModeHasRecentPriceRequest(history = []) {
 
 function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const raw = String(message || "").trim();
+  const liveFallback = aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile });
+  if (liveFallback) {
+    return {
+      reply: liveFallback,
+      handoverRequired: false,
+      assignedTo: "",
+      assignedRole: "",
+      reason: "Live WhatsApp fallback answered the latest customer turn without stale recommendation replay.",
+      nextAction: "live_latest_turn_fallback"
+    };
+  }
 
   // Highest priority: if the customer is asking price, never fall back to the old
   // "recommended setup" loop. Give only a safe price-status reply.
@@ -16767,7 +17109,18 @@ function aiModeBuildSafeModelFailureReply({ message = "", history = [], activeCo
     };
   }
 
-  if (aiModeHasRecentPriceRequest(history) || aiModeIsConfusionOrAck(raw)) {
+  if (aiModeIsConfusionOrAck(raw)) {
+    return {
+      reply: aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile }),
+      handoverRequired: false,
+      assignedTo: "",
+      assignedRole: "",
+      reason: "Customer sent a confusion/clarification nudge while model was unavailable.",
+      nextAction: "clarify_latest_reply_without_replaying_price"
+    };
+  }
+
+  if (aiModeHasRecentPriceRequest(history)) {
     return {
       reply: aiModeBuildPricelistUnavailableReply({ message, history, activeContext, requirementProfile }),
       handoverRequired: true,
@@ -16833,6 +17186,70 @@ function aiModeBuildDeterministicResponseObject({ aiMode, source = "operator_hub
   };
 }
 
+function aiModePersistEarlyConversationState({ chatId = "", customerName = "", customerPhone = "", channel = "whatsapp", message = "", reply = "", requirementProfile = {}, activeContext = {} } = {}) {
+  if (!chatId) return;
+  Promise.resolve().then(async () => {
+    try {
+      const latestMemory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+      latestMemory[chatId] = {
+        ...(latestMemory[chatId] || {}),
+        customerName,
+        customerPhone,
+        channel,
+        last_message: message,
+        last_user_message: message,
+        last_ai_reply: reply,
+        last_ai_action: "send_direct_reply",
+        last_level: 1,
+        requirement_profile: requirementProfile,
+        active_context: activeContext,
+        context_state: activeContext,
+        updated_at: now()
+      };
+      await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, latestMemory);
+    } catch (memoryErr) {
+      console.warn("AI Mode early local memory save skipped:", memoryErr?.message || memoryErr);
+    }
+  });
+}
+
+function aiModeMemoryTimestampMs(memory = {}) {
+  const candidates = [
+    memory?.updated_at,
+    memory?.last_updated,
+    memory?.write_date,
+    memory?.last_message_date,
+    memory?.odoo_memory?.write_date,
+    memory?.odoo_memory?.[AI_MODE_MEMORY_FIELDS?.lastMessageDate]
+  ];
+  for (const value of candidates) {
+    const ms = aiModeParseOdooDateMs(value);
+    if (ms) return ms;
+  }
+  return 0;
+}
+
+function aiModeMergeLiveChatMemory(localMemory = {}, odooMemory = {}, odooRecord = null) {
+  const local = localMemory && typeof localMemory === "object" ? localMemory : {};
+  const odoo = odooMemory && typeof odooMemory === "object" ? odooMemory : {};
+  const localMs = aiModeMemoryTimestampMs(local);
+  const odooMs = aiModeMemoryTimestampMs({ ...odoo, odoo_memory: odooRecord || null });
+
+  const newer = localMs >= odooMs ? local : odoo;
+  const older = localMs >= odooMs ? odoo : local;
+  return {
+    ...older,
+    ...newer,
+    active_context: newer.active_context || newer.context_state || older.active_context || older.context_state || {},
+    context_state: newer.context_state || newer.active_context || older.context_state || older.active_context || {},
+    requirement_profile: newer.requirement_profile || older.requirement_profile || {},
+    local_memory: local,
+    odoo_memory: odooRecord || null,
+    memory_source: localMs >= odooMs ? "local_latest" : "odoo_latest",
+    memory_timestamps: { local_ms: localMs, odoo_ms: odooMs }
+  };
+}
+
 
 function aiModeOutgoingTextFromResult(aiResult = {}) {
   return String(aiResult.customer_reply || aiResult.suggested_customer_reply || "").trim();
@@ -16845,6 +17262,17 @@ function aiModeNormalizeComparableReplyText(value = "") {
     .replace(/[^a-z0-9₹]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function aiModeTextSimilarity(a = "", b = "") {
+  const ta = aiModeNormalizeComparableReplyText(a).split(/\s+/).filter((x) => x.length > 1);
+  const tb = aiModeNormalizeComparableReplyText(b).split(/\s+/).filter((x) => x.length > 1);
+  if (!ta.length || !tb.length) return 0;
+  const sa = new Set(ta);
+  const sb = new Set(tb);
+  let overlap = 0;
+  for (const token of sa) if (sb.has(token)) overlap += 1;
+  return overlap / Math.max(sa.size, sb.size);
 }
 
 function aiModeCustomerTextsFromHistory(history = [], latestMessage = "") {
@@ -16863,6 +17291,13 @@ function aiModeLooksLikeCustomerEcho(reply = "", latestMessage = "", history = [
   const normalizedReply = aiModeNormalizeComparableReplyText(reply);
   if (!normalizedReply) return false;
 
+  const normalizedLatest = aiModeNormalizeComparableReplyText(latestMessage);
+  if (normalizedLatest && normalizedReply === normalizedLatest) return true;
+  if (normalizedReply.length <= 250 && normalizedLatest && normalizedLatest.length <= 250) {
+    if (normalizedReply.includes(normalizedLatest) || normalizedLatest.includes(normalizedReply)) return true;
+    if (aiModeTextSimilarity(normalizedReply, normalizedLatest) >= 0.86) return true;
+  }
+
   const customerTexts = aiModeCustomerTextsFromHistory(history, latestMessage)
     .map((x) => aiModeNormalizeComparableReplyText(x))
     .filter(Boolean);
@@ -16870,13 +17305,14 @@ function aiModeLooksLikeCustomerEcho(reply = "", latestMessage = "", history = [
   for (const customerText of customerTexts) {
     if (!customerText) continue;
     if (normalizedReply === customerText) return true;
-    if (normalizedReply.length <= 120 && customerText.length <= 120) {
+    if (normalizedReply.length <= 250 && customerText.length <= 250) {
       if (normalizedReply.includes(customerText) || customerText.includes(normalizedReply)) return true;
+      if (aiModeTextSimilarity(normalizedReply, customerText) >= 0.86) return true;
     }
   }
 
   // Generic short command echo guard: customer-like commands should never be posted as our answer.
-  return normalizedReply.length <= 140 && /\b(mujhe|muje|mai|maine|sample|price|rate|batao|sabka|sab\s+ka|kya|kyaa|tum)\b/i.test(reply) &&
+  return normalizedReply.length <= 140 && /\b(mujhe|muje|mai|maine|sample|price|rate|batao|sabka|sab\s+ka|kya|kyaa|tum|bhejo|chaiye|chahiye)\b/i.test(reply) &&
     !/(ji|sir|madam|breakdown|subtotal|gst|total including|include|driver|led|battery|jst).{15,}/i.test(reply);
 }
 
@@ -16887,7 +17323,9 @@ function aiModeIsPriceIntentUniversal({ message = "", history = [] } = {}) {
   const text = `${latest}\n${customerHistory}`;
   const directPrice = /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|amount|gst|bill|billing)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price|price\s+batao|rate\s+batao/i.test(latest);
   const recentPrice = /sabka\s+price|sab\s+ka\s+price|price\s+batao|rate\s+batao|kitna\s+padega|kitna\s+padhega|full\s+set\s+price|total\s+price|sample\s+set\s+ka\s+price|sample\s+price/i.test(customerHistory);
-  const shortNudge = /^(ok|okay|haan|ha|yes|y|kya\??|kyaa\??|ky\??|\?\?+|batao|tum\s+batao|reply|please reply|sample|sample set|sample-set)$/i.test(String(message || "").trim());
+  const latestRaw = String(message || "").trim();
+  const confusionOnly = /^(kya\??|kyaa\??|ky\??|\?\?+|kya bol raha hai|samajh nahi aaya|samajh nhi aaya)$/i.test(latestRaw);
+  const shortNudge = !confusionOnly && /^(batao|tum\s+batao|reply|please reply|sample|sample set|sample-set)$/i.test(latestRaw);
   return !!(directPrice || (recentPrice && shortNudge));
 }
 
@@ -17017,6 +17455,15 @@ function aiModeLooksLikeUnsafeCustomerReply(reply = "", { message = "", history 
 }
 
 function aiModeBuildUniversalClarificationReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
+  const latest = aiModeLatestMessageIntent(message);
+  const latestText = latest.lower;
+  if (latest.confusion || latest.frustration) return aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile }) || "Ji, sorry agar unclear hua. Aap latest requirement ek line mein bata dijiye, main direct answer dunga.";
+  if (latest.dispatch) return "Ji, dispatch/tracking check karne ke liye order number ya invoice number share kar dijiye.";
+  if (latest.support) return "Ji, issue check karne ke liye product/SKU, order reference aur problem ka short detail share kar dijiye.";
+  if (latest.custom) return "Ji, custom requirement ke liye function, size, quantity aur use-case share kar dijiye.";
+  if (/driver/i.test(latestText) && !/led|cob|strip/i.test(latestText)) return "Ji, driver ke liye LED type confirm kar dijiye â€” single COB, dual/3-color COB, strip LED, ya DOB?";
+  if (/led|cob/i.test(latestText) && !/driver|battery|usb|recharge/i.test(latestText)) return "Ji, LED ke liye power type confirm kar dijiye â€” rechargeable driver ke saath chahiye ya USB-C powered?";
+
   const text = aiModeKnownProductContextText({ message, history, activeContext, requirementProfile });
   if (/dispatch|tracking|ship|courier|delivery|awb|order\s+status/i.test(text)) return "Ji, dispatch/tracking check karne ke liye order number ya invoice number share kar dijiye.";
   if (/problem|issue|not\s+working|fault|warranty|replacement|return|burn|damage/i.test(text)) return "Ji, issue check karne ke liye product/SKU, order reference aur problem ka short detail share kar dijiye.";
@@ -17050,7 +17497,9 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
   }
 
   if (!replacement) {
-    replacement = aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile }) ||
+    replacement = await aiModeBuildLatestFirstDeterministicReply({ message, history, activeContext, requirementProfile }) ||
+      aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile }) ||
+      aiModeTryFastDeterministicReply({ message, history, activeContext, requirementProfile }) ||
       aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message) ||
       aiModeBuildUniversalClarificationReply({ message, history, activeContext, requirementProfile });
   }
@@ -17122,16 +17571,99 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       return res.json(internalResult);
     }
 
-    // SPEED FIX: answer clear follow-ups locally before any file retrieval, Odoo memory load,
-    // Gemini interpreter, or final model call. This prevents simple WhatsApp replies from
-    // taking 2-3 minutes when Gemini/Odoo is slow.
+    // SPEED FIX REFACTORED: answer clear follow-ups locally before Gemini, but MUST load memory first
+    // so we don't reset the customer's cart state on every single message.
     if (AI_MODE_FAST_LOCAL_FIRST) {
+      let earlyActiveContext = {};
+      const odooChannelForMem = String(odooChannelId || chatId || "");
+      if (odooChannelForMem) {
+        const odooMemRes = await withTimeout(aiModeOdooLoadMemoryContext(odooChannelForMem), 1500).catch(() => null);
+        if (odooMemRes?.contextJson) earlyActiveContext = odooMemRes.contextJson;
+      }
       const earlyHeuristicProfile = aiModeBuildRequirementProfile(history, message, {});
-      const earlyIsPriceIntent = aiModeIsSampleSetPriceIntent({ message, history });
+      earlyHeuristicProfile.active_context = earlyActiveContext;
+      
+      const earlyLatestFirstReply = await aiModeBuildLatestFirstDeterministicReply({
+        message,
+        history,
+        activeContext: earlyActiveContext,
+        requirementProfile: earlyHeuristicProfile
+      });
+      if (earlyLatestFirstReply) {
+        const earlyParsed = aiModeBuildDeterministicResponseObject({
+          aiMode,
+          source,
+          message,
+          reply: earlyLatestFirstReply,
+          modelUsed: "latest_first_cart_rule",
+          summary: "Latest-first structured cart reply used before Odoo/Gemini to avoid stale price replay."
+        });
+        earlyParsed.active_context = earlyActiveContext;
+        earlyParsed.requirement_profile = earlyHeuristicProfile;
+        aiModePersistEarlyConversationState({
+          chatId,
+          customerName,
+          customerPhone,
+          channel,
+          message,
+          reply: earlyLatestFirstReply,
+          requirementProfile: earlyHeuristicProfile,
+          activeContext: earlyActiveContext
+        });
+        const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
+          aiMode,
+          source,
+          message,
+          history,
+          activeContext: earlyActiveContext,
+          requirementProfile: earlyHeuristicProfile
+        });
+        return res.json(safeEarly);
+      }
+
+      const earlyLiveControlReply = aiModeBuildImmediateLiveControlReply({
+        message,
+        history,
+        activeContext: earlyActiveContext,
+        requirementProfile: earlyHeuristicProfile
+      });
+      if (earlyLiveControlReply) {
+        const earlyParsed = aiModeBuildDeterministicResponseObject({
+          aiMode,
+          source,
+          message,
+          reply: earlyLiveControlReply,
+          modelUsed: "live_turn_control_rule",
+          summary: "Immediate live WhatsApp turn-control reply used for greeting/confusion/correction/support/dispatch without stale context replay."
+        });
+        earlyParsed.active_context = earlyActiveContext;
+        earlyParsed.requirement_profile = earlyHeuristicProfile;
+        aiModePersistEarlyConversationState({
+          chatId,
+          customerName,
+          customerPhone,
+          channel,
+          message,
+          reply: earlyLiveControlReply,
+          requirementProfile: earlyHeuristicProfile,
+          activeContext: earlyActiveContext
+        });
+        const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
+          aiMode,
+          source,
+          message,
+          history,
+          activeContext: earlyActiveContext,
+          requirementProfile: earlyHeuristicProfile
+        });
+        return res.json(safeEarly);
+      }
+
+      const earlyIsPriceIntent = aiModeIsSampleSetPriceIntent({ message, history }) && aiModeLatestMessageIntent(message).asksPrice;
       const earlyPriceReply = await aiModeBuildSampleSetPriceFromJson({
         message,
         history,
-        activeContext: {},
+        activeContext: earlyActiveContext,
         requirementProfile: earlyHeuristicProfile
       });
       if (earlyPriceReply) {
@@ -17143,12 +17675,24 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           modelUsed: "fast_json_price_first",
           summary: "Fast sample-set price reply calculated from odoo-product-pricelist-export.json with GST before Odoo/Gemini."
         });
+        earlyParsed.active_context = earlyActiveContext;
+        earlyParsed.requirement_profile = earlyHeuristicProfile;
+        aiModePersistEarlyConversationState({
+          chatId,
+          customerName,
+          customerPhone,
+          channel,
+          message,
+          reply: earlyPriceReply,
+          requirementProfile: earlyHeuristicProfile,
+          activeContext: earlyActiveContext
+        });
         const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
           aiMode,
           source,
           message,
           history,
-          activeContext: {},
+          activeContext: earlyActiveContext,
           requirementProfile: earlyHeuristicProfile
         });
         return res.json(safeEarly);
@@ -17164,7 +17708,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           aiMode,
           source,
           message,
-          reply: aiModeBuildPricelistUnavailableReply({ message, history, activeContext: {}, requirementProfile: earlyHeuristicProfile }),
+          reply: aiModeBuildPricelistUnavailableReply({ message, history, activeContext: earlyActiveContext, requirementProfile: earlyHeuristicProfile }),
           modelUsed: "price_json_lookup_failed_no_placeholder",
           summary: "Sample-set price was requested, but JSON price lookup failed. Unsafe placeholder price reply was blocked."
         });
@@ -17173,12 +17717,24 @@ app.post("/api/ai-mode/chat", async (req, res) => {
         earlyParsed.assigned_role = "Sales";
         earlyParsed.handover_reason = "JSON pricelist lookup failed for sample set pricing.";
         earlyParsed.internal_notification = "Customer asked for sample set price. JSON lookup failed; please verify odoo-product-pricelist-export.json path and product matching for AS-B-202-DLD, 3W dual COB LED, 2600mAh battery, JST wire.";
+        earlyParsed.active_context = earlyActiveContext;
+        earlyParsed.requirement_profile = earlyHeuristicProfile;
+        aiModePersistEarlyConversationState({
+          chatId,
+          customerName,
+          customerPhone,
+          channel,
+          message,
+          reply: earlyParsed.suggested_customer_reply,
+          requirementProfile: earlyHeuristicProfile,
+          activeContext: earlyActiveContext
+        });
         const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
           aiMode,
           source,
           message,
           history,
-          activeContext: {},
+          activeContext: earlyActiveContext,
           requirementProfile: earlyHeuristicProfile
         });
         return res.json(safeEarly);
@@ -17188,7 +17744,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       const earlyFastReply = aiModeTryFastDeterministicReply({
         message,
         history,
-        activeContext: {},
+        activeContext: earlyActiveContext,
         requirementProfile: earlyHeuristicProfile
       });
 
@@ -17202,31 +17758,25 @@ app.post("/api/ai-mode/chat", async (req, res) => {
           summary: "Fast local deterministic reply used before product retrieval/Odoo/Gemini."
         });
 
-        // Save minimal local context asynchronously; never delay the WhatsApp reply for memory writes.
-        if (chatId) {
-          Promise.resolve().then(async () => {
-            try {
-              const latestMemory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
-              latestMemory[chatId] = {
-                ...(latestMemory[chatId] || {}),
-                requirement_profile: earlyHeuristicProfile,
-                last_ai_reply: earlyFastReply,
-                last_user_message: message,
-                updated_at: now()
-              };
-              await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, latestMemory);
-            } catch (memoryErr) {
-              console.warn("AI Mode early local memory save skipped:", memoryErr?.message || memoryErr);
-            }
-          });
-        }
+        earlyParsed.active_context = earlyActiveContext;
+        earlyParsed.requirement_profile = earlyHeuristicProfile;
+        aiModePersistEarlyConversationState({
+          chatId,
+          customerName,
+          customerPhone,
+          channel,
+          message,
+          reply: earlyFastReply,
+          requirementProfile: earlyHeuristicProfile,
+          activeContext: earlyActiveContext
+        });
 
         const safeEarly = await aiModeApplyFinalReplySafetyGuard(aiModeNormalizeAiJson(earlyParsed, { aiMode, source, message }), {
           aiMode,
           source,
           message,
           history,
-          activeContext: {},
+          activeContext: earlyActiveContext,
           requirementProfile: earlyHeuristicProfile
         });
         return res.json(safeEarly);
@@ -17266,12 +17816,7 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     const productLinks = await aiModeReadJsonFile(PRODUCT_LINKS_PATH, {});
     const localChatMemory = chatId ? (memory[chatId] || {}) : {};
     const odooMemoryLoad = chatId ? await aiModeOdooLoadMemoryContext(chatId) : { ok: true, found: false, memory: {} };
-    const chatMemory = {
-      ...localChatMemory,
-      ...(odooMemoryLoad?.memory || {}),
-      local_memory: localChatMemory,
-      odoo_memory: odooMemoryLoad?.record || null
-    };
+    const chatMemory = aiModeMergeLiveChatMemory(localChatMemory, odooMemoryLoad?.memory || {}, odooMemoryLoad?.record || null);
     const heuristicProfile = aiModeBuildRequirementProfile(history, message, chatMemory?.requirement_profile || {});
     const activeContext = await aiModeInterpretConversationContext({
       history,
@@ -17281,7 +17826,14 @@ app.post("/api/ai-mode/chat", async (req, res) => {
     });
     const requirementProfile = aiModeContextToLegacyProfile(activeContext, heuristicProfile);
 
-    const jsonPriceReply = await aiModeBuildSampleSetPriceFromJson({
+    const latestFirstReply = await aiModeBuildLatestFirstDeterministicReply({
+      message,
+      history,
+      activeContext,
+      requirementProfile
+    });
+
+    const jsonPriceReply = latestFirstReply || await aiModeBuildSampleSetPriceFromJson({
       message,
       history,
       activeContext,
@@ -17494,6 +18046,7 @@ Requirement profile repair applied: ${aiModeProfileSummaryLine(requirementProfil
     const normalCustomerAsk = /\b(hello|hi|hey|need|want|looking\s+for|require|chahiye|chaiye|mujhe|product|products|led|driver|battery|strip|cob|kit|lamp|price|rate|sample)\b/i.test(message || "");
     if (!modelCallFailed && aiMode === "chat" && !currentReplyText && normalCustomerAsk && !normalized.handover_required && !normalized.clarification_required) {
       const fallbackReply = aiModeBuildDirectReplyFromContext(activeContext, requirementProfile, message) ||
+        aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile }) ||
         aiModeBuildProfileBasedCustomerReply(requirementProfile, message) ||
         "Ji, please tell me which product you need — LED, driver, battery, strip LED, or complete lamp kit?";
       normalized = {
@@ -18184,19 +18737,76 @@ function aiModeOutboundReplySignature(channelId, body = "") {
   return `${String(channelId || "")}|${String(body || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 1200)}`;
 }
 
-function aiModeShouldBlockDuplicateOutbound(channelId, body = "") {
+function aiModeHasRecentOutboundReplyLock(channelId, body = "") {
   const signature = aiModeOutboundReplySignature(channelId, body);
   if (!signature || signature.endsWith("|")) return false;
   const nowMs = Date.now();
   const prev = aiModeRecentOutboundReplyLock.get(signature);
   if (prev && nowMs - prev < 180000) return true;
+  return false;
+}
+
+function aiModeRememberRecentOutboundReply(channelId, body = "") {
+  const signature = aiModeOutboundReplySignature(channelId, body);
+  if (!signature || signature.endsWith("|")) return;
+  const nowMs = Date.now();
   aiModeRecentOutboundReplyLock.set(signature, nowMs);
   if (aiModeRecentOutboundReplyLock.size > 500) {
     for (const [key, at] of aiModeRecentOutboundReplyLock.entries()) {
       if (nowMs - at > 10 * 60 * 1000) aiModeRecentOutboundReplyLock.delete(key);
     }
   }
+}
+
+async function aiModeShouldBlockDuplicateOutboundDurable(channelId, body = "") {
+  const signature = aiModeOutboundReplySignature(channelId, body);
+  if (!signature || signature.endsWith("|")) return false;
+
+  if (aiModeHasRecentOutboundReplyLock(channelId, body)) return true;
+
+  try {
+    const nowMs = Date.now();
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    const worker = memory._background_worker || {};
+    const outbound = worker.outbound_signatures && typeof worker.outbound_signatures === "object"
+      ? worker.outbound_signatures
+      : {};
+    const prev = Number(outbound[signature] || 0);
+    if (prev && nowMs - prev < 10 * 60 * 1000) return true;
+  } catch (error) {
+    console.warn("AI Mode durable outbound dedupe skipped:", error?.message || error);
+  }
+
   return false;
+}
+
+async function aiModeRememberOutboundSignatureDurable(channelId, body = "") {
+  const signature = aiModeOutboundReplySignature(channelId, body);
+  if (!signature || signature.endsWith("|")) return;
+  aiModeRememberRecentOutboundReply(channelId, body);
+  try {
+    const nowMs = Date.now();
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    const worker = memory._background_worker || {};
+    const outbound = worker.outbound_signatures && typeof worker.outbound_signatures === "object"
+      ? worker.outbound_signatures
+      : {};
+    outbound[signature] = nowMs;
+    const compact = Object.fromEntries(
+      Object.entries(outbound)
+        .filter(([, at]) => nowMs - Number(at || 0) < 60 * 60 * 1000)
+        .slice(-500)
+    );
+    memory._background_worker = {
+      ...worker,
+      updated_at: now(),
+      global_mode: aiModeGlobalState.mode,
+      outbound_signatures: compact
+    };
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+  } catch (error) {
+    console.warn("AI Mode durable outbound remember skipped:", error?.message || error);
+  }
 }
 
 async function aiModePostTextToOdooChannel(uid, channel, text) {
@@ -18205,7 +18815,7 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
   if (!channel?.id) return { ok: false, reason: "missing_channel" };
   if (aiModeLooksLikeUnsafeCustomerReply(body)) return { ok: false, reason: "unsafe_reply_blocked" };
   if (aiModeLooksLikeCustomerEcho(body, "", [])) return { ok: false, reason: "echo_like_reply_blocked" };
-  if (aiModeShouldBlockDuplicateOutbound(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
+  if (await aiModeShouldBlockDuplicateOutboundDurable(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
   if (!aiModeCanPostToChannel(channel)) {
     return { ok: false, reason: "whatsapp_reply_window_closed" };
   }
@@ -18215,6 +18825,7 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
     : { body, message_type: "comment", subtype_xmlid: "mail.mt_comment" };
 
   await odooExecute(uid, "discuss.channel", "message_post", [[Number(channel.id)]], kwargs);
+  await aiModeRememberOutboundSignatureDurable(channel.id, body);
   return { ok: true };
 }
 
