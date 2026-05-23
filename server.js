@@ -14695,9 +14695,13 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
   const historyRaw = aiModeLatestCustomerText(history, latestMessage);
   const historyText = historyRaw.toLowerCase();
   const latestText = aiModeCleanCustomerMessageForProfile(latestMessage).toLowerCase();
+  const latestIntent = aiModeLatestMessageIntent(latestMessage);
+  const latestConversationType = latestText ? aiModeDetectConversationType(latestText) : "";
 
   const profile = {
-    conversation_type: aiModeDetectConversationType(historyText),
+    conversation_type: (latestIntent.greeting || latestIntent.thanks || latestIntent.languagePreference)
+      ? "general"
+      : (latestConversationType && latestConversationType !== "general" ? latestConversationType : aiModeDetectConversationType(historyText)),
     lead_stage: "new",
     customer_intent: "",
     lamp_type: "",
@@ -14797,6 +14801,19 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
   if (/single\s*color|single\s*colour|1\s*color|one\s*color|single color chaiye|single colour chaiye|ek\s*color|ek hi color|warm\s*white only|single\s*led/i.test(historyText)) profile.color_type = "single color";
   if (/3\s*color|three\s*color|tri\s*color|dual|warm\s*cool|cct|3c|ww\s*\+\s*cw/i.test(historyText)) profile.color_type = profile.color_type || "3-color / dual CCT";
 
+  // In live sales chat, "3 watt LED single color + rechargeable driver" almost always means
+  // the normal single-color COB route. Do not keep asking "COB/strip/DOB" after this is clear.
+  if (
+    !profile.led_type &&
+    /\bled\b|single\s*color|single\s*colour|cob/i.test(historyText) &&
+    profile.color_type === "single color" &&
+    (profile.wattage || /3\s*w|3w|5\s*w|5w/i.test(historyText)) &&
+    !/strip|tape|linear|dob|dual|3\s*color|three\s*color|cct/i.test(historyText)
+  ) {
+    profile.led_type = "COB LED";
+    profile.confidence_notes.push("Inferred COB LED from single-color wattage LED request in live WhatsApp chat.");
+  }
+
   // Need / commercial intent aliases
   if (/complete\s*kit|full\s*kit|kit\s*chaiye|kit\s*chahiye|set\s*chaiye|set\s*chahiye|combo|complete\s*set|driver\s*led\s*battery|driver\s*\+\s*led/i.test(historyText)) profile.need_type = "complete kit";
   if (/only\s*led|sirf\s*led|led\s*only/i.test(historyText)) profile.need_type = profile.need_type || "LED only";
@@ -14843,6 +14860,12 @@ function aiModeBuildRequirementProfile(history = [], latestMessage = "", previou
     profile.dispatch_request.needs_handover = true;
     const orderMatch = historyText.match(/\b(SO\d+|S\d+|ORD[-\s]?\d+|order\s*#?\s*\d+)\b/i);
     if (orderMatch) profile.dispatch_request.order_ref = orderMatch[0];
+  }
+
+  // Latest live product messages must pull the chat out of stale dispatch/support memory.
+  if ((latestIntent.productMention || latestIntent.greeting || latestIntent.languagePreference) && !latestIntent.dispatch && !latestIntent.support) {
+    profile.dispatch_request = { is_dispatch_query: false, order_ref: "", needs_handover: false };
+    if (profile.lead_stage === "order_status") profile.lead_stage = "new";
   }
   if (profile.conversation_type === "technical_help") {
     profile.technical_help.is_technical = true;
@@ -15039,6 +15062,14 @@ function aiModeApplyLatestProfileInvalidations(profile = {}, latestMessage = "")
     if (merged.known_facts) merged.known_facts.battery_required = false;
     if (merged.active_context?.confirmed_facts) merged.active_context.confirmed_facts.battery_required = false;
     if (merged.active_context?.product_cart) aiModeCartRemove(merged.active_context.product_cart, "battery2600s", "Customer rejected battery in latest message");
+  }
+
+  if ((latest.productMention || latest.greeting || latest.languagePreference) && !latest.dispatch && !latest.support) {
+    if (merged.conversation_type === "dispatch" || merged.lead_stage === "order_status") {
+      merged.conversation_type = latest.productMention ? "product_enquiry" : "general";
+      merged.lead_stage = "new";
+    }
+    merged.dispatch_request = { is_dispatch_query: false, order_ref: "", needs_handover: false };
   }
 
   if (/\b(strip)\b[\s\S]{0,40}\b(nahi|nhi|not|no|wrong|galat)\b|\b(nahi|nhi|not|no|wrong|galat)\b[\s\S]{0,40}\b(strip)\b/i.test(text)) {
@@ -16520,7 +16551,9 @@ function aiModeLatestMessageIntent(message = "") {
     lower,
     greeting: /^(hi+|hello+|hey+|namaste|namaskar|good\s*(morning|afternoon|evening)|salam|hii+)\b[\s!.]*$/i.test(raw),
     thanks: /^(thanks|thank you|thx|ok thanks|okay thanks|dhanyawad|shukriya|thanku)\b/i.test(lower),
-    asksHuman: /\b(human|person|sales|team|khushagra|vibhu|call|phone|baat|connect|agent|executive)\b/i.test(lower),
+    languagePreference: /\b(hinglish|hindi|english)\b[\s\S]{0,40}\b(baat|talk|reply|bolo|bolna|message|chat)\b|\b(baat|talk|reply|bolo|bolna|message|chat)\b[\s\S]{0,40}\b(hinglish|hindi|english)\b/i.test(lower),
+    asksHuman: /\b(human|person|sales|team|khushagra|vibhu|call|phone|connect|agent|executive)\b/i.test(lower),
+    productMention: /\b(led|cob|driver|battery|strip|dob|jst|wire|connector|kit|lamp|light|module|201|202|204|205|206|101|102|103|3w|5w|3\s*w|5\s*w|single\s*color|single\s*colour|dual|3\s*color)\b/i.test(lower),
     asksPrice: /\b(price|rate|cost|kitna|kitne|padega|padhega|total|quotation|quote|qotation|amount|gst|bill|billing)\b|sabka\s+price|sab\s+ka\s+price|full\s+set\s+price|sample\s+set\s+ka\s+price|sample\s+price|price\s+batao|rate\s+batao/i.test(raw),
     asksIncluded: /kya\s+kya\s+include|kya\s+include|included|isme\s+kya|ismein\s+kya|set\s+mein\s+kya|set\s+me\s+kya|components?|items?|andar\s+kya/i.test(lower),
     confusion: /^(ok|okay|k|hmm|acha|accha|theek|thik|haan|ha|yes|ji|kya\??|kyaa\??|kya bol raha hai|samajh nahi aaya|samajh nhi aaya|\?+)$/i.test(raw),
@@ -16678,6 +16711,12 @@ function aiModeBuildHumanLikeLiveFallbackReply({ message = "", history = [], act
   const hasCart = Array.isArray(cart?.items) && cart.items.length > 0;
 
   if (!raw) return "";
+  if (latest.languagePreference) {
+    const lang = /hindi/i.test(raw) ? "Hindi" : /english/i.test(raw) ? "English" : "Hinglish";
+    const current = aiModeProfileSummaryLine(requirementProfile);
+    if (current) return `Ji, ${lang} mein baat karunga. Aapki current requirement ${current} ke liye hi continue kar raha hoon.`;
+    return `Ji, ${lang} mein baat karunga. Aap apni LED/driver requirement bata dijiye.`;
+  }
   if (latest.greeting) {
     return "Hello ji. Aapko LED, driver, battery, strip LED, ya complete lamp kit mein kya chahiye?";
   }
@@ -16723,6 +16762,7 @@ function aiModeBuildImmediateLiveControlReply({ message = "", history = [], acti
     latest.dispatch ||
     latest.support ||
     latest.custom ||
+    latest.languagePreference ||
     latest.asksHuman ||
     latest.confusion ||
     latest.frustration
@@ -17424,10 +17464,13 @@ async function aiModeBuildUniversalPriceReply({ message = "", history = [], acti
 function aiModeLooksLikeUnsafeCustomerReply(reply = "", { message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const text = String(reply || "").toLowerCase();
   if (!text) return false;
+  const latest = aiModeLatestMessageIntent(message);
   const priceIntent = aiModeIsPriceIntentUniversal({ message, history });
   const hasKnownContext = !!(requirementProfile?.likely_driver || requirementProfile?.likely_led || requirementProfile?.detected_products?.length || /\b(201|202|204|205|101|102|103|3\s*w|5\s*w|2600|jst|cob|driver|led|battery)\b/i.test(aiModeKnownProductContextText({ message, history, activeContext, requirementProfile })));
 
   return (
+    ((latest.greeting || latest.languagePreference || latest.productMention) && !latest.dispatch && /dispatch|tracking|order\s+number|invoice\s+number|awb/i.test(text)) ||
+    (latest.languagePreference && /team\s+ko|connect\s+kar|exact\s+product\/issue|human|handover/i.test(text)) ||
     /price\s+to\s+be\s+added/i.test(text) ||
     /latest\s+odoo\/?pricelist\s+rates/i.test(text) ||
     /exact\s+total\s+tabhi\s+final/i.test(text) ||
@@ -17457,6 +17500,7 @@ function aiModeLooksLikeUnsafeCustomerReply(reply = "", { message = "", history 
 function aiModeBuildUniversalClarificationReply({ message = "", history = [], activeContext = {}, requirementProfile = {} } = {}) {
   const latest = aiModeLatestMessageIntent(message);
   const latestText = latest.lower;
+  if (latest.greeting || latest.thanks || latest.languagePreference) return aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile }) || "Hello ji. Aapko kis product mein help chahiye?";
   if (latest.confusion || latest.frustration) return aiModeBuildHumanLikeLiveFallbackReply({ message, history, activeContext, requirementProfile }) || "Ji, sorry agar unclear hua. Aap latest requirement ek line mein bata dijiye, main direct answer dunga.";
   if (latest.dispatch) return "Ji, dispatch/tracking check karne ke liye order number ya invoice number share kar dijiye.";
   if (latest.support) return "Ji, issue check karne ke liye product/SKU, order reference aur problem ka short detail share kar dijiye.";
