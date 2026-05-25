@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-notification-center-v6";
+const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v7-zapier-path-notifications";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14637,18 +14637,37 @@ function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {})
 }
 
 async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
-  if (!WEB_PUSH_ENABLED) return { ok: false, skipped: "disabled" };
-  if (!webPushConfigured()) return { ok: false, skipped: "not_configured" };
+  const debugBase = { odooMessageId: message?.id || null, odooChannelId: channel?.id || null };
+  if (!WEB_PUSH_ENABLED) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "disabled" });
+    return { ok: false, skipped: "disabled" };
+  }
+  if (!webPushConfigured()) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "not_configured", hasPublicKey: !!WEB_PUSH_PUBLIC_KEY, hasPrivateKey: !!WEB_PUSH_PRIVATE_KEY, subject: WEB_PUSH_SUBJECT });
+    return { ok: false, skipped: "not_configured" };
+  }
   const messageId = aiModeSafeString(message?.id || "", 80);
-  if (!messageId) return { ok: false, skipped: "missing_message_id" };
+  if (!messageId) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "missing_message_id" });
+    return { ok: false, skipped: "missing_message_id" };
+  }
   const pushKey = `push:${messageId}`;
-  if (webPushState.sent_message_ids.has(pushKey)) return { ok: false, skipped: "duplicate_push" };
+  if (webPushState.sent_message_ids.has(pushKey)) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "duplicate_push" });
+    return { ok: false, skipped: "duplicate_push" };
+  }
 
   const ready = await configureWebPush();
-  if (!ready) return { ok: false, skipped: "web_push_not_ready", error: webPushState.last_error || webPushState.module_error };
+  if (!ready) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "web_push_not_ready", error: webPushState.last_error || webPushState.module_error });
+    return { ok: false, skipped: "web_push_not_ready", error: webPushState.last_error || webPushState.module_error };
+  }
   const webpush = await getWebPushModule();
   const subscriptions = await readPushSubscriptions();
-  if (!subscriptions.length) return { ok: false, skipped: "no_subscribers" };
+  if (!subscriptions.length) {
+    console.warn("Operator push skipped:", { ...debugBase, reason: "no_subscribers", subscriptionsPath: WEB_PUSH_SUBSCRIPTIONS_PATH });
+    return { ok: false, skipped: "no_subscribers" };
+  }
 
   const payload = JSON.stringify(buildPushPayload({ channel, message, messageText }));
   const remaining = [];
@@ -14846,7 +14865,27 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
       odooChannelId: channel?.id,
       status: response.status
     });
-    return { ok: true, status: response.status, responseText: responseText.slice(0, 300) };
+
+    // V7 safety: send operator mobile push from the same path that successfully forwards to Zapier.
+    // This guarantees notifications fire even if the outer worker path exits early or an older worker branch is used.
+    let pushNotifyResult = null;
+    try {
+      pushNotifyResult = await sendOperatorPushNotification({
+        channel,
+        message,
+        messageText: cleanMessageText
+      });
+      console.log("Operator push notification after Zapier forward:", {
+        odooMessageId: message?.id,
+        odooChannelId: channel?.id,
+        result: pushNotifyResult
+      });
+    } catch (pushError) {
+      pushNotifyResult = { ok: false, error: pushError?.message || String(pushError) };
+      console.warn("Operator push notification after Zapier forward failed:", pushNotifyResult.error);
+    }
+
+    return { ok: true, status: response.status, responseText: responseText.slice(0, 300), pushNotifyResult };
   } catch (error) {
     zapierIncomingWhatsAppState.failed_count += 1;
     zapierIncomingWhatsAppState.last_error = error?.message || String(error);
