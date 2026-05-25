@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v7-zapier-path-notifications";
+const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v8-notifications-independent-of-ai-toggle";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -18900,23 +18900,55 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     return { ok: false, skipped: "waiting_for_customer_pause" };
   }
 
-  // Forward the incoming customer chat message to Zapier before AI/handover logic.
-  // This is independent from AI Mode, so Zapier can notify the team or trigger actions
-  // even when the message is later skipped because an operator has already replied.
-  const zapierForwardResult = await sendIncomingWhatsAppToZapier({
-    channel,
-    message: latestCustomerMessage,
-    messageText,
-    aiMode: aiModeGlobalState.mode
-  });
-
-  // Send real mobile notification drawer alerts to subscribed operator devices.
-  // This runs for WhatsApp, Live Chat, and direct customer chats.
+  // Send real mobile notification drawer alerts to subscribed operator devices FIRST.
+  // This must be independent of AI Reply mode. Even when SH AI is OFF/manual,
+  // operators still need mobile notifications for new WhatsApp/Live Chat/direct chats.
   const pushNotifyResult = await sendOperatorPushNotification({
     channel,
     message: latestCustomerMessage,
     messageText
   });
+  console.log("Operator push notification after inbound customer message:", {
+    odooMessageId: latestCustomerMessage?.id || null,
+    odooChannelId: channel?.id || null,
+    aiMode: aiModeGlobalState.mode,
+    result: pushNotifyResult
+  });
+
+  // Only forward to Zapier when SH AI toggle is ON.
+  // When SH AI is OFF/manual, do NOT send customer text to Zapier; only notify operators.
+  let zapierForwardResult = { ok: false, skipped: "ai_mode_off_manual_notification_only" };
+  if (aiModeGlobalState.mode === "zapier") {
+    zapierForwardResult = await sendIncomingWhatsAppToZapier({
+      channel,
+      message: latestCustomerMessage,
+      messageText,
+      aiMode: aiModeGlobalState.mode
+    });
+  }
+
+  // Manual mode: stop after notification. No Zapier, no Gemini, no auto reply.
+  if (aiModeGlobalState.mode === "manual") {
+    aiModeBackgroundState.processed_count += 1;
+    await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+    return {
+      ok: true,
+      mode: "manual",
+      notification_only: true,
+      skipped_zapier: true,
+      skipped_gemini: true,
+      decision: {
+        aiMode: "manual",
+        action: "operator_notification_only",
+        send_to_customer: false,
+        show_as_suggestion: false,
+        customer_reply: "",
+        suggested_customer_reply: "",
+        zapier_forward_result: zapierForwardResult,
+        push_notify_result: pushNotifyResult
+      }
+    };
+  }
 
   // In Zapier Mode, Zapier becomes the reply/action controller.
   // We forward the customer chat message to Zapier and then mark it processed here,
@@ -19016,7 +19048,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
 async function aiModeBackgroundTick() {
   if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
   if (!odooConfigured) return;
-  if (!aiModeGlobalState || !["assist", "chat", "zapier"].includes(aiModeGlobalState.mode)) return;
+  if (!aiModeGlobalState || !["manual", "assist", "chat", "zapier"].includes(aiModeGlobalState.mode)) return;
   if (aiModeBackgroundState.running) return;
 
   aiModeBackgroundState.running = true;
