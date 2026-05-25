@@ -14414,10 +14414,10 @@ async function aiModeWriteJsonFile(path, value) {
 }
 
 
-// ===================== ZAPIER: INCOMING WHATSAPP FORWARDING =====================
-// Sends every new incoming WhatsApp customer message detected by the Odoo/AI Mode worker
-// to Zapier. Zapier can then notify the team, update Sheets/CRM, call another AI flow,
-// or trigger actions outside this server.
+// ===================== ZAPIER: INCOMING CHAT FORWARDING =====================
+// Sends every new incoming customer message detected by the Odoo/AI Mode worker
+// to Zapier for WhatsApp, Live Chat, and direct Discuss chat channels. Zapier can
+// then generate replies, notify the team, update Sheets/CRM, or trigger actions.
 const ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL =
   process.env.ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL ||
   process.env.ZAPIER_WEBHOOK_URL ||
@@ -14492,7 +14492,7 @@ async function zapierRememberIncomingWhatsAppSentId(messageKey) {
 async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messageText = "", aiMode = "" } = {}) {
   if (!ZAPIER_INCOMING_WHATSAPP_ENABLED) return { ok: false, skipped: "disabled" };
   if (!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL) return { ok: false, skipped: "missing_webhook_url" };
-  if (channel?.channel_type !== "whatsapp") return { ok: false, skipped: "not_whatsapp" };
+  if (!aiModeChannelIsWorkerEligible(channel)) return { ok: false, skipped: "not_supported_chat_channel" };
 
   const cleanMessageText = aiModeSafeString(messageText || aiModeMessagePlainText(message), 8000);
   if (!cleanMessageText) return { ok: false, skipped: "empty_message" };
@@ -14508,8 +14508,8 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
 
   const payload = {
     source: "smart_handicrafts_operator_hub",
-    event: "incoming_whatsapp_message",
-    channel: "whatsapp",
+    event: "incoming_chat_message",
+    channel: aiModeChannelKind(channel),
     aiMode: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual"),
     replyController: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual") === "zapier" ? "zapier" : "server_copy_only",
 
@@ -14517,7 +14517,7 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
     customerPhone: aiModeChannelPhone(channel),
 
     messageText: cleanMessageText,
-    messageType: message?.message_type || "whatsapp_message",
+    messageType: message?.message_type || "comment",
     odooMessageId: message?.id || null,
     odooChannelId: channel?.id || null,
     messageDate: message?.date || "",
@@ -14551,7 +14551,7 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
     zapierIncomingWhatsAppState.last_sent_at = now();
     zapierIncomingWhatsAppState.last_error = "";
     await zapierRememberIncomingWhatsAppSentId(messageKey);
-    console.log("Incoming WhatsApp message forwarded to Zapier:", {
+    console.log("Incoming chat message forwarded to Zapier:", {
       odooMessageId: message?.id,
       odooChannelId: channel?.id,
       status: response.status
@@ -14560,7 +14560,7 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
   } catch (error) {
     zapierIncomingWhatsAppState.failed_count += 1;
     zapierIncomingWhatsAppState.last_error = error?.message || String(error);
-    console.warn("Incoming WhatsApp -> Zapier failed:", zapierIncomingWhatsAppState.last_error);
+    console.warn("Incoming chat -> Zapier failed:", zapierIncomingWhatsAppState.last_error);
     return { ok: false, error: zapierIncomingWhatsAppState.last_error };
   } finally {
     clearTimeout(timeout);
@@ -17815,7 +17815,7 @@ const AI_MODE_BACKGROUND_INTERVAL_MS = Math.max(
 );
 const AI_MODE_BACKGROUND_CHANNEL_LIMIT = Math.max(
   5,
-  Math.min(60, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 20))
+  Math.min(200, Number(process.env.AI_MODE_BACKGROUND_CHANNEL_LIMIT || 80))
 );
 const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
   8,
@@ -17826,7 +17826,7 @@ const AI_MODE_BACKGROUND_MESSAGE_LIMIT = Math.max(
 // even when the Operator Hub/WhatsApp page is closed.
 const AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT = Math.max(
   30,
-  Math.min(200, Number(process.env.AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT || 80))
+  Math.min(500, Number(process.env.AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT || 250))
 );
 // Also scan active AI memory records in Odoo. This catches old WhatsApp channels
 // whose discuss.channel row does not move to the top until an operator opens WhatsApp/Odoo UI.
@@ -18133,16 +18133,22 @@ function aiModeIsOwnOdooMessage(message = {}, userContext = {}, options = {}) {
   const authorId = Array.isArray(message.author_id) ? Number(message.author_id[0]) : null;
   const creatorId = Array.isArray(message.create_uid) ? Number(message.create_uid[0]) : null;
 
-  // In background WhatsApp scanning, author_id can sometimes equal the logged-in
-  // Odoo partner when the test/customer number is also saved as the operator/contact.
-  // If we trust author_id there, every incoming customer message gets skipped.
-  // create_uid is the safer signal for messages actually created by our API/Odoo user.
+  // Odoo WhatsApp/public-route messages can sometimes be created by the logged-in/Odoo user
+  // even when the actual sender is the customer. If we skip every create_uid == uid message,
+  // new customer numbers may never reach Zapier. Treat a message as ours only when there is
+  // a strong outbound signal, not from create_uid alone.
   if (!!userContext.uid && creatorId === Number(userContext.uid)) {
-    return true;
+    const text = aiModeMessagePlainText(message);
+    if (aiModeIsLikelySmartHandicraftsOutbound(message) || aiModeLooksLikeOurAssistantText(text)) {
+      return true;
+    }
   }
 
   if (trustAuthorId && !!userContext.partnerId && authorId === Number(userContext.partnerId)) {
-    return true;
+    const text = aiModeMessagePlainText(message);
+    if (aiModeIsLikelySmartHandicraftsOutbound(message) || aiModeLooksLikeOurAssistantText(text)) {
+      return true;
+    }
   }
 
   return false;
@@ -18165,8 +18171,38 @@ function aiModeChannelPhone(channel = {}) {
   return "";
 }
 
+function aiModeChannelLooksLikeWhatsApp(channel = {}) {
+  const type = String(channel?.channel_type || "").toLowerCase();
+  const name = `${String(channel?.display_name || "")} ${String(channel?.name || "")}`.toLowerCase();
+  return (
+    type === "whatsapp" ||
+    !!channel?.whatsapp_number ||
+    !!channel?.whatsapp_channel_valid_until ||
+    !!channel?.whatsapp_channel_active ||
+    (Array.isArray(channel?.whatsapp_partner_id) && !!channel.whatsapp_partner_id[0]) ||
+    name.includes("whatsapp") ||
+    /^\+?\d[\d\s-]{7,}$/.test(String(channel?.display_name || channel?.name || "").trim())
+  );
+}
+
+function aiModeChannelKind(channel = {}) {
+  const type = String(channel?.channel_type || "").toLowerCase();
+  if (aiModeChannelLooksLikeWhatsApp(channel)) return "whatsapp";
+  if (type === "livechat") return "livechat";
+  if (type === "chat") return "chat";
+  return type || "chat";
+}
+
+function aiModeChannelIsWorkerEligible(channel = {}) {
+  const type = String(channel?.channel_type || "").toLowerCase();
+  // Reply through Zapier for customer-facing chat types, not only WhatsApp.
+  // We include: WhatsApp, Odoo Live Chat, and direct Discuss chat.
+  // We intentionally exclude broad internal channels/groups unless explicitly detected as WhatsApp.
+  return aiModeChannelLooksLikeWhatsApp(channel) || type === "livechat" || type === "chat";
+}
+
 function aiModeCanPostToChannel(channel = {}) {
-  if (channel.channel_type !== "whatsapp") return true;
+  if (!aiModeChannelLooksLikeWhatsApp(channel)) return true;
   if (channel.whatsapp_channel_active === false) return false;
   const validUntil = aiModeParseOdooDateMs(channel.whatsapp_channel_valid_until);
   if (!validUntil) return !!channel.whatsapp_channel_active;
@@ -18190,9 +18226,7 @@ async function aiModeFetchWorkerChannels(uid) {
   ];
 
   const domain = [
-    "|",
-    ["channel_type", "=", "whatsapp"],
-    ["channel_type", "=", "livechat"]
+    ["channel_type", "in", ["whatsapp", "livechat", "chat"]]
   ];
 
   try {
@@ -18238,19 +18272,37 @@ async function aiModeFetchWorkerChannelsByIds(uid, channelIds = []) {
     "livechat_visitor_id"
   ];
 
-  try {
-    return await odooExecute(uid, "discuss.channel", "read", [ids, fields]);
-  } catch (error) {
-    console.warn("AI Mode worker channel read by recent messages failed, retrying minimal fields:", error?.message || error);
-    return await odooExecute(uid, "discuss.channel", "read", [ids, [
-      "id",
-      "name",
-      "display_name",
-      "channel_type",
-      "write_date",
-      "last_interest_dt"
-    ]]);
+  async function readChannels(modelName, idsToRead, rich = true) {
+    if (!idsToRead.length) return [];
+    try {
+      const rows = await odooExecute(uid, modelName, "read", [idsToRead, rich ? fields : [
+        "id",
+        "name",
+        "display_name",
+        "channel_type",
+        "write_date",
+        "last_interest_dt"
+      ]]);
+      return (Array.isArray(rows) ? rows : []).map((row) => ({ ...row, __channel_model: modelName }));
+    } catch (error) {
+      if (rich) {
+        console.warn(`AI Mode worker ${modelName} rich channel read failed, retrying minimal fields:`, error?.message || error);
+        return readChannels(modelName, idsToRead, false);
+      }
+      console.warn(`AI Mode worker ${modelName} channel read failed:`, error?.message || error);
+      return [];
+    }
   }
+
+  const discussRows = await readChannels("discuss.channel", ids, true);
+  const foundIds = new Set(discussRows.map((row) => Number(row?.id || 0)).filter(Boolean));
+  const missingIds = ids.filter((id) => !foundIds.has(Number(id)));
+
+  // Some Odoo versions/custom modules still use mail.channel in mail.message.model.
+  // Read missing IDs from mail.channel too, otherwise new WhatsApp conversations can be missed.
+  const mailRows = missingIds.length ? await readChannels("mail.channel", missingIds, true) : [];
+
+  return [...discussRows, ...mailRows];
 }
 
 async function aiModeFetchActiveMemoryChannelIds(uid) {
@@ -18382,11 +18434,12 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
     return { ok: false, reason: "whatsapp_reply_window_closed" };
   }
 
-  const kwargs = channel.channel_type === "whatsapp"
+  const kwargs = aiModeChannelLooksLikeWhatsApp(channel)
     ? { body, message_type: "whatsapp_message", subtype_xmlid: "mail.mt_comment" }
     : { body, message_type: "comment", subtype_xmlid: "mail.mt_comment" };
 
-  await odooExecute(uid, "discuss.channel", "message_post", [[Number(channel.id)]], kwargs);
+  const channelModel = channel.__channel_model || "discuss.channel";
+  await odooExecute(uid, channelModel, "message_post", [[Number(channel.id)]], kwargs);
   return { ok: true };
 }
 
@@ -18574,7 +18627,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     return { ok: false, skipped: "waiting_for_customer_pause" };
   }
 
-  // Forward the incoming WhatsApp customer message to Zapier before AI/handover logic.
+  // Forward the incoming customer chat message to Zapier before AI/handover logic.
   // This is independent from AI Mode, so Zapier can notify the team or trigger actions
   // even when the message is later skipped because an operator has already replied.
   const zapierForwardResult = await sendIncomingWhatsAppToZapier({
@@ -18585,7 +18638,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   });
 
   // In Zapier Mode, Zapier becomes the reply/action controller.
-  // We forward the WhatsApp customer message to Zapier and then mark it processed here,
+  // We forward the customer chat message to Zapier and then mark it processed here,
   // so Gemini/local AI is not called and no server-side AI auto-reply is sent.
   if (aiModeGlobalState.mode === "zapier") {
     aiModeBackgroundState.processed_count += 1;
@@ -18631,7 +18684,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   const payload = {
     aiMode: aiModeGlobalState.mode,
     source: "server_background_worker",
-    channel: channel.channel_type || "chat",
+    channel: aiModeChannelKind(channel),
     chatId: String(channel.id || ""),
     odooChannelId: Number(channel.id || 0),
     customerName: aiModeChannelDisplayName(channel),
@@ -18820,6 +18873,19 @@ async function aiModeBackgroundTick() {
       ...activeMemoryChannelIds
     ].map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
 
+    if (recentCandidateMessageCount || recentSkipOwn || recentSkipOutbound || recentSkipMissingChannel) {
+      console.log("AI Mode worker recent scan summary:", {
+        found: aiModeBackgroundState.recent_message_found_count,
+        candidates: recentCandidateMessageCount,
+        candidate_channels: candidateChannelIds.length,
+        skip_own: recentSkipOwn,
+        skip_outbound: recentSkipOutbound,
+        skip_missing_channel: recentSkipMissingChannel,
+        sample_candidates: recentCandidateDebug,
+        sample_skips: recentSkipDebug
+      });
+    }
+
     let channels = await aiModeFetchWorkerChannelsByIds(uid, candidateChannelIds);
     aiModeBackgroundState.candidate_channel_count = Array.isArray(channels) ? channels.length : 0;
 
@@ -18830,7 +18896,16 @@ async function aiModeBackgroundTick() {
     }
 
     for (const channel of channels || []) {
-      if (!channel?.id || !["whatsapp", "livechat"].includes(channel.channel_type)) continue;
+      if (!channel?.id || !aiModeChannelIsWorkerEligible(channel)) {
+        if (channel?.id) {
+          console.log("AI Mode worker skipped non-eligible channel:", {
+            id: channel.id,
+            channel_type: channel.channel_type || "",
+            name: channel.display_name || channel.name || ""
+          });
+        }
+        continue;
+      }
 
       const messages = await aiModeFetchWorkerMessages(uid, channel.id).catch((error) => {
         console.warn(`AI Mode worker message fetch failed for channel ${channel.id}:`, error?.message || error);
