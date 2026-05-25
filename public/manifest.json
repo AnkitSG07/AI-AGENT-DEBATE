@@ -1,0 +1,25 @@
+{
+  "name": "Smart Handicrafts Operator Notifications",
+  "short_name": "SH Notify",
+  "description": "Mobile notifications for Smart Handicrafts Operator Hub",
+  "start_url": "/operator-notifications",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111827",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
