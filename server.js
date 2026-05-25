@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-ai-toggle-zapier-visible-gemini-hidden-v4";
+const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-notifications-v1";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14481,6 +14481,201 @@ const ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS = Math.max(
   Number(process.env.ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS || 8000)
 );
 
+
+// ===================== PWA WEB PUSH NOTIFICATIONS =====================
+// Direct Web Push for mobile notification drawer alerts.
+// Requires npm package: web-push
+// Requires env vars:
+// WEB_PUSH_PUBLIC_KEY, WEB_PUSH_PRIVATE_KEY, WEB_PUSH_SUBJECT=mailto:care@smarthandicrafts.com
+const WEB_PUSH_ENABLED = String(process.env.WEB_PUSH_ENABLED || "true").toLowerCase() !== "false";
+const WEB_PUSH_PUBLIC_KEY = process.env.WEB_PUSH_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "";
+const WEB_PUSH_PRIVATE_KEY = process.env.WEB_PUSH_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "";
+const WEB_PUSH_SUBJECT = process.env.WEB_PUSH_SUBJECT || "mailto:care@smarthandicrafts.com";
+const WEB_PUSH_SUBSCRIPTIONS_PATH = process.env.WEB_PUSH_SUBSCRIPTIONS_PATH || "./push-subscriptions.json";
+const WEB_PUSH_OPERATOR_AUDIENCE = process.env.WEB_PUSH_OPERATOR_AUDIENCE || "smart-handicrafts-operators";
+
+const webPushState = {
+  module: null,
+  module_error: "",
+  initialized: false,
+  sent_count: 0,
+  failed_count: 0,
+  last_sent_at: "",
+  last_error: "",
+  sent_message_ids: new Set()
+};
+
+async function getWebPushModule() {
+  if (webPushState.module) return webPushState.module;
+  if (webPushState.module_error) return null;
+  try {
+    const mod = await import("web-push");
+    webPushState.module = mod.default || mod;
+    return webPushState.module;
+  } catch (error) {
+    webPushState.module_error = error?.message || String(error);
+    console.warn("Web Push module unavailable. Install dependency: npm install web-push", webPushState.module_error);
+    return null;
+  }
+}
+
+function webPushConfigured() {
+  return !!(WEB_PUSH_ENABLED && WEB_PUSH_PUBLIC_KEY && WEB_PUSH_PRIVATE_KEY && WEB_PUSH_SUBJECT);
+}
+
+async function configureWebPush() {
+  if (webPushState.initialized) return true;
+  if (!webPushConfigured()) return false;
+  const webpush = await getWebPushModule();
+  if (!webpush) return false;
+  try {
+    webpush.setVapidDetails(WEB_PUSH_SUBJECT, WEB_PUSH_PUBLIC_KEY, WEB_PUSH_PRIVATE_KEY);
+    webPushState.initialized = true;
+    return true;
+  } catch (error) {
+    webPushState.last_error = error?.message || String(error);
+    console.warn("Web Push VAPID setup failed:", webPushState.last_error);
+    return false;
+  }
+}
+
+async function readPushSubscriptions() {
+  const data = await aiModeReadJsonFile(WEB_PUSH_SUBSCRIPTIONS_PATH, { subscriptions: [] });
+  return Array.isArray(data?.subscriptions) ? data.subscriptions : [];
+}
+
+async function writePushSubscriptions(subscriptions = []) {
+  const unique = [];
+  const seen = new Set();
+  for (const row of subscriptions || []) {
+    const endpoint = String(row?.subscription?.endpoint || row?.endpoint || "").trim();
+    if (!endpoint || seen.has(endpoint)) continue;
+    seen.add(endpoint);
+    unique.push({
+      ...row,
+      updated_at: row?.updated_at || now(),
+      audience: row?.audience || WEB_PUSH_OPERATOR_AUDIENCE
+    });
+  }
+  await aiModeWriteJsonFile(WEB_PUSH_SUBSCRIPTIONS_PATH, {
+    updated_at: now(),
+    count: unique.length,
+    subscriptions: unique.slice(-500)
+  });
+  return unique;
+}
+
+function normalizePushSubscriptionPayload(body = {}) {
+  const subscription = body?.subscription || body;
+  const endpoint = String(subscription?.endpoint || "").trim();
+  if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return null;
+  return {
+    endpoint,
+    subscription,
+    user_agent: aiModeSafeString(body?.userAgent || body?.user_agent || "", 500),
+    operator_name: aiModeSafeString(body?.operatorName || body?.operator_name || "", 120),
+    device_label: aiModeSafeString(body?.deviceLabel || body?.device_label || "Operator device", 120),
+    audience: aiModeSafeString(body?.audience || WEB_PUSH_OPERATOR_AUDIENCE, 120),
+    created_at: body?.created_at || now(),
+    updated_at: now()
+  };
+}
+
+function buildOperatorHubUrlForPush(channel = {}) {
+  const base = String(process.env.OPERATOR_HUB_URL || process.env.APP_URL || "").replace(/\/$/, "");
+  const channelId = channel?.id ? String(channel.id) : "";
+  if (!base) return channelId ? `/operator-hub?channel=${encodeURIComponent(channelId)}` : "/operator-hub";
+  return channelId ? `${base}/operator-hub?channel=${encodeURIComponent(channelId)}` : `${base}/operator-hub`;
+}
+
+function getPushTitle(channel = {}) {
+  const label = aiModeZapierChannelLabel(channel);
+  if (label === "whatsapp") return "New WhatsApp message";
+  if (label === "livechat") return "New Live Chat message";
+  return "New customer chat message";
+}
+
+function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {}) {
+  const customer = aiModeSafeString(aiModeChannelDisplayName(channel) || "Customer", 90);
+  const bodyText = aiModeSafeString(messageText || aiModeMessagePlainText(message), 140);
+  return {
+    title: getPushTitle(channel),
+    body: `${customer}: ${bodyText || "New message"}`.slice(0, 180),
+    icon: process.env.PWA_ICON_URL || "/icons/icon-192.png",
+    badge: process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+    tag: `sh-chat-${channel?.id || "new"}`,
+    renotify: true,
+    requireInteraction: false,
+    data: {
+      url: buildOperatorHubUrlForPush(channel),
+      channelId: channel?.id || null,
+      messageId: message?.id || null,
+      channelType: aiModeZapierChannelLabel(channel),
+      customerName: customer,
+      customerPhone: aiModeChannelPhone(channel) || "",
+      receivedAt: now()
+    }
+  };
+}
+
+async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
+  if (!WEB_PUSH_ENABLED) return { ok: false, skipped: "disabled" };
+  if (!webPushConfigured()) return { ok: false, skipped: "not_configured" };
+  const messageId = aiModeSafeString(message?.id || "", 80);
+  if (!messageId) return { ok: false, skipped: "missing_message_id" };
+  const pushKey = `push:${messageId}`;
+  if (webPushState.sent_message_ids.has(pushKey)) return { ok: false, skipped: "duplicate_push" };
+
+  const ready = await configureWebPush();
+  if (!ready) return { ok: false, skipped: "web_push_not_ready", error: webPushState.last_error || webPushState.module_error };
+  const webpush = await getWebPushModule();
+  const subscriptions = await readPushSubscriptions();
+  if (!subscriptions.length) return { ok: false, skipped: "no_subscribers" };
+
+  const payload = JSON.stringify(buildPushPayload({ channel, message, messageText }));
+  const remaining = [];
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of subscriptions) {
+    const sub = row?.subscription || row;
+    if (!sub?.endpoint) continue;
+    try {
+      await webpush.sendNotification(sub, payload, { TTL: 60 * 60, urgency: "high" });
+      sent += 1;
+      remaining.push({ ...row, last_sent_at: now(), last_error: "" });
+    } catch (error) {
+      failed += 1;
+      const statusCode = Number(error?.statusCode || 0);
+      if (statusCode === 404 || statusCode === 410) {
+        // Drop expired browser subscriptions.
+        continue;
+      }
+      remaining.push({ ...row, last_error: error?.message || String(error), last_failed_at: now() });
+      webPushState.last_error = error?.message || String(error);
+    }
+  }
+
+  await writePushSubscriptions(remaining);
+  webPushState.sent_message_ids.add(pushKey);
+  if (webPushState.sent_message_ids.size > 2000) {
+    webPushState.sent_message_ids = new Set(Array.from(webPushState.sent_message_ids).slice(-1500));
+  }
+  webPushState.sent_count += sent;
+  webPushState.failed_count += failed;
+  webPushState.last_sent_at = sent ? now() : webPushState.last_sent_at;
+
+  console.log("Operator push notification result:", {
+    odooMessageId: message?.id || null,
+    odooChannelId: channel?.id || null,
+    sent,
+    failed,
+    subscribers: remaining.length
+  });
+
+  return { ok: sent > 0, sent, failed, subscribers: remaining.length };
+}
+
 const zapierIncomingWhatsAppState = {
   loaded: false,
   sent_ids: new Set(),
@@ -18658,6 +18853,14 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     aiMode: aiModeGlobalState.mode
   });
 
+  // Send real mobile notification drawer alerts to subscribed operator devices.
+  // This runs for WhatsApp, Live Chat, and direct customer chats.
+  const pushNotifyResult = await sendOperatorPushNotification({
+    channel,
+    message: latestCustomerMessage,
+    messageText
+  });
+
   // In Zapier Mode, Zapier becomes the reply/action controller.
   // We forward the customer chat message to Zapier and then mark it processed here,
   // so Gemini/local AI is not called and no server-side AI auto-reply is sent.
@@ -18675,7 +18878,8 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
         show_as_suggestion: false,
         customer_reply: "",
         suggested_customer_reply: "",
-        zapier_forward_result: zapierForwardResult
+        zapier_forward_result: zapierForwardResult,
+        push_notify_result: pushNotifyResult
       }
     };
   }
@@ -18994,6 +19198,73 @@ function startAiModeBackgroundWorker() {
 
   console.log(`AI Mode background worker ready. Interval: ${AI_MODE_BACKGROUND_INTERVAL_MS}ms, current mode: ${aiModeGlobalState.mode}`);
 }
+
+
+// ===================== PWA PUSH API =====================
+app.get("/api/push/public-key", (req, res) => {
+  res.json({
+    ok: true,
+    enabled: WEB_PUSH_ENABLED,
+    configured: webPushConfigured(),
+    publicKey: WEB_PUSH_PUBLIC_KEY,
+    subject: WEB_PUSH_SUBJECT,
+    moduleReady: !webPushState.module_error,
+    moduleError: webPushState.module_error || ""
+  });
+});
+
+app.post("/api/push/subscribe", async (req, res) => {
+  try {
+    const row = normalizePushSubscriptionPayload(req.body || {});
+    if (!row) return res.status(400).json({ ok: false, error: "Invalid push subscription payload." });
+    const existing = await readPushSubscriptions();
+    const filtered = existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== row.endpoint);
+    const saved = await writePushSubscriptions([...filtered, row]);
+    res.json({ ok: true, subscribed: true, count: saved.length, configured: webPushConfigured() });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/push/unsubscribe", async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
+    if (!endpoint) return res.status(400).json({ ok: false, error: "endpoint is required." });
+    const existing = await readPushSubscriptions();
+    const saved = await writePushSubscriptions(existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== endpoint));
+    res.json({ ok: true, unsubscribed: true, count: saved.length });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.get("/api/push/status", async (req, res) => {
+  const subscriptions = await readPushSubscriptions();
+  res.json({
+    ok: true,
+    enabled: WEB_PUSH_ENABLED,
+    configured: webPushConfigured(),
+    subscriberCount: subscriptions.length,
+    sentCount: webPushState.sent_count,
+    failedCount: webPushState.failed_count,
+    lastSentAt: webPushState.last_sent_at,
+    lastError: webPushState.last_error,
+    moduleError: webPushState.module_error || ""
+  });
+});
+
+app.post("/api/push/test", async (req, res) => {
+  try {
+    const result = await sendOperatorPushNotification({
+      channel: { id: req.body?.channelId || "test", channel_type: "chat", display_name: "Smart Handicrafts Test" },
+      message: { id: `test-${Date.now()}`, date: now() },
+      messageText: req.body?.message || "Test notification from Operator Hub"
+    });
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
 
 // Simple frontend API for the new single toggle UI.
 // GET returns whether AI auto-reply is ON/OFF.
