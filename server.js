@@ -14593,11 +14593,12 @@ function buildOperatorHubUrlForPush(channel = {}) {
     if (!channelId) return url;
     try {
       const u = new URL(url, fallbackBase || "https://ai-agent-debate.onrender.com");
+      u.searchParams.set("channel_id", channelId);
       u.searchParams.set("channel", channelId);
       return u.toString();
     } catch {
       const sep = String(url).includes("?") ? "&" : "?";
-      return `${url}${sep}channel=${encodeURIComponent(channelId)}`;
+      return `${url}${sep}channel_id=${encodeURIComponent(channelId)}&channel=${encodeURIComponent(channelId)}`;
     }
   };
 
