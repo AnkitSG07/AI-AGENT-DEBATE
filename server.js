@@ -14607,31 +14607,74 @@ function buildOperatorHubUrlForPush(channel = {}) {
   return appendChannel(localUrl);
 }
 
+function getPushTemplate(channel = {}, customer = "Customer", bodyText = "") {
+  const channelType = aiModeZapierChannelLabel(channel);
+  const safeCustomer = aiModeSafeString(customer || "Customer", 70);
+  const safeBody = aiModeSafeString(bodyText || "New message", 120);
+
+  if (channelType === "whatsapp") {
+    return {
+      template: "whatsapp",
+      title: "SH Operator Hub",
+      body: `WhatsApp from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+      channelLabel: "WhatsApp",
+      tagPrefix: "sh-wa-chat",
+      actionTitle: "Open WhatsApp Chat"
+    };
+  }
+
+  if (channelType === "livechat") {
+    return {
+      template: "livechat",
+      title: "SH Operator Hub",
+      body: `Website chat from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+      channelLabel: "Live Chat",
+      tagPrefix: "sh-live-chat",
+      actionTitle: "Open Live Chat"
+    };
+  }
+
+  return {
+    template: "odoo_chat",
+    title: "SH Operator Hub",
+    body: `Odoo chat from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+    channelLabel: "Odoo Chat",
+    tagPrefix: "sh-odoo-chat",
+    actionTitle: "Open Chat"
+  };
+}
+
 function getPushTitle(channel = {}) {
-  const label = aiModeZapierChannelLabel(channel);
-  if (label === "whatsapp") return "New WhatsApp message";
-  if (label === "livechat") return "New Live Chat message";
-  return "New customer chat message";
+  return getPushTemplate(channel).title;
 }
 
 function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {}) {
   const customer = aiModeSafeString(aiModeChannelDisplayName(channel) || "Customer", 90);
   const bodyText = aiModeSafeString(messageText || aiModeMessagePlainText(message), 140);
+  const template = getPushTemplate(channel, customer, bodyText);
+  const channelId = channel?.id || null;
+
   return {
-    title: getPushTitle(channel),
-    body: `${customer}: ${bodyText || "New message"}`.slice(0, 180),
+    title: template.title,
+    body: template.body,
+    channelLabel: template.channelLabel,
+    template: template.template,
     icon: process.env.PWA_ICON_URL || "/icons/icon-192.png",
     badge: process.env.PWA_BADGE_URL || "/icons/badge-96.png",
-    tag: `sh-chat-${channel?.id || "new"}`,
+    tag: `${template.tagPrefix}-${channelId || "new"}`,
     renotify: true,
     requireInteraction: false,
     data: {
       url: buildOperatorHubUrlForPush(channel),
-      channelId: channel?.id || null,
+      channelId,
       messageId: message?.id || null,
       channelType: aiModeZapierChannelLabel(channel),
+      channelLabel: template.channelLabel,
+      template: template.template,
+      actionTitle: template.actionTitle,
       customerName: customer,
       customerPhone: aiModeChannelPhone(channel) || "",
+      messagePreview: bodyText || "New message",
       receivedAt: now()
     }
   };
