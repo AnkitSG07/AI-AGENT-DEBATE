@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-notifications-v1";
+const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-notification-center-v6";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14582,10 +14582,28 @@ function normalizePushSubscriptionPayload(body = {}) {
 }
 
 function buildOperatorHubUrlForPush(channel = {}) {
-  const base = String(process.env.OPERATOR_HUB_URL || process.env.APP_URL || "").replace(/\/$/, "");
+  // OPERATOR_HUB_URL should be the real Operator Hub page, usually on Odoo:
+  // https://www.smarthandicrafts.com/your-operator-hub-page
+  // Do NOT append /operator-hub again when OPERATOR_HUB_URL is already a full page URL.
+  const configuredUrl = String(process.env.OPERATOR_HUB_URL || "").trim();
+  const fallbackBase = String(process.env.APP_URL || "").replace(/\/$/, "");
   const channelId = channel?.id ? String(channel.id) : "";
-  if (!base) return channelId ? `/operator-hub?channel=${encodeURIComponent(channelId)}` : "/operator-hub";
-  return channelId ? `${base}/operator-hub?channel=${encodeURIComponent(channelId)}` : `${base}/operator-hub`;
+
+  const appendChannel = (url) => {
+    if (!channelId) return url;
+    try {
+      const u = new URL(url, fallbackBase || "https://ai-agent-debate.onrender.com");
+      u.searchParams.set("channel", channelId);
+      return u.toString();
+    } catch {
+      const sep = String(url).includes("?") ? "&" : "?";
+      return `${url}${sep}channel=${encodeURIComponent(channelId)}`;
+    }
+  };
+
+  if (configuredUrl) return appendChannel(configuredUrl);
+  const localUrl = fallbackBase ? `${fallbackBase}/operator-notifications` : "/operator-notifications";
+  return appendChannel(localUrl);
 }
 
 function getPushTitle(channel = {}) {
@@ -19199,6 +19217,14 @@ function startAiModeBackgroundWorker() {
   console.log(`AI Mode background worker ready. Interval: ${AI_MODE_BACKGROUND_INTERVAL_MS}ms, current mode: ${aiModeGlobalState.mode}`);
 }
 
+
+
+// Render-hosted notification center.
+// Use this page once on each operator phone to allow notifications and save a push subscription.
+// The actual Operator Hub may still remain inside Odoo; tapping a notification opens OPERATOR_HUB_URL.
+app.get(["/operator-notifications", "/operator-hub"], (req, res) => {
+  res.sendFile(`${process.cwd()}/public/operator-notifications.html`);
+});
 
 // ===================== PWA PUSH API =====================
 app.get("/api/push/public-key", (req, res) => {
