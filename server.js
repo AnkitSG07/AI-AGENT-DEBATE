@@ -7,6 +7,9 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
+const SERVER_PATCH_VERSION = "2026-05-25-all-customer-chat-zapier-v3-public-user-inbound";
+console.log("Server patch version:", SERVER_PATCH_VERSION);
+
 const app = express();
 
 // ===================== CORS FOR ODOO / SMART HANDICRAFTS =====================
@@ -18086,8 +18089,10 @@ function aiModeIsLikelySmartHandicraftsOutbound(message = {}) {
   // are CUSTOMER messages and must be forwarded to Zapier. Do not skip them as
   // outbound just because the author text contains our company name.
   if (isPublicCreator) {
-    // Only treat as outbound if the message explicitly comes from our real email.
-    return emailLower.includes("care@smarthandicrafts") || emailLower.includes("@smarthandicrafts.com");
+    // Odoo WhatsApp/livechat inbound customer messages are often created by Public user,
+    // even when author/display name contains the company name. Treat ALL Public user
+    // messages as customer inbound so they are forwarded to Zapier.
+    return false;
   }
 
   // Strong outbound signals: created by our logged-in/internal user or our email.
@@ -18226,9 +18231,7 @@ async function aiModeFetchWorkerChannels(uid) {
   ];
 
   const domain = [
-    "|",
-    ["channel_type", "=", "whatsapp"],
-    ["channel_type", "=", "livechat"]
+    ["channel_type", "in", ["whatsapp", "livechat", "chat"]]
   ];
 
   try {
