@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v8-notifications-independent-of-ai-toggle";
+const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v12-rich-notification-drawer-templates";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14610,16 +14610,26 @@ function buildOperatorHubUrlForPush(channel = {}) {
 function getPushTemplate(channel = {}, customer = "Customer", bodyText = "") {
   const channelType = aiModeZapierChannelLabel(channel);
   const safeCustomer = aiModeSafeString(customer || "Customer", 70);
-  const safeBody = aiModeSafeString(bodyText || "New message", 120);
+  const safeBody = aiModeSafeString(bodyText || "New message", 110);
 
+  // Notification drawer template target:
+  // Title: SH Operator Hub
+  // Body line 1: Ankit: Hello
+  // Body line 2: WhatsApp • Tap to open chat
+  // Browser/OS controls the final visual layout, but newline + icon/badge/image
+  // gives the closest WhatsApp-style card across Android and iOS PWA.
   if (channelType === "whatsapp") {
     return {
       template: "whatsapp",
       title: "SH Operator Hub",
-      body: `WhatsApp from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+      body: `${safeCustomer}: ${safeBody}
+WhatsApp • Tap to open chat`.slice(0, 220),
       channelLabel: "WhatsApp",
       tagPrefix: "sh-wa-chat",
-      actionTitle: "Open WhatsApp Chat"
+      actionTitle: "Open WhatsApp Chat",
+      icon: process.env.PWA_WHATSAPP_ICON_URL || process.env.PWA_ICON_URL || "/icons/icon-192.png",
+      badge: process.env.PWA_WHATSAPP_BADGE_URL || process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+      image: process.env.PWA_WHATSAPP_IMAGE_URL || ""
     };
   }
 
@@ -14627,20 +14637,28 @@ function getPushTemplate(channel = {}, customer = "Customer", bodyText = "") {
     return {
       template: "livechat",
       title: "SH Operator Hub",
-      body: `Website chat from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+      body: `${safeCustomer}: ${safeBody}
+Live Chat • Tap to open chat`.slice(0, 220),
       channelLabel: "Live Chat",
       tagPrefix: "sh-live-chat",
-      actionTitle: "Open Live Chat"
+      actionTitle: "Open Live Chat",
+      icon: process.env.PWA_LIVECHAT_ICON_URL || process.env.PWA_ICON_URL || "/icons/icon-192.png",
+      badge: process.env.PWA_LIVECHAT_BADGE_URL || process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+      image: process.env.PWA_LIVECHAT_IMAGE_URL || ""
     };
   }
 
   return {
     template: "odoo_chat",
     title: "SH Operator Hub",
-    body: `Odoo chat from ${safeCustomer}: ${safeBody}`.slice(0, 190),
+    body: `${safeCustomer}: ${safeBody}
+Odoo Chat • Tap to open chat`.slice(0, 220),
     channelLabel: "Odoo Chat",
     tagPrefix: "sh-odoo-chat",
-    actionTitle: "Open Chat"
+    actionTitle: "Open Chat",
+    icon: process.env.PWA_ODOO_ICON_URL || process.env.PWA_ICON_URL || "/icons/icon-192.png",
+    badge: process.env.PWA_ODOO_BADGE_URL || process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+    image: process.env.PWA_ODOO_IMAGE_URL || ""
   };
 }
 
@@ -14659,11 +14677,13 @@ function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {})
     body: template.body,
     channelLabel: template.channelLabel,
     template: template.template,
-    icon: process.env.PWA_ICON_URL || "/icons/icon-192.png",
-    badge: process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+    icon: template.icon || process.env.PWA_ICON_URL || "/icons/icon-192.png",
+    badge: template.badge || process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+    image: template.image || "",
     tag: `${template.tagPrefix}-${channelId || "new"}`,
     renotify: true,
     requireInteraction: false,
+    vibrate: [120, 70, 120],
     data: {
       url: buildOperatorHubUrlForPush(channel),
       channelId,
