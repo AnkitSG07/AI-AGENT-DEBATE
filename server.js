@@ -14305,7 +14305,8 @@ app.post("/api/profile-logout", (req, res) => {
 // Modes:
 // - manual: AI does nothing
 // - assist: AI suggests only; operator sends manually
-// - chat: AI can send Level 1 replies directly, ask internal clarification for Level 2, and hand over Level 3 cases.
+// - chat: Gemini/AI can send Level 1 replies directly, ask internal clarification for Level 2, and hand over Level 3 cases.
+// - zapier: forward new incoming WhatsApp customer messages to Zapier and do not call Gemini/AI for auto-replies.
 const AI_MODE_RULES_PATH = process.env.AI_MODE_RULES_PATH || "./ai-mode-rules.md";
 const HANDOVER_RULES_PATH = process.env.HANDOVER_RULES_PATH || "./handover-rules.md";
 const APPROVED_TRAINING_RULES_PATH = process.env.APPROVED_TRAINING_RULES_PATH || "./approved-training-rules.md";
@@ -14377,7 +14378,7 @@ function aiModeCleanPhone(value) {
 
 function aiModeNormalizeMode(value) {
   const mode = String(value || "manual").trim().toLowerCase();
-  return ["manual", "assist", "chat"].includes(mode) ? mode : "manual";
+  return ["manual", "assist", "chat", "zapier"].includes(mode) ? mode : "manual";
 }
 
 function aiModeSafeString(value, max = 4000) {
@@ -14409,6 +14410,160 @@ async function aiModeWriteJsonFile(path, value) {
   } catch (error) {
     console.warn("AI Mode memory write failed:", error?.message || error);
     return false;
+  }
+}
+
+
+// ===================== ZAPIER: INCOMING WHATSAPP FORWARDING =====================
+// Sends every new incoming WhatsApp customer message detected by the Odoo/AI Mode worker
+// to Zapier. Zapier can then notify the team, update Sheets/CRM, call another AI flow,
+// or trigger actions outside this server.
+const ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL =
+  process.env.ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL ||
+  process.env.ZAPIER_WEBHOOK_URL ||
+  "https://hooks.zapier.com/hooks/catch/27703710/4oqoizf/";
+
+const ZAPIER_INCOMING_WHATSAPP_ENABLED =
+  String(process.env.ZAPIER_INCOMING_WHATSAPP_ENABLED || "true").toLowerCase() !== "false";
+
+const ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS = Math.max(
+  2000,
+  Number(process.env.ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS || 8000)
+);
+
+const zapierIncomingWhatsAppState = {
+  loaded: false,
+  sent_ids: new Set(),
+  sent_count: 0,
+  skipped_duplicate_count: 0,
+  failed_count: 0,
+  last_sent_at: "",
+  last_error: ""
+};
+
+function zapierIncomingWhatsAppMessageKey(message = {}) {
+  const id = aiModeSafeString(message?.id || "", 80);
+  return id ? `odoo-mail-message:${id}` : "";
+}
+
+async function zapierLoadIncomingWhatsAppSentIds() {
+  if (zapierIncomingWhatsAppState.loaded) return;
+  zapierIncomingWhatsAppState.loaded = true;
+  try {
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    const stored = Array.isArray(memory?._zapier_incoming_whatsapp?.sent_message_ids)
+      ? memory._zapier_incoming_whatsapp.sent_message_ids
+      : [];
+    stored.slice(-1500).forEach((id) => {
+      const key = aiModeSafeString(id, 120);
+      if (key) zapierIncomingWhatsAppState.sent_ids.add(key);
+    });
+  } catch (error) {
+    console.warn("Zapier incoming WhatsApp sent-id load failed:", error?.message || error);
+  }
+}
+
+async function zapierRememberIncomingWhatsAppSentId(messageKey) {
+  const key = aiModeSafeString(messageKey, 120);
+  if (!key) return;
+  zapierIncomingWhatsAppState.sent_ids.add(key);
+  if (zapierIncomingWhatsAppState.sent_ids.size > 2000) {
+    zapierIncomingWhatsAppState.sent_ids = new Set(Array.from(zapierIncomingWhatsAppState.sent_ids).slice(-1500));
+  }
+
+  try {
+    const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+    memory._zapier_incoming_whatsapp = {
+      ...(memory._zapier_incoming_whatsapp || {}),
+      updated_at: now(),
+      webhook_configured: !!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL,
+      sent_count: zapierIncomingWhatsAppState.sent_count,
+      failed_count: zapierIncomingWhatsAppState.failed_count,
+      last_sent_at: zapierIncomingWhatsAppState.last_sent_at,
+      last_error: zapierIncomingWhatsAppState.last_error,
+      sent_message_ids: Array.from(zapierIncomingWhatsAppState.sent_ids).slice(-1500)
+    };
+    await aiModeWriteJsonFile(OPERATOR_MEMORY_PATH, memory);
+  } catch (error) {
+    console.warn("Zapier incoming WhatsApp sent-id save failed:", error?.message || error);
+  }
+}
+
+async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messageText = "", aiMode = "" } = {}) {
+  if (!ZAPIER_INCOMING_WHATSAPP_ENABLED) return { ok: false, skipped: "disabled" };
+  if (!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL) return { ok: false, skipped: "missing_webhook_url" };
+  if (channel?.channel_type !== "whatsapp") return { ok: false, skipped: "not_whatsapp" };
+
+  const cleanMessageText = aiModeSafeString(messageText || aiModeMessagePlainText(message), 8000);
+  if (!cleanMessageText) return { ok: false, skipped: "empty_message" };
+
+  const messageKey = zapierIncomingWhatsAppMessageKey(message);
+  if (!messageKey) return { ok: false, skipped: "missing_message_id" };
+
+  await zapierLoadIncomingWhatsAppSentIds();
+  if (zapierIncomingWhatsAppState.sent_ids.has(messageKey)) {
+    zapierIncomingWhatsAppState.skipped_duplicate_count += 1;
+    return { ok: false, skipped: "duplicate_already_sent" };
+  }
+
+  const payload = {
+    source: "smart_handicrafts_operator_hub",
+    event: "incoming_whatsapp_message",
+    channel: "whatsapp",
+    aiMode: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual"),
+    replyController: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual") === "zapier" ? "zapier" : "server_copy_only",
+
+    customerName: aiModeChannelDisplayName(channel),
+    customerPhone: aiModeChannelPhone(channel),
+
+    messageText: cleanMessageText,
+    messageType: message?.message_type || "whatsapp_message",
+    odooMessageId: message?.id || null,
+    odooChannelId: channel?.id || null,
+    messageDate: message?.date || "",
+    receivedAt: now(),
+
+    replyWindowOpen: aiModeCanPostToChannel(channel),
+    whatsappReplyWindowValidUntil: channel?.whatsapp_channel_valid_until || "",
+
+    authorName: Array.isArray(message?.author_id) ? message.author_id[1] : "",
+    rawOdooMessage: message,
+    rawOdooChannel: channel
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    const responseText = await response.text().catch(() => "");
+
+    if (!response.ok) {
+      throw new Error(`Zapier HTTP ${response.status}: ${responseText.slice(0, 300)}`);
+    }
+
+    zapierIncomingWhatsAppState.sent_count += 1;
+    zapierIncomingWhatsAppState.last_sent_at = now();
+    zapierIncomingWhatsAppState.last_error = "";
+    await zapierRememberIncomingWhatsAppSentId(messageKey);
+    console.log("Incoming WhatsApp message forwarded to Zapier:", {
+      odooMessageId: message?.id,
+      odooChannelId: channel?.id,
+      status: response.status
+    });
+    return { ok: true, status: response.status, responseText: responseText.slice(0, 300) };
+  } catch (error) {
+    zapierIncomingWhatsAppState.failed_count += 1;
+    zapierIncomingWhatsAppState.last_error = error?.message || String(error);
+    console.warn("Incoming WhatsApp -> Zapier failed:", zapierIncomingWhatsAppState.last_error);
+    return { ok: false, error: zapierIncomingWhatsAppState.last_error };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -17106,6 +17261,23 @@ app.post("/api/ai-mode/chat", async (req, res) => {
       ));
     }
 
+    if (aiMode === "zapier") {
+      return res.json(aiModeNormalizeAiJson(
+        {
+          level: 0,
+          action: "forward_to_zapier",
+          next_action: "zapier_mode",
+          customer_reply: "",
+          suggested_customer_reply: "",
+          internal_summary: "Zapier Mode is active. Incoming WhatsApp messages are forwarded by the server background worker; Gemini is not used for auto-replies in this mode.",
+          send_to_customer: false,
+          show_as_suggestion: false,
+          zapier_mode: true
+        },
+        { aiMode, source, message }
+      ));
+    }
+
     const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
     const isInternalControl =
       !!INTERNAL_CONTROL_WHATSAPP &&
@@ -18314,6 +18486,38 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     return { ok: false, skipped: "waiting_for_customer_pause" };
   }
 
+  // Forward the incoming WhatsApp customer message to Zapier before AI/handover logic.
+  // This is independent from AI Mode, so Zapier can notify the team or trigger actions
+  // even when the message is later skipped because an operator has already replied.
+  const zapierForwardResult = await sendIncomingWhatsAppToZapier({
+    channel,
+    message: latestCustomerMessage,
+    messageText,
+    aiMode: aiModeGlobalState.mode
+  });
+
+  // In Zapier Mode, Zapier becomes the reply/action controller.
+  // We forward the WhatsApp customer message to Zapier and then mark it processed here,
+  // so Gemini/local AI is not called and no server-side AI auto-reply is sent.
+  if (aiModeGlobalState.mode === "zapier") {
+    aiModeBackgroundState.processed_count += 1;
+    await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+    return {
+      ok: true,
+      mode: "zapier",
+      skipped_gemini: true,
+      decision: {
+        aiMode: "zapier",
+        action: "forwarded_to_zapier",
+        send_to_customer: false,
+        show_as_suggestion: false,
+        customer_reply: "",
+        suggested_customer_reply: "",
+        zapier_forward_result: zapierForwardResult
+      }
+    };
+  }
+
   // If any operator/Smart Handicrafts message already exists after this customer message,
   // treat this customer message as answered and do not let AI reply again.
   if (aiModeHasOperatorMessageAfter(messages, latestCustomerMessage, userContext)) {
@@ -18389,7 +18593,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
 async function aiModeBackgroundTick() {
   if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
   if (!odooConfigured) return;
-  if (!aiModeGlobalState || !["assist", "chat"].includes(aiModeGlobalState.mode)) return;
+  if (!aiModeGlobalState || !["assist", "chat", "zapier"].includes(aiModeGlobalState.mode)) return;
   if (aiModeBackgroundState.running) return;
 
   aiModeBackgroundState.running = true;
@@ -18693,7 +18897,7 @@ app.get("/api/ai-mode/status", async (req, res) => {
   const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
   res.json({
     ok: true,
-    modes: ["manual", "assist", "chat"],
+    modes: ["manual", "assist", "chat", "zapier"],
     internal_control_configured: !!INTERNAL_CONTROL_WHATSAPP,
     paths: {
       ai_mode_rules: AI_MODE_RULES_PATH,
@@ -18717,6 +18921,15 @@ app.get("/api/ai-mode/status", async (req, res) => {
       auto_sent_count: aiModeBackgroundState.auto_sent_count,
       handover_count: aiModeBackgroundState.handover_count,
       clarification_count: aiModeBackgroundState.clarification_count
+    },
+    zapier_incoming_whatsapp: {
+      enabled: ZAPIER_INCOMING_WHATSAPP_ENABLED,
+      webhook_configured: !!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL,
+      sent_count: zapierIncomingWhatsAppState.sent_count,
+      skipped_duplicate_count: zapierIncomingWhatsAppState.skipped_duplicate_count,
+      failed_count: zapierIncomingWhatsAppState.failed_count,
+      last_sent_at: zapierIncomingWhatsAppState.last_sent_at,
+      last_error: zapierIncomingWhatsAppState.last_error
     },
     odoo_memory: {
       enabled: aiModeOdooEnabled(),
