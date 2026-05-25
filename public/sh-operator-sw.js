@@ -1,4 +1,4 @@
-/* Smart Handicrafts Operator Hub Service Worker - Web Push v9 exact chat opener */
+/* Smart Handicrafts Operator Hub Service Worker - Web Push v11 notification templates */
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -7,25 +7,50 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-self.addEventListener('push', (event) => {
-  let payload = {};
+function normalizePushPayload(event) {
   try {
-    payload = event.data ? event.data.json() : {};
+    return event.data ? event.data.json() : {};
   } catch (e) {
-    payload = { title: 'Smart Handicrafts', body: event.data ? event.data.text() : 'New message' };
+    return {
+      title: 'SH Operator Hub',
+      body: event.data ? event.data.text() : 'New customer message',
+      data: {}
+    };
   }
+}
 
-  const title = payload.title || 'New customer message';
+function notificationActionTitle(payload) {
+  const data = payload && payload.data ? payload.data : {};
+  const channelType = String(data.channelType || payload.channelType || '').toLowerCase();
+  const channelLabel = String(data.channelLabel || payload.channelLabel || '').toLowerCase();
+
+  if (channelType === 'whatsapp' || channelLabel.includes('whatsapp')) return 'Open WhatsApp Chat';
+  if (channelType === 'livechat' || channelLabel.includes('live')) return 'Open Live Chat';
+  return 'Open Chat';
+}
+
+self.addEventListener('push', (event) => {
+  const payload = normalizePushPayload(event);
+  const data = payload.data || {};
+
+  const title = payload.title || 'SH Operator Hub';
+  const body = payload.body || 'New customer message. Tap to open chat.';
+
   const options = {
-    body: payload.body || 'Open Operator Hub to reply.',
+    body,
     icon: payload.icon || '/icons/icon-192.png',
     badge: payload.badge || '/icons/badge-96.png',
-    tag: payload.tag || 'smart-handicrafts-chat',
+    tag: payload.tag || ('smart-handicrafts-chat-' + (data.channelId || 'new')),
     renotify: payload.renotify !== false,
     requireInteraction: !!payload.requireInteraction,
-    data: payload.data || {},
+    timestamp: Date.now(),
+    data: {
+      ...data,
+      url: data.url || payload.url || '/operator-notifications',
+      notificationTemplate: data.template || payload.template || 'chat'
+    },
     actions: [
-      { action: 'open', title: 'Open Chat' }
+      { action: 'open', title: notificationActionTitle(payload) }
     ]
   };
 
@@ -44,7 +69,6 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
 
-    // If the target page is already open, focus it and navigate it to the exact chat URL.
     for (const client of allClients) {
       try {
         const clientUrl = new URL(client.url);
@@ -57,7 +81,6 @@ self.addEventListener('notificationclick', (event) => {
       } catch (e) {}
     }
 
-    // Otherwise open the Operator Hub URL from the push payload.
     if (clients.openWindow) return clients.openWindow(targetUrl);
   })());
 });
