@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#111827" />
+  <title>SH Operator Notifications</title>
+  <style>
+    :root{--bg:#0f172a;--card:#fff;--text:#111827;--muted:#64748b;--green:#16a34a;--red:#dc2626;--line:#e5e7eb;--violet:#8b5cf6;}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:radial-gradient(circle at top,#1e293b,#020617 60%);display:flex;align-items:center;justify-content:center;padding:20px;color:var(--text)}
+    .card{width:min(440px,100%);background:rgba(255,255,255,.96);border-radius:28px;padding:24px;box-shadow:0 30px 80px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.45)}
+    .logo{width:58px;height:58px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#22c55e);display:grid;place-items:center;color:#fff;font-weight:900;font-size:24px;margin-bottom:16px;box-shadow:0 14px 28px rgba(139,92,246,.35)}
+    h1{font-size:24px;line-height:1.15;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted);line-height:1.5}.status{border:1px solid var(--line);background:#f8fafc;border-radius:18px;padding:14px;margin:16px 0;font-size:14px;color:#334155;white-space:pre-wrap}.row{display:flex;gap:10px;flex-wrap:wrap}button{border:0;border-radius:16px;padding:14px 16px;font-weight:800;cursor:pointer}.primary{background:#111827;color:#fff;flex:1;min-width:190px}.ghost{background:#eef2ff;color:#3730a3}.danger{background:#fee2e2;color:#991b1b}.ok{color:var(--green);font-weight:800}.bad{color:var(--red);font-weight:800}.small{font-size:12px;color:#64748b;margin-top:14px}.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid #ddd6fe;background:#f5f3ff;border-radius:999px;padding:8px 10px;color:#6d28d9;font-size:12px;font-weight:800;margin-bottom:14px}.dot{width:8px;height:8px;border-radius:999px;background:#8b5cf6;box-shadow:0 0 0 4px rgba(139,92,246,.15)}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">SH</div>
+    <div class="pill"><span class="dot"></span> Operator notification setup</div>
+    <h1>Enable mobile notifications</h1>
+    <p>This page registers your phone/browser for real notification-drawer alerts when new WhatsApp, Live Chat, or customer chat messages arrive.</p>
+    <div class="status" id="status">Checking push status…</div>
+    <div class="row">
+      <button class="primary" id="enableBtn">Enable Notifications</button>
+      <button class="ghost" id="testBtn">Send Test</button>
+      <button class="danger" id="resetBtn">Reset</button>
+    </div>
+    <p class="small">Keep this installed/opened once per operator phone. Tapping notifications will open your Operator Hub URL configured in Render.</p>
+  </main>
+
+<script>
+const statusEl = document.getElementById('status');
+const enableBtn = document.getElementById('enableBtn');
+const testBtn = document.getElementById('testBtn');
+const resetBtn = document.getElementById('resetBtn');
+let currentSub = null;
+
+function logStatus(message, good){
+  statusEl.innerHTML = (good === true ? '<span class="ok">OK</span> ' : good === false ? '<span class="bad">Issue</span> ' : '') + String(message || '');
+}
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+function supported(){ return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+async function getRegistration(){
+  const reg = await navigator.serviceWorker.register('/sh-operator-sw.js', { scope: '/' });
+  await navigator.serviceWorker.ready;
+  return reg;
+}
+async function refresh(){
+  if (!supported()) { logStatus('Push is not supported in this browser. Use Chrome/Edge on Android, or iOS Safari Home Screen PWA.', false); return; }
+  try {
+    const keyRes = await fetch('/api/push/public-key');
+    const keyData = await keyRes.json();
+    if (!keyData.configured) { logStatus('Server push is not configured. Check Render WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY.', false); return; }
+    const reg = await getRegistration();
+    currentSub = await reg.pushManager.getSubscription();
+    const perm = Notification.permission;
+    if (perm === 'granted' && currentSub) logStatus('Notifications are enabled on this device. Subscription saved in browser.', true);
+    else if (perm === 'denied') logStatus('Notifications are blocked. Open browser site settings and allow notifications for this site.', false);
+    else logStatus('Notifications are not enabled yet. Tap Enable Notifications.', null);
+  } catch(e){ logStatus(e.message || e, false); }
+}
+async function enable(){
+  if (!supported()) return refresh();
+  enableBtn.disabled = true;
+  try {
+    logStatus('Requesting permission…');
+    const keyRes = await fetch('/api/push/public-key');
+    const keyData = await keyRes.json();
+    if (!keyData.publicKey || !keyData.configured) throw new Error('Server push key is missing or not configured.');
+    const reg = await getRegistration();
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('Notification permission was not allowed.');
+    currentSub = await reg.pushManager.getSubscription();
+    if (!currentSub) {
+      currentSub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(keyData.publicKey) });
+    }
+    const saveRes = await fetch('/api/push/subscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ subscription: currentSub, deviceLabel: navigator.userAgent || 'Operator device', userAgent: navigator.userAgent || '' }) });
+    const saveData = await saveRes.json().catch(()=>({}));
+    if (!saveRes.ok || saveData.ok === false) throw new Error(saveData.error || 'Could not save subscription.');
+    logStatus('Notifications enabled and subscription saved. Sending a test notification…', true);
+    await fetch('/api/push/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: 'Operator Hub notifications are working.' }) });
+  } catch(e){ logStatus(e.message || e, false); }
+  finally { enableBtn.disabled = false; refresh(); }
+}
+async function test(){
+  try { await fetch('/api/push/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: 'Test notification from Smart Handicrafts Operator Hub.' }) }); logStatus('Test notification sent. Check your notification drawer.', true); }
+  catch(e){ logStatus(e.message || e, false); }
+}
+async function reset(){
+  try {
+    const reg = await getRegistration();
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { await fetch('/api/push/unsubscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ endpoint: sub.endpoint }) }); await sub.unsubscribe(); }
+    currentSub = null; logStatus('Subscription reset. You can enable again.', true);
+  } catch(e){ logStatus(e.message || e, false); }
+}
+enableBtn.addEventListener('click', enable);
+testBtn.addEventListener('click', test);
+resetBtn.addEventListener('click', reset);
+refresh();
+</script>
+</body>
+</html>
