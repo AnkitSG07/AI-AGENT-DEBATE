@@ -1,4 +1,4 @@
-/* Smart Handicrafts Operator Hub Service Worker - Web Push v11 notification templates */
+/* Smart Handicrafts Operator Hub Service Worker - Web Push v12 rich drawer notification templates */
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -40,10 +40,12 @@ self.addEventListener('push', (event) => {
     body,
     icon: payload.icon || '/icons/icon-192.png',
     badge: payload.badge || '/icons/badge-96.png',
+    image: payload.image || data.image || undefined,
     tag: payload.tag || ('smart-handicrafts-chat-' + (data.channelId || 'new')),
     renotify: payload.renotify !== false,
     requireInteraction: !!payload.requireInteraction,
     timestamp: Date.now(),
+    vibrate: payload.vibrate || [120, 70, 120],
     data: {
       ...data,
       url: data.url || payload.url || '/operator-notifications',
@@ -53,6 +55,11 @@ self.addEventListener('push', (event) => {
       { action: 'open', title: notificationActionTitle(payload) }
     ]
   };
+
+  // Clean undefined values because some browsers are stricter with NotificationOptions.
+  Object.keys(options).forEach((key) => {
+    if (options[key] === undefined || options[key] === '') delete options[key];
+  });
 
   event.waitUntil(self.registration.showNotification(title, options));
 });
