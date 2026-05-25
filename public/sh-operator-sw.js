@@ -1,4 +1,4 @@
-/* Smart Handicrafts Operator Hub Service Worker - Web Push v6 notification center */
+/* Smart Handicrafts Operator Hub Service Worker - Web Push v9 exact chat opener */
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -34,19 +34,30 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification && event.notification.data && event.notification.data.url) || '/';
+
+  const rawUrl = (event.notification && event.notification.data && event.notification.data.url) || '/operator-notifications';
+  let targetUrl = rawUrl;
+  try {
+    targetUrl = new URL(rawUrl, self.location.origin).toString();
+  } catch (e) {}
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    // If the target page is already open, focus it and navigate it to the exact chat URL.
     for (const client of allClients) {
-      if ('focus' in client) {
-        client.focus();
-        if ('navigate' in client) {
-          try { await client.navigate(url); } catch (e) {}
+      try {
+        const clientUrl = new URL(client.url);
+        const target = new URL(targetUrl);
+        if (clientUrl.origin === target.origin && clientUrl.pathname === target.pathname) {
+          if ('focus' in client) await client.focus();
+          if ('navigate' in client) await client.navigate(targetUrl);
+          return;
         }
-        return;
-      }
+      } catch (e) {}
     }
-    if (clients.openWindow) return clients.openWindow(url);
+
+    // Otherwise open the Operator Hub URL from the push payload.
+    if (clients.openWindow) return clients.openWindow(targetUrl);
   })());
 });
