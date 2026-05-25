@@ -18391,6 +18391,94 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
 }
 
 
+// ===================== ZAPIER: REPLY BACK INTO ODOO/WHATSAPP =====================
+// Add this AFTER aiModePostTextToOdooChannel(...) is defined, and BEFORE app.listen(...).
+// Zapier Step 3 should POST JSON to:
+// https://ai-agent-debate.onrender.com/api/zapier/reply
+
+const ZAPIER_REPLY_SECRET = process.env.ZAPIER_REPLY_SECRET || "";
+
+app.post("/api/zapier/reply", async (req, res) => {
+  try {
+    if (ZAPIER_REPLY_SECRET) {
+      const incomingSecret = String(req.headers["x-zapier-secret"] || req.body?.secret || "");
+      if (incomingSecret !== ZAPIER_REPLY_SECRET) {
+        return res.status(401).json({ ok: false, error: "Invalid Zapier secret" });
+      }
+    }
+
+    const reply = aiModeSafeString(
+      req.body?.reply ||
+      req.body?.responseText ||
+      req.body?.response_text ||
+      req.body?.message ||
+      req.body?.text ||
+      "",
+      8000
+    );
+
+    const odooChannelId = Number(
+      req.body?.odoo_channel_id ||
+      req.body?.odooChannelId ||
+      req.body?.channel_id ||
+      req.body?.channelId ||
+      0
+    );
+
+    const customerPhone = aiModeSafeString(req.body?.to || req.body?.customerPhone || "", 80);
+
+    if (!reply) {
+      return res.status(400).json({ ok: false, error: "reply is required" });
+    }
+
+    if (!odooChannelId) {
+      return res.status(400).json({
+        ok: false,
+        error: "odoo_channel_id is required",
+        hint: "In Zapier Step 3 Data, send odoo_channel_id = Step 1 Odoo Channel Id."
+      });
+    }
+
+    if (!aiModeOdooEnabled()) {
+      return res.status(500).json({ ok: false, error: "Odoo is not configured on server" });
+    }
+
+    const uid = await odooLoginCached();
+    const channels = await aiModeFetchWorkerChannelsByIds(uid, [odooChannelId]);
+    const channel = channels?.[0];
+
+    if (!channel?.id) {
+      return res.status(404).json({ ok: false, error: `Odoo channel not found: ${odooChannelId}` });
+    }
+
+    if (!aiModeCanPostToChannel(channel)) {
+      return res.status(409).json({
+        ok: false,
+        error: "WhatsApp reply window is closed",
+        customerPhone,
+        odooChannelId
+      });
+    }
+
+    const postResult = await aiModePostTextToOdooChannel(uid, channel, reply);
+    if (!postResult?.ok) {
+      return res.status(400).json({ ok: false, error: postResult?.reason || "Could not post reply" });
+    }
+
+    return res.json({
+      ok: true,
+      posted: true,
+      odooChannelId,
+      customerPhone,
+      replyLength: reply.length
+    });
+  } catch (error) {
+    console.error("Zapier reply endpoint failed:", error?.message || error);
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+
 function aiModeIsBumpOrFollowupDuringHandover(text = "") {
   const clean = aiModeSafeString(text, 500).trim().toLowerCase();
   if (!clean) return true;
