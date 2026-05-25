@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-all-customer-chat-zapier-v3-public-user-inbound";
+const SERVER_PATCH_VERSION = "2026-05-25-ai-toggle-zapier-visible-gemini-hidden-v4";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14384,6 +14384,53 @@ function aiModeNormalizeMode(value) {
   return ["manual", "assist", "chat", "zapier"].includes(mode) ? mode : "manual";
 }
 
+// UI toggle mapping:
+// - ON  => Zapier AI auto-reply by default
+// - OFF => Manual/human reply only
+// Gemini/server AI mode is intentionally kept hidden for now. It is still supported
+// internally as mode "chat" and can be enabled later by POSTing { mode: "chat" }
+// or by setting AI_MODE_TOGGLE_ON_MODE=chat if Zapier is ever disabled.
+const AI_MODE_TOGGLE_ON_MODE = aiModeNormalizeMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier");
+const AI_MODE_TOGGLE_OFF_MODE = aiModeNormalizeMode(process.env.AI_MODE_TOGGLE_OFF_MODE || "manual");
+
+function aiModeIsAutoReplyMode(mode) {
+  const normalized = aiModeNormalizeMode(mode);
+  return normalized === "zapier" || normalized === "chat";
+}
+
+function aiModeResolveRequestedMode(body = {}) {
+  const hasExplicitToggle = Object.prototype.hasOwnProperty.call(body || {}, "aiEnabled") ||
+    Object.prototype.hasOwnProperty.call(body || {}, "ai_enabled") ||
+    Object.prototype.hasOwnProperty.call(body || {}, "aiOn") ||
+    Object.prototype.hasOwnProperty.call(body || {}, "ai_on") ||
+    Object.prototype.hasOwnProperty.call(body || {}, "enabled");
+
+  if (hasExplicitToggle) {
+    const raw = body.aiEnabled ?? body.ai_enabled ?? body.aiOn ?? body.ai_on ?? body.enabled;
+    const enabled = raw === true || String(raw).toLowerCase() === "true" || String(raw) === "1";
+    return enabled ? AI_MODE_TOGGLE_ON_MODE : AI_MODE_TOGGLE_OFF_MODE;
+  }
+
+  // Hidden/admin fallback: keep older modes available, including Gemini/server AI = "chat".
+  return aiModeNormalizeMode(body?.aiMode || body?.mode || AI_MODE_TOGGLE_OFF_MODE);
+}
+
+function aiModePublicToggleState() {
+  const currentMode = aiModeNormalizeMode(aiModeGlobalState?.mode || AI_MODE_TOGGLE_OFF_MODE);
+  return {
+    ok: true,
+    aiEnabled: aiModeIsAutoReplyMode(currentMode),
+    ai_enabled: aiModeIsAutoReplyMode(currentMode),
+    mode: currentMode,
+    visibleMode: aiModeIsAutoReplyMode(currentMode) ? "ai" : "manual",
+    autoReplyProvider: currentMode === "zapier" ? "zapier" : currentMode === "chat" ? "gemini_hidden" : "none",
+    hiddenModesAvailable: ["chat"],
+    toggleOnMode: AI_MODE_TOGGLE_ON_MODE,
+    toggleOffMode: AI_MODE_TOGGLE_OFF_MODE,
+    global: aiModeGlobalState
+  };
+}
+
 function aiModeSafeString(value, max = 4000) {
   return String(value || "").trim().slice(0, max);
 }
@@ -18948,6 +18995,32 @@ function startAiModeBackgroundWorker() {
   console.log(`AI Mode background worker ready. Interval: ${AI_MODE_BACKGROUND_INTERVAL_MS}ms, current mode: ${aiModeGlobalState.mode}`);
 }
 
+// Simple frontend API for the new single toggle UI.
+// GET returns whether AI auto-reply is ON/OFF.
+// POST accepts { aiEnabled: true/false }.
+// Hidden fallback remains available: POST { mode: "chat" } enables Gemini/server AI,
+// POST { mode: "zapier" } enables Zapier, POST { mode: "manual" } disables AI.
+app.get("/api/ai-mode", (req, res) => {
+  res.json(aiModePublicToggleState());
+});
+
+app.post("/api/ai-mode", (req, res) => {
+  const nextMode = aiModeResolveRequestedMode(req.body || {});
+  const previousMode = aiModeNormalizeMode(aiModeGlobalState.mode);
+  aiModeGlobalState.mode = nextMode;
+  aiModeGlobalState.updated_at = now();
+  aiModeGlobalState.updated_by = aiModeSafeString(req.body?.updatedBy || req.body?.source || "operator_hub_toggle", 120);
+
+  if (previousMode !== nextMode) {
+    aiModeGlobalState.enabled_since_ms = Date.now();
+  }
+
+  res.json({
+    ...aiModePublicToggleState(),
+    previousMode
+  });
+});
+
 app.get("/api/ai-mode/global", (req, res) => {
   res.json({
     ok: true,
@@ -18995,7 +19068,7 @@ app.get("/api/ai-mode/global", (req, res) => {
 });
 
 app.post("/api/ai-mode/global", (req, res) => {
-  const nextMode = aiModeNormalizeMode(req.body?.aiMode || req.body?.mode || "manual");
+  const nextMode = aiModeResolveRequestedMode(req.body || {});
   const previousMode = aiModeGlobalState.mode;
   aiModeGlobalState.mode = nextMode;
   aiModeGlobalState.updated_at = now();
@@ -19012,7 +19085,9 @@ app.get("/api/ai-mode/status", async (req, res) => {
   const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
   res.json({
     ok: true,
-    modes: ["manual", "assist", "chat", "zapier"],
+    modes: ["manual", "zapier"],
+    hidden_modes: ["chat", "assist"],
+    toggle: aiModePublicToggleState(),
     internal_control_configured: !!INTERNAL_CONTROL_WHATSAPP,
     paths: {
       ai_mode_rules: AI_MODE_RULES_PATH,
