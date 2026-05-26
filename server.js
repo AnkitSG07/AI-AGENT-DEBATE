@@ -39,10 +39,37 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json({
+  limit: "8mb",
+  verify: (req, res, buf) => {
+    // Keep exact raw webhook body so forwarded Meta webhooks can preserve signature checks.
+    // Odoo may validate x-hub-signature-256 against the raw request body.
+    if (req.originalUrl && String(req.originalUrl).includes("webhook")) {
+      req.rawBody = buf?.toString("utf8") || "";
+    }
+  }
+}));
 app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
+
+// ===================== WHATSAPP WEBHOOK ROUTER / ODOO FORWARDING =====================
+// Use this when Meta callback URL is changed from Odoo to Render.
+// Meta -> Render /webhook -> store call events/debug -> forward message/status payloads to Odoo.
+const ODOO_WHATSAPP_WEBHOOK_URL = String(
+  process.env.ODOO_WHATSAPP_WEBHOOK_URL ||
+  "https://vaidahi-kala-pvt-ltd.odoo.com/whatsapp/webhook"
+).trim();
+const ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED = String(
+  process.env.ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED || "true"
+).toLowerCase() !== "false";
+const ODOO_WHATSAPP_WEBHOOK_FORWARD_TIMEOUT_MS = Math.max(
+  2000,
+  Number(process.env.ODOO_WHATSAPP_WEBHOOK_FORWARD_TIMEOUT_MS || 9000)
+);
+const ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS = String(
+  process.env.ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS || "true"
+).toLowerCase() !== "false";
 
 const profilePasswords = {
   "Smart handicrafts": process.env.PROFILE_PASS_SMART_HANDICRAFTS || "",
@@ -20897,19 +20924,111 @@ function handleWhatsappWebhookVerify(req, res) {
   return res.status(403).send("Forbidden");
 }
 
+
+function whatsappWebhookPayloadFields(body = {}) {
+  const fields = new Set();
+  if (body?.sample?.field) fields.add(String(body.sample.field));
+  if (body?.field) fields.add(String(body.field));
+  if (Array.isArray(body?.entry)) {
+    for (const entry of body.entry || []) {
+      for (const change of entry?.changes || []) {
+        if (change?.field) fields.add(String(change.field));
+      }
+    }
+  }
+  return [...fields].map((field) => field.toLowerCase());
+}
+
+function shouldForwardWebhookToOdoo(body = {}) {
+  if (!ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED || !ODOO_WHATSAPP_WEBHOOK_URL) return false;
+  if (ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS) return true;
+  const fields = whatsappWebhookPayloadFields(body);
+  // Calls should stay in Render if you disable FORWARD_ALL_FIELDS. Messages/statuses should continue to Odoo.
+  return fields.some((field) => ["messages", "message_template_status_update", "account_update", "phone_number_name_update", "phone_number_quality_update", "template_category_update", "whatsapp_business_account"].includes(field));
+}
+
+async function forwardWhatsappWebhookToOdoo(req, body = {}) {
+  if (!shouldForwardWebhookToOdoo(body)) {
+    return { attempted: false, skipped: true, reason: "forward_disabled_or_field_not_allowed" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ODOO_WHATSAPP_WEBHOOK_FORWARD_TIMEOUT_MS);
+
+  try {
+    const rawBody = req?.rawBody || JSON.stringify(body || {});
+    const headers = {
+      "Content-Type": req?.headers?.["content-type"] || "application/json",
+      "User-Agent": "SH-Operator-Hub-Webhook-Proxy/25",
+      "X-SH-Webhook-Proxy": "render-to-odoo",
+      "X-Forwarded-For": req?.headers?.["x-forwarded-for"] || req?.socket?.remoteAddress || "",
+      "X-Forwarded-Proto": "https"
+    };
+
+    // Preserve Meta signature headers where possible. If Odoo validates signatures,
+    // the raw body above gives it the best chance to verify the forwarded payload.
+    ["x-hub-signature", "x-hub-signature-256"].forEach((name) => {
+      if (req?.headers?.[name]) headers[name] = req.headers[name];
+    });
+
+    const resp = await fetch(ODOO_WHATSAPP_WEBHOOK_URL, {
+      method: "POST",
+      headers,
+      body: rawBody,
+      signal: controller.signal
+    });
+
+    const responseText = await resp.text().catch(() => "");
+    const result = {
+      attempted: true,
+      ok: resp.ok,
+      status: resp.status,
+      statusText: resp.statusText,
+      responsePreview: responseText.slice(0, 500)
+    };
+
+    if (!resp.ok) {
+      console.warn("Odoo WhatsApp webhook forward failed:", result);
+    } else {
+      console.log("Odoo WhatsApp webhook forwarded:", { status: resp.status, fields: whatsappWebhookPayloadFields(body) });
+    }
+
+    return result;
+  } catch (error) {
+    const result = {
+      attempted: true,
+      ok: false,
+      error: error?.name === "AbortError" ? "forward_timeout" : (error?.message || String(error))
+    };
+    console.warn("Odoo WhatsApp webhook forward error:", result);
+    return result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function handleWhatsappWebhookPost(req, res) {
   try {
     const body = req.body || {};
-    const result = await processWhatsappCallWebhook(body);
+    const callResult = await processWhatsappCallWebhook(body);
+    const forwardResult = await forwardWhatsappWebhookToOdoo(req, body);
+    const result = {
+      ...callResult,
+      odoo_forward: forwardResult,
+      router_mode: true
+    };
+
     await recordWebhookDebugEvent(req, body, result).catch((debugError) => {
       console.warn("Webhook debug record failed:", debugError?.message || debugError);
     });
-    // Always 200 for Meta webhook delivery. Errors are logged below and not exposed to Meta.
+
+    // Always 200 for Meta webhook delivery. Do not expose Odoo forwarding failures to Meta;
+    // they are visible in Render logs and /api/debug/webhooks/recent.
     return res.status(200).json(result);
   } catch (error) {
     console.error("WhatsApp webhook processing failed:", error?.message || error);
     await recordWebhookDebugEvent(req, req.body || {}, { ok: false, error: error?.message || String(error) }).catch(() => null);
-    return res.status(200).json({ ok: false, error: error?.message || String(error) });
+    return res.status(200).json({ ok: false, error: error?.message || String(error), router_mode: true });
   }
 }
 
@@ -20949,6 +21068,19 @@ app.post("/api/debug/webhooks/clear", async (req, res) => {
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
+});
+
+app.get("/api/debug/webhooks/router-status", async (req, res) => {
+  return res.json({
+    ok: true,
+    router_mode: true,
+    render_callback_url: `${String(process.env.APP_URL || "https://ai-agent-debate.onrender.com").replace(/\/$/, "")}/webhook`,
+    odoo_forward_enabled: ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED,
+    odoo_forward_url: ODOO_WHATSAPP_WEBHOOK_URL ? ODOO_WHATSAPP_WEBHOOK_URL.replace(/\?.*$/, "") : "",
+    forward_all_fields: ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS,
+    verify_token_configured: !!WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    debug_enabled: WHATSAPP_WEBHOOK_DEBUG_ENABLED
+  });
 });
 
 
