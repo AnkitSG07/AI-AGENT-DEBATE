@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-direct-incoming-webrtc-v23";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-stability-v26";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -20789,15 +20789,16 @@ async function findOdooWhatsappChannelForCall(event = {}) {
 
   try {
     const uid = await odooLoginCached();
+    const domain = [
+      ["channel_type", "=", "whatsapp"],
+      ["whatsapp_number", "ilike", phone.slice(-10)]
+    ];
+    const fields = ["id", "name", "display_name", "channel_type", "whatsapp_number", "whatsapp_partner_id", "last_interest_dt", "write_date"];
     const rows = await odooExecute(
       uid,
       "discuss.channel",
       "search_read",
-      [[
-        ["channel_type", "=", "whatsapp"],
-        ["whatsapp_number", "ilike", phone.slice(-10)]
-      ]],
-      ["id", "name", "display_name", "channel_type", "whatsapp_number", "whatsapp_partner_id", "last_interest_dt", "write_date"],
+      [domain, fields],
       { limit: 1, order: "last_interest_dt desc, write_date desc, id desc" }
     );
     return rows?.[0] || null;
@@ -21267,7 +21268,13 @@ app.get("/api/whatsapp-calls/logs", async (req, res) => {
     }
 
     if (channelId) {
-      calls = calls.filter((row) => Number(row?.odoo_channel_id || 0) === channelId);
+      // Do not hide call events only because Odoo channel lookup failed.
+      // When phone filtering is already applied, rows without odoo_channel_id still belong to this customer.
+      calls = calls.filter((row) => {
+        const rowChannelId = Number(row?.odoo_channel_id || 0);
+        if (!rowChannelId && phone) return true;
+        return rowChannelId === channelId;
+      });
     }
 
     calls = calls
