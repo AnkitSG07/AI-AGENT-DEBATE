@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Incoming WhatsApp Call</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#020617">
+  <style>
+    :root{--bg:#020617;--panel:#0f172a;--muted:#94a3b8;--text:#f8fafc;--green:#22c55e;--red:#ef4444;--line:rgba(255,255,255,.12)}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#164e63 0,#020617 36%,#000 100%);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--text);overflow:hidden}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;padding-top:calc(24px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+    .phone{width:min(430px,100%);min-height:min(760px,94vh);border:1px solid var(--line);background:linear-gradient(180deg,rgba(15,23,42,.78),rgba(2,6,23,.95));box-shadow:0 30px 90px rgba(0,0,0,.55);border-radius:38px;padding:28px 22px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between}
+    .phone:before{content:"";position:absolute;inset:-80px;background:radial-gradient(circle at 30% 10%,rgba(34,197,94,.18),transparent 34%),radial-gradient(circle at 70% 0,rgba(14,165,233,.16),transparent 32%);pointer-events:none}
+    .top,.mid,.actions,.foot{position:relative;z-index:1}.top{display:flex;justify-content:space-between;align-items:center}.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:14px;letter-spacing:.02em}.brand i{width:30px;height:30px;border-radius:12px;background:#25d366;display:grid;place-items:center;color:#052e16;font-style:normal}.pill{font-size:12px;color:#bbf7d0;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);padding:7px 10px;border-radius:999px}.mid{text-align:center;padding:56px 0 28px}.avatar{width:132px;height:132px;border-radius:50%;margin:0 auto 24px;background:linear-gradient(135deg,#22c55e,#14b8a6);display:grid;place-items:center;font-size:54px;font-weight:900;box-shadow:0 0 0 10px rgba(34,197,94,.08),0 0 0 22px rgba(34,197,94,.04)}
+    h1{margin:0;font-size:30px;line-height:1.15;word-break:break-word}.phone-no{margin-top:10px;color:var(--muted);font-size:15px}.state{margin:24px auto 0;width:max-content;max-width:100%;padding:9px 14px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--line);font-size:13px;color:#e2e8f0}.timer{font-variant-numeric:tabular-nums;margin-top:12px;color:#cbd5e1;font-size:18px;font-weight:700}.actions{display:flex;justify-content:center;gap:34px;margin:20px 0 18px}.callbtn{width:82px;height:82px;border-radius:50%;border:0;display:grid;place-items:center;color:white;font-size:32px;box-shadow:0 14px 40px rgba(0,0,0,.32);cursor:pointer}.accept{background:var(--green)}.reject,.end{background:var(--red)}.callbtn:disabled{opacity:.45;filter:grayscale(1);cursor:not-allowed}.labelrow{display:flex;justify-content:center;gap:52px;color:#cbd5e1;font-size:13px}.foot{border-top:1px solid var(--line);padding-top:16px;margin-top:16px;color:#94a3b8;font-size:13px;line-height:1.45}.small-actions{display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap}.small-actions button{background:rgba(255,255,255,.08);color:#e2e8f0;border:1px solid var(--line);border-radius:999px;padding:9px 12px}.err{display:none;margin:14px 0 0;padding:12px;border-radius:14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.28);color:#fecaca;font-size:13px;line-height:1.4}.err.show{display:block}.pulse{animation:pulse 1.35s infinite}@keyframes pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 10px rgba(34,197,94,.08),0 0 0 22px rgba(34,197,94,.04)}50%{transform:scale(1.035);box-shadow:0 0 0 14px rgba(34,197,94,.12),0 0 0 32px rgba(34,197,94,.06)}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <main class="phone" role="application" aria-label="WhatsApp call receiver">
+      <div class="top"><div class="brand"><i>☎</i><span>SH Operator Call</span></div><div class="pill" id="sourcePill">WhatsApp</div></div>
+      <section class="mid">
+        <div class="avatar pulse" id="avatar">?</div>
+        <h1 id="callerName">Incoming call</h1>
+        <div class="phone-no" id="callerPhone">Loading call…</div>
+        <div class="state" id="callState">Preparing receiver…</div>
+        <div class="timer" id="timer">00:00</div>
+        <div class="err" id="errorBox"></div>
+      </section>
+      <section>
+        <div class="actions">
+          <button class="callbtn reject" id="rejectBtn" title="Reject" aria-label="Reject call">✕</button>
+          <button class="callbtn accept" id="acceptBtn" title="Accept" aria-label="Accept call">✓</button>
+          <button class="callbtn end" id="endBtn" title="End" aria-label="End call" style="display:none">⌕</button>
+        </div>
+        <div class="labelrow"><span>Decline</span><span id="acceptLabel">Accept</span></div>
+      </section>
+      <footer class="foot">
+        Keep this app installed/open for fastest answering. The microphone starts only after you open this call screen.
+        <div class="small-actions"><button id="refreshBtn">Refresh call</button><button id="openHubBtn">Open Operator Hub</button></div>
+      </footer>
+    </main>
+  </div>
+  <audio id="remoteAudio" autoplay playsinline></audio>
+<script>
+const qs = new URLSearchParams(location.search);
+let callId = qs.get('callId') || qs.get('call_id') || '';
+let phone = (qs.get('phone') || '').replace(/\D/g,'');
+let callerName = qs.get('name') || '';
+let currentCall = null;
+let pc = null;
+let localStream = null;
+let ringTimer = null;
+let audioCtx = null;
+let startedAt = 0;
+const $ = id => document.getElementById(id);
+function setState(t){ $('callState').textContent = t; }
+function showErr(t){ const e=$('errorBox'); e.textContent=t||''; e.classList.toggle('show',!!t); }
+function fmtPhone(p){ return p ? '+'+p : 'Unknown WhatsApp number'; }
+function initials(n,p){ const s=(n||p||'?').trim(); return (s[0]||'?').toUpperCase(); }
+function updateHeader(){ $('callerName').textContent = callerName || 'WhatsApp caller'; $('callerPhone').textContent = fmtPhone(phone); $('avatar').textContent = initials(callerName, phone); }
+function startTimer(){ if(startedAt) return; startedAt=Date.now(); setInterval(()=>{ const s=Math.floor((Date.now()-startedAt)/1000); $('timer').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); },1000); }
+function startRingtone(){ try{ stopRingtone(); audioCtx=new (window.AudioContext||window.webkitAudioContext)(); ringTimer=setInterval(()=>{ const osc=audioCtx.createOscillator(); const gain=audioCtx.createGain(); osc.frequency.value=880; gain.gain.value=.045; osc.connect(gain).connect(audioCtx.destination); osc.start(); setTimeout(()=>{ try{osc.stop()}catch(e){} },260); },850);}catch(e){} }
+function stopRingtone(){ if(ringTimer) clearInterval(ringTimer); ringTimer=null; if(audioCtx){ try{audioCtx.close()}catch(e){} audioCtx=null; } }
+async function fetchCall(){
+  showErr('');
+  let data=null;
+  if(callId){ const r=await fetch(`/api/whatsapp-calls/${encodeURIComponent(callId)}`); if(r.ok) data=await r.json(); }
+  if(!data || !data.ok){ const r=await fetch('/api/whatsapp-calls/incoming'); const j=await r.json(); data={ok:true,call:(j.calls||[])[0]}; }
+  currentCall=data.call||null;
+  if(!currentCall){ setState('No active incoming call found'); showErr('Call not found or already ended. Ask the customer to call again.'); return; }
+  callId=currentCall.call_id || callId;
+  phone=(currentCall.customer_phone||currentCall.wa_id||currentCall.from||phone||'').replace(/\D/g,'');
+  callerName=currentCall.customer_name || callerName || '';
+  updateHeader();
+  setState(currentCall.has_sdp ? 'Incoming call • ready to answer' : 'Incoming call event received');
+  if(!currentCall.has_sdp) showErr('This call event does not include WebRTC SDP yet. Accept may fail until Meta sends the session offer.');
+  startRingtone();
+}
+async function acceptCall(){
+  try{
+    showErr(''); setState('Opening microphone…'); stopRingtone();
+    if(!currentCall) await fetchCall();
+    const offer = currentCall?.session?.sdp || currentCall?.raw?.call?.session?.sdp || currentCall?.raw?.call?.connect?.session?.sdp || '';
+    if(!offer) throw new Error('No SDP offer found in this call event. Cannot connect audio yet.');
+    localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+    pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+    pc.ontrack = ev => { $('remoteAudio').srcObject = ev.streams[0]; };
+    await pc.setRemoteDescription({type:'offer',sdp:offer});
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await new Promise(resolve=>{ if(pc.iceGatheringState==='complete') return resolve(); const to=setTimeout(resolve,2000); pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete'){clearTimeout(to);resolve();} }; });
+    setState('Accepting WhatsApp call…');
+    const r=await fetch('/api/whatsapp-calls/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,sdp:pc.localDescription.sdp,sdp_type:pc.localDescription.type,phone_number_id:currentCall.phone_number_id})});
+    const j=await r.json(); if(!j.ok) throw new Error(j.error||'Accept failed');
+    $('acceptBtn').style.display='none'; $('rejectBtn').style.display='none'; $('endBtn').style.display='grid'; $('acceptLabel').textContent='Connected';
+    setState('Connected'); startTimer();
+  }catch(e){ setState('Could not answer'); showErr(e.message||String(e)); startRingtone(); }
+}
+async function rejectCall(){ stopRingtone(); try{ if(callId) await fetch('/api/whatsapp-calls/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,phone_number_id:currentCall?.phone_number_id})}); }catch(e){} setState('Call declined'); }
+async function endCall(){ stopRingtone(); try{ if(callId) await fetch('/api/whatsapp-calls/terminate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,phone_number_id:currentCall?.phone_number_id})}); }catch(e){} try{pc&&pc.close()}catch(e){} if(localStream)localStream.getTracks().forEach(t=>t.stop()); setState('Call ended'); }
+$('acceptBtn').onclick=acceptCall; $('rejectBtn').onclick=rejectCall; $('endBtn').onclick=endCall; $('refreshBtn').onclick=fetchCall; $('openHubBtn').onclick=()=>{ location.href = new URL('/operator-notifications', location.origin).toString(); };
+updateHeader(); fetchCall().catch(e=>{setState('Load failed');showErr(e.message||String(e));});
+</script>
+</body>
+</html>
