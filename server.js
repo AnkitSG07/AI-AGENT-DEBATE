@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v33-remove-call-push-topic";
+const SERVER_PATCH_VERSION = "2026-05-26-ai-mode-manual-default-v34";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15482,18 +15482,32 @@ function aiModeNormalizeMode(value) {
   return ["manual", "assist", "chat", "zapier"].includes(mode) ? mode : "manual";
 }
 
+// Public Operator Hub modes are intentionally locked to only:
+// - manual: human replies only
+// - zapier: Zapier auto-reply / automation
+// Hidden Gemini/server chat mode must never become active by default or from stale env values.
+// Enable it only for emergency/internal fallback by setting AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
+const AI_MODE_ALLOW_HIDDEN_CHAT_MODE =
+  String(process.env.AI_MODE_ALLOW_HIDDEN_CHAT_MODE || "false").toLowerCase() === "true";
+
+function aiModeNormalizeOperationalMode(value) {
+  const mode = aiModeNormalizeMode(value);
+  if (mode === "zapier") return "zapier";
+  if (mode === "manual") return "manual";
+  if (AI_MODE_ALLOW_HIDDEN_CHAT_MODE && ["chat", "assist"].includes(mode)) return mode;
+  return "manual";
+}
+
 // UI toggle mapping:
 // - ON  => Zapier AI auto-reply by default
 // - OFF => Manual/human reply only
-// Gemini/server AI mode is intentionally kept hidden for now. It is still supported
-// internally as mode "chat" and can be enabled later by POSTing { mode: "chat" }
-// or by setting AI_MODE_TOGGLE_ON_MODE=chat if Zapier is ever disabled.
-const AI_MODE_TOGGLE_ON_MODE = aiModeNormalizeMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier");
-const AI_MODE_TOGGLE_OFF_MODE = aiModeNormalizeMode(process.env.AI_MODE_TOGGLE_OFF_MODE || "manual");
+// Gemini/server AI mode is hidden and blocked unless AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
+const AI_MODE_TOGGLE_ON_MODE = aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier");
+const AI_MODE_TOGGLE_OFF_MODE = aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_OFF_MODE || "manual");
 
 function aiModeIsAutoReplyMode(mode) {
-  const normalized = aiModeNormalizeMode(mode);
-  return normalized === "zapier" || normalized === "chat";
+  const normalized = aiModeNormalizeOperationalMode(mode);
+  return normalized === "zapier" || (AI_MODE_ALLOW_HIDDEN_CHAT_MODE && normalized === "chat");
 }
 
 function aiModeResolveRequestedMode(body = {}) {
@@ -15509,20 +15523,21 @@ function aiModeResolveRequestedMode(body = {}) {
     return enabled ? AI_MODE_TOGGLE_ON_MODE : AI_MODE_TOGGLE_OFF_MODE;
   }
 
-  // Hidden/admin fallback: keep older modes available, including Gemini/server AI = "chat".
-  return aiModeNormalizeMode(body?.aiMode || body?.mode || AI_MODE_TOGGLE_OFF_MODE);
+  // Hidden/admin fallback is locked down: only manual/zapier are accepted unless
+  // AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true is explicitly set in Render.
+  return aiModeNormalizeOperationalMode(body?.aiMode || body?.mode || AI_MODE_TOGGLE_OFF_MODE);
 }
 
 function aiModePublicToggleState() {
-  const currentMode = aiModeNormalizeMode(aiModeGlobalState?.mode || AI_MODE_TOGGLE_OFF_MODE);
+  const currentMode = aiModeNormalizeOperationalMode(aiModeGlobalState?.mode || AI_MODE_TOGGLE_OFF_MODE);
   return {
     ok: true,
     aiEnabled: aiModeIsAutoReplyMode(currentMode),
     ai_enabled: aiModeIsAutoReplyMode(currentMode),
     mode: currentMode,
     visibleMode: aiModeIsAutoReplyMode(currentMode) ? "ai" : "manual",
-    autoReplyProvider: currentMode === "zapier" ? "zapier" : currentMode === "chat" ? "gemini_hidden" : "none",
-    hiddenModesAvailable: ["chat"],
+    autoReplyProvider: currentMode === "zapier" ? "zapier" : (AI_MODE_ALLOW_HIDDEN_CHAT_MODE && currentMode === "chat") ? "gemini_hidden" : "none",
+    hiddenModesAvailable: AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ["chat", "assist"] : [],
     toggleOnMode: AI_MODE_TOGGLE_ON_MODE,
     toggleOffMode: AI_MODE_TOGGLE_OFF_MODE,
     global: aiModeGlobalState
@@ -19452,7 +19467,9 @@ const AI_MODE_BACKGROUND_PREBOOT_GRACE_MS = Math.max(
 );
 
 const aiModeGlobalState = {
-  mode: aiModeNormalizeMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
+  // Hard default is manual. Even if Render still has an old AI_MODE_GLOBAL_DEFAULT=chat,
+  // chat is forced back to manual unless AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
+  mode: aiModeNormalizeOperationalMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
   updated_at: now(),
   updated_by: "server_start",
   enabled_since_ms: Date.now(),
@@ -20524,6 +20541,15 @@ function startAiModeBackgroundWorker() {
   if (!AI_MODE_BACKGROUND_WORKER_ENABLED) {
     console.warn("AI Mode background worker disabled by env.");
     return;
+  }
+  // Final startup guard: if any old Render env/state tries to start in chat/assist,
+  // force it back to manual unless hidden Gemini mode is explicitly allowed.
+  const safeStartupMode = aiModeNormalizeOperationalMode(aiModeGlobalState.mode);
+  if (aiModeGlobalState.mode !== safeStartupMode) {
+    console.warn(`AI Mode startup corrected from ${aiModeGlobalState.mode} to ${safeStartupMode}`);
+    aiModeGlobalState.mode = safeStartupMode;
+    aiModeGlobalState.updated_at = now();
+    aiModeGlobalState.updated_by = "server_start_safety_guard";
   }
   if (!odooConfigured) {
     console.warn("AI Mode background worker disabled because Odoo is not configured.");
