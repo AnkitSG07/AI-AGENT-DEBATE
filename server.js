@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v29";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v30-safe-start";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -21499,7 +21499,27 @@ async function prewarmLiveOdooProducts() {
   }
 }
 
+process.on("uncaughtException", (error) => {
+  console.error("UNCAUGHT EXCEPTION:", error?.stack || error?.message || error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason?.stack || reason?.message || reason);
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  startAiModeBackgroundWorker();
+
+  // Start the heavy Odoo/AI background worker after the web port is already open.
+  // This prevents Render deploy health checks from failing if the worker has a
+  // temporary startup error, while keeping all HTTP routes available.
+  setTimeout(() => {
+    try {
+      if (typeof startAiModeBackgroundWorker === "function") {
+        startAiModeBackgroundWorker();
+      }
+    } catch (error) {
+      console.error("AI Mode background worker startup failed:", error?.stack || error?.message || error);
+    }
+  }, 1000);
 });
