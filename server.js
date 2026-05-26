@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-odoo-documents-certificate-center-v1";
+const SERVER_PATCH_VERSION = "2026-05-26-odoo-documents-certificate-center-v18-fixes";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14677,36 +14677,140 @@ function documentFilename(doc) {
   return ext ? `${base}.${ext}` : base;
 }
 
+async function readOdooAttachmentBinary(uid, attachmentId) {
+  const id = Number(attachmentId || 0);
+  if (!id) return null;
+  const rows = await odooExecute(uid, "ir.attachment", "read", [[id], ["id", "name", "datas", "mimetype", "file_size"]]);
+  const row = rows?.[0];
+  if (!row) return null;
+  const buffer = base64ToBuffer(row.datas || "");
+  if (!buffer.length) return null;
+  return {
+    buffer,
+    filename: safeDocString(row.name || `attachment-${id}`, 240),
+    mimetype: safeDocString(row.mimetype || "application/octet-stream", 120),
+    file_size: Number(row.file_size || buffer.length) || buffer.length
+  };
+}
+
+async function readOdooDocumentBinary(uid, documentId) {
+  const row = await getOdooDocumentById(uid, documentId, false);
+  const doc = normalizeDocumentRecord(row);
+
+  if (doc.is_url && doc.url) {
+    return { doc, redirect: doc.url };
+  }
+
+  // Best path: Documents app files are backed by ir.attachment. Reading the attachment
+  // avoids Odoo RPC 500 errors that can happen when requesting documents.document datas/raw.
+  if (doc.attachment_id) {
+    try {
+      const attachment = await readOdooAttachmentBinary(uid, doc.attachment_id);
+      if (attachment?.buffer?.length) {
+        return {
+          doc,
+          buffer: attachment.buffer,
+          filename: documentFilename({ ...doc, attachment_name: attachment.filename }),
+          mimetype: attachment.mimetype || doc.mimetype || "application/octet-stream"
+        };
+      }
+    } catch (error) {
+      console.warn("Document attachment binary read failed:", error?.message || error);
+    }
+  }
+
+  // Fallback only: some records expose datas on documents.document.
+  try {
+    const rows = await odooExecute(uid, "documents.document", "read", [[Number(documentId)], ["id", "datas", "mimetype", "name", "attachment_name", "file_extension"]]);
+    const binaryRow = rows?.[0] || {};
+    const buffer = base64ToBuffer(binaryRow.datas || "");
+    if (buffer.length) {
+      const fallbackDoc = normalizeDocumentRecord({ ...row, ...binaryRow });
+      return {
+        doc: fallbackDoc,
+        buffer,
+        filename: documentFilename(fallbackDoc),
+        mimetype: binaryRow.mimetype || doc.mimetype || "application/octet-stream"
+      };
+    }
+  } catch (error) {
+    console.warn("Document direct binary read failed:", error?.message || error);
+  }
+
+  // Last fallback for operator-authenticated users.
+  if (doc.attachment_id && ODOO_URL) {
+    return {
+      doc,
+      redirect: `${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=false`
+    };
+  }
+
+  throw new Error("This Odoo document has no downloadable file content or your API user cannot read the attachment binary.");
+}
+
 function certificateShareMessage(doc, link) {
   const name = safeDocString(doc?.name || doc?.display_name || "the requested document", 240);
   return [
-    `Dear Customer,`,
-    ``,
-    `Please find the requested Smart Handicrafts document/certificate below:`,
-    `${name}`,
-    link ? `Link: ${link}` : "",
-    ``,
-    `Regards,`,
-    `Smart Handicrafts`
+    "Dear Customer,",
+    "",
+    "Please find the requested Smart Handicrafts document/certificate below:",
+    "",
+    `Document: ${name}`,
+    link ? `View / Download: ${link}` : "",
+    "",
+    "Regards,",
+    "Smart Handicrafts"
   ].filter(line => line !== "").join("\n");
 }
 
-async function sendDocumentLinkToOdooChannel(uid, channelId, doc, link, note = "") {
+async function readOdooChannelForDocumentShare(uid, channelId) {
   const id = Number(channelId || 0);
   if (!id) throw new Error("channelId is required for chat sharing.");
-  const body = safeDocString(note, 2000) || certificateShareMessage(doc, link);
 
-  return await odooExecute(
-    uid,
-    "discuss.channel",
-    "message_post",
-    [[id]],
-    {
-      body: body.replace(/\n/g, "<br>"),
-      message_type: "comment",
-      subtype_xmlid: "mail.mt_comment"
+  const richFields = [
+    "id",
+    "name",
+    "display_name",
+    "channel_type",
+    "active",
+    "write_date",
+    "last_interest_dt",
+    "whatsapp_number",
+    "whatsapp_channel_valid_until",
+    "whatsapp_partner_id",
+    "whatsapp_channel_active",
+    "livechat_visitor_id"
+  ];
+
+  try {
+    const rows = await odooExecute(uid, "discuss.channel", "read", [[id], richFields]);
+    if (!rows?.[0]) throw new Error("Chat channel not found.");
+    return rows[0];
+  } catch (error) {
+    console.warn("Document share channel rich read failed, retrying minimal read:", error?.message || error);
+    const rows = await odooExecute(uid, "discuss.channel", "read", [[id], [
+      "id", "name", "display_name", "channel_type", "write_date", "last_interest_dt"
+    ]]);
+    if (!rows?.[0]) throw new Error("Chat channel not found.");
+    return rows[0];
+  }
+}
+
+async function sendDocumentLinkToOdooChannel(uid, channelId, doc, link, note = "") {
+  const channel = await readOdooChannelForDocumentShare(uid, channelId);
+  const body = safeDocString(note, 4000) || certificateShareMessage(doc, link);
+
+  // Important: for WhatsApp channels we must post with message_type = whatsapp_message.
+  // Posting a normal Odoo comment only shows inside Odoo and may never reach the customer's WhatsApp.
+  const result = await aiModePostTextToOdooChannel(uid, channel, body);
+  if (!result?.ok) {
+    const reason = result?.reason || "unknown_error";
+    if (reason === "whatsapp_reply_window_closed") {
+      throw new Error("WhatsApp free-text reply window is closed for this chat. Send an approved WhatsApp template first.");
     }
-  );
+    throw new Error(`Could not send document to chat: ${reason}`);
+  }
+  return result;
 }
 
 async function sendDocumentLinkByZohoEmail(doc, link, body = {}) {
@@ -14839,23 +14943,16 @@ app.get("/api/odoo-documents/view/:documentId", async (req, res) => {
   try {
     if (!odooConfigured) throw new Error("Odoo not configured.");
     const uid = await odooLoginCached();
-    const row = await getOdooDocumentById(uid, req.params?.documentId, true);
-    const doc = normalizeDocumentRecord(row);
+    const file = await readOdooDocumentBinary(uid, req.params?.documentId);
 
-    if (doc.is_url && doc.url) return res.redirect(doc.url);
+    if (file.redirect) return res.redirect(file.redirect);
 
-    const raw = row.raw || row.datas || "";
-    const buffer = base64ToBuffer(raw);
-    if (!buffer.length && doc.attachment_id && ODOO_URL) {
-      return res.redirect(`${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=false`);
-    }
-    if (!buffer.length) throw new Error("Document file content is empty or restricted.");
-
-    res.setHeader("Content-Type", doc.mimetype || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${documentFilename(doc).replace(/"/g, "")}"`);
-    return res.send(buffer);
+    res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${String(file.filename || documentFilename(file.doc)).replace(/"/g, "")}"`);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(file.buffer);
   } catch (error) {
-    return res.status(500).send(String(error?.message || error || ""));
+    return res.status(500).send(`Document preview failed: ${String(error?.message || error || "")}`);
   }
 });
 
@@ -14863,23 +14960,19 @@ app.get("/api/odoo-documents/download/:documentId", async (req, res) => {
   try {
     if (!odooConfigured) throw new Error("Odoo not configured.");
     const uid = await odooLoginCached();
-    const row = await getOdooDocumentById(uid, req.params?.documentId, true);
-    const doc = normalizeDocumentRecord(row);
+    const file = await readOdooDocumentBinary(uid, req.params?.documentId);
 
-    if (doc.is_url && doc.url) return res.redirect(doc.url);
-
-    const raw = row.raw || row.datas || "";
-    const buffer = base64ToBuffer(raw);
-    if (!buffer.length && doc.attachment_id && ODOO_URL) {
-      return res.redirect(`${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=true`);
+    if (file.redirect) {
+      const sep = file.redirect.includes("?") ? "&" : "?";
+      return res.redirect(`${file.redirect}${sep}download=true`);
     }
-    if (!buffer.length) throw new Error("Document file content is empty or restricted.");
 
-    res.setHeader("Content-Type", doc.mimetype || "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${documentFilename(doc).replace(/"/g, "")}"`);
-    return res.send(buffer);
+    res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${String(file.filename || documentFilename(file.doc)).replace(/"/g, "")}"`);
+    res.setHeader("Cache-Control", "private, max-age=300");
+    return res.send(file.buffer);
   } catch (error) {
-    return res.status(500).send(String(error?.message || error || ""));
+    return res.status(500).send(`Document download failed: ${String(error?.message || error || "")}`);
   }
 });
 
