@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-25-pwa-push-v12-rich-notification-drawer-templates";
+const SERVER_PATCH_VERSION = "2026-05-26-google-contacts-vaidahi-kala-tabs-v1";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -170,6 +170,323 @@ const zohoMailConfigured = !!(
   ZOHO_MAIL_CLIENT_SECRET &&
   ZOHO_MAIL_REFRESH_TOKEN
 );
+
+
+// ===================== GOOGLE CONTACTS CONFIG =====================
+// Used for the Operator Hub "Gmail Contacts" tab. This is intentionally separate
+// from Zoho Mail. Authorize the Google account: vaidahi.kala@gmail.com
+const GOOGLE_CONTACTS_CLIENT_ID = process.env.GOOGLE_CONTACTS_CLIENT_ID || "";
+const GOOGLE_CONTACTS_CLIENT_SECRET = process.env.GOOGLE_CONTACTS_CLIENT_SECRET || "";
+const GOOGLE_CONTACTS_REFRESH_TOKEN = process.env.GOOGLE_CONTACTS_REFRESH_TOKEN || "";
+const GOOGLE_CONTACTS_ACCOUNT_EMAIL = process.env.GOOGLE_CONTACTS_ACCOUNT_EMAIL || "vaidahi.kala@gmail.com";
+const GOOGLE_CONTACTS_REDIRECT_URI =
+  process.env.GOOGLE_CONTACTS_REDIRECT_URI ||
+  `${String(process.env.APP_URL || "").replace(/\/$/, "")}/google-contacts/callback`;
+const GOOGLE_CONTACTS_SCOPES =
+  process.env.GOOGLE_CONTACTS_SCOPES ||
+  "https://www.googleapis.com/auth/contacts.readonly";
+const GOOGLE_CONTACTS_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_CONTACTS_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_PEOPLE_API_BASE = "https://people.googleapis.com/v1";
+
+const googleContactsConfigured = !!(
+  GOOGLE_CONTACTS_CLIENT_ID &&
+  GOOGLE_CONTACTS_CLIENT_SECRET &&
+  GOOGLE_CONTACTS_REFRESH_TOKEN
+);
+
+const googleContactsOAuthStates = new Map();
+const googleContactsAccessTokenCache = {
+  token: "",
+  expiresAt: 0
+};
+
+function googleContactsNowMs() {
+  return Date.now();
+}
+
+function cleanGoogleContactsOAuthStates() {
+  const nowMs = googleContactsNowMs();
+  for (const [state, expiresAt] of googleContactsOAuthStates.entries()) {
+    if (!expiresAt || expiresAt <= nowMs) googleContactsOAuthStates.delete(state);
+  }
+}
+
+function googleEncodeQuery(query = {}) {
+  const params = new URLSearchParams();
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    params.set(key, String(value));
+  });
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function normalizeGoogleContactPhone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.replace(/[^\d+]/g, "");
+}
+
+function firstGoogleContactValue(list, keys = ["value"]) {
+  const row = Array.isArray(list) ? list.find((item) => {
+    return keys.some((key) => String(item?.[key] || "").trim());
+  }) : null;
+  if (!row) return "";
+  for (const key of keys) {
+    const value = String(row?.[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeGooglePerson(person = {}, index = 0) {
+  const names = Array.isArray(person.names) ? person.names : [];
+  const emails = Array.isArray(person.emailAddresses) ? person.emailAddresses : [];
+  const phones = Array.isArray(person.phoneNumbers) ? person.phoneNumbers : [];
+  const orgs = Array.isArray(person.organizations) ? person.organizations : [];
+  const photos = Array.isArray(person.photos) ? person.photos : [];
+
+  const displayName =
+    firstGoogleContactValue(names, ["displayName", "unstructuredName", "givenName"]) ||
+    firstGoogleContactValue(emails, ["value"]) ||
+    firstGoogleContactValue(phones, ["canonicalForm", "value"]) ||
+    "Unnamed Gmail contact";
+
+  const email = firstGoogleContactValue(emails, ["value"]);
+  const phone =
+    firstGoogleContactValue(phones, ["canonicalForm"]) ||
+    firstGoogleContactValue(phones, ["value"]);
+  const company = firstGoogleContactValue(orgs, ["name"]);
+  const jobTitle = firstGoogleContactValue(orgs, ["title"]);
+  const photoUrl = firstGoogleContactValue(photos, ["url"]);
+
+  return {
+    id: person.resourceName || `google-${index}`,
+    resourceName: person.resourceName || "",
+    etag: person.etag || "",
+    name: displayName,
+    display_name: displayName,
+    email,
+    phone: normalizeGoogleContactPhone(phone) || phone,
+    mobile: normalizeGoogleContactPhone(phone) || phone,
+    company_name: company,
+    job_title: jobTitle,
+    photo_url: photoUrl,
+    source: "gmail",
+    source_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL
+  };
+}
+
+async function getGoogleContactsAccessToken({ force = false } = {}) {
+  if (!force && googleContactsAccessTokenCache.token && googleContactsNowMs() < googleContactsAccessTokenCache.expiresAt) {
+    return googleContactsAccessTokenCache.token;
+  }
+
+  if (!GOOGLE_CONTACTS_CLIENT_ID || !GOOGLE_CONTACTS_CLIENT_SECRET || !GOOGLE_CONTACTS_REFRESH_TOKEN) {
+    throw new Error("Google Contacts is not configured. Add GOOGLE_CONTACTS_CLIENT_ID, GOOGLE_CONTACTS_CLIENT_SECRET, and GOOGLE_CONTACTS_REFRESH_TOKEN.");
+  }
+
+  const body = new URLSearchParams({
+    client_id: GOOGLE_CONTACTS_CLIENT_ID,
+    client_secret: GOOGLE_CONTACTS_CLIENT_SECRET,
+    refresh_token: GOOGLE_CONTACTS_REFRESH_TOKEN,
+    grant_type: "refresh_token"
+  });
+
+  const resp = await fetch(GOOGLE_CONTACTS_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body
+  });
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.access_token) {
+    throw new Error(`Google Contacts refresh token exchange failed: ${data?.error_description || data?.error || `HTTP ${resp.status}`}`);
+  }
+
+  const expiresIn = Math.max(60, Number(data.expires_in || 3600));
+  googleContactsAccessTokenCache.token = data.access_token;
+  googleContactsAccessTokenCache.expiresAt = googleContactsNowMs() + Math.max(30, expiresIn - 90) * 1000;
+  return googleContactsAccessTokenCache.token;
+}
+
+async function googlePeopleRequest(path, { method = "GET", query = {}, body = undefined, retryOnAuth = true } = {}) {
+  const token = await getGoogleContactsAccessToken();
+  const url = `${GOOGLE_PEOPLE_API_BASE}${path}${googleEncodeQuery(query)}`;
+  const resp = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {})
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined
+  });
+
+  if (resp.status === 401 && retryOnAuth) {
+    googleContactsAccessTokenCache.token = "";
+    googleContactsAccessTokenCache.expiresAt = 0;
+    const retryToken = await getGoogleContactsAccessToken({ force: true });
+    const retryResp = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${retryToken}`,
+        Accept: "application/json",
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {})
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+    const retryData = await retryResp.json().catch(() => ({}));
+    if (!retryResp.ok) {
+      throw new Error(`Google People API error: ${retryData?.error?.message || `HTTP ${retryResp.status}`}`);
+    }
+    return retryData;
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(`Google People API error: ${data?.error?.message || `HTTP ${resp.status}`}`);
+  }
+  return data;
+}
+
+async function searchGoogleContacts(query = "", pageSize = 40) {
+  const safeQuery = String(query || "").trim();
+  const safePageSize = Math.max(1, Math.min(100, Number(pageSize || 40)));
+  const personFields = "names,emailAddresses,phoneNumbers,organizations,photos";
+
+  if (safeQuery) {
+    try {
+      // Google recommends a warm-up request before searchContacts; harmless if it fails.
+      await googlePeopleRequest("/people:searchContacts", {
+        query: { query: "", readMask: personFields, pageSize: 1 }
+      }).catch(() => null);
+
+      const payload = await googlePeopleRequest("/people:searchContacts", {
+        query: { query: safeQuery, readMask: personFields, pageSize: safePageSize }
+      });
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      return results.map((row, index) => normalizeGooglePerson(row.person || {}, index));
+    } catch (error) {
+      console.warn("Google contact searchContacts failed, falling back to connections:", error?.message || error);
+    }
+  }
+
+  const payload = await googlePeopleRequest("/people/me/connections", {
+    query: {
+      personFields,
+      pageSize: safePageSize,
+      sortOrder: "LAST_MODIFIED_DESCENDING"
+    }
+  });
+
+  let contacts = (Array.isArray(payload?.connections) ? payload.connections : [])
+    .map((person, index) => normalizeGooglePerson(person, index));
+
+  if (safeQuery) {
+    const needle = safeQuery.toLowerCase();
+    contacts = contacts.filter((c) => {
+      return [c.name, c.email, c.phone, c.mobile, c.company_name, c.job_title]
+        .some((v) => String(v || "").toLowerCase().includes(needle));
+    });
+  }
+
+  return contacts;
+}
+
+function normalizeGoogleContactPayload(contact = {}) {
+  const name = String(contact.name || contact.display_name || "").trim();
+  const email = String(contact.email || "").trim();
+  const phone = normalizeGoogleContactPhone(contact.mobile || contact.phone || "");
+  const company = String(contact.company_name || "").trim();
+  const jobTitle = String(contact.job_title || "").trim();
+
+  if (!name && !email && !phone) {
+    throw new Error("Google contact has no usable name, email, or phone.");
+  }
+
+  return {
+    name: name || email || phone || "Gmail Contact",
+    email,
+    phone,
+    mobile: phone,
+    company_name: company,
+    function: jobTitle
+  };
+}
+
+async function findExistingOdooPartnerForGoogleContact(uid, contact = {}) {
+  const normalized = normalizeGoogleContactPayload(contact);
+  const domains = [];
+  if (normalized.email) domains.push([["email", "=", normalized.email]]);
+  if (normalized.mobile) {
+    domains.push([["mobile", "=", normalized.mobile]]);
+    domains.push([["phone", "=", normalized.mobile]]);
+  }
+  if (normalized.name) domains.push([["name", "ilike", normalized.name]]);
+
+  for (const domain of domains) {
+    const found = await odooExecute(
+      uid,
+      "res.partner",
+      "search_read",
+      [domain, ["id", "name", "display_name", "email", "phone", "mobile", "company_name", "is_company", "company_type", "parent_id", "commercial_partner_id"]],
+      { limit: 1, order: "write_date desc, id desc" }
+    );
+    if (found?.[0]?.id) return found[0];
+  }
+  return null;
+}
+
+async function importGoogleContactToOdoo(contact = {}) {
+  if (!odooConfigured) throw new Error("Odoo not configured.");
+  const uid = await odooLoginCached();
+  const normalized = normalizeGoogleContactPayload(contact);
+  const existing = await findExistingOdooPartnerForGoogleContact(uid, normalized);
+
+  const values = {
+    name: normalized.name,
+    company_type: "person"
+  };
+  if (normalized.email) values.email = normalized.email;
+  if (normalized.mobile) {
+    values.mobile = normalized.mobile;
+    values.phone = normalized.mobile;
+  }
+  if (normalized.company_name) values.company_name = normalized.company_name;
+  if (normalized.function) values.function = normalized.function;
+
+  let partnerId = existing?.id || 0;
+  let created = false;
+
+  if (partnerId) {
+    const updateValues = {};
+    Object.entries(values).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") updateValues[key] = value;
+    });
+    delete updateValues.name;
+    delete updateValues.company_type;
+    if (Object.keys(updateValues).length) {
+      await odooExecute(uid, "res.partner", "write", [[partnerId], updateValues]);
+    }
+  } else {
+    partnerId = await odooExecute(uid, "res.partner", "create", [values]);
+    created = true;
+  }
+
+  const rows = await odooExecute(
+    uid,
+    "res.partner",
+    "read",
+    [[partnerId], ["id", "name", "display_name", "email", "phone", "mobile", "company_name", "parent_id", "commercial_partner_id", "is_company", "company_type", "active"]]
+  );
+
+  return {
+    created,
+    partner: rows?.[0] || { id: partnerId, ...values }
+  };
+}
 
 // ===================== STORES (in-memory) =====================
 const labelsStore = new Map(); // labelId -> record
@@ -13984,6 +14301,204 @@ app.get("/api/odoo/delivery-orders", async (req, res) => {
   }
 });
 
+
+// ===================== GOOGLE CONTACTS OAUTH + API ROUTES =====================
+app.get("/google-contacts/auth", (req, res) => {
+  try {
+    if (!GOOGLE_CONTACTS_CLIENT_ID || !GOOGLE_CONTACTS_REDIRECT_URI) {
+      return res.status(500).send(
+        renderZohoCallbackPage({
+          ok: false,
+          title: "Google Contacts authorization is not configured",
+          lines: [
+            "Add GOOGLE_CONTACTS_CLIENT_ID, GOOGLE_CONTACTS_CLIENT_SECRET, APP_URL, and GOOGLE_CONTACTS_REDIRECT_URI in Render first.",
+            "This should authorize the Google account: vaidahi.kala@gmail.com"
+          ]
+        })
+      );
+    }
+
+    cleanGoogleContactsOAuthStates();
+    const state = randomUUID();
+    googleContactsOAuthStates.set(state, googleContactsNowMs() + 10 * 60 * 1000);
+
+    const authorizeUrl =
+      GOOGLE_CONTACTS_AUTH_BASE +
+      googleEncodeQuery({
+        client_id: GOOGLE_CONTACTS_CLIENT_ID,
+        response_type: "code",
+        redirect_uri: GOOGLE_CONTACTS_REDIRECT_URI,
+        scope: GOOGLE_CONTACTS_SCOPES,
+        access_type: "offline",
+        prompt: "consent",
+        include_granted_scopes: "true",
+        login_hint: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+        state
+      });
+
+    return res.redirect(authorizeUrl);
+  } catch (error) {
+    return res.status(500).send(
+      renderZohoCallbackPage({
+        ok: false,
+        title: "Google Contacts authorization failed",
+        lines: [String(error?.message || error || "Unknown error")]
+      })
+    );
+  }
+});
+
+app.get("/google-contacts/callback", async (req, res) => {
+  try {
+    cleanGoogleContactsOAuthStates();
+
+    const code = String(req.query.code || "").trim();
+    const state = String(req.query.state || "").trim();
+
+    if (!code) throw new Error("Missing Google authorization code.");
+    if (!state || !googleContactsOAuthStates.has(state)) {
+      throw new Error("Invalid/expired Google OAuth state. Start again from /google-contacts/auth.");
+    }
+    googleContactsOAuthStates.delete(state);
+
+    const body = new URLSearchParams({
+      code,
+      client_id: GOOGLE_CONTACTS_CLIENT_ID,
+      client_secret: GOOGLE_CONTACTS_CLIENT_SECRET,
+      redirect_uri: GOOGLE_CONTACTS_REDIRECT_URI,
+      grant_type: "authorization_code"
+    });
+
+    const resp = await fetch(GOOGLE_CONTACTS_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body
+    });
+
+    const tokenData = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(tokenData?.error_description || tokenData?.error || `Google token exchange failed: HTTP ${resp.status}`);
+    }
+
+    const refreshToken = tokenData.refresh_token || "";
+    const lines = refreshToken
+      ? [
+          "Google Contacts authorization succeeded.",
+          "Copy the refresh token below and add it in Render as GOOGLE_CONTACTS_REFRESH_TOKEN.",
+          `Authorized contact source should be: ${GOOGLE_CONTACTS_ACCOUNT_EMAIL}`,
+          "After saving Render environment variables and redeploying, open /api/google-contacts/status to verify."
+        ]
+      : [
+          "Google returned an access token, but did not include a refresh token.",
+          "Open /google-contacts/auth again, approve with prompt=consent, or revoke old consent and retry.",
+          `Make sure you authorize: ${GOOGLE_CONTACTS_ACCOUNT_EMAIL}`
+        ];
+
+    return res.send(
+      renderZohoCallbackPage({
+        ok: !!refreshToken,
+        title: refreshToken ? "Google Contacts authorization complete" : "Google Contacts refresh token missing",
+        lines,
+        details: refreshToken
+          ? `GOOGLE_CONTACTS_REFRESH_TOKEN=${refreshToken}`
+          : JSON.stringify(tokenData, null, 2)
+      })
+    );
+  } catch (error) {
+    return res.status(500).send(
+      renderZohoCallbackPage({
+        ok: false,
+        title: "Google Contacts authorization failed",
+        lines: [String(error?.message || error || "Unknown error")]
+      })
+    );
+  }
+});
+
+app.get("/api/google-contacts/status", async (req, res) => {
+  try {
+    if (!googleContactsConfigured) {
+      return res.json({
+        ok: true,
+        configured: false,
+        authorized: false,
+        account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+        auth_url: "/google-contacts/auth",
+        message: "Google Contacts is not authorized yet."
+      });
+    }
+
+    await getGoogleContactsAccessToken();
+    return res.json({
+      ok: true,
+      configured: true,
+      authorized: true,
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL
+    });
+  } catch (error) {
+    return res.json({
+      ok: true,
+      configured: googleContactsConfigured,
+      authorized: false,
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+      auth_url: "/google-contacts/auth",
+      error: String(error?.message || error)
+    });
+  }
+});
+
+app.get("/api/google-contacts/search", async (req, res) => {
+  try {
+    if (!googleContactsConfigured) {
+      return res.status(400).json({
+        ok: false,
+        configured: false,
+        authorized: false,
+        account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+        auth_url: "/google-contacts/auth",
+        error: "Google Contacts is not authorized yet."
+      });
+    }
+
+    const q = String(req.query.q || req.query.query || "").trim();
+    const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize || req.query.limit || 40)));
+    const contacts = await searchGoogleContacts(q, pageSize);
+
+    return res.json({
+      ok: true,
+      source: "gmail",
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+      query: q,
+      contacts
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+      error: String(error?.message || error)
+    });
+  }
+});
+
+app.post("/api/google-contacts/import-to-odoo", async (req, res) => {
+  try {
+    const contact = req.body?.contact || req.body || {};
+    const result = await importGoogleContactToOdoo(contact);
+    return res.json({
+      ok: true,
+      source: "gmail",
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+      ...result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      account_email: GOOGLE_CONTACTS_ACCOUNT_EMAIL,
+      error: String(error?.message || error)
+    });
+  }
+});
+
 // ===================== ZOHO MAIL OAUTH + API ROUTES =====================
 app.get("/zoho/auth", (req, res) => {
   try {
@@ -19564,7 +20079,7 @@ app.get("/api/ai-mode/status", async (req, res) => {
 });
 
 
-app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured }));
+app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured, googleContactsConfigured }));
 // ===================== RENDER 30-SECOND KEEP ALIVE =====================
 // Keeps the free Render server active by self-pinging /health every 30 seconds.
 
