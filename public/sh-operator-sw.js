@@ -1,4 +1,4 @@
-/* Smart Handicrafts Operator Hub Service Worker - Web Push v27 call receiver */
+/* Smart Handicrafts Operator Hub Service Worker - Web Push v28 call inside notification page */
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -31,6 +31,25 @@ function notificationActionTitle(payload) {
   return 'Open Chat';
 }
 
+function buildOperatorNotificationUrl(data, payload, isCall) {
+  const explicit = data.url || payload.url || '';
+  if (explicit) return explicit;
+
+  if (isCall) {
+    const params = new URLSearchParams();
+    const callId = data.callId || data.call_id || '';
+    const phone = data.phone || data.from || data.customerPhone || data.customer_phone || '';
+    const name = data.name || data.customerName || data.customer_name || '';
+    if (callId) params.set('callId', callId);
+    if (phone) params.set('phone', phone);
+    if (name) params.set('name', name);
+    params.set('mode', 'call');
+    return '/operator-notifications?' + params.toString();
+  }
+
+  return '/operator-notifications';
+}
+
 self.addEventListener('push', (event) => {
   const payload = normalizePushPayload(event);
   const data = payload.data || {};
@@ -38,21 +57,22 @@ self.addEventListener('push', (event) => {
   const isCall = template === 'whatsapp_call' || String(data.channelType || '').toLowerCase() === 'whatsapp_call';
 
   const title = payload.title || (isCall ? 'Incoming WhatsApp Call' : 'SH Operator Hub');
-  const body = payload.body || (isCall ? 'Tap to answer in Operator Call.' : 'New customer message. Tap to open chat.');
+  const body = payload.body || (isCall ? 'Tap to answer in Operator Notifications.' : 'New customer message. Tap to open chat.');
+  const targetUrl = buildOperatorNotificationUrl(data, payload, isCall);
 
   const options = {
     body,
     icon: payload.icon || '/icons/icon-192.png',
     badge: payload.badge || '/icons/badge-96.png',
     image: payload.image || data.image || undefined,
-    tag: payload.tag || (isCall ? ('smart-handicrafts-call-' + (data.callId || Date.now())) : ('smart-handicrafts-chat-' + (data.channelId || 'new'))),
+    tag: payload.tag || (isCall ? ('smart-handicrafts-call-' + (data.callId || data.call_id || Date.now())) : ('smart-handicrafts-chat-' + (data.channelId || 'new'))),
     renotify: payload.renotify !== false,
     requireInteraction: isCall ? true : !!payload.requireInteraction,
     timestamp: Date.now(),
     vibrate: payload.vibrate || (isCall ? [250, 90, 250, 90, 250, 90, 400] : [120, 70, 120]),
     data: {
       ...data,
-      url: data.url || payload.url || (isCall ? '/operator-call' : '/operator-notifications'),
+      url: targetUrl,
       notificationTemplate: data.template || payload.template || (isCall ? 'whatsapp_call' : 'chat')
     },
     actions: payload.actions || [
