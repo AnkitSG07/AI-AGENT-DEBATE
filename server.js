@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-odoo-documents-certificate-center-v18-fixes";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-calls-webhook-v22";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15342,6 +15342,27 @@ const OPERATOR_MEMORY_PATH = process.env.OPERATOR_MEMORY_PATH || "./operator-mem
 const INTERNAL_CONTROL_WHATSAPP = String(process.env.INTERNAL_CONTROL_WHATSAPP || "").replace(/\D/g, "");
 
 
+// ===================== WHATSAPP BUSINESS CALLS =====================
+// Receives Meta WhatsApp "calls" webhook events for the same WhatsApp number.
+// This logs incoming/connect/terminate/reject events so Operator Hub can show call activity.
+// Outgoing call initiation is intentionally handled separately because Meta Calling API
+// requires a WebRTC/permission flow; this module first makes call events visible and reliable.
+const WHATSAPP_WEBHOOK_VERIFY_TOKEN =
+  process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
+  process.env.WHATSAPP_VERIFY_TOKEN ||
+  process.env.META_WEBHOOK_VERIFY_TOKEN ||
+  "";
+
+const WHATSAPP_CALL_LOGS_PATH =
+  process.env.WHATSAPP_CALL_LOGS_PATH ||
+  "./whatsapp-call-logs.json";
+
+const WHATSAPP_CALL_LOG_MAX = Math.max(100, Number(process.env.WHATSAPP_CALL_LOG_MAX || 1000));
+const WHATSAPP_CALL_RECENT_WINDOW_MS = Math.max(5000, Number(process.env.WHATSAPP_CALL_RECENT_WINDOW_MS || 30 * 60 * 1000));
+const whatsappCallSeenIds = new Set();
+
+
+
 // ===================== AI MODE: ODOO MEMORY MODELS =====================
 // These are the Odoo Studio custom model/field names from your Model Overview PDFs.
 const AI_MODE_ODOO_ENABLED = String(process.env.AI_MODE_ODOO_ENABLED || "true").toLowerCase() !== "false";
@@ -20585,6 +20606,258 @@ app.get("/api/ai-mode/status", async (req, res) => {
       training_model: AI_MODE_TRAINING_MODEL
     }
   });
+});
+
+
+
+
+// ===================== WHATSAPP CALL WEBHOOK + OPERATOR HUB CALL LOGS =====================
+function whatsappCallCleanPhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function whatsappCallValueFromPayload(body = {}) {
+  // Supports real Meta webhook payloads and the "Test" sample wrapper shown in Meta UI:
+  // { sample: { field: "calls", value: { calls: [...] } } }
+  if (body?.sample?.field === "calls" && body?.sample?.value) return [body.sample.value];
+  if (body?.field === "calls" && body?.value) return [body.value];
+  if (Array.isArray(body?.entry)) {
+    const values = [];
+    for (const entry of body.entry || []) {
+      for (const change of entry?.changes || []) {
+        if (change?.field === "calls" && change?.value) values.push(change.value);
+        // Some Meta test payloads may not include field exactly; keep this safe.
+        else if (change?.value?.calls) values.push(change.value);
+      }
+    }
+    return values;
+  }
+  if (body?.calls) return [body];
+  if (body?.value?.calls) return [body.value];
+  return [];
+}
+
+function whatsappCallContactName(value = {}, waId = "") {
+  const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+  const match =
+    contacts.find((c) => whatsappCallCleanPhone(c?.wa_id) === whatsappCallCleanPhone(waId)) ||
+    contacts[0] ||
+    null;
+  return aiModeSafeString(match?.profile?.name || "", 160);
+}
+
+function normalizeWhatsappCallEvent(call = {}, value = {}) {
+  const businessDisplay = value?.metadata?.display_phone_number || "";
+  const businessPhoneId = value?.metadata?.phone_number_id || "";
+  const from = whatsappCallCleanPhone(call?.from);
+  const to = whatsappCallCleanPhone(call?.to);
+  const waId = from || whatsappCallCleanPhone(value?.contacts?.[0]?.wa_id || "");
+  const timestampSeconds = Number(call?.timestamp || 0);
+  const date = timestampSeconds
+    ? new Date(timestampSeconds * 1000).toISOString()
+    : now();
+
+  const id = aiModeSafeString(call?.id || `${waId || "unknown"}-${call?.event || "call"}-${timestampSeconds || Date.now()}`, 160);
+  return {
+    id,
+    call_id: id,
+    event: aiModeSafeString(call?.event || "unknown", 80),
+    from,
+    to,
+    wa_id: waId,
+    customer_phone: waId || from,
+    customer_name: whatsappCallContactName(value, waId),
+    business_display_phone_number: whatsappCallCleanPhone(businessDisplay) || businessDisplay,
+    phone_number_id: aiModeSafeString(businessPhoneId, 80),
+    timestamp: timestampSeconds || Math.floor(Date.now() / 1000),
+    date,
+    direction: to && businessDisplay && whatsappCallCleanPhone(to) === whatsappCallCleanPhone(businessDisplay) ? "incoming" : "unknown",
+    source: "whatsapp_calls_webhook",
+    raw: {
+      call,
+      metadata: value?.metadata || null,
+      contacts: value?.contacts || []
+    }
+  };
+}
+
+async function readWhatsappCallLogs() {
+  const data = await aiModeReadJsonFile(WHATSAPP_CALL_LOGS_PATH, { calls: [] });
+  return Array.isArray(data?.calls) ? data.calls : [];
+}
+
+async function writeWhatsappCallLogs(calls = []) {
+  const unique = [];
+  const seen = new Set();
+  for (const row of calls || []) {
+    const key = aiModeSafeString(row?.id || row?.call_id || "", 180);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(row);
+  }
+  const trimmed = unique
+    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
+    .slice(0, WHATSAPP_CALL_LOG_MAX);
+
+  await aiModeWriteJsonFile(WHATSAPP_CALL_LOGS_PATH, {
+    updated_at: now(),
+    count: trimmed.length,
+    calls: trimmed
+  });
+  return trimmed;
+}
+
+async function storeWhatsappCallEvents(events = []) {
+  if (!events.length) return { added: 0, calls: [] };
+  const existing = await readWhatsappCallLogs();
+  const existingKeys = new Set(existing.map((row) => aiModeSafeString(row?.id || row?.call_id || "", 180)).filter(Boolean));
+  const added = [];
+
+  for (const event of events) {
+    const key = aiModeSafeString(event?.id || event?.call_id || "", 180);
+    if (!key || existingKeys.has(key) || whatsappCallSeenIds.has(key)) continue;
+    whatsappCallSeenIds.add(key);
+    existingKeys.add(key);
+    added.push({ ...event, received_at: now() });
+  }
+
+  if (added.length) await writeWhatsappCallLogs([...added, ...existing]);
+  return { added: added.length, calls: added };
+}
+
+async function findOdooWhatsappChannelForCall(event = {}) {
+  if (!odooConfigured) return null;
+  const phone = whatsappCallCleanPhone(event?.customer_phone || event?.wa_id || event?.from);
+  if (!phone) return null;
+
+  try {
+    const uid = await odooLoginCached();
+    const rows = await odooExecute(
+      uid,
+      "discuss.channel",
+      "search_read",
+      [[
+        ["channel_type", "=", "whatsapp"],
+        ["whatsapp_number", "ilike", phone.slice(-10)]
+      ]],
+      ["id", "name", "display_name", "channel_type", "whatsapp_number", "whatsapp_partner_id", "last_interest_dt", "write_date"],
+      { limit: 1, order: "last_interest_dt desc, write_date desc, id desc" }
+    );
+    return rows?.[0] || null;
+  } catch (error) {
+    console.warn("WhatsApp call channel lookup failed:", error?.message || error);
+    return null;
+  }
+}
+
+async function processWhatsappCallWebhook(body = {}) {
+  const values = whatsappCallValueFromPayload(body);
+  const events = [];
+
+  for (const value of values) {
+    const calls = Array.isArray(value?.calls) ? value.calls : [];
+    for (const call of calls) {
+      const event = normalizeWhatsappCallEvent(call, value);
+      const channel = await findOdooWhatsappChannelForCall(event);
+      if (channel?.id) {
+        event.odoo_channel_id = channel.id;
+        event.odoo_channel_name = channel.display_name || channel.name || "";
+      }
+      events.push(event);
+    }
+  }
+
+  const stored = await storeWhatsappCallEvents(events);
+  return { ok: true, received: events.length, added: stored.added, calls: stored.calls };
+}
+
+function handleWhatsappWebhookVerify(req, res) {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && (!WHATSAPP_WEBHOOK_VERIFY_TOKEN || token === WHATSAPP_WEBHOOK_VERIFY_TOKEN)) {
+    return res.status(200).send(challenge || "");
+  }
+
+  return res.status(403).send("Forbidden");
+}
+
+async function handleWhatsappWebhookPost(req, res) {
+  try {
+    const result = await processWhatsappCallWebhook(req.body || {});
+    // Always 200 for Meta webhook delivery. Errors are logged below and not exposed to Meta.
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("WhatsApp webhook processing failed:", error?.message || error);
+    return res.status(200).json({ ok: false, error: error?.message || String(error) });
+  }
+}
+
+// Support common webhook paths. Use the path already configured in Meta; these are aliases.
+app.get("/webhook", handleWhatsappWebhookVerify);
+app.post("/webhook", handleWhatsappWebhookPost);
+app.get("/whatsapp/webhook", handleWhatsappWebhookVerify);
+app.post("/whatsapp/webhook", handleWhatsappWebhookPost);
+app.get("/api/whatsapp/webhook", handleWhatsappWebhookVerify);
+app.post("/api/whatsapp/webhook", handleWhatsappWebhookPost);
+app.get("/api/meta/whatsapp/webhook", handleWhatsappWebhookVerify);
+app.post("/api/meta/whatsapp/webhook", handleWhatsappWebhookPost);
+
+app.get("/api/whatsapp-calls/logs", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    const phone = whatsappCallCleanPhone(req.query.phone || req.query.wa_id || "");
+    const channelId = Number(req.query.channelId || req.query.channel_id || 0);
+    let calls = await readWhatsappCallLogs();
+
+    if (phone) {
+      const last10 = phone.slice(-10);
+      calls = calls.filter((row) => {
+        const rowPhone = whatsappCallCleanPhone(row?.customer_phone || row?.wa_id || row?.from || "");
+        return rowPhone.endsWith(last10) || last10.endsWith(rowPhone.slice(-10));
+      });
+    }
+
+    if (channelId) {
+      calls = calls.filter((row) => Number(row?.odoo_channel_id || 0) === channelId);
+    }
+
+    calls = calls
+      .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
+      .slice(0, limit);
+
+    return res.json({ ok: true, count: calls.length, calls });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.get("/api/whatsapp-calls/recent", async (req, res) => {
+  try {
+    const sinceMs = Number(req.query.since_ms || req.query.since || 0);
+    const minTimeMs = sinceMs > 0 ? sinceMs : Date.now() - WHATSAPP_CALL_RECENT_WINDOW_MS;
+    const calls = (await readWhatsappCallLogs())
+      .filter((row) => {
+        const ts = Number(row?.timestamp || 0) * 1000;
+        return ts >= minTimeMs;
+      })
+      .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
+      .slice(0, 100);
+
+    return res.json({ ok: true, since_ms: minTimeMs, count: calls.length, calls });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/whatsapp-calls/test", async (req, res) => {
+  try {
+    const result = await processWhatsappCallWebhook(req.body || {});
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
 });
 
 
