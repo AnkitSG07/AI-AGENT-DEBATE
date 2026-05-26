@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v30-safe-start";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v32-any-call-event";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -20620,23 +20620,39 @@ app.post("/api/push/test", async (req, res) => {
   }
 });
 
+
+async function sendManualWhatsappCallPushTest(body = {}) {
+  const fakeCallId = body?.call_id || `test-call-${Date.now()}`;
+  const fakeCall = {
+    id: fakeCallId,
+    call_id: fakeCallId,
+    event: "connect",
+    customer_name: body?.name || "Test WhatsApp Caller",
+    customer_phone: String(body?.phone || "919999999999").replace(/\D/g, ""),
+    phone_number_id: body?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
+    timestamp: Math.floor(Date.now() / 1000),
+    date: now(),
+    source: "manual_push_test"
+  };
+  const result = await sendWhatsappCallPushNotification(fakeCall);
+  return { ok: true, result, call: fakeCall };
+}
+
+app.get("/api/push/test-call", async (req, res) => {
+  try {
+    const payload = await sendManualWhatsappCallPushTest(req.query || {});
+    return res.json({ ...payload, method: "GET" });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
 app.post("/api/push/test-call", async (req, res) => {
   try {
-    const fakeCall = {
-      id: req.body?.call_id || `test-call-${Date.now()}`,
-      call_id: req.body?.call_id || `test-call-${Date.now()}`,
-      event: "connect",
-      customer_name: req.body?.name || "Test WhatsApp Caller",
-      customer_phone: String(req.body?.phone || "919999999999").replace(/\D/g, ""),
-      phone_number_id: req.body?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
-      timestamp: Math.floor(Date.now() / 1000),
-      date: now(),
-      source: "manual_push_test"
-    };
-    const result = await sendWhatsappCallPushNotification(fakeCall);
-    res.json({ ok: true, result, call: fakeCall });
+    const payload = await sendManualWhatsappCallPushTest(req.body || {});
+    return res.json({ ...payload, method: "POST" });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) });
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
@@ -21007,6 +21023,17 @@ async function recordWebhookDebugEvent(req, body = {}, processingResult = null) 
   return event;
 }
 
+function whatsappCallShouldTriggerPush(call = {}) {
+  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  if (!callId) return false;
+
+  // Meta may send different call event names depending on Graph version / call stage.
+  // For notifications, treat every non-closed call event as an incoming-call candidate.
+  // Duplicate notification is still prevented by sendWhatsappCallPushNotification(callId).
+  if (whatsappCallIsClosedEvent(call?.event)) return false;
+  return true;
+}
+
 async function processWhatsappCallWebhook(body = {}) {
   const values = whatsappCallValueFromPayload(body);
   const events = [];
@@ -21027,14 +21054,30 @@ async function processWhatsappCallWebhook(body = {}) {
   const stored = await storeWhatsappCallEvents(events);
 
   const pushResults = [];
+  const pushCandidatesById = new Map();
+
+  // First prefer newly stored events.
   for (const call of stored.calls || []) {
-    if (whatsappCallIsOpenEvent(call?.event) && !whatsappCallIsClosedEvent(call?.event)) {
-      try {
-        pushResults.push(await sendWhatsappCallPushNotification(call));
-      } catch (pushError) {
-        pushResults.push({ ok: false, error: pushError?.message || String(pushError) });
-        console.warn("WhatsApp call push failed:", pushError?.message || pushError);
-      }
+    const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+    if (callId && whatsappCallShouldTriggerPush(call)) pushCandidatesById.set(callId, call);
+  }
+
+  // Fallback: if the event was already present in file/in-memory, still attempt push.
+  // sendWhatsappCallPushNotification prevents duplicates with call:<callId>.
+  // This fixes cases where the call card appears in Operator Hub but no background push is sent.
+  for (const call of events || []) {
+    const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+    if (callId && whatsappCallShouldTriggerPush(call) && !pushCandidatesById.has(callId)) {
+      pushCandidatesById.set(callId, call);
+    }
+  }
+
+  for (const call of pushCandidatesById.values()) {
+    try {
+      pushResults.push(await sendWhatsappCallPushNotification(call));
+    } catch (pushError) {
+      pushResults.push({ ok: false, error: pushError?.message || String(pushError) });
+      console.warn("WhatsApp call push failed:", pushError?.message || pushError);
     }
   }
 
@@ -21043,8 +21086,10 @@ async function processWhatsappCallWebhook(body = {}) {
   } else if (events.length) {
     console.log("WhatsApp call webhook received without push trigger:", {
       received: events.length,
+      added: stored.added,
       events: events.map((c) => c.event),
-      callIds: events.map((c) => c.call_id)
+      callIds: events.map((c) => c.call_id),
+      note: "No push candidates. Closed event or missing call_id."
     });
   }
 
