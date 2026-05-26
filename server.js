@@ -15357,6 +15357,14 @@ const WHATSAPP_CALL_LOGS_PATH =
   process.env.WHATSAPP_CALL_LOGS_PATH ||
   "./whatsapp-call-logs.json";
 
+// Temporary webhook debug store. Keep this on until live WhatsApp call delivery is confirmed.
+// It records whether Meta is actually POSTing real call webhooks to Render.
+const WHATSAPP_WEBHOOK_DEBUG_ENABLED = String(process.env.WHATSAPP_WEBHOOK_DEBUG_ENABLED || "true").toLowerCase() !== "false";
+const WHATSAPP_WEBHOOK_DEBUG_PATH =
+  process.env.WHATSAPP_WEBHOOK_DEBUG_PATH ||
+  "./whatsapp-webhook-debug.json";
+const WHATSAPP_WEBHOOK_DEBUG_MAX = Math.max(20, Math.min(500, Number(process.env.WHATSAPP_WEBHOOK_DEBUG_MAX || 120)));
+
 const WHATSAPP_CALL_LOG_MAX = Math.max(100, Number(process.env.WHATSAPP_CALL_LOG_MAX || 1000));
 const WHATSAPP_CALL_RECENT_WINDOW_MS = Math.max(5000, Number(process.env.WHATSAPP_CALL_RECENT_WINDOW_MS || 30 * 60 * 1000));
 const whatsappCallSeenIds = new Set();
@@ -20772,6 +20780,90 @@ async function findOdooWhatsappChannelForCall(event = {}) {
   }
 }
 
+function safeWebhookDebugHeaderValue(value = "", max = 220) {
+  return aiModeSafeString(value || "", max);
+}
+
+function compactWebhookDebugBody(body = {}) {
+  try {
+    const clone = JSON.parse(JSON.stringify(body || {}));
+    // Never store app secrets/tokens if someone accidentally posts them to the webhook.
+    for (const key of ["access_token", "token", "app_secret", "client_secret"]) {
+      if (clone?.[key]) clone[key] = "[hidden]";
+      if (clone?.sample?.[key]) clone.sample[key] = "[hidden]";
+    }
+    return clone;
+  } catch {
+    return { raw_unserializable: true };
+  }
+}
+
+function detectWebhookDebugKinds(body = {}) {
+  const kinds = new Set();
+  if (body?.sample?.field) kinds.add(`sample:${body.sample.field}`);
+  if (body?.field) kinds.add(String(body.field));
+  if (body?.calls || body?.value?.calls) kinds.add("calls");
+  if (body?.messages || body?.value?.messages) kinds.add("messages");
+  if (body?.statuses || body?.value?.statuses) kinds.add("statuses");
+  if (Array.isArray(body?.entry)) {
+    for (const entry of body.entry || []) {
+      for (const change of entry?.changes || []) {
+        if (change?.field) kinds.add(String(change.field));
+        if (change?.value?.calls) kinds.add("calls");
+        if (change?.value?.messages) kinds.add("messages");
+        if (change?.value?.statuses) kinds.add("statuses");
+      }
+    }
+  }
+  return [...kinds];
+}
+
+async function readWebhookDebugEvents() {
+  const data = await aiModeReadJsonFile(WHATSAPP_WEBHOOK_DEBUG_PATH, { events: [] });
+  return Array.isArray(data?.events) ? data.events : [];
+}
+
+async function writeWebhookDebugEvents(events = []) {
+  const trimmed = (events || []).slice(0, WHATSAPP_WEBHOOK_DEBUG_MAX);
+  await aiModeWriteJsonFile(WHATSAPP_WEBHOOK_DEBUG_PATH, {
+    updated_at: now(),
+    count: trimmed.length,
+    events: trimmed
+  });
+  return trimmed;
+}
+
+async function recordWebhookDebugEvent(req, body = {}, processingResult = null) {
+  if (!WHATSAPP_WEBHOOK_DEBUG_ENABLED) return null;
+  const event = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    received_at: now(),
+    method: req?.method || "POST",
+    path: req?.originalUrl || req?.url || "",
+    ip: req?.headers?.["x-forwarded-for"] || req?.socket?.remoteAddress || "",
+    user_agent: safeWebhookDebugHeaderValue(req?.headers?.["user-agent"] || "", 260),
+    meta_signature_present: !!(req?.headers?.["x-hub-signature-256"] || req?.headers?.["x-hub-signature"]),
+    content_type: safeWebhookDebugHeaderValue(req?.headers?.["content-type"] || "", 120),
+    kinds: detectWebhookDebugKinds(body),
+    call_values_found: whatsappCallValueFromPayload(body).length,
+    processing_result: processingResult || null,
+    body: compactWebhookDebugBody(body)
+  };
+
+  const existing = await readWebhookDebugEvents();
+  await writeWebhookDebugEvents([event, ...existing]);
+
+  console.log("WHATSAPP WEBHOOK DEBUG", JSON.stringify({
+    received_at: event.received_at,
+    path: event.path,
+    kinds: event.kinds,
+    call_values_found: event.call_values_found,
+    processing_result: processingResult ? { ok: processingResult.ok, received: processingResult.received, added: processingResult.added } : null
+  }));
+
+  return event;
+}
+
 async function processWhatsappCallWebhook(body = {}) {
   const values = whatsappCallValueFromPayload(body);
   const events = [];
@@ -20807,11 +20899,16 @@ function handleWhatsappWebhookVerify(req, res) {
 
 async function handleWhatsappWebhookPost(req, res) {
   try {
-    const result = await processWhatsappCallWebhook(req.body || {});
+    const body = req.body || {};
+    const result = await processWhatsappCallWebhook(body);
+    await recordWebhookDebugEvent(req, body, result).catch((debugError) => {
+      console.warn("Webhook debug record failed:", debugError?.message || debugError);
+    });
     // Always 200 for Meta webhook delivery. Errors are logged below and not exposed to Meta.
     return res.status(200).json(result);
   } catch (error) {
     console.error("WhatsApp webhook processing failed:", error?.message || error);
+    await recordWebhookDebugEvent(req, req.body || {}, { ok: false, error: error?.message || String(error) }).catch(() => null);
     return res.status(200).json({ ok: false, error: error?.message || String(error) });
   }
 }
@@ -20825,6 +20922,34 @@ app.get("/api/whatsapp/webhook", handleWhatsappWebhookVerify);
 app.post("/api/whatsapp/webhook", handleWhatsappWebhookPost);
 app.get("/api/meta/whatsapp/webhook", handleWhatsappWebhookVerify);
 app.post("/api/meta/whatsapp/webhook", handleWhatsappWebhookPost);
+
+app.get("/api/debug/webhooks/recent", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 40)));
+    const kind = aiModeSafeString(req.query.kind || "", 40).toLowerCase();
+    let events = await readWebhookDebugEvents();
+    if (kind) {
+      events = events.filter((event) => (event.kinds || []).some((k) => String(k || "").toLowerCase().includes(kind)));
+    }
+    return res.json({
+      ok: true,
+      debug_enabled: WHATSAPP_WEBHOOK_DEBUG_ENABLED,
+      count: Math.min(events.length, limit),
+      events: events.slice(0, limit)
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/debug/webhooks/clear", async (req, res) => {
+  try {
+    await writeWebhookDebugEvents([]);
+    return res.json({ ok: true, cleared: true });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
 
 
 function whatsappCallFindByCallId(calls = [], callId = "") {
