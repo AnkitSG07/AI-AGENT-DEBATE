@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-pwa-receiver-v27";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v29";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15800,15 +15800,12 @@ function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {})
 
 
 function buildOperatorCallUrlForPush(call = {}) {
+  // IMPORTANT: the installed PWA is the existing notification page.
+  // Do not send users to /operator-call or require query params.
+  // The /operator-notifications page polls /api/whatsapp-calls/incoming and
+  // automatically switches to the call screen when a call is active.
   const base = String(process.env.APP_URL || "https://ai-agent-debate.onrender.com").replace(/\/$/, "");
-  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
-  const phone = whatsappCallCleanPhone(call?.customer_phone || call?.wa_id || call?.from || "");
-  const name = aiModeSafeString(call?.customer_name || "", 120);
-  const url = new URL(`${base}/operator-call`);
-  if (callId) url.searchParams.set("callId", callId);
-  if (phone) url.searchParams.set("phone", phone);
-  if (name) url.searchParams.set("name", name);
-  return url.toString();
+  return `${base}/operator-notifications`;
 }
 
 function buildWhatsappCallPushPayload(call = {}) {
@@ -15849,7 +15846,7 @@ async function sendWhatsappCallPushNotification(call = {}) {
   if (!webPushConfigured()) return { ok: false, skipped: "not_configured" };
   const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
   if (!callId) return { ok: false, skipped: "missing_call_id" };
-  const pushKey = `call:${callId}:${call?.event || "incoming"}`;
+  const pushKey = `call:${callId}`;
   if (webPushState.sent_message_ids.has(pushKey)) return { ok: false, skipped: "duplicate_call_push" };
 
   const ready = await configureWebPush();
@@ -20623,6 +20620,26 @@ app.post("/api/push/test", async (req, res) => {
   }
 });
 
+app.post("/api/push/test-call", async (req, res) => {
+  try {
+    const fakeCall = {
+      id: req.body?.call_id || `test-call-${Date.now()}`,
+      call_id: req.body?.call_id || `test-call-${Date.now()}`,
+      event: "connect",
+      customer_name: req.body?.name || "Test WhatsApp Caller",
+      customer_phone: String(req.body?.phone || "919999999999").replace(/\D/g, ""),
+      phone_number_id: req.body?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
+      timestamp: Math.floor(Date.now() / 1000),
+      date: now(),
+      source: "manual_push_test"
+    };
+    const result = await sendWhatsappCallPushNotification(fakeCall);
+    res.json({ ok: true, result, call: fakeCall });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
 // Simple frontend API for the new single toggle UI.
 // GET returns whether AI auto-reply is ON/OFF.
 // POST accepts { aiEnabled: true/false }.
@@ -21019,6 +21036,16 @@ async function processWhatsappCallWebhook(body = {}) {
         console.warn("WhatsApp call push failed:", pushError?.message || pushError);
       }
     }
+  }
+
+  if (pushResults.length) {
+    console.log("WhatsApp call webhook push results:", JSON.stringify(pushResults));
+  } else if (events.length) {
+    console.log("WhatsApp call webhook received without push trigger:", {
+      received: events.length,
+      events: events.map((c) => c.event),
+      callIds: events.map((c) => c.call_id)
+    });
   }
 
   return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults };
