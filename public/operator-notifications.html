@@ -12,100 +12,52 @@
     .card{width:min(440px,100%);background:rgba(255,255,255,.96);border-radius:28px;padding:24px;box-shadow:0 30px 80px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.45)}
     .logo{width:58px;height:58px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#22c55e);display:grid;place-items:center;color:#fff;font-weight:900;font-size:24px;margin-bottom:16px;box-shadow:0 14px 28px rgba(139,92,246,.35)}
     h1{font-size:24px;line-height:1.15;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted);line-height:1.5}.status{border:1px solid var(--line);background:#f8fafc;border-radius:18px;padding:14px;margin:16px 0;font-size:14px;color:#334155;white-space:pre-wrap}.row{display:flex;gap:10px;flex-wrap:wrap}button{border:0;border-radius:16px;padding:14px 16px;font-weight:800;cursor:pointer}.primary{background:#111827;color:#fff;flex:1;min-width:190px}.ghost{background:#eef2ff;color:#3730a3}.danger{background:#fee2e2;color:#991b1b}.ok{color:var(--green);font-weight:800}.bad{color:var(--red);font-weight:800}.small{font-size:12px;color:#64748b;margin-top:14px}.pill{display:inline-flex;align-items:center;gap:8px;border:1px solid #ddd6fe;background:#f5f3ff;border-radius:999px;padding:8px 10px;color:#6d28d9;font-size:12px;font-weight:800;margin-bottom:14px}.dot{width:8px;height:8px;border-radius:999px;background:#8b5cf6;box-shadow:0 0 0 4px rgba(139,92,246,.15)}
+    body.call-mode{padding:0;background:radial-gradient(circle at top,#164e63 0,#020617 36%,#000 100%);color:#f8fafc;overflow:hidden}.call-wrap{display:none;min-height:100vh;width:100%;align-items:center;justify-content:center;padding:24px;padding-top:calc(24px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}.call-mode .setup-card{display:none}.call-mode .call-wrap{display:flex}.phone{width:min(430px,100%);min-height:min(760px,94vh);border:1px solid rgba(255,255,255,.12);background:linear-gradient(180deg,rgba(15,23,42,.78),rgba(2,6,23,.95));box-shadow:0 30px 90px rgba(0,0,0,.55);border-radius:38px;padding:28px 22px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between}.phone:before{content:"";position:absolute;inset:-80px;background:radial-gradient(circle at 30% 10%,rgba(34,197,94,.18),transparent 34%),radial-gradient(circle at 70% 0,rgba(14,165,233,.16),transparent 32%);pointer-events:none}.ctop,.cmid,.actions,.foot{position:relative;z-index:1}.ctop{display:flex;justify-content:space-between;align-items:center}.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:14px;letter-spacing:.02em}.brand i{width:30px;height:30px;border-radius:12px;background:#25d366;display:grid;place-items:center;color:#052e16;font-style:normal}.call-pill{font-size:12px;color:#bbf7d0;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);padding:7px 10px;border-radius:999px}.cmid{text-align:center;padding:56px 0 28px}.avatar{width:132px;height:132px;border-radius:50%;margin:0 auto 24px;background:linear-gradient(135deg,#22c55e,#14b8a6);display:grid;place-items:center;font-size:54px;font-weight:900;box-shadow:0 0 0 10px rgba(34,197,94,.08),0 0 0 22px rgba(34,197,94,.04)}.call-mode h1{color:#f8fafc;font-size:30px}.phone-no{margin-top:10px;color:#94a3b8;font-size:15px}.call-state{margin:24px auto 0;width:max-content;max-width:100%;padding:9px 14px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);font-size:13px;color:#e2e8f0}.timer{font-variant-numeric:tabular-nums;margin-top:12px;color:#cbd5e1;font-size:18px;font-weight:700}.actions{display:flex;justify-content:center;gap:34px;margin:20px 0 18px}.callbtn{width:82px;height:82px;border-radius:50%;border:0;display:grid;place-items:center;color:white;font-size:32px;box-shadow:0 14px 40px rgba(0,0,0,.32);cursor:pointer}.accept{background:#22c55e}.reject,.end{background:#ef4444}.labelrow{display:flex;justify-content:center;gap:52px;color:#cbd5e1;font-size:13px}.foot{border-top:1px solid rgba(255,255,255,.12);padding-top:16px;margin-top:16px;color:#94a3b8;font-size:13px;line-height:1.45}.small-actions{display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap}.small-actions button{background:rgba(255,255,255,.08);color:#e2e8f0;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:9px 12px}.err{display:none;margin:14px 0 0;padding:12px;border-radius:14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.28);color:#fecaca;font-size:13px;line-height:1.4}.err.show{display:block}.pulse{animation:pulse 1.35s infinite}@keyframes pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 10px rgba(34,197,94,.08),0 0 0 22px rgba(34,197,94,.04)}50%{transform:scale(1.035);box-shadow:0 0 0 14px rgba(34,197,94,.12),0 0 0 32px rgba(34,197,94,.06)}}
   </style>
 </head>
 <body>
-  <main class="card">
+  <main class="card setup-card">
     <div class="logo">SH</div>
     <div class="pill"><span class="dot"></span> Operator notification setup</div>
     <h1>Enable mobile notifications</h1>
-    <p>This page registers your phone/browser for real notification-drawer alerts when new WhatsApp, Live Chat, or customer chat messages arrive.</p>
+    <p>This page registers your phone/browser for notification-drawer alerts when new messages or WhatsApp calls arrive.</p>
     <div class="status" id="status">Checking push status…</div>
     <div class="row">
       <button class="primary" id="enableBtn">Enable Notifications</button>
       <button class="ghost" id="testBtn">Send Test</button>
       <button class="danger" id="resetBtn">Reset</button>
     </div>
-    <p class="small">Keep this installed/opened once per operator phone. Tapping notifications will open your Operator Hub URL configured in Render.</p>
+    <p class="small">Keep this installed/opened once per operator phone. Call notifications open this same page in call mode.</p>
   </main>
-
+  <div class="call-wrap">
+    <main class="phone" role="application" aria-label="WhatsApp call receiver">
+      <div class="ctop"><div class="brand"><i>☎</i><span>SH Operator Call</span></div><div class="call-pill">WhatsApp</div></div>
+      <section class="cmid"><div class="avatar pulse" id="avatar">?</div><h1 id="callerName">Incoming call</h1><div class="phone-no" id="callerPhone">Loading call…</div><div class="call-state" id="callState">Preparing receiver…</div><div class="timer" id="timer">00:00</div><div class="err" id="errorBox"></div></section>
+      <section><div class="actions"><button class="callbtn reject" id="rejectBtn">✕</button><button class="callbtn accept" id="acceptBtn">✓</button><button class="callbtn end" id="endBtn" style="display:none">⌕</button></div><div class="labelrow"><span>Decline</span><span id="acceptLabel">Accept</span></div></section>
+      <footer class="foot">Keep this notification app installed for fastest answering. The microphone starts only after this screen opens.<div class="small-actions"><button id="refreshBtn">Refresh call</button><button id="setupBtn">Notification Setup</button></div></footer>
+    </main>
+  </div>
+  <audio id="remoteAudio" autoplay playsinline></audio>
 <script>
-const statusEl = document.getElementById('status');
-const enableBtn = document.getElementById('enableBtn');
-const testBtn = document.getElementById('testBtn');
-const resetBtn = document.getElementById('resetBtn');
-let currentSub = null;
-
-function logStatus(message, good){
-  statusEl.innerHTML = (good === true ? '<span class="ok">OK</span> ' : good === false ? '<span class="bad">Issue</span> ' : '') + String(message || '');
-}
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-  return outputArray;
-}
-function supported(){ return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
-async function getRegistration(){
-  const reg = await navigator.serviceWorker.register('/sh-operator-sw.js', { scope: '/' });
-  await navigator.serviceWorker.ready;
-  return reg;
-}
-async function refresh(){
-  if (!supported()) { logStatus('Push is not supported in this browser. Use Chrome/Edge on Android, or iOS Safari Home Screen PWA.', false); return; }
-  try {
-    const keyRes = await fetch('/api/push/public-key');
-    const keyData = await keyRes.json();
-    if (!keyData.configured) { logStatus('Server push is not configured. Check Render WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY.', false); return; }
-    const reg = await getRegistration();
-    currentSub = await reg.pushManager.getSubscription();
-    const perm = Notification.permission;
-    if (perm === 'granted' && currentSub) logStatus('Notifications are enabled on this device. Subscription saved in browser.', true);
-    else if (perm === 'denied') logStatus('Notifications are blocked. Open browser site settings and allow notifications for this site.', false);
-    else logStatus('Notifications are not enabled yet. Tap Enable Notifications.', null);
-  } catch(e){ logStatus(e.message || e, false); }
-}
-async function enable(){
-  if (!supported()) return refresh();
-  enableBtn.disabled = true;
-  try {
-    logStatus('Requesting permission…');
-    const keyRes = await fetch('/api/push/public-key');
-    const keyData = await keyRes.json();
-    if (!keyData.publicKey || !keyData.configured) throw new Error('Server push key is missing or not configured.');
-    const reg = await getRegistration();
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') throw new Error('Notification permission was not allowed.');
-    currentSub = await reg.pushManager.getSubscription();
-    if (!currentSub) {
-      currentSub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(keyData.publicKey) });
-    }
-    const saveRes = await fetch('/api/push/subscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ subscription: currentSub, deviceLabel: navigator.userAgent || 'Operator device', userAgent: navigator.userAgent || '' }) });
-    const saveData = await saveRes.json().catch(()=>({}));
-    if (!saveRes.ok || saveData.ok === false) throw new Error(saveData.error || 'Could not save subscription.');
-    logStatus('Notifications enabled and subscription saved. Sending a test notification…', true);
-    await fetch('/api/push/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: 'Operator Hub notifications are working.' }) });
-  } catch(e){ logStatus(e.message || e, false); }
-  finally { enableBtn.disabled = false; refresh(); }
-}
-async function test(){
-  try { await fetch('/api/push/test', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: 'Test notification from Smart Handicrafts Operator Hub.' }) }); logStatus('Test notification sent. Check your notification drawer.', true); }
-  catch(e){ logStatus(e.message || e, false); }
-}
-async function reset(){
-  try {
-    const reg = await getRegistration();
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) { await fetch('/api/push/unsubscribe', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ endpoint: sub.endpoint }) }); await sub.unsubscribe(); }
-    currentSub = null; logStatus('Subscription reset. You can enable again.', true);
-  } catch(e){ logStatus(e.message || e, false); }
-}
-enableBtn.addEventListener('click', enable);
-testBtn.addEventListener('click', test);
-resetBtn.addEventListener('click', reset);
-refresh();
+const statusEl=document.getElementById('status'),enableBtn=document.getElementById('enableBtn'),testBtn=document.getElementById('testBtn'),resetBtn=document.getElementById('resetBtn');let currentSub=null;
+function logStatus(m,g){if(!statusEl)return;statusEl.innerHTML=(g===true?'<span class="ok">OK</span> ':g===false?'<span class="bad">Issue</span> ':'')+String(m||'')}
+function urlBase64ToUint8Array(s){const p='='.repeat((4-s.length%4)%4),b=(s+p).replace(/-/g,'+').replace(/_/g,'/'),r=atob(b),a=new Uint8Array(r.length);for(let i=0;i<r.length;++i)a[i]=r.charCodeAt(i);return a}
+function supported(){return 'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window}
+async function getRegistration(){const r=await navigator.serviceWorker.register('/sh-operator-sw.js',{scope:'/'});await navigator.serviceWorker.ready;return r}
+async function refresh(){if(!supported()){logStatus('Push is not supported in this browser. Use Chrome/Edge on Android, or iOS Safari Home Screen PWA.',false);return}try{const k=await(await fetch('/api/push/public-key')).json();if(!k.configured){logStatus('Server push is not configured. Check Render WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY.',false);return}const r=await getRegistration();currentSub=await r.pushManager.getSubscription();const p=Notification.permission;if(p==='granted'&&currentSub)logStatus('Notifications are enabled on this device. Subscription saved in browser.',true);else if(p==='denied')logStatus('Notifications are blocked. Open browser site settings and allow notifications for this site.',false);else logStatus('Notifications are not enabled yet. Tap Enable Notifications.',null)}catch(e){logStatus(e.message||e,false)}}
+async function enable(){if(!supported())return refresh();enableBtn.disabled=true;try{logStatus('Requesting permission…');const k=await(await fetch('/api/push/public-key')).json();if(!k.publicKey||!k.configured)throw new Error('Server push key is missing or not configured.');const r=await getRegistration();const p=await Notification.requestPermission();if(p!=='granted')throw new Error('Notification permission was not allowed.');currentSub=await r.pushManager.getSubscription();if(!currentSub)currentSub=await r.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(k.publicKey)});const s=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscription:currentSub,deviceLabel:navigator.userAgent||'Operator device',userAgent:navigator.userAgent||''})});const d=await s.json().catch(()=>({}));if(!s.ok||d.ok===false)throw new Error(d.error||'Could not save subscription.');logStatus('Notifications enabled and subscription saved. Sending a test notification…',true);await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:'Operator Hub notifications are working.'})})}catch(e){logStatus(e.message||e,false)}finally{enableBtn.disabled=false;refresh()}}
+async function test(){try{await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:'Test notification from Smart Handicrafts Operator Hub.'})});logStatus('Test notification sent. Check your notification drawer.',true)}catch(e){logStatus(e.message||e,false)}}
+async function reset(){try{const r=await getRegistration(),s=await r.pushManager.getSubscription();if(s){await fetch('/api/push/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:s.endpoint})});await s.unsubscribe()}currentSub=null;logStatus('Subscription reset. You can enable again.',true)}catch(e){logStatus(e.message||e,false)}}
+enableBtn&&enableBtn.addEventListener('click',enable);testBtn&&testBtn.addEventListener('click',test);resetBtn&&resetBtn.addEventListener('click',reset);
+const qs=new URLSearchParams(location.search),isCallMode=qs.get('mode')==='call'||qs.has('callId')||qs.has('call_id');let callId=qs.get('callId')||qs.get('call_id')||'',phone=(qs.get('phone')||'').replace(/\D/g,''),callerName=qs.get('name')||'',currentCall=null,pc=null,localStream=null,ringTimer=null,audioCtx=null,startedAt=0;const $=id=>document.getElementById(id);
+function setState(t){if($('callState'))$('callState').textContent=t}function showErr(t){const e=$('errorBox');if(!e)return;e.textContent=t||'';e.classList.toggle('show',!!t)}function fmtPhone(p){return p?'+'+p:'Unknown WhatsApp number'}function initials(n,p){const s=(n||p||'?').trim();return(s[0]||'?').toUpperCase()}function updateHeader(){if(!$('callerName'))return;$('callerName').textContent=callerName||'WhatsApp caller';$('callerPhone').textContent=fmtPhone(phone);$('avatar').textContent=initials(callerName,phone)}
+function startTimer(){if(startedAt)return;startedAt=Date.now();setInterval(()=>{const s=Math.floor((Date.now()-startedAt)/1000);if($('timer'))$('timer').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')},1000)}
+function startRingtone(){try{stopRingtone();audioCtx=new(window.AudioContext||window.webkitAudioContext)();ringTimer=setInterval(()=>{const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.frequency.value=880;g.gain.value=.045;o.connect(g).connect(audioCtx.destination);o.start();setTimeout(()=>{try{o.stop()}catch(e){}},260)},850)}catch(e){}}function stopRingtone(){if(ringTimer)clearInterval(ringTimer);ringTimer=null;if(audioCtx){try{audioCtx.close()}catch(e){}audioCtx=null}}
+async function fetchCall(){showErr('');let data=null;if(callId){const r=await fetch(`/api/whatsapp-calls/${encodeURIComponent(callId)}`);if(r.ok)data=await r.json()}if(!data||!data.ok){const r=await fetch('/api/whatsapp-calls/incoming'),j=await r.json();data={ok:true,call:(j.calls||[])[0]}}currentCall=data.call||null;if(!currentCall){setState('No active incoming call found');showErr('Call not found or already ended. Ask the customer to call again.');return}callId=currentCall.call_id||callId;phone=(currentCall.customer_phone||currentCall.wa_id||currentCall.from||phone||'').replace(/\D/g,'');callerName=currentCall.customer_name||callerName||'';updateHeader();setState(currentCall.has_sdp?'Incoming call • ready to answer':'Incoming call event received');if(!currentCall.has_sdp)showErr('This call event does not include WebRTC SDP yet. Accept may fail until Meta sends the session offer.');startRingtone()}
+async function acceptCall(){try{showErr('');setState('Opening microphone…');stopRingtone();if(!currentCall)await fetchCall();const offer=currentCall?.session?.sdp||currentCall?.raw?.call?.session?.sdp||currentCall?.raw?.call?.connect?.session?.sdp||'';if(!offer)throw new Error('No SDP offer found in this call event. Cannot connect audio yet.');localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));pc.ontrack=ev=>{$('remoteAudio').srcObject=ev.streams[0]};await pc.setRemoteDescription({type:'offer',sdp:offer});const ans=await pc.createAnswer();await pc.setLocalDescription(ans);await new Promise(resolve=>{if(pc.iceGatheringState==='complete')return resolve();const to=setTimeout(resolve,2000);pc.onicegatheringstatechange=()=>{if(pc.iceGatheringState==='complete'){clearTimeout(to);resolve()}}});setState('Accepting WhatsApp call…');const r=await fetch('/api/whatsapp-calls/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,sdp:pc.localDescription.sdp,sdp_type:pc.localDescription.type,phone_number_id:currentCall.phone_number_id})});const j=await r.json();if(!j.ok)throw new Error(j.error||'Accept failed');$('acceptBtn').style.display='none';$('rejectBtn').style.display='none';$('endBtn').style.display='grid';$('acceptLabel').textContent='Connected';setState('Connected');startTimer()}catch(e){setState('Could not answer');showErr(e.message||String(e));startRingtone()}}
+async function rejectCall(){stopRingtone();try{if(callId)await fetch('/api/whatsapp-calls/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,phone_number_id:currentCall?.phone_number_id})})}catch(e){}setState('Call declined')}async function endCall(){stopRingtone();try{if(callId)await fetch('/api/whatsapp-calls/terminate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({call_id:callId,phone_number_id:currentCall?.phone_number_id})})}catch(e){}try{pc&&pc.close()}catch(e){}if(localStream)localStream.getTracks().forEach(t=>t.stop());setState('Call ended')}
+$('acceptBtn')&&($('acceptBtn').onclick=acceptCall);$('rejectBtn')&&($('rejectBtn').onclick=rejectCall);$('endBtn')&&($('endBtn').onclick=endCall);$('refreshBtn')&&($('refreshBtn').onclick=fetchCall);$('setupBtn')&&($('setupBtn').onclick=()=>{location.href='/operator-notifications'});
+if(isCallMode){document.body.classList.add('call-mode');updateHeader();fetchCall().catch(e=>{setState('Load failed');showErr(e.message||String(e))})}else refresh();
 </script>
 </body>
 </html>
