@@ -1,4 +1,4 @@
-/* Smart Handicrafts Operator Hub Service Worker - Web Push v12 rich drawer notification templates */
+/* Smart Handicrafts Operator Hub Service Worker - Web Push v27 call receiver */
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -21,9 +21,11 @@ function normalizePushPayload(event) {
 
 function notificationActionTitle(payload) {
   const data = payload && payload.data ? payload.data : {};
+  const template = String(data.notificationTemplate || data.template || payload.template || '').toLowerCase();
   const channelType = String(data.channelType || payload.channelType || '').toLowerCase();
   const channelLabel = String(data.channelLabel || payload.channelLabel || '').toLowerCase();
 
+  if (template === 'whatsapp_call' || channelType === 'whatsapp_call' || channelLabel.includes('call')) return 'Answer Call';
   if (channelType === 'whatsapp' || channelLabel.includes('whatsapp')) return 'Open WhatsApp Chat';
   if (channelType === 'livechat' || channelLabel.includes('live')) return 'Open Live Chat';
   return 'Open Chat';
@@ -32,31 +34,32 @@ function notificationActionTitle(payload) {
 self.addEventListener('push', (event) => {
   const payload = normalizePushPayload(event);
   const data = payload.data || {};
+  const template = String(data.notificationTemplate || data.template || payload.template || '').toLowerCase();
+  const isCall = template === 'whatsapp_call' || String(data.channelType || '').toLowerCase() === 'whatsapp_call';
 
-  const title = payload.title || 'SH Operator Hub';
-  const body = payload.body || 'New customer message. Tap to open chat.';
+  const title = payload.title || (isCall ? 'Incoming WhatsApp Call' : 'SH Operator Hub');
+  const body = payload.body || (isCall ? 'Tap to answer in Operator Call.' : 'New customer message. Tap to open chat.');
 
   const options = {
     body,
     icon: payload.icon || '/icons/icon-192.png',
     badge: payload.badge || '/icons/badge-96.png',
     image: payload.image || data.image || undefined,
-    tag: payload.tag || ('smart-handicrafts-chat-' + (data.channelId || 'new')),
+    tag: payload.tag || (isCall ? ('smart-handicrafts-call-' + (data.callId || Date.now())) : ('smart-handicrafts-chat-' + (data.channelId || 'new'))),
     renotify: payload.renotify !== false,
-    requireInteraction: !!payload.requireInteraction,
+    requireInteraction: isCall ? true : !!payload.requireInteraction,
     timestamp: Date.now(),
-    vibrate: payload.vibrate || [120, 70, 120],
+    vibrate: payload.vibrate || (isCall ? [250, 90, 250, 90, 250, 90, 400] : [120, 70, 120]),
     data: {
       ...data,
-      url: data.url || payload.url || '/operator-notifications',
-      notificationTemplate: data.template || payload.template || 'chat'
+      url: data.url || payload.url || (isCall ? '/operator-call' : '/operator-notifications'),
+      notificationTemplate: data.template || payload.template || (isCall ? 'whatsapp_call' : 'chat')
     },
-    actions: [
+    actions: payload.actions || [
       { action: 'open', title: notificationActionTitle(payload) }
     ]
   };
 
-  // Clean undefined values because some browsers are stricter with NotificationOptions.
   Object.keys(options).forEach((key) => {
     if (options[key] === undefined || options[key] === '') delete options[key];
   });
@@ -75,11 +78,11 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const target = new URL(targetUrl);
 
     for (const client of allClients) {
       try {
         const clientUrl = new URL(client.url);
-        const target = new URL(targetUrl);
         if (clientUrl.origin === target.origin && clientUrl.pathname === target.pathname) {
           if ('focus' in client) await client.focus();
           if ('navigate' in client) await client.navigate(targetUrl);
