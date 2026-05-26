@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-stability-v26";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-pwa-receiver-v27";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15798,6 +15798,97 @@ function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {})
   };
 }
 
+
+function buildOperatorCallUrlForPush(call = {}) {
+  const base = String(process.env.APP_URL || "https://ai-agent-debate.onrender.com").replace(/\/$/, "");
+  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  const phone = whatsappCallCleanPhone(call?.customer_phone || call?.wa_id || call?.from || "");
+  const name = aiModeSafeString(call?.customer_name || "", 120);
+  const url = new URL(`${base}/operator-call`);
+  if (callId) url.searchParams.set("callId", callId);
+  if (phone) url.searchParams.set("phone", phone);
+  if (name) url.searchParams.set("name", name);
+  return url.toString();
+}
+
+function buildWhatsappCallPushPayload(call = {}) {
+  const phone = whatsappCallCleanPhone(call?.customer_phone || call?.wa_id || call?.from || "");
+  const customer = aiModeSafeString(call?.customer_name || (phone ? `+${phone}` : "WhatsApp customer"), 90);
+  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  return {
+    title: "Incoming WhatsApp Call",
+    body: `${customer}\nTap to answer in Operator Call`,
+    channelLabel: "WhatsApp Call",
+    template: "whatsapp_call",
+    icon: process.env.PWA_CALL_ICON_URL || process.env.PWA_WHATSAPP_ICON_URL || process.env.PWA_ICON_URL || "/icons/icon-192.png",
+    badge: process.env.PWA_CALL_BADGE_URL || process.env.PWA_WHATSAPP_BADGE_URL || process.env.PWA_BADGE_URL || "/icons/badge-96.png",
+    tag: `sh-wa-call-${callId || phone || Date.now()}`,
+    renotify: true,
+    requireInteraction: true,
+    vibrate: [250, 90, 250, 90, 250, 90, 400],
+    data: {
+      url: buildOperatorCallUrlForPush(call),
+      callId,
+      phone,
+      customerName: customer,
+      channelType: "whatsapp_call",
+      channelLabel: "WhatsApp Call",
+      template: "whatsapp_call",
+      notificationTemplate: "whatsapp_call",
+      actionTitle: "Answer Call",
+      receivedAt: now()
+    },
+    actions: [
+      { action: "open", title: "Answer Call" }
+    ]
+  };
+}
+
+async function sendWhatsappCallPushNotification(call = {}) {
+  if (!WEB_PUSH_ENABLED) return { ok: false, skipped: "disabled" };
+  if (!webPushConfigured()) return { ok: false, skipped: "not_configured" };
+  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  if (!callId) return { ok: false, skipped: "missing_call_id" };
+  const pushKey = `call:${callId}:${call?.event || "incoming"}`;
+  if (webPushState.sent_message_ids.has(pushKey)) return { ok: false, skipped: "duplicate_call_push" };
+
+  const ready = await configureWebPush();
+  if (!ready) return { ok: false, skipped: "web_push_not_ready", error: webPushState.last_error || webPushState.module_error };
+  const webpush = await getWebPushModule();
+  const subscriptions = await readPushSubscriptions();
+  if (!subscriptions.length) return { ok: false, skipped: "no_subscribers" };
+
+  const payload = JSON.stringify(buildWhatsappCallPushPayload(call));
+  const remaining = [];
+  let sent = 0;
+  let failed = 0;
+
+  for (const row of subscriptions) {
+    const sub = row?.subscription || row;
+    if (!sub?.endpoint) continue;
+    try {
+      await webpush.sendNotification(sub, payload, { TTL: 60 * 5, urgency: "high", topic: `wa-call-${callId}`.slice(0, 32) });
+      sent += 1;
+      remaining.push({ ...row, last_call_push_at: now(), last_error: "" });
+    } catch (error) {
+      failed += 1;
+      const statusCode = Number(error?.statusCode || 0);
+      if (statusCode === 404 || statusCode === 410) continue;
+      remaining.push({ ...row, last_error: error?.message || String(error), last_failed_at: now() });
+      webPushState.last_error = error?.message || String(error);
+    }
+  }
+
+  await writePushSubscriptions(remaining);
+  webPushState.sent_message_ids.add(pushKey);
+  webPushState.sent_count += sent;
+  webPushState.failed_count += failed;
+  webPushState.last_sent_at = sent ? now() : webPushState.last_sent_at;
+
+  console.log("WhatsApp call push notification result:", { callId, sent, failed, subscribers: remaining.length });
+  return { ok: sent > 0, sent, failed, subscribers: remaining.length };
+}
+
 async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
   const debugBase = { odooMessageId: message?.id || null, odooChannelId: channel?.id || null };
   if (!WEB_PUSH_ENABLED) {
@@ -20459,6 +20550,13 @@ app.get(["/operator-notifications", "/operator-hub"], (req, res) => {
   res.sendFile(`${process.cwd()}/public/operator-notifications.html`);
 });
 
+// Lightweight Render-hosted WhatsApp call receiver.
+// Push notifications should open this page instead of the Odoo-embedded Operator Hub,
+// because it loads much faster and can immediately request microphone/WebRTC access.
+app.get(["/operator-call", "/whatsapp-call"], (req, res) => {
+  res.sendFile(`${process.cwd()}/public/operator-call.html`);
+});
+
 // ===================== PWA PUSH API =====================
 app.get("/api/push/public-key", (req, res) => {
   res.json({
@@ -20910,7 +21008,20 @@ async function processWhatsappCallWebhook(body = {}) {
   }
 
   const stored = await storeWhatsappCallEvents(events);
-  return { ok: true, received: events.length, added: stored.added, calls: stored.calls };
+
+  const pushResults = [];
+  for (const call of stored.calls || []) {
+    if (whatsappCallIsOpenEvent(call?.event) && !whatsappCallIsClosedEvent(call?.event)) {
+      try {
+        pushResults.push(await sendWhatsappCallPushNotification(call));
+      } catch (pushError) {
+        pushResults.push({ ok: false, error: pushError?.message || String(pushError) });
+        console.warn("WhatsApp call push failed:", pushError?.message || pushError);
+      }
+    }
+  }
+
+  return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults };
 }
 
 function handleWhatsappWebhookVerify(req, res) {
@@ -21194,6 +21305,17 @@ app.get("/api/whatsapp-calls/incoming", async (req, res) => {
       .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
       .slice(0, 20);
     return res.json({ ok: true, count: openCalls.length, calls: openCalls });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.get("/api/whatsapp-calls/:callId", async (req, res) => {
+  try {
+    const calls = await readWhatsappCallLogs();
+    const call = whatsappCallFindByCallId(calls, req.params.callId || "");
+    if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
+    return res.json({ ok: true, call });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
