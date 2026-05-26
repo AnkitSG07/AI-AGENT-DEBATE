@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v32-any-call-event";
+const SERVER_PATCH_VERSION = "2026-05-26-whatsapp-call-push-trigger-v33-remove-call-push-topic";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15864,26 +15864,35 @@ async function sendWhatsappCallPushNotification(call = {}) {
     const sub = row?.subscription || row;
     if (!sub?.endpoint) continue;
     try {
-      await webpush.sendNotification(sub, payload, { TTL: 60 * 5, urgency: "high", topic: `wa-call-${callId}`.slice(0, 32) });
+      await webpush.sendNotification(sub, payload, { TTL: 60 * 5, urgency: "high" });
       sent += 1;
       remaining.push({ ...row, last_call_push_at: now(), last_error: "" });
     } catch (error) {
       failed += 1;
       const statusCode = Number(error?.statusCode || 0);
+      const errorBody = error?.body ? String(error.body).slice(0, 300) : "";
+      const errorMessage = error?.message || String(error);
+      const errorDetail = [errorMessage, errorBody].filter(Boolean).join(" | ");
+      console.warn("WhatsApp call push send failed:", {
+        callId,
+        statusCode,
+        endpointPreview: String(sub.endpoint || "").slice(0, 80),
+        error: errorDetail
+      });
       if (statusCode === 404 || statusCode === 410) continue;
-      remaining.push({ ...row, last_error: error?.message || String(error), last_failed_at: now() });
-      webPushState.last_error = error?.message || String(error);
+      remaining.push({ ...row, last_error: errorDetail, last_failed_at: now() });
+      webPushState.last_error = errorDetail;
     }
   }
 
   await writePushSubscriptions(remaining);
-  webPushState.sent_message_ids.add(pushKey);
+  if (sent > 0) webPushState.sent_message_ids.add(pushKey);
   webPushState.sent_count += sent;
   webPushState.failed_count += failed;
   webPushState.last_sent_at = sent ? now() : webPushState.last_sent_at;
 
-  console.log("WhatsApp call push notification result:", { callId, sent, failed, subscribers: remaining.length });
-  return { ok: sent > 0, sent, failed, subscribers: remaining.length };
+  console.log("WhatsApp call push notification result:", { callId, sent, failed, subscribers: remaining.length, last_error: webPushState.last_error || "" });
+  return { ok: sent > 0, sent, failed, subscribers: remaining.length, last_error: webPushState.last_error || "" };
 }
 
 async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
