@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-google-contacts-vaidahi-kala-tabs-v1";
+const SERVER_PATCH_VERSION = "2026-05-26-odoo-documents-certificate-center-v1";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -14498,6 +14498,422 @@ app.post("/api/google-contacts/import-to-odoo", async (req, res) => {
     });
   }
 });
+
+
+// ===================== ODOO DOCUMENTS / CERTIFICATE CENTER HELPERS =====================
+// Used by Operator Hub "Certificates & Documents" panel.
+// It reads Odoo Documents app records from documents.document and lets operators view,
+// download, copy/share links, and send document links to customers.
+const ODOO_DOCUMENT_PUBLIC_LINK_MODE =
+  String(process.env.ODOO_DOCUMENT_PUBLIC_LINK_MODE || "proxy").toLowerCase(); // proxy | odoo
+const ODOO_DOCUMENTS_SHARE_DEFAULT_SUBJECT =
+  process.env.ODOO_DOCUMENTS_SHARE_DEFAULT_SUBJECT || "Smart Handicrafts documents / certificates";
+
+function safeDocString(value, max = 10000) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function docMany2oneId(value) {
+  if (Array.isArray(value)) return Number(value[0] || 0) || 0;
+  return Number(value || 0) || 0;
+}
+
+function docMany2oneName(value) {
+  if (Array.isArray(value)) return String(value[1] || "").trim();
+  return "";
+}
+
+function normalizeDocumentRecord(row = {}) {
+  const attachmentId = docMany2oneId(row.attachment_id);
+  const folderId = docMany2oneId(row.folder_id);
+  const ownerId = docMany2oneId(row.owner_id);
+  const partnerId = docMany2oneId(row.partner_id);
+
+  const name =
+    safeDocString(row.name || row.display_name || row.attachment_name || row.url || `Document ${row.id}`, 600);
+
+  const fileExtension = safeDocString(row.file_extension || "", 40).replace(/^\./, "");
+  const mimetype = safeDocString(row.mimetype || "", 200);
+  const type = safeDocString(row.type || "", 40) || (attachmentId ? "binary" : "url");
+
+  return {
+    id: Number(row.id || 0),
+    name,
+    display_name: safeDocString(row.display_name || name, 600),
+    type,
+    folder_id: folderId || null,
+    folder_name: docMany2oneName(row.folder_id),
+    parent_path: safeDocString(row.parent_path || "", 500),
+    children_ids: Array.isArray(row.children_ids) ? row.children_ids : [],
+    attachment_id: attachmentId || null,
+    attachment_name: safeDocString(row.attachment_name || name, 600),
+    attachment_type: safeDocString(row.attachment_type || "", 80),
+    file_extension: fileExtension,
+    mimetype,
+    file_size: Number(row.file_size || 0) || 0,
+    url: safeDocString(row.url || "", 2000),
+    access_url: safeDocString(row.access_url || "", 2000),
+    access_token: safeDocString(row.access_token || row.document_token || "", 400),
+    access_via_link: safeDocString(row.access_via_link || "", 80),
+    access_internal: safeDocString(row.access_internal || "", 80),
+    user_permission: safeDocString(row.user_permission || "", 80),
+    owner_id: ownerId || null,
+    owner_name: docMany2oneName(row.owner_id),
+    partner_id: partnerId || null,
+    partner_name: docMany2oneName(row.partner_id),
+    create_date: row.create_date || "",
+    write_date: row.write_date || "",
+    active: row.active !== false,
+    is_folder: type === "folder",
+    is_file: type === "binary",
+    is_url: type === "url",
+    can_download: type === "binary" || !!attachmentId,
+    can_view: type === "url" || type === "binary" || !!attachmentId
+  };
+}
+
+function documentPublicUrl(doc, mode = ODOO_DOCUMENT_PUBLIC_LINK_MODE) {
+  if (!doc) return "";
+  const appUrl = String(process.env.APP_URL || "").replace(/\/$/, "");
+
+  if (doc.is_url && doc.url) return doc.url;
+
+  if (mode === "odoo" && doc.access_url) {
+    if (/^https?:\/\//i.test(doc.access_url)) return doc.access_url;
+    const base = String(ODOO_URL || "").replace(/\/$/, "");
+    if (base) return `${base}${doc.access_url}`;
+  }
+
+  if (appUrl && doc.id) return `${appUrl}/api/odoo-documents/view/${encodeURIComponent(doc.id)}`;
+
+  if (doc.attachment_id && ODOO_URL) {
+    return `${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=false`;
+  }
+
+  return doc.access_url || doc.url || "";
+}
+
+async function readOdooDocuments(uid, domain = [], fields = [], kw = {}) {
+  return await odooExecute(uid, "documents.document", "search_read", [domain, fields], kw);
+}
+
+const ODOO_DOCUMENT_LIST_FIELDS = [
+  "id",
+  "name",
+  "display_name",
+  "type",
+  "folder_id",
+  "children_ids",
+  "parent_path",
+  "attachment_id",
+  "attachment_name",
+  "attachment_type",
+  "file_extension",
+  "file_size",
+  "mimetype",
+  "url",
+  "access_url",
+  "access_token",
+  "access_via_link",
+  "access_internal",
+  "document_token",
+  "user_permission",
+  "owner_id",
+  "partner_id",
+  "create_date",
+  "write_date",
+  "active"
+];
+
+function buildDocumentTree(records = []) {
+  const docs = records.map(normalizeDocumentRecord);
+  const byId = new Map(docs.map(doc => [Number(doc.id), { ...doc, children: [] }]));
+  const roots = [];
+
+  byId.forEach(doc => {
+    if (doc.folder_id && byId.has(Number(doc.folder_id))) {
+      byId.get(Number(doc.folder_id)).children.push(doc);
+    } else {
+      roots.push(doc);
+    }
+  });
+
+  const sortDocs = (items = []) => {
+    items.sort((a, b) => {
+      if (a.is_folder !== b.is_folder) return a.is_folder ? -1 : 1;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+    items.forEach(item => sortDocs(item.children || []));
+    return items;
+  };
+
+  return sortDocs(roots);
+}
+
+async function getOdooDocumentById(uid, documentId, includeBinary = false) {
+  const id = Number(documentId || 0);
+  if (!id) throw new Error("documentId is required.");
+
+  const fields = includeBinary
+    ? [...new Set([...ODOO_DOCUMENT_LIST_FIELDS, "datas", "raw"])]
+    : ODOO_DOCUMENT_LIST_FIELDS;
+
+  const rows = await odooExecute(uid, "documents.document", "read", [[id], fields]);
+  if (!rows?.[0]) throw new Error("Document not found.");
+  return rows[0];
+}
+
+function base64ToBuffer(value = "") {
+  const clean = String(value || "").replace(/^data:[^;]+;base64,/, "");
+  if (!clean) return Buffer.alloc(0);
+  return Buffer.from(clean, "base64");
+}
+
+function documentFilename(doc) {
+  const base = safeDocString(doc.attachment_name || doc.name || doc.display_name || `document-${doc.id}`, 240)
+    .replace(/[\\/:*?"<>|]+/g, "-");
+  if (/\.[a-z0-9]{1,8}$/i.test(base)) return base;
+  const ext = safeDocString(doc.file_extension || "", 12).replace(/^\./, "");
+  return ext ? `${base}.${ext}` : base;
+}
+
+function certificateShareMessage(doc, link) {
+  const name = safeDocString(doc?.name || doc?.display_name || "the requested document", 240);
+  return [
+    `Dear Customer,`,
+    ``,
+    `Please find the requested Smart Handicrafts document/certificate below:`,
+    `${name}`,
+    link ? `Link: ${link}` : "",
+    ``,
+    `Regards,`,
+    `Smart Handicrafts`
+  ].filter(line => line !== "").join("\n");
+}
+
+async function sendDocumentLinkToOdooChannel(uid, channelId, doc, link, note = "") {
+  const id = Number(channelId || 0);
+  if (!id) throw new Error("channelId is required for chat sharing.");
+  const body = safeDocString(note, 2000) || certificateShareMessage(doc, link);
+
+  return await odooExecute(
+    uid,
+    "discuss.channel",
+    "message_post",
+    [[id]],
+    {
+      body: body.replace(/\n/g, "<br>"),
+      message_type: "comment",
+      subtype_xmlid: "mail.mt_comment"
+    }
+  );
+}
+
+async function sendDocumentLinkByZohoEmail(doc, link, body = {}) {
+  const toAddress = safeDocString(body.toAddress || body.to || "", 2000);
+  if (!toAddress) throw new Error("Email address is required.");
+
+  const subject = safeDocString(
+    body.subject || `${ODOO_DOCUMENTS_SHARE_DEFAULT_SUBJECT}: ${doc.name || doc.display_name || "Document"}`,
+    1200
+  );
+
+  const plain = safeDocString(body.content || body.message || "", 200000) || certificateShareMessage(doc, link);
+  const html = plain
+    .split("\n")
+    .map(line => line ? `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>` : "<br>")
+    .join("");
+
+  const account = await getZohoMailAccount();
+  const payload = buildZohoSendPayload({
+    fromAddress: body.fromAddress || ZOHO_MAIL_FROM_ADDRESS,
+    toAddress,
+    ccAddress: body.ccAddress || body.cc || "",
+    bccAddress: body.bccAddress || body.bcc || "",
+    subject,
+    content: html,
+    mailFormat: "html"
+  });
+
+  const result = await zohoMailRequest(
+    `/accounts/${encodeURIComponent(account.accountId)}/messages`,
+    { method: "POST", body: payload }
+  );
+
+  return result?.data || result;
+}
+
+// ===================== ODOO DOCUMENTS / CERTIFICATE CENTER API ROUTES =====================
+app.get("/api/odoo-documents/tree", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+
+    const q = safeDocString(req.query?.q || req.query?.query || "", 200);
+    const folderIdRaw = safeDocString(req.query?.folderId || "", 80);
+    const limit = Math.max(50, Math.min(2000, Number(req.query?.limit || 1000)));
+    const includeFiles = String(req.query?.includeFiles || "true").toLowerCase() !== "false";
+
+    const domain = [["active", "=", true]];
+    if (!includeFiles) domain.push(["type", "=", "folder"]);
+    if (q) {
+      domain.push("|", "|", ["name", "ilike", q], ["display_name", "ilike", q], ["index_content", "ilike", q]);
+    }
+    if (folderIdRaw && folderIdRaw !== "root" && Number(folderIdRaw)) {
+      domain.push(["folder_id", "=", Number(folderIdRaw)]);
+    }
+
+    const rows = await readOdooDocuments(uid, domain, ODOO_DOCUMENT_LIST_FIELDS, {
+      limit,
+      order: "type desc, sequence asc, name asc, id asc"
+    });
+
+    const docs = (rows || []).map(normalizeDocumentRecord);
+    const tree = buildDocumentTree(rows || []);
+
+    return res.json({
+      ok: true,
+      count: docs.length,
+      documents: docs,
+      tree
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/odoo-documents/folder/:folderId", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+
+    const folderId = safeDocString(req.params?.folderId || "root", 80);
+    const q = safeDocString(req.query?.q || req.query?.query || "", 200);
+    const domain = [["active", "=", true]];
+
+    if (folderId === "root" || folderId === "0") {
+      domain.push(["folder_id", "=", false]);
+    } else {
+      domain.push(["folder_id", "=", Number(folderId)]);
+    }
+
+    if (q) {
+      domain.push("|", "|", ["name", "ilike", q], ["display_name", "ilike", q], ["index_content", "ilike", q]);
+    }
+
+    const rows = await readOdooDocuments(uid, domain, ODOO_DOCUMENT_LIST_FIELDS, {
+      limit: Math.max(50, Math.min(500, Number(req.query?.limit || 200))),
+      order: "type desc, sequence asc, name asc, id asc"
+    });
+
+    return res.json({
+      ok: true,
+      folderId,
+      documents: (rows || []).map(normalizeDocumentRecord)
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/odoo-documents/file/:documentId", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+    const row = await getOdooDocumentById(uid, req.params?.documentId, false);
+    const doc = normalizeDocumentRecord(row);
+    return res.json({
+      ok: true,
+      document: {
+        ...doc,
+        view_url: documentPublicUrl(doc),
+        download_url: `${String(process.env.APP_URL || "").replace(/\/$/, "")}/api/odoo-documents/download/${encodeURIComponent(doc.id)}`
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
+app.get("/api/odoo-documents/view/:documentId", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+    const row = await getOdooDocumentById(uid, req.params?.documentId, true);
+    const doc = normalizeDocumentRecord(row);
+
+    if (doc.is_url && doc.url) return res.redirect(doc.url);
+
+    const raw = row.raw || row.datas || "";
+    const buffer = base64ToBuffer(raw);
+    if (!buffer.length && doc.attachment_id && ODOO_URL) {
+      return res.redirect(`${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=false`);
+    }
+    if (!buffer.length) throw new Error("Document file content is empty or restricted.");
+
+    res.setHeader("Content-Type", doc.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${documentFilename(doc).replace(/"/g, "")}"`);
+    return res.send(buffer);
+  } catch (error) {
+    return res.status(500).send(String(error?.message || error || ""));
+  }
+});
+
+app.get("/api/odoo-documents/download/:documentId", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+    const row = await getOdooDocumentById(uid, req.params?.documentId, true);
+    const doc = normalizeDocumentRecord(row);
+
+    if (doc.is_url && doc.url) return res.redirect(doc.url);
+
+    const raw = row.raw || row.datas || "";
+    const buffer = base64ToBuffer(raw);
+    if (!buffer.length && doc.attachment_id && ODOO_URL) {
+      return res.redirect(`${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=true`);
+    }
+    if (!buffer.length) throw new Error("Document file content is empty or restricted.");
+
+    res.setHeader("Content-Type", doc.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${documentFilename(doc).replace(/"/g, "")}"`);
+    return res.send(buffer);
+  } catch (error) {
+    return res.status(500).send(String(error?.message || error || ""));
+  }
+});
+
+app.post("/api/odoo-documents/share", async (req, res) => {
+  try {
+    if (!odooConfigured) throw new Error("Odoo not configured.");
+    const uid = await odooLoginCached();
+
+    const documentId = Number(req.body?.documentId || req.body?.id || 0);
+    if (!documentId) throw new Error("documentId is required.");
+
+    const row = await getOdooDocumentById(uid, documentId, false);
+    const doc = normalizeDocumentRecord(row);
+    const link = safeDocString(req.body?.link || "", 2000) || documentPublicUrl(doc);
+    if (!link) throw new Error("Could not create a share link for this document.");
+
+    const channel = safeDocString(req.body?.channel || req.body?.mode || "copy", 40).toLowerCase();
+
+    if (channel === "email") {
+      const result = await sendDocumentLinkByZohoEmail(doc, link, req.body || {});
+      return res.json({ ok: true, channel, document: doc, link, result });
+    }
+
+    if (channel === "whatsapp" || channel === "chat") {
+      const result = await sendDocumentLinkToOdooChannel(uid, req.body?.channelId, doc, link, req.body?.message || "");
+      return res.json({ ok: true, channel: "chat", document: doc, link, result });
+    }
+
+    return res.json({ ok: true, channel: "copy", document: doc, link });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
+  }
+});
+
 
 // ===================== ZOHO MAIL OAUTH + API ROUTES =====================
 app.get("/zoho/auth", (req, res) => {
