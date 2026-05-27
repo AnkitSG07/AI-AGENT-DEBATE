@@ -1,16 +1,14 @@
 (() => {
-  if (window.__SH_OPERATOR_CALL_FLOW_HARDENED_V5__) return;
-  window.__SH_OPERATOR_CALL_FLOW_HARDENED_V5__ = true;
+  if (window.__SH_OPERATOR_CALL_STABLE_V6__) return;
+  window.__SH_OPERATOR_CALL_STABLE_V6__ = true;
 
   const CACHE_KEY = 'sh_operator_call_history_v4';
   const OLD_CACHE_KEYS = ['sh_operator_call_history_v2', 'sh_operator_call_history_v3'];
-  const LIVE_MAX_AGE_MS = 110000;
   let latestRows = [];
   let refreshTimer = null;
-  let activeCall = null;
+  let cleanupInProgress = false;
 
   const terminalRe = /miss|declin|reject|failed|ended|terminate|timeout|no.answer|no_answer|unanswered/i;
-  const liveRe = /connect|ring|offer|incoming/i;
 
   const $ = (id) => document.getElementById(id);
   const clean = (v) => String(v || '').replace(/\D/g, '');
@@ -32,26 +30,6 @@
   function phoneOf(c) { return clean(c?.customer_phone || c?.customerPhone || c?.phone || c?.from || c?.wa_id || ''); }
   function nameOf(c) { return String(c?.customer_name || c?.customerName || c?.name || c?.from_name || c?.wa_name || phoneOf(c) || 'WhatsApp caller'); }
   function initialOf(c) { return (nameOf(c).trim()[0] || phoneOf(c)[0] || '?').toUpperCase(); }
-
-  function isTerminal(c) {
-    const status = String(c?.status || '').toLowerCase();
-    return terminalRe.test(eventOf(c)) || ['missed', 'declined', 'ended', 'failed'].includes(status);
-  }
-
-  function isStale(c) {
-    const t = tsMs(c);
-    return !!t && Date.now() - t > LIVE_MAX_AGE_MS;
-  }
-
-  function hasTerminalFor(id) {
-    return !!id && latestRows.some((r) => callId(r) === id && isTerminal(r));
-  }
-
-  function liveOpenable(c) {
-    const id = callId(c);
-    if (!id || isTerminal(c) || isStale(c) || hasTerminalFor(id)) return false;
-    return !!(c?.has_sdp || c?.session?.sdp || c?.raw?.call?.session?.sdp || liveRe.test(eventOf(c)));
-  }
 
   function kindOf(c) {
     const ev = eventOf(c).toLowerCase();
@@ -90,37 +68,6 @@
     OLD_CACHE_KEYS.forEach((key) => { try { localStorage.removeItem(key); } catch {} });
   }
 
-  function ensureActiveChip() {
-    let chip = $('returnActiveCallChip');
-    if (!chip) {
-      chip = document.createElement('button');
-      chip.id = 'returnActiveCallChip';
-      chip.textContent = 'Return to Active Call';
-      chip.style.cssText = 'display:none;position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);z-index:99;border:0;border-radius:999px;background:#111;color:#fff;font-weight:900;font-size:13px;padding:12px 18px;box-shadow:0 14px 34px rgba(0,0,0,.18);';
-      document.body.appendChild(chip);
-      chip.addEventListener('click', () => {
-        if (!activeCall) return;
-        document.body.classList.add('call-mode');
-        chip.style.display = 'none';
-      });
-    }
-    return chip;
-  }
-
-  function showActiveChip(show) {
-    const chip = ensureActiveChip();
-    chip.style.display = show && activeCall ? 'block' : 'none';
-  }
-
-  function hideFooterControls() {
-    const back = $('backBtn');
-    const refresh = $('refreshBtn');
-    if (back) back.style.display = 'none';
-    if (refresh) refresh.style.display = 'none';
-    const foot = document.querySelector('.foot');
-    if (foot) foot.style.display = 'none';
-  }
-
   function cardHtml(c) {
     const kind = kindOf(c);
     const name = esc(nameOf(c));
@@ -128,8 +75,8 @@
     const ev = esc(eventOf(c));
     const time = esc(timeText(c));
     const callText = kind === 'outgoing' ? 'Call Again' : 'Call Back';
-    const call = phone ? `<button class="client-call" data-fix-call="${phone}" data-name="${name}">${callText}</button>` : '<button class="client-call" disabled>No No.</button>';
-    return `<div class="client-card ${kind}"><div class="client-avatar">${esc(initialOf(c))}</div><div class="client-name">${name}</div><div class="client-phone">${phone ? '+' + phone : 'No number'}</div><div class="client-meta">${ev}${time ? ' • ' + time : ''}</div><div class="client-badge ${kind}">${kind}</div><div class="card-actions">${call}</div></div>`;
+    const call = phone ? '<button class="client-call" data-fix-call="' + phone + '" data-name="' + name + '">' + callText + '</button>' : '<button class="client-call" disabled>No No.</button>';
+    return '<div class="client-card ' + kind + '"><div class="client-avatar">' + esc(initialOf(c)) + '</div><div class="client-name">' + name + '</div><div class="client-phone">' + (phone ? '+' + phone : 'No number') + '</div><div class="client-meta">' + ev + (time ? ' • ' + time : '') + '</div><div class="client-badge ' + kind + '">' + kind + '</div><div class="card-actions">' + call + '</div></div>';
   }
 
   function activeFilter() {
@@ -140,7 +87,7 @@
   function renderFixedHistory() {
     const filter = activeFilter();
     const rows = filter === 'all' ? latestRows : latestRows.filter((r) => kindOf(r) === filter);
-    const empty = `<div class="empty-card"><div class="empty-icon">SH</div><div><b>No ${filter === 'all' ? 'WhatsApp' : filter} calls yet</b><span>Calls will appear after webhook/Odoo sync.</span></div></div>`;
+    const empty = '<div class="empty-card"><div class="empty-icon">SH</div><div><b>No ' + (filter === 'all' ? 'WhatsApp' : filter) + ' calls yet</b><span>Calls will appear after webhook/Odoo sync.</span></div></div>';
     const html = rows.length ? rows.map(cardHtml).join('') : empty;
     const home = $('homeCallList');
     const list = $('callList');
@@ -181,7 +128,16 @@
     renderFixedHistory();
   }
 
-  function hideAcceptIfNotReady() {
+  function hideFooterControls() {
+    const back = $('backBtn');
+    const refresh = $('refreshBtn');
+    const foot = document.querySelector('.foot');
+    if (back) back.style.display = 'none';
+    if (refresh) refresh.style.display = 'none';
+    if (foot) foot.style.display = 'none';
+  }
+
+  function hideAcceptWhenNotAnswerable() {
     const err = $('errorBox');
     const state = $('callState');
     const accept = $('acceptBtn');
@@ -193,116 +149,113 @@
     }
   }
 
-  function closeCallScreen(delay = 450) {
-    setTimeout(() => {
-      try { window.stopRingtone?.(); } catch {}
-      try { window.pc?.close?.(); } catch {}
-      try { window.localStream?.getTracks?.().forEach((t) => t.stop()); } catch {}
-      activeCall = null;
-      showActiveChip(false);
-      document.body.classList.remove('call-mode');
-      const timer = $('timer');
-      if (timer) timer.textContent = '00:00';
-      const err = $('errorBox');
-      if (err) { err.textContent = ''; err.classList.remove('show'); }
-      const accept = $('acceptBtn');
-      const reject = $('rejectBtn');
-      const end = $('endBtn');
-      if (accept) accept.style.display = 'grid';
-      if (reject) reject.style.display = 'grid';
-      if (end) end.style.display = 'none';
-      loadFixedHistory();
-    }, delay);
-  }
+  function hardResetCallUi() {
+    if (cleanupInProgress) return;
+    cleanupInProgress = true;
 
-  function markCallActive() {
-    const title = $('callTitle')?.textContent || '';
-    const state = $('callState')?.textContent || '';
-    const phone = $('callerPhone')?.textContent || '';
-    if (document.body.classList.contains('call-mode') && !/declined|ended|failed|already/i.test(state)) {
-      activeCall = { title, state, phone, at: Date.now() };
-    }
-  }
+    try { window.stopRingtone?.(); } catch {}
+    try { window.pc?.close?.(); } catch {}
+    try { window.localStream?.getTracks?.().forEach((t) => t.stop()); } catch {}
 
-  function patchButtons() {
-    hideFooterControls();
-    const reject = $('rejectBtn');
-    if (reject && !reject.dataset.fixBoundV5) {
-      reject.dataset.fixBoundV5 = '1';
-      reject.addEventListener('click', () => closeCallScreen(700), true);
-    }
-    const end = $('endBtn');
-    if (end && !end.dataset.fixBoundV5) {
-      end.dataset.fixBoundV5 = '1';
-      end.addEventListener('click', () => closeCallScreen(700), true);
-    }
+    document.body.classList.remove('call-mode');
+    document.body.style.pointerEvents = '';
+    document.documentElement.style.pointerEvents = '';
+
+    const timer = $('timer');
+    if (timer) timer.textContent = '00:00';
+
+    const err = $('errorBox');
+    if (err) { err.textContent = ''; err.classList.remove('show'); }
+
     const accept = $('acceptBtn');
-    if (accept && !accept.dataset.fixBoundV5) {
-      accept.dataset.fixBoundV5 = '1';
+    const reject = $('rejectBtn');
+    const end = $('endBtn');
+    const label = $('acceptLabel');
+    if (accept) accept.style.display = 'grid';
+    if (reject) reject.style.display = 'grid';
+    if (end) end.style.display = 'none';
+    if (label) label.textContent = 'Accept';
+
+    setTimeout(() => {
+      cleanupInProgress = false;
+      loadFixedHistory();
+    }, 600);
+  }
+
+  function patchButtonsOnce() {
+    hideFooterControls();
+    hideAcceptWhenNotAnswerable();
+
+    const reject = $('rejectBtn');
+    if (reject && !reject.dataset.stableV6) {
+      reject.dataset.stableV6 = '1';
+      reject.addEventListener('click', () => setTimeout(hardResetCallUi, 550), true);
+    }
+
+    const end = $('endBtn');
+    if (end && !end.dataset.stableV6) {
+      end.dataset.stableV6 = '1';
+      end.addEventListener('click', () => setTimeout(hardResetCallUi, 550), true);
+    }
+
+    const accept = $('acceptBtn');
+    if (accept && !accept.dataset.stableV6) {
+      accept.dataset.stableV6 = '1';
       accept.addEventListener('click', (e) => {
         const text = (($('errorBox')?.textContent || '') + ' ' + ($('callState')?.textContent || '')).toLowerCase();
         if (text.includes('does not include webrtc sdp') || text.includes('already ended') || text.includes('declined')) {
           e.preventDefault();
           e.stopImmediatePropagation();
-          hideAcceptIfNotReady();
-          return;
+          hideAcceptWhenNotAnswerable();
         }
-        markCallActive();
       }, true);
     }
   }
 
-  function patchTabs() {
+  function bindStaticButtons() {
     document.querySelectorAll('.tab').forEach((tab) => {
-      if (tab.dataset.fixBoundV5) return;
-      tab.dataset.fixBoundV5 = '1';
-      tab.addEventListener('click', () => setTimeout(renderFixedHistory, 30));
+      if (tab.dataset.stableV6) return;
+      tab.dataset.stableV6 = '1';
+      tab.addEventListener('click', () => setTimeout(renderFixedHistory, 50));
     });
-    const refresh = $('refreshHomeBtn');
-    if (refresh && !refresh.dataset.fixBoundV5) {
-      refresh.dataset.fixBoundV5 = '1';
-      refresh.addEventListener('click', () => setTimeout(loadFixedHistory, 30));
-    }
-    const refresh2 = $('refreshCallsBtn');
-    if (refresh2 && !refresh2.dataset.fixBoundV5) {
-      refresh2.dataset.fixBoundV5 = '1';
-      refresh2.addEventListener('click', () => setTimeout(loadFixedHistory, 30));
-    }
+
+    ['refreshHomeBtn', 'refreshCallsBtn'].forEach((id) => {
+      const btn = $(id);
+      if (btn && !btn.dataset.stableV6) {
+        btn.dataset.stableV6 = '1';
+        btn.addEventListener('click', () => setTimeout(loadFixedHistory, 50));
+      }
+    });
   }
 
   document.addEventListener('click', (e) => {
     const callBtn = e.target.closest('[data-fix-call]');
-    if (callBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const phone = callBtn.dataset.fixCall;
-      const name = callBtn.dataset.name || phone;
-      if (window.startOutgoingCall) {
-        activeCall = { title: 'Outgoing WhatsApp Call', phone, at: Date.now() };
-        window.startOutgoingCall(phone, name);
-      }
-    }
+    if (!callBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const phone = callBtn.dataset.fixCall;
+    const name = callBtn.dataset.name || phone;
+    if (window.startOutgoingCall) window.startOutgoingCall(phone, name);
   }, true);
 
-  const originalBodyClassRemove = DOMTokenList.prototype.remove;
-  DOMTokenList.prototype.remove = function (...tokens) {
-    if (this === document.body.classList && tokens.includes('call-mode') && activeCall) {
-      setTimeout(() => showActiveChip(true), 80);
-    }
-    return originalBodyClassRemove.apply(this, tokens);
-  };
-
-  const observer = new MutationObserver(() => {
-    hideAcceptIfNotReady();
+  // Lightweight watcher only. No global prototype patch, no whole-page style fighting.
+  let lastState = '';
+  setInterval(() => {
     hideFooterControls();
-    patchButtons();
-    markCallActive();
-  });
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style'] });
+    hideAcceptWhenNotAnswerable();
+    patchButtonsOnce();
+    const state = String($('callState')?.textContent || '').toLowerCase();
+    const inCall = document.body.classList.contains('call-mode');
+    if (inCall && state !== lastState) {
+      lastState = state;
+      if (state.includes('declined') || state.includes('ended') || state.includes('failed') || state.includes('already ended')) {
+        setTimeout(hardResetCallUi, 700);
+      }
+    }
+  }, 700);
 
-  patchButtons();
-  patchTabs();
-  hideFooterControls();
+  bindStaticButtons();
+  patchButtonsOnce();
   latestRows = mergeRows(readCache(), latestRows);
   renderFixedHistory();
   loadFixedHistory();
