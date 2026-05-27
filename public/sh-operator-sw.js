@@ -1,118 +1,93 @@
-/* Smart Handicrafts Operator Call Service Worker - Web Push v37 visual call actions */
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
+self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
+self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
-});
-
-function normalizePushPayload(event) {
-  try {
-    return event.data ? event.data.json() : {};
-  } catch (e) {
-    return {
-      title: 'SH Operator Call',
-      body: event.data ? event.data.text() : 'New customer message',
-      data: {}
-    };
-  }
+function readPayload(event) {
+  try { return event.data ? event.data.json() : {}; }
+  catch { return { title: 'SH Operator Call', body: event.data ? event.data.text() : 'New customer message', data: {} }; }
 }
 
-function cleanPhone(value) {
+function digits(value) {
   return String(value || '').replace(/\D/g, '');
 }
 
-function formatPhone(value) {
-  const phone = cleanPhone(value);
-  return phone ? `+${phone}` : '';
+function plusPhone(value) {
+  const p = digits(value);
+  return p ? `+${p}` : '';
 }
 
-function isWhatsappCallPayload(payload, data) {
+function isCall(payload, data) {
   const template = String(data.notificationTemplate || data.template || payload.template || '').toLowerCase();
   const channelType = String(data.channelType || payload.channelType || '').toLowerCase();
   const channelLabel = String(data.channelLabel || payload.channelLabel || '').toLowerCase();
   return template === 'whatsapp_call' || channelType === 'whatsapp_call' || channelLabel.includes('call');
 }
 
-function operatorAppUrl(data, payload) {
-  return data.url || payload.url || '/operator-notifications';
+function callUrl(data, payload) {
+  const callId = data.callId || data.call_id || payload.callId || payload.call_id || '';
+  const phone = digits(data.phone || data.customerPhone || data.customer_phone || data.from || payload.phone || '');
+  const name = data.customerName || data.customer_name || data.name || payload.customerName || payload.name || '';
+  return `/operator-notifications?mode=call&callId=${encodeURIComponent(callId)}&phone=${encodeURIComponent(phone)}&name=${encodeURIComponent(name)}`;
 }
 
-function buildNotification(payload, data, isCall) {
-  const customerName = String(data.customerName || data.customer_name || data.name || payload.customerName || '').trim();
-  const phone = data.phone || data.customerPhone || data.customer_phone || data.from || '';
-  const phoneText = formatPhone(phone);
-  const title = isCall ? (customerName || phoneText || 'WhatsApp Caller') : (payload.title || 'SH Operator Hub');
-  const body = isCall
-    ? `${phoneText || 'Incoming WhatsApp call'}\nWhatsApp voice call`
-    : (payload.body || 'New customer message. Tap to open chat.');
+function appUrl(data, payload, call) {
+  return call ? callUrl(data, payload) : (data.url || payload.url || '/operator-notifications');
+}
 
+function build(payload, data, call) {
+  const name = String(data.customerName || data.customer_name || data.name || payload.customerName || '').trim();
+  const phone = data.phone || data.customerPhone || data.customer_phone || data.from || '';
+  const phoneText = plusPhone(phone);
+  const title = call ? (name || phoneText || 'WhatsApp Caller') : (payload.title || 'SH Operator Hub');
+  const body = call ? `${phoneText || 'Incoming WhatsApp call'}\nTap to open answer screen` : (payload.body || 'New customer message. Tap to open.');
   const options = {
     body,
-    icon: isCall ? (payload.icon || data.icon || '/icons/icon-192.png') : (payload.icon || '/icons/icon-192.png'),
-    badge: isCall ? (payload.badge || data.badge || '/icons/badge-96.png') : (payload.badge || '/icons/badge-96.png'),
-    image: payload.image || data.image || undefined,
-    tag: payload.tag || (isCall ? (`sh-active-whatsapp-call-${data.callId || data.call_id || phone || Date.now()}`) : (`sh-chat-${data.channelId || 'new'}`)),
+    icon: payload.icon || data.icon || '/icons/icon-192.png',
+    badge: payload.badge || data.badge || '/icons/badge-96.png',
+    tag: payload.tag || (call ? `sh-call-${data.callId || data.call_id || phone || Date.now()}` : `sh-chat-${data.channelId || 'new'}`),
     renotify: true,
-    requireInteraction: isCall ? true : !!payload.requireInteraction,
+    requireInteraction: !!call || !!payload.requireInteraction,
     timestamp: Date.now(),
-    vibrate: payload.vibrate || (isCall ? [280, 90, 280, 90, 280, 90, 500] : [120, 70, 120]),
+    vibrate: payload.vibrate || (call ? [280, 90, 280, 90, 500] : [120, 70, 120]),
     data: {
       ...data,
-      url: operatorAppUrl(data, payload),
-      notificationTemplate: data.template || payload.template || (isCall ? 'whatsapp_call' : 'chat'),
+      url: appUrl(data, payload, call),
+      notificationTemplate: data.template || payload.template || (call ? 'whatsapp_call' : 'chat'),
       callId: data.callId || data.call_id || '',
-      phone: cleanPhone(phone),
-      customerName: customerName || phoneText || 'WhatsApp Caller'
+      phone: digits(phone),
+      customerName: name || phoneText || 'WhatsApp Caller'
     },
-    actions: isCall
-      ? [
-          { action: 'open_decline_visual', title: 'Decline' },
-          { action: 'open_answer_visual', title: 'Answer' }
-        ]
-      : (payload.actions || [{ action: 'open', title: 'Open Chat' }])
+    actions: call ? [{ action: 'open_answer', title: 'Open' }] : (payload.actions || [{ action: 'open', title: 'Open' }])
   };
-
-  Object.keys(options).forEach((key) => {
-    if (options[key] === undefined || options[key] === '') delete options[key];
-  });
-
+  Object.keys(options).forEach(k => { if (options[k] === undefined || options[k] === '') delete options[k]; });
   return { title, options };
 }
 
-self.addEventListener('push', (event) => {
-  const payload = normalizePushPayload(event);
+self.addEventListener('push', event => {
+  const payload = readPayload(event);
   const data = payload.data || {};
-  const isCall = isWhatsappCallPayload(payload, data);
-  const built = buildNotification(payload, data, isCall);
-  event.waitUntil(self.registration.showNotification(built.title, built.options));
+  const call = isCall(payload, data);
+  const item = build(payload, data, call);
+  event.waitUntil(self.registration.showNotification(item.title, item.options));
 });
 
-async function openOrFocusUrl(rawUrl) {
+async function openUrl(rawUrl) {
   const target = new URL(rawUrl || '/operator-notifications', self.location.origin);
-  const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-
-  for (const client of allClients) {
+  const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const client of all) {
     try {
-      const clientUrl = new URL(client.url);
-      if (clientUrl.origin === target.origin && clientUrl.pathname === target.pathname) {
+      const current = new URL(client.url);
+      if (current.origin === target.origin && current.pathname === target.pathname) {
         if ('focus' in client) await client.focus();
         if ('navigate' in client) await client.navigate(target.toString());
         return;
       }
-    } catch (e) {}
+    } catch {}
   }
-
   if (clients.openWindow) return clients.openWindow(target.toString());
 }
 
-self.addEventListener('notificationclick', (event) => {
-  const data = (event.notification && event.notification.data) || {};
-  const targetUrl = data.url || '/operator-notifications';
+self.addEventListener('notificationclick', event => {
+  const data = event.notification?.data || {};
   event.notification.close();
-
-  // Decline and Answer are visual call-style buttons only.
-  // Both open the main Operator Call app. The real Accept/Reject happens inside the app UI.
-  event.waitUntil(openOrFocusUrl(targetUrl));
+  event.waitUntil(openUrl(data.url || '/operator-notifications'));
 });
