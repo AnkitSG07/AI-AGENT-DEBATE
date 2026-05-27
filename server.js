@@ -15678,20 +15678,78 @@ async function writePushSubscriptions(subscriptions = []) {
   return unique;
 }
 
+function normalizeOperatorDeviceStatus(value = "online") {
+  const status = aiModeSafeString(value || "online", 40).toLowerCase();
+  return ["online", "busy", "away", "dnd", "offline"].includes(status) ? status : "online";
+}
+
+function normalizeOperatorDeviceId(value = "") {
+  const clean = aiModeSafeString(value || "", 120).replace(/[^a-zA-Z0-9_-]/g, "");
+  return clean || `device_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function normalizePushSubscriptionPayload(body = {}) {
   const subscription = body?.subscription || body;
   const endpoint = String(subscription?.endpoint || "").trim();
   if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return null;
+  const deviceId = normalizeOperatorDeviceId(body?.deviceId || body?.device_id || body?.operatorDeviceId || body?.operator_device_id || "");
+  const status = normalizeOperatorDeviceStatus(body?.status || body?.operatorStatus || body?.operator_status || "online");
   return {
     endpoint,
     subscription,
+    device_id: deviceId,
+    deviceId,
     user_agent: aiModeSafeString(body?.userAgent || body?.user_agent || "", 500),
-    operator_name: aiModeSafeString(body?.operatorName || body?.operator_name || "", 120),
+    operator_name: aiModeSafeString(body?.operatorName || body?.operator_name || "Operator", 120),
     device_label: aiModeSafeString(body?.deviceLabel || body?.device_label || "Operator device", 120),
+    status,
+    operator_status: status,
+    receive_calls: body?.receiveCalls === false || body?.receive_calls === false ? false : true,
+    receive_chats: body?.receiveChats === false || body?.receive_chats === false ? false : true,
     audience: aiModeSafeString(body?.audience || WEB_PUSH_OPERATOR_AUDIENCE, 120),
     created_at: body?.created_at || now(),
-    updated_at: now()
+    updated_at: now(),
+    last_seen_at: now()
   };
+}
+
+function operatorDeviceSummary(row = {}) {
+  return {
+    device_id: row?.device_id || row?.deviceId || "",
+    operator_name: row?.operator_name || row?.operatorName || "Operator",
+    device_label: row?.device_label || row?.deviceLabel || "Operator device",
+    status: normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online"),
+    receive_calls: row?.receive_calls !== false,
+    receive_chats: row?.receive_chats !== false,
+    last_seen_at: row?.last_seen_at || row?.updated_at || "",
+    last_call_push_at: row?.last_call_push_at || "",
+    last_sent_at: row?.last_sent_at || "",
+    last_error: row?.last_error || "",
+    endpoint_preview: String(row?.subscription?.endpoint || row?.endpoint || "").slice(0, 60)
+  };
+}
+
+function operatorDeviceReceivesCall(row = {}) {
+  const status = normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
+  if (row?.receive_calls === false) return false;
+  return !["busy", "dnd", "offline"].includes(status);
+}
+
+function operatorDeviceReceivesChat(row = {}) {
+  const status = normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
+  if (row?.receive_chats === false) return false;
+  return status !== "offline";
+}
+
+function choosePushTargets(subscriptions = [], type = "chat") {
+  const rows = Array.isArray(subscriptions) ? subscriptions : [];
+  const preferred = rows.filter((row) => type === "call" ? operatorDeviceReceivesCall(row) : operatorDeviceReceivesChat(row));
+  if (preferred.length) return new Set(preferred.map((row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim()).filter(Boolean));
+  // Safety fallback: if all devices are busy/offline by stale state, still notify devices that have not opted out.
+  return new Set(rows
+    .filter((row) => type === "call" ? row?.receive_calls !== false : row?.receive_chats !== false)
+    .map((row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim())
+    .filter(Boolean));
 }
 
 function buildOperatorHubUrlForPush(channel = {}) {
@@ -15871,13 +15929,19 @@ async function sendWhatsappCallPushNotification(call = {}) {
   if (!subscriptions.length) return { ok: false, skipped: "no_subscribers" };
 
   const payload = JSON.stringify(buildWhatsappCallPushPayload(call));
+  const targetEndpoints = choosePushTargets(subscriptions, "call");
   const remaining = [];
   let sent = 0;
   let failed = 0;
 
   for (const row of subscriptions) {
     const sub = row?.subscription || row;
-    if (!sub?.endpoint) continue;
+    const endpoint = String(sub?.endpoint || row?.endpoint || "").trim();
+    if (!endpoint) continue;
+    if (!targetEndpoints.has(endpoint)) {
+      remaining.push(row);
+      continue;
+    }
     try {
       await webpush.sendNotification(sub, payload, { TTL: 60 * 5, urgency: "high" });
       sent += 1;
@@ -15906,8 +15970,8 @@ async function sendWhatsappCallPushNotification(call = {}) {
   webPushState.failed_count += failed;
   webPushState.last_sent_at = sent ? now() : webPushState.last_sent_at;
 
-  console.log("WhatsApp call push notification result:", { callId, sent, failed, subscribers: remaining.length, last_error: webPushState.last_error || "" });
-  return { ok: sent > 0, sent, failed, subscribers: remaining.length, last_error: webPushState.last_error || "" };
+  console.log("WhatsApp call push notification result:", { callId, sent, failed, subscribers: remaining.length, targets: targetEndpoints.size, last_error: webPushState.last_error || "" });
+  return { ok: sent > 0, sent, failed, subscribers: remaining.length, targets: targetEndpoints.size, last_error: webPushState.last_error || "" };
 }
 
 async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
@@ -15944,13 +16008,19 @@ async function sendOperatorPushNotification({ channel = {}, message = {}, messag
   }
 
   const payload = JSON.stringify(buildPushPayload({ channel, message, messageText }));
+  const targetEndpoints = choosePushTargets(subscriptions, "chat");
   const remaining = [];
   let sent = 0;
   let failed = 0;
 
   for (const row of subscriptions) {
     const sub = row?.subscription || row;
-    if (!sub?.endpoint) continue;
+    const endpoint = String(sub?.endpoint || row?.endpoint || "").trim();
+    if (!endpoint) continue;
+    if (!targetEndpoints.has(endpoint)) {
+      remaining.push(row);
+      continue;
+    }
     try {
       await webpush.sendNotification(sub, payload, { TTL: 60 * 60, urgency: "high" });
       sent += 1;
@@ -15981,10 +16051,11 @@ async function sendOperatorPushNotification({ channel = {}, message = {}, messag
     odooChannelId: channel?.id || null,
     sent,
     failed,
-    subscribers: remaining.length
+    subscribers: remaining.length,
+    targets: targetEndpoints.size
   });
 
-  return { ok: sent > 0, sent, failed, subscribers: remaining.length };
+  return { ok: sent > 0, sent, failed, subscribers: remaining.length, targets: targetEndpoints.size };
 }
 
 const zapierIncomingWhatsAppState = {
@@ -20640,6 +20711,78 @@ app.get("/api/push/status", async (req, res) => {
     lastError: webPushState.last_error,
     moduleError: webPushState.module_error || ""
   });
+});
+
+app.get("/api/operator-devices", async (req, res) => {
+  try {
+    const subscriptions = await readPushSubscriptions();
+    const devices = subscriptions.map(operatorDeviceSummary);
+    const counts = devices.reduce((acc, d) => {
+      acc.total += 1;
+      acc[d.status] = (acc[d.status] || 0) + 1;
+      if (d.receive_calls && !["busy", "dnd", "offline"].includes(d.status)) acc.call_ready += 1;
+      if (d.receive_chats && d.status !== "offline") acc.chat_ready += 1;
+      return acc;
+    }, { total: 0, online: 0, busy: 0, away: 0, dnd: 0, offline: 0, call_ready: 0, chat_ready: 0 });
+    res.json({ ok: true, count: devices.length, counts, devices });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/operator-devices/status", async (req, res) => {
+  try {
+    const deviceId = normalizeOperatorDeviceId(req.body?.deviceId || req.body?.device_id || "");
+    const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
+    const subscriptions = await readPushSubscriptions();
+    let updated = false;
+    const next = subscriptions.map((row) => {
+      const rowEndpoint = String(row?.subscription?.endpoint || row?.endpoint || "").trim();
+      const rowDeviceId = String(row?.device_id || row?.deviceId || "").trim();
+      const matches = (deviceId && rowDeviceId === deviceId) || (endpoint && rowEndpoint === endpoint);
+      if (!matches) return row;
+      updated = true;
+      const status = normalizeOperatorDeviceStatus(req.body?.status || row?.status || "online");
+      return {
+        ...row,
+        device_id: deviceId || rowDeviceId,
+        deviceId: deviceId || rowDeviceId,
+        operator_name: aiModeSafeString(req.body?.operatorName || req.body?.operator_name || row?.operator_name || "Operator", 120),
+        device_label: aiModeSafeString(req.body?.deviceLabel || req.body?.device_label || row?.device_label || "Operator device", 120),
+        status,
+        operator_status: status,
+        receive_calls: req.body?.receiveCalls === undefined && req.body?.receive_calls === undefined ? row?.receive_calls !== false : !(req.body?.receiveCalls === false || req.body?.receive_calls === false),
+        receive_chats: req.body?.receiveChats === undefined && req.body?.receive_chats === undefined ? row?.receive_chats !== false : !(req.body?.receiveChats === false || req.body?.receive_chats === false),
+        updated_at: now(),
+        last_seen_at: now()
+      };
+    });
+    const saved = await writePushSubscriptions(next);
+    res.json({ ok: true, updated, count: saved.length, device: saved.map(operatorDeviceSummary).find((d) => d.device_id === deviceId) || null });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/operator-devices/heartbeat", async (req, res) => {
+  try {
+    const deviceId = normalizeOperatorDeviceId(req.body?.deviceId || req.body?.device_id || "");
+    const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
+    const subscriptions = await readPushSubscriptions();
+    let updated = false;
+    const next = subscriptions.map((row) => {
+      const rowEndpoint = String(row?.subscription?.endpoint || row?.endpoint || "").trim();
+      const rowDeviceId = String(row?.device_id || row?.deviceId || "").trim();
+      const matches = (deviceId && rowDeviceId === deviceId) || (endpoint && rowEndpoint === endpoint);
+      if (!matches) return row;
+      updated = true;
+      return { ...row, device_id: deviceId || rowDeviceId, deviceId: deviceId || rowDeviceId, last_seen_at: now(), updated_at: now() };
+    });
+    const saved = await writePushSubscriptions(next);
+    res.json({ ok: true, updated, count: saved.length });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
 });
 
 app.post("/api/push/test", async (req, res) => {
