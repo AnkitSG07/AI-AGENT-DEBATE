@@ -3,6 +3,7 @@
   window.__SH_OPERATOR_CALL_FLOW_HARDENED__ = true;
 
   const CACHE_KEY = 'sh_operator_call_history_v4';
+  const OLD_CACHE_KEYS = ['sh_operator_call_history_v2', 'sh_operator_call_history_v3'];
   const LIVE_MAX_AGE_MS = 110000;
   let latestRows = [];
   let refreshTimer = null;
@@ -83,6 +84,11 @@
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(safeRows(rows).slice(0, 200))); } catch {}
   }
 
+  function clearAllCallCaches() {
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
+    OLD_CACHE_KEYS.forEach((key) => { try { localStorage.removeItem(key); } catch {} });
+  }
+
   function cardHtml(c) {
     const kind = kindOf(c);
     const id = esc(callId(c));
@@ -115,19 +121,31 @@
   }
 
   async function loadFixedHistory() {
+    let odooReached = false;
     let rows = [];
     try {
       const r = await fetch('/api/odoo/call-log/recent?limit=120', { cache: 'no-store' });
       const j = await r.json();
-      if (j.ok && Array.isArray(j.calls)) rows = j.calls;
+      if (j.ok && Array.isArray(j.calls)) {
+        odooReached = true;
+        rows = j.calls;
+      }
     } catch {}
-    if (!rows.length) {
-      try {
-        const r = await fetch('/api/whatsapp-calls/recent?limit=120', { cache: 'no-store' });
-        const j = await r.json();
-        if (Array.isArray(j.calls)) rows = j.calls;
-      } catch {}
+
+    if (odooReached) {
+      latestRows = rows;
+      if (rows.length) writeCache(rows);
+      else clearAllCallCaches();
+      renderFixedHistory();
+      return;
     }
+
+    try {
+      const r = await fetch('/api/whatsapp-calls/recent?limit=120', { cache: 'no-store' });
+      const j = await r.json();
+      if (Array.isArray(j.calls)) rows = j.calls;
+    } catch {}
+
     latestRows = mergeRows(readCache(), rows);
     writeCache(latestRows);
     renderFixedHistory();
