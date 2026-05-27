@@ -21571,6 +21571,93 @@ app.get("/api/whatsapp-calls/:callId", async (req, res) => {
   }
 });
 
+
+app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const to = whatsappCallCleanPhone(body.to || body.phone || body.customer_phone || "");
+    const customerName = aiModeSafeString(
+      body.customer_name || body.customerName || body.name || to || "WhatsApp caller",
+      160
+    );
+    const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: null });
+    const sdp = String(body.sdp || body.offer_sdp || body.localDescription?.sdp || "");
+    const sdpType = aiModeSafeString(
+      body.sdp_type || body.sdpType || body.localDescription?.type || "offer",
+      40
+    );
+
+    if (!to) throw new Error("Customer phone number is required.");
+    if (!sdp) throw new Error("Browser WebRTC offer SDP is required for outgoing WhatsApp call.");
+    if (!WHATSAPP_CALL_ACCESS_TOKEN) {
+      throw new Error("META_WHATSAPP_ACCESS_TOKEN / WHATSAPP_ACCESS_TOKEN is missing in Render environment variables.");
+    }
+    if (!phoneNumberId) {
+      throw new Error("WhatsApp phone_number_id is missing. Add WHATSAPP_PHONE_NUMBER_ID / META_WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_CALL_PHONE_NUMBER_ID.");
+    }
+
+    const payload = {
+      messaging_product: "whatsapp",
+      to,
+      action: "connect",
+      session: {
+        sdp_type: sdpType || "offer",
+        sdp
+      }
+    };
+
+    const url = `${WHATSAPP_GRAPH_API_BASE}/${WHATSAPP_GRAPH_API_VERSION}/${encodeURIComponent(phoneNumberId)}/calls`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_CALL_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const graph = await resp.json().catch(() => ({}));
+    if (!resp.ok || graph?.error) {
+      const message = graph?.error?.message || graph?.error?.error_user_msg || `HTTP ${resp.status}`;
+      throw new Error(`Outgoing WhatsApp call failed: ${message}`);
+    }
+
+    const callId = aiModeSafeString(
+      graph.call_id || graph.id || graph.calls?.[0]?.id || `outgoing-${to}-${Date.now()}`,
+      220
+    );
+
+    const actionEvent = await appendSyntheticWhatsappCallEvent({
+      callId,
+      action: "outgoing",
+      base: {},
+      extra: {
+        direction: "outgoing",
+        customer_phone: to,
+        customer_name: customerName,
+        phone_number_id: phoneNumberId,
+        graph
+      }
+    });
+
+    return res.json({
+      ok: true,
+      call_id: callId,
+      id: callId,
+      event: "outgoing",
+      direction: "outgoing",
+      customer_phone: to,
+      customer_name: customerName,
+      phone_number_id: phoneNumberId,
+      graph,
+      log_event: actionEvent
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
 app.post("/api/whatsapp-calls/accept", async (req, res) => {
   try {
     const body = req.body || {};
