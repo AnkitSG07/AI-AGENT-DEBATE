@@ -2,10 +2,10 @@
   "name": "ai-agent-debate",
   "version": "1.5.0",
   "description": "Multi-AI debate + Odoo-connected PDF shipping labels (with editable label drafts)",
-  "main": "server.js",
+  "main": "server-outgoing-wrapper.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server-outgoing-wrapper.js",
     "check:no-duplicate-odoo": "node scripts/check-no-duplicate-odoo.mjs"
   },
   "engines": {
