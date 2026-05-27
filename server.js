@@ -15399,9 +15399,10 @@ const whatsappCallSeenIds = new Set();
 // Meta Calling API configuration for direct incoming-call answer/reject/end from Operator Hub.
 // Add META_WHATSAPP_ACCESS_TOKEN in Render. WHATSAPP_PHONE_NUMBER_ID is optional because
 // the server also stores phone_number_id from the latest webhook event metadata.
-const WHATSAPP_GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION || process.env.META_GRAPH_API_VERSION || "v25.0";
-const WHATSAPP_GRAPH_API_BASE = String(process.env.WHATSAPP_GRAPH_API_BASE || "https://graph.facebook.com").replace(/\/$/, "");
+const WHATSAPP_GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION || process.env.META_GRAPH_API_VERSION || "v22.0";
+const WHATSAPP_GRAPH_API_BASE = String(process.env.WHATSAPP_GRAPH_API_BASE || process.env.META_GRAPH_API_BASE || "https://graph.facebook.com").replace(/\/$/, "");
 const WHATSAPP_CALL_ACCESS_TOKEN =
+  process.env.WHATSAPP_CALL_ACCESS_TOKEN ||
   process.env.META_WHATSAPP_ACCESS_TOKEN ||
   process.env.WHATSAPP_ACCESS_TOKEN ||
   process.env.WHATSAPP_TOKEN ||
@@ -15410,6 +15411,7 @@ const WHATSAPP_CALL_ACCESS_TOKEN =
 const WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID =
   process.env.WHATSAPP_PHONE_NUMBER_ID ||
   process.env.META_WHATSAPP_PHONE_NUMBER_ID ||
+  process.env.WHATSAPP_CALL_PHONE_NUMBER_ID ||
   process.env.PHONE_NUMBER_ID ||
   "";
 const WHATSAPP_CALL_PRE_ACCEPT_ENABLED = String(process.env.WHATSAPP_CALL_PRE_ACCEPT_ENABLED || "true").toLowerCase() !== "false";
@@ -21008,19 +21010,47 @@ function whatsappCallContactName(value = {}, waId = "") {
   return aiModeSafeString(match?.profile?.name || "", 160);
 }
 
+function whatsappCallBusinessNumbersFromValue(value = {}) {
+  return [
+    value?.metadata?.display_phone_number,
+    process.env.WHATSAPP_DISPLAY_PHONE_NUMBER,
+    process.env.META_WHATSAPP_DISPLAY_PHONE_NUMBER,
+    process.env.WHATSAPP_BUSINESS_NUMBER,
+    process.env.META_WHATSAPP_BUSINESS_NUMBER,
+    process.env.WHATSAPP_BUSINESS_PHONE_NUMBER,
+    process.env.META_WHATSAPP_BUSINESS_PHONE_NUMBER
+  ].map(whatsappCallCleanPhone).filter(Boolean);
+}
+
 function normalizeWhatsappCallEvent(call = {}, value = {}) {
   const businessDisplay = value?.metadata?.display_phone_number || "";
   const businessPhoneId = value?.metadata?.phone_number_id || "";
+  const businessNumbers = whatsappCallBusinessNumbersFromValue(value);
   const from = whatsappCallCleanPhone(call?.from);
   const to = whatsappCallCleanPhone(call?.to);
-  const waId = from || whatsappCallCleanPhone(value?.contacts?.[0]?.wa_id || "");
+  const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+  const contactPhone = whatsappCallCleanPhone(contacts?.[0]?.wa_id || "");
+  const eventName = aiModeSafeString(call?.event || "unknown", 80);
+  const eventLower = eventName.toLowerCase();
+
+  const fromIsBusiness = !!(from && businessNumbers.includes(from));
+  const toIsBusiness = !!(to && businessNumbers.includes(to));
+  const isOutgoing =
+    fromIsBusiness ||
+    eventLower.includes("outgoing") ||
+    eventLower.includes("dial") ||
+    eventLower.includes("connect_requested");
+  const isIncoming = !isOutgoing && (toIsBusiness || !!from || !!contactPhone);
+
+  const customerPhone = isOutgoing
+    ? (to || contactPhone || from)
+    : (from || contactPhone || to);
   const timestampSeconds = Number(call?.timestamp || 0);
   const date = timestampSeconds
     ? new Date(timestampSeconds * 1000).toISOString()
     : now();
 
-  const callId = aiModeSafeString(call?.id || `${waId || "unknown"}-${timestampSeconds || Date.now()}`, 160);
-  const eventName = aiModeSafeString(call?.event || "unknown", 80);
+  const callId = aiModeSafeString(call?.id || `${customerPhone || "unknown"}-${timestampSeconds || Date.now()}`, 160);
   const id = aiModeSafeString(`${callId}-${eventName}-${timestampSeconds || Date.now()}`, 220);
   return {
     id,
@@ -21028,21 +21058,22 @@ function normalizeWhatsappCallEvent(call = {}, value = {}) {
     event: eventName,
     from,
     to,
-    wa_id: waId,
-    customer_phone: waId || from,
-    customer_name: whatsappCallContactName(value, waId),
+    wa_id: customerPhone,
+    customer_phone: customerPhone,
+    customer_name: whatsappCallContactName(value, customerPhone),
     business_display_phone_number: whatsappCallCleanPhone(businessDisplay) || businessDisplay,
     phone_number_id: aiModeSafeString(businessPhoneId, 80),
     session: call?.session || call?.connect?.session || null,
     has_sdp: !!(call?.session?.sdp || call?.connect?.session?.sdp),
     timestamp: timestampSeconds || Math.floor(Date.now() / 1000),
     date,
-    direction: to && businessDisplay && whatsappCallCleanPhone(to) === whatsappCallCleanPhone(businessDisplay) ? "incoming" : "unknown",
+    direction: isOutgoing ? "outgoing" : (isIncoming ? "incoming" : "unknown"),
+    is_business_outgoing: isOutgoing,
     source: "whatsapp_calls_webhook",
     raw: {
       call,
       metadata: value?.metadata || null,
-      contacts: value?.contacts || []
+      contacts
     }
   };
 }
@@ -21205,9 +21236,10 @@ function whatsappCallShouldTriggerPush(call = {}) {
   const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
   if (!callId) return false;
 
-  // Meta may send different call event names depending on Graph version / call stage.
-  // For notifications, treat every non-closed call event as an incoming-call candidate.
-  // Duplicate notification is still prevented by sendWhatsappCallPushNotification(callId).
+  // Only real incoming customer calls should notify/operator-open the call screen.
+  // Outgoing call webhooks from our own business number must be logged/history only,
+  // otherwise the operator receives their own outgoing call as a new incoming call.
+  if (String(call?.direction || "").toLowerCase() === "outgoing" || call?.is_business_outgoing === true) return false;
   if (whatsappCallIsClosedEvent(call?.event)) return false;
   return true;
 }
@@ -21551,7 +21583,10 @@ app.get("/api/whatsapp-calls/incoming", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const states = latestWhatsappCallStates(calls);
     const openCalls = Array.from(states.values())
-      .filter((row) => whatsappCallIsOpenEvent(row?.event) && !whatsappCallIsClosedEvent(row?.event))
+      .filter((row) => {
+        if (String(row?.direction || "").toLowerCase() === "outgoing" || row?.is_business_outgoing === true) return false;
+        return whatsappCallIsOpenEvent(row?.event) && !whatsappCallIsClosedEvent(row?.event);
+      })
       .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
       .slice(0, 20);
     return res.json({ ok: true, count: openCalls.length, calls: openCalls });
@@ -21571,7 +21606,6 @@ app.get("/api/whatsapp-calls/:callId", async (req, res) => {
   }
 });
 
-
 app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
   try {
     const body = req.body || {};
@@ -21590,7 +21624,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
     if (!to) throw new Error("Customer phone number is required.");
     if (!sdp) throw new Error("Browser WebRTC offer SDP is required for outgoing WhatsApp call.");
     if (!WHATSAPP_CALL_ACCESS_TOKEN) {
-      throw new Error("META_WHATSAPP_ACCESS_TOKEN / WHATSAPP_ACCESS_TOKEN is missing in Render environment variables.");
+      throw new Error("WHATSAPP_CALL_ACCESS_TOKEN / META_WHATSAPP_ACCESS_TOKEN / WHATSAPP_ACCESS_TOKEN is missing in Render environment variables.");
     }
     if (!phoneNumberId) {
       throw new Error("WhatsApp phone_number_id is missing. Add WHATSAPP_PHONE_NUMBER_ID / META_WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_CALL_PHONE_NUMBER_ID.");
@@ -21634,6 +21668,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       base: {},
       extra: {
         direction: "outgoing",
+        is_business_outgoing: true,
         customer_phone: to,
         customer_name: customerName,
         phone_number_id: phoneNumberId,
