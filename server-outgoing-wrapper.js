@@ -8,6 +8,7 @@ await import("./server.js");
 
 const app = express();
 let odooUidCache = null;
+const contactCache = new Map();
 
 const cleanPhone = (v = "") => String(v || "").replace(/\D/g, "");
 const safeString = (v = "", max = 500) => String(v || "").trim().slice(0, max);
@@ -84,14 +85,62 @@ function directionOfCall(call = {}, fallback = "incoming") {
   return e.includes("out") || fallback === "outgoing" ? "outgoing" : "incoming";
 }
 
-async function findOdooPartner(phone) {
+function validName(value = "", phone = "") {
+  const v = safeString(value, 160);
+  if (!v) return false;
+  if (v === phone || v === `+${phone}`) return false;
+  if (/^\d{7,15}$/.test(cleanPhone(v))) return false;
+  if (/whatsapp caller/i.test(v)) return false;
+  return v;
+}
+
+async function lookupOdooContact(phone) {
   const p = cleanPhone(phone);
-  if (!p) return false;
-  const last = p.slice(-10);
+  if (!p || !odooConfig().ready) return null;
+  const key = p.slice(-10) || p;
+  if (contactCache.has(key)) return contactCache.get(key);
+
   try {
-    const rows = await odooExecute("res.partner", "search_read", [["|", ["phone", "ilike", last], ["mobile", "ilike", last]]], { fields: ["id"], limit: 1 });
-    return rows?.[0]?.id || false;
-  } catch { return false; }
+    const rows = await odooExecute(
+      "res.partner",
+      "search_read",
+      [["|", "|", ["phone", "ilike", key], ["mobile", "ilike", key], ["commercial_partner_id.phone", "ilike", key]]],
+      { fields: ["id", "name", "phone", "mobile", "email", "commercial_company_name", "parent_id"], limit: 8 }
+    );
+
+    const scored = (rows || []).map((r) => {
+      const ph = cleanPhone(r.phone || "");
+      const mob = cleanPhone(r.mobile || "");
+      let score = 0;
+      if (ph === p || mob === p) score += 100;
+      if (ph.endsWith(key) || mob.endsWith(key)) score += 50;
+      if (r.name) score += 5;
+      return { ...r, score };
+    }).sort((a, b) => b.score - a.score);
+
+    const best = scored[0];
+    const contact = best ? {
+      id: best.id,
+      name: best.name || "",
+      phone: best.phone || "",
+      mobile: best.mobile || "",
+      email: best.email || "",
+      company: best.commercial_company_name || "",
+      parent_id: Array.isArray(best.parent_id) ? best.parent_id[0] : false,
+      source: "odoo"
+    } : null;
+    contactCache.set(key, contact);
+    return contact;
+  } catch (error) {
+    console.warn("Odoo contact lookup failed:", error?.message || error);
+    contactCache.set(key, null);
+    return null;
+  }
+}
+
+async function findOdooPartner(phone) {
+  const contact = await lookupOdooContact(phone);
+  return contact?.id || false;
 }
 
 function normalizeForOdoo(row = {}) {
@@ -114,16 +163,20 @@ function normalizeForOdoo(row = {}) {
 async function saveCallToOdoo(row = {}) {
   if (!odooConfig().ready) return { ok: false, skipped: true };
   const n = normalizeForOdoo(row);
+  const contact = await lookupOdooContact(n.phone);
+  const contactName = validName(contact?.name, n.phone);
+  const finalName = contactName || validName(n.name, n.phone) || n.name || n.phone || "WhatsApp caller";
+
   const ids = await odooExecute(ODOO_CALL_MODEL, "search", [[["x_studio_x_call_id", "=", n.callId]]], { limit: 1 });
   const id = ids?.[0];
   let old = {};
   if (id) old = (await odooExecute(ODOO_CALL_MODEL, "read", [[id], ["x_studio_x_call_started_at", "x_studio_x_status"]]))?.[0] || {};
-  const partnerId = await findOdooPartner(n.phone);
+  const partnerId = contact?.id || false;
   const vals = {
-    x_name: `${n.direction === "outgoing" ? "Outgoing" : "Incoming"} ${n.event} - ${n.name || n.phone}`,
+    x_name: `${n.direction === "outgoing" ? "Outgoing" : "Incoming"} ${n.event} - ${finalName}`,
     x_studio_x_call_id: n.callId,
     x_studio_x_customer_phone: n.phone,
-    x_studio_x_customer_name: n.name,
+    x_studio_x_customer_name: finalName,
     x_studio_x_direction: n.direction,
     x_studio_x_event: n.event,
     x_studio_event_1: n.event,
@@ -142,27 +195,34 @@ async function saveCallToOdoo(row = {}) {
     if (Number.isFinite(start) && Number.isFinite(end) && end >= start) vals.x_studio_x_duration_seconds = Math.floor((end - start) / 1000);
   }
   Object.keys(vals).forEach((k) => { if (vals[k] === false || vals[k] === "") delete vals[k]; });
-  if (id) { await odooExecute(ODOO_CALL_MODEL, "write", [[id], vals]); return { ok: true, action: "updated", id, call_id: n.callId }; }
+  if (id) { await odooExecute(ODOO_CALL_MODEL, "write", [[id], vals]); return { ok: true, action: "updated", id, call_id: n.callId, contact_source: contact ? "odoo" : "none" }; }
   const newId = await odooExecute(ODOO_CALL_MODEL, "create", [vals]);
-  return { ok: true, action: "created", id: newId, call_id: n.callId };
+  return { ok: true, action: "created", id: newId, call_id: n.callId, contact_source: contact ? "odoo" : "none" };
 }
 
-function normalizeOdooRecord(r = {}) {
+async function normalizeOdooRecord(r = {}) {
   const phone = cleanPhone(r.x_studio_x_customer_phone || "");
   const ts = timestampMs(r.x_studio_x_last_event_at || r.x_studio_x_call_started_at || r.create_date);
+  const partner = Array.isArray(r.x_studio_x_partner_id) ? { id: r.x_studio_x_partner_id[0], name: r.x_studio_x_partner_id[1] } : null;
+  let customerName = validName(r.x_studio_x_customer_name, phone) || validName(partner?.name, phone) || "";
+  if (!customerName && phone) {
+    const contact = await lookupOdooContact(phone);
+    customerName = validName(contact?.name, phone) || "";
+  }
   return {
     id: `odoo-${r.id}`, odoo_id: r.id, call_id: r.x_studio_x_call_id || `odoo-${r.id}`,
     event: r.x_studio_x_event || "connect", status: r.x_studio_x_status || "ringing", direction: r.x_studio_x_direction || "incoming",
-    customer_phone: phone, customer_name: r.x_studio_x_customer_name || phone || "WhatsApp caller",
+    customer_phone: phone, customer_name: customerName || phone || "WhatsApp caller",
+    partner_id: partner?.id || false, partner_name: partner?.name || "", contact_source: partner?.id ? "odoo" : (customerName ? "odoo_lookup" : "none"),
     phone_number_id: r.x_studio_x_phone_number_id || "", timestamp: Math.floor(ts / 1000), date: new Date(ts).toISOString(), received_at: r.x_studio_x_last_event_at || r.write_date || "", duration_seconds: r.x_studio_x_duration_seconds || 0, source: "odoo"
   };
 }
 
 async function recentOdooCalls(limit = 80) {
   if (!odooConfig().ready) return [];
-  const fields = ["id", "x_name", "x_studio_x_call_id", "x_studio_x_customer_phone", "x_studio_x_customer_name", "x_studio_x_direction", "x_studio_x_event", "x_studio_x_status", "x_studio_x_phone_number_id", "x_studio_x_call_started_at", "x_studio_x_call_ended_at", "x_studio_x_last_event_at", "x_studio_x_duration_seconds", "write_date", "create_date"];
+  const fields = ["id", "x_name", "x_studio_x_call_id", "x_studio_x_customer_phone", "x_studio_x_customer_name", "x_studio_x_partner_id", "x_studio_x_direction", "x_studio_x_event", "x_studio_x_status", "x_studio_x_phone_number_id", "x_studio_x_call_started_at", "x_studio_x_call_ended_at", "x_studio_x_last_event_at", "x_studio_x_duration_seconds", "write_date", "create_date"];
   const rows = await odooExecute(ODOO_CALL_MODEL, "search_read", [[]], { fields, order: "x_studio_x_last_event_at desc, id desc", limit });
-  return rows.map(normalizeOdooRecord);
+  return Promise.all(rows.map(normalizeOdooRecord));
 }
 
 function callValuesFromBody(body = {}) {
@@ -197,6 +257,16 @@ async function forwardSyntheticCallLog(row = {}) {
   const payload = { field: "calls", value: { messaging_product: "whatsapp", metadata: { phone_number_id: row.phone_number_id || envFirst("WHATSAPP_PHONE_NUMBER_ID", "META_WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_CALL_PHONE_NUMBER_ID"), display_phone_number: envFirst("WHATSAPP_DISPLAY_PHONE_NUMBER", "META_WHATSAPP_DISPLAY_PHONE_NUMBER") }, contacts: [{ wa_id: row.customer_phone, profile: { name: row.customer_name || "" } }], calls: [{ id: row.call_id, from: row.customer_phone, to: envFirst("WHATSAPP_DISPLAY_PHONE_NUMBER", "META_WHATSAPP_DISPLAY_PHONE_NUMBER"), event: row.event, timestamp: String(row.timestamp || Math.floor(Date.now() / 1000)) }] } };
   await fetch(`http://127.0.0.1:${internalPort}/api/whatsapp-calls/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).catch(() => null);
 }
+
+app.get("/api/contacts/lookup", async (req, res) => {
+  try {
+    const phone = cleanPhone(req.query.phone || req.query.q || "");
+    const contact = await lookupOdooContact(phone);
+    res.json({ ok: true, phone, contact, source: contact ? "odoo" : "none", gmail_note: "Gmail contacts require Google People API OAuth or syncing Gmail contacts into Odoo." });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error), contact: null });
+  }
+});
 
 app.get("/api/odoo/call-log/recent", async (req, res) => {
   try { res.json({ ok: true, source: "odoo", calls: await recentOdooCalls(Math.min(Number(req.query.limit || 80), 200)) }); }
@@ -234,7 +304,8 @@ app.post("/api/whatsapp-calls/outgoing", express.json({ limit: "2mb" }), async (
   try {
     const body = req.body || {};
     const to = cleanPhone(body.to || body.phone || body.customer_phone || "");
-    const customerName = safeString(body.customer_name || body.customerName || body.name || "", 160);
+    const contact = await lookupOdooContact(to);
+    const customerName = safeString(body.customer_name || body.customerName || body.name || contact?.name || "", 160);
     const phoneNumberId = safeString(body.phone_number_id || body.phoneNumberId || "", 120);
     const graph = await graphOutboundCall({ to, sdp: String(body.sdp || body.offer_sdp || body.localDescription?.sdp || ""), sdpType: safeString(body.sdp_type || body.sdpType || body.localDescription?.type || "offer", 40), phoneNumberId });
     const callId = safeString(graph.call_id || graph.id || graph.calls?.[0]?.id || `outgoing-${to}-${Date.now()}`, 220);
@@ -250,7 +321,7 @@ function injectCallFixes(req, headers, buffer) {
   const type = String(headers.get("content-type") || "");
   if (!path.includes("operator-notifications") || !type.includes("text/html")) return buffer;
   let html = buffer.toString("utf8");
-  if (!html.includes("operator-call-fixes.js")) html = html.replace("</body>", '<script src="/operator-call-fixes.js?v=3"></script></body>');
+  if (!html.includes("operator-call-fixes.js")) html = html.replace("</body>", '<script src="/operator-call-fixes.js?v=6"></script></body>');
   return Buffer.from(html, "utf8");
 }
 
