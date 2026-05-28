@@ -21521,6 +21521,61 @@ function whatsappCallIsOwnNumber(phone = "") {
   });
 }
 
+function whatsappCallValidDisplayName(value = "", phone = "") {
+  const name = aiModeSafeString(value || "", 160);
+  const cleanName = whatsappCallCleanPhone(name);
+  const cleanPhone = whatsappCallCleanPhone(phone);
+  if (!name) return "";
+  if (/^whatsapp caller$/i.test(name)) return "";
+  if (/^unknown/i.test(name)) return "";
+  if (cleanPhone && (cleanName === cleanPhone || whatsappCallLast10(cleanName) === whatsappCallLast10(cleanPhone))) return "";
+  if (/^\+?\d{7,15}$/.test(name.replace(/\s+/g, ""))) return "";
+  return name;
+}
+
+function whatsappCallCandidateNames(row = {}) {
+  const out = [];
+  const partnerName = Array.isArray(row?.x_studio_x_partner_id) ? row.x_studio_x_partner_id[1] : row?.partner_name;
+  out.push(partnerName);
+  out.push(row?.customer_name);
+  out.push(row?.customerName);
+  out.push(row?.name);
+  out.push(row?.from_name);
+  out.push(row?.wa_name);
+  out.push(row?.profile_name);
+  out.push(row?.raw?.odoo_call_log?.x_studio_x_customer_name);
+  out.push(Array.isArray(row?.raw?.odoo_call_log?.x_studio_x_partner_id) ? row.raw.odoo_call_log.x_studio_x_partner_id[1] : "");
+  const contacts = row?.raw?.contacts || row?.raw?.call?.contacts || [];
+  if (Array.isArray(contacts)) {
+    for (const c of contacts) out.push(c?.profile?.name || c?.name || "");
+  }
+  return out.filter(Boolean);
+}
+
+function whatsappCallBestNameFromRows(rows = [], phone = "") {
+  const cleanPhone = whatsappCallCleanPhone(phone);
+  for (const row of rows || []) {
+    for (const candidate of whatsappCallCandidateNames(row)) {
+      const valid = whatsappCallValidDisplayName(candidate, cleanPhone);
+      if (valid) return valid;
+    }
+  }
+  return cleanPhone || "WhatsApp caller";
+}
+
+function whatsappCallNameMapFromRows(rows = []) {
+  const map = new Map();
+  const ordered = [...(rows || [])].sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
+  for (const row of ordered) {
+    const phone = whatsappCallCleanPhone(row?.customer_phone || row?.customerPhone || row?.phone || row?.wa_id || row?.from || row?.to || row?.raw?.call?.from || row?.raw?.call?.to || "");
+    const key = whatsappCallLast10(phone);
+    if (!key || map.has(key)) continue;
+    const best = whatsappCallBestNameFromRows([row], phone);
+    if (whatsappCallValidDisplayName(best, phone)) map.set(key, best);
+  }
+  return map;
+}
+
 function whatsappCallTimestampMs(row = {}) {
   const raw = row?.timestamp || row?.time || row?.date || row?.received_at || row?.created_at || 0;
   if (typeof raw === "number") return raw < 2000000000 ? raw * 1000 : raw;
@@ -21643,21 +21698,31 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   });
   const latest = ordered[0] || {};
   const latestEvent = String(latest?.event || latest?.status || "").toLowerCase();
-  const anyAccepted = ordered.some((r) => /accepted|accept|connected/.test(String(r?.event || r?.status || "").toLowerCase()));
+  const latestStatus = String(latest?.status || "").toLowerCase();
+  const anyAccepted = ordered.some((r) => {
+    const text = String(`${r?.event || ""} ${r?.status || ""} ${r?.latest_event || ""}`).toLowerCase();
+    const duration = Number(r?.duration_seconds || r?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0);
+    return /accepted|accept|connected|answered/.test(text) || duration > 0;
+  });
   const anyOutgoing = ordered.some(whatsappCallRowLooksOutgoing) || direction === "outgoing";
   const anyOutgoingRemoteAnswer = direction === "outgoing" && ordered.some(whatsappCallRowHasRemoteAnswerSdp);
+  const wasConnected = anyAccepted || anyOutgoingRemoteAnswer;
 
-  if (/failed/.test(latestEvent)) return "failed";
-  if (/busy/.test(latestEvent)) return "busy";
-  if (/reject|rejected|declin/.test(latestEvent)) return direction === "incoming" ? "declined" : "rejected";
-  if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent)) return direction === "incoming" ? "missed" : "no_answer";
-  if (/terminate|terminated|end|ended/.test(latestEvent)) return anyAccepted || anyOutgoingRemoteAnswer ? "ended" : (direction === "incoming" ? "missed" : "ended");
-  if (anyAccepted || anyOutgoingRemoteAnswer) return "connected";
+  if (/failed/.test(latestEvent) || latestStatus === "failed") return "failed";
+  if (/busy/.test(latestEvent) || latestStatus === "busy") return "busy";
+  if (/reject|rejected|declin/.test(latestEvent) || ["declined", "rejected"].includes(latestStatus)) return direction === "incoming" ? "declined" : "rejected";
+  if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent) || ["missed", "no_answer"].includes(latestStatus)) {
+    return wasConnected ? "ended" : (direction === "incoming" ? "missed" : "no_answer");
+  }
+  if (/terminate|terminated|end|ended/.test(latestEvent) || latestStatus === "ended") {
+    if (direction === "outgoing") return "ended";
+    return wasConnected ? "ended" : "missed";
+  }
+  if (wasConnected) return "connected";
   if (anyOutgoing) return "outgoing_ringing";
-  if (/connect|ringing|incoming|pre_accept/.test(latestEvent)) return "incoming_ringing";
+  if (/connect|ringing|incoming|pre_accept/.test(latestEvent) || latestStatus === "ringing") return "incoming_ringing";
   return direction === "outgoing" ? "outgoing_ringing" : "unknown";
 }
-
 function whatsappCallLifecycleFromRows(rows = []) {
   const validRows = (rows || []).filter(Boolean).sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
   if (!validRows.length) return null;
@@ -21685,7 +21750,7 @@ function whatsappCallLifecycleFromRows(rows = []) {
     active,
     answerable,
     customer_phone: customerPhone,
-    customer_name: aiModeSafeString(validRows.find((r) => r?.customer_name)?.customer_name || validRows.find((r) => r?.name)?.name || customerPhone || "WhatsApp caller", 160),
+    customer_name: aiModeSafeString(whatsappCallBestNameFromRows(validRows, customerPhone), 160),
     phone_number_id: aiModeSafeString(validRows.find((r) => r?.phone_number_id)?.phone_number_id || latest?.raw?.metadata?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID || "", 120),
     has_sdp: !!sdpRow,
     session: sdpRow?.session || sdpRow?.raw?.call?.session || sdpRow?.raw?.call?.connect?.session || sdpRow?.raw?.call?.answer?.session || null,
@@ -21707,8 +21772,10 @@ function whatsappCallLifecycleFromRows(rows = []) {
 }
 
 function collapseWhatsappCallLifecycles(calls = []) {
+  const rows = Array.isArray(calls) ? calls : [];
+  const bestNameByPhone = whatsappCallNameMapFromRows(rows);
   const grouped = new Map();
-  for (const row of calls || []) {
+  for (const row of rows) {
     const callId = aiModeSafeString(row?.call_id || row?.id || "", 220);
     if (!callId) continue;
     if (!grouped.has(callId)) grouped.set(callId, []);
@@ -21717,9 +21784,13 @@ function collapseWhatsappCallLifecycles(calls = []) {
   return [...grouped.values()]
     .map(whatsappCallLifecycleFromRows)
     .filter(Boolean)
+    .map((call) => {
+      const key = whatsappCallLast10(call.customer_phone || "");
+      const bestName = key ? bestNameByPhone.get(key) : "";
+      return bestName ? { ...call, customer_name: bestName } : call;
+    })
     .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
 }
-
 
 // Odoo call logs were previously read from server-outgoing-wrapper.js.
 // In direct server.js mode we keep the same history source here, without using
@@ -22149,41 +22220,40 @@ app.get("/api/whatsapp-calls/recent", async (req, res) => {
     const sinceMs = Number(req.query.since_ms || req.query.since || 0);
     const minTimeMs = sinceMs > 0 ? sinceMs : Date.now() - WHATSAPP_CALL_RECENT_WINDOW_MS;
 
-    // Prefer Odoo for call history, exactly like the old wrapper did. This is
-    // why the Odoo Call Logs list can populate the operator history again.
-    // Live incoming call detection does NOT use Odoo history.
+    // Phase 2.1: history must combine Odoo persistence with local live call
+    // events. Odoo gives better contact names, while local rows can contain
+    // accepted/connected events that prevent answered calls from being shown as missed.
     let odooError = "";
+    let odooRows = [];
     try {
-      const odooRows = await readOdooWhatsappCallLogRows(limit);
-      const odooCalls = collapseWhatsappCallLifecycles(odooRows).slice(0, limit);
-      if (odooCalls.length) {
-        return res.json({
-          ok: true,
-          normalized: true,
-          source: "odoo",
-          model: ODOO_CALL_LOG_MODEL,
-          count: odooCalls.length,
-          calls: odooCalls
-        });
-      }
+      odooRows = await readOdooWhatsappCallLogRows(limit);
     } catch (error) {
       odooError = error?.message || String(error);
       console.warn("Odoo call history fetch failed:", odooError);
     }
 
     const allRows = await readWhatsappCallLogs();
-    let rawCalls = allRows.filter((row) => {
+    let localRows = allRows.filter((row) => {
       const ts = whatsappCallTimestampMs(row);
       return !minTimeMs || ts >= minTimeMs;
     });
 
-    // If no rows fall inside the short recent window, still return the latest
-    // collapsed history. This keeps Call Back / Call Again available after a
-    // test call, while /incoming remains strict and only returns active incoming calls.
-    if (!rawCalls.length && allRows.length) rawCalls = allRows;
+    if (!localRows.length && allRows.length) localRows = allRows;
 
-    const calls = collapseWhatsappCallLifecycles(rawCalls).slice(0, limit);
-    return res.json({ ok: true, normalized: true, source: "local", since_ms: minTimeMs, count: calls.length, calls, odoo_error: odooError });
+    const sourceRows = [...odooRows, ...localRows];
+    const calls = collapseWhatsappCallLifecycles(sourceRows).slice(0, limit);
+    return res.json({
+      ok: true,
+      normalized: true,
+      source: odooRows.length && localRows.length ? "merged" : (odooRows.length ? "odoo" : "local"),
+      model: ODOO_CALL_LOG_MODEL,
+      since_ms: minTimeMs,
+      count: calls.length,
+      odoo_count: odooRows.length,
+      local_count: localRows.length,
+      calls,
+      odoo_error: odooError
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
