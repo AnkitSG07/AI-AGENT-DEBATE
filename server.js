@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-10-1-odoo-actual-note-fields";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-11-odoo-followup-activity";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -22390,6 +22390,163 @@ function normalizeCallFollowupStatus(value = "none") {
   return "none";
 }
 
+
+function odooDateOnly(value = Date.now()) {
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+}
+
+function callFollowupActivitySummary(row = {}, note = "") {
+  const phone = whatsappCallCleanPhone(row?.x_studio_x_customer_phone || row?.customer_phone || "");
+  const name = aiModeSafeString(row?.x_studio_x_customer_name || row?.customer_name || row?.display_name || phone || "customer", 120);
+  return aiModeSafeString(`WhatsApp Call Follow-up - ${name}`, 180);
+}
+
+function callFollowupActivityNote(row = {}, note = "") {
+  const safeNote = aiModeSafeString(note || "", 4000);
+  const phone = whatsappCallCleanPhone(row?.x_studio_x_customer_phone || row?.customer_phone || "");
+  const name = aiModeSafeString(row?.x_studio_x_customer_name || row?.customer_name || row?.display_name || "Customer", 180);
+  const callId = aiModeSafeString(row?.x_studio_x_call_id || row?.call_id || "", 220);
+  const direction = aiModeSafeString(row?.x_studio_x_direction || row?.direction || "", 40);
+  const status = aiModeSafeString(row?.x_studio_x_status || row?.status || "", 40);
+  return [
+    `<p><b>WhatsApp call follow-up</b></p>`,
+    `<p><b>Customer:</b> ${name}${phone ? ` (${phone})` : ""}</p>`,
+    direction || status ? `<p><b>Call:</b> ${direction || "call"}${status ? ` / ${status}` : ""}</p>` : "",
+    callId ? `<p><b>Call ID:</b> ${callId}</p>` : "",
+    safeNote ? `<p><b>Note:</b><br/>${safeNote.replace(/\n/g, "<br/>")}</p>` : ""
+  ].filter(Boolean).join("\n");
+}
+
+async function odooModelId(uid, modelName) {
+  const rows = await odooExecute(
+    uid,
+    "ir.model",
+    "search_read",
+    [[ ["model", "=", modelName] ]],
+    { fields: ["id", "model", "name"], limit: 1 }
+  );
+  const id = Number(rows?.[0]?.id || 0);
+  if (!id) throw new Error(`Odoo model not found: ${modelName}`);
+  return id;
+}
+
+async function odooFindCallFollowupActivityType(uid) {
+  const wantedName = aiModeSafeString(process.env.ODOO_CALL_FOLLOWUP_ACTIVITY_TYPE || "Call Follow-up", 120);
+  const fields = ["id", "name", "category", "res_model", "summary"];
+
+  let rows = await odooExecute(
+    uid,
+    "mail.activity.type",
+    "search_read",
+    [[ ["name", "=", wantedName] ]],
+    { fields, limit: 1 }
+  ).catch(() => []);
+  if (rows?.[0]?.id) return Number(rows[0].id);
+
+  rows = await odooExecute(
+    uid,
+    "mail.activity.type",
+    "search_read",
+    [[ ["category", "=", "phonecall"] ]],
+    { fields, limit: 1 }
+  ).catch(() => []);
+  if (rows?.[0]?.id) return Number(rows[0].id);
+
+  rows = await odooExecute(
+    uid,
+    "mail.activity.type",
+    "search_read",
+    [[ ["name", "ilike", "to do"] ]],
+    { fields, limit: 1 }
+  ).catch(() => []);
+  if (rows?.[0]?.id) return Number(rows[0].id);
+
+  rows = await odooExecute(
+    uid,
+    "mail.activity.type",
+    "search_read",
+    [[]],
+    { fields, limit: 1 }
+  ).catch(() => []);
+  const id = Number(rows?.[0]?.id || 0);
+  if (!id) throw new Error("No Odoo activity type found. Create one named Call Follow-up.");
+  return id;
+}
+
+async function odooFindOpenCallFollowupActivities(uid, callLogId) {
+  const modelId = await odooModelId(uid, ODOO_CALL_LOG_MODEL);
+  const domain = [
+    ["res_model_id", "=", modelId],
+    ["res_id", "=", Number(callLogId)],
+    ["summary", "ilike", "WhatsApp Call Follow-up"]
+  ];
+  return odooExecute(
+    uid,
+    "mail.activity",
+    "search_read",
+    [domain],
+    { fields: ["id", "summary", "activity_type_id", "date_deadline", "user_id"], limit: 10 }
+  ).catch(() => []);
+}
+
+async function odooCompleteActivities(uid, activityIds = [], feedback = "") {
+  const ids = (activityIds || []).map((id) => Number(id)).filter(Boolean);
+  if (!ids.length) return { ok: true, done: 0 };
+  const safeFeedback = aiModeSafeString(feedback || "Follow-up completed from Smart Handicrafts call app.", 2000);
+
+  try {
+    await odooExecute(uid, "mail.activity", "action_feedback", [ids], { feedback: safeFeedback });
+    return { ok: true, method: "action_feedback", done: ids.length };
+  } catch (error) {
+    try {
+      await odooExecute(uid, "mail.activity", "action_done", [ids]);
+      return { ok: true, method: "action_done", done: ids.length };
+    } catch (error2) {
+      // Last-resort: remove the scheduled activity so it disappears from reminders.
+      await odooExecute(uid, "mail.activity", "unlink", [ids]);
+      return { ok: true, method: "unlink", done: ids.length };
+    }
+  }
+}
+
+async function syncOdooFollowupActivityForCall({ uid, callLogId, row = {}, note = "", followupStatus = "none" } = {}) {
+  const id = Number(callLogId || 0);
+  const status = normalizeCallFollowupStatus(followupStatus);
+  if (!id) return { ok: false, skipped: true, reason: "missing_call_log_id" };
+
+  const existing = await odooFindOpenCallFollowupActivities(uid, id);
+  const existingIds = (existing || []).map((r) => Number(r.id)).filter(Boolean);
+
+  if (status === "needed") {
+    const modelId = await odooModelId(uid, ODOO_CALL_LOG_MODEL);
+    const activityTypeId = await odooFindCallFollowupActivityType(uid);
+    const vals = {
+      res_model_id: modelId,
+      res_id: id,
+      activity_type_id: activityTypeId,
+      summary: callFollowupActivitySummary(row, note),
+      note: callFollowupActivityNote(row, note),
+      date_deadline: odooDateOnly(Date.now()),
+      user_id: uid
+    };
+
+    if (existingIds.length) {
+      await odooExecute(uid, "mail.activity", "write", [existingIds, vals]);
+      return { ok: true, action: "updated", activity_ids: existingIds };
+    }
+
+    const newId = await odooExecute(uid, "mail.activity", "create", [vals]);
+    return { ok: true, action: "created", activity_ids: [Number(newId)] };
+  }
+
+  if (status === "done") {
+    return odooCompleteActivities(uid, existingIds, note || "Follow-up completed from Smart Handicrafts call app.");
+  }
+
+  return { ok: true, skipped: true, reason: "followup_none", existing_activity_count: existingIds.length };
+}
+
 async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", followupStatus = "none", callbackDone = null } = {}) {
   if (!odooConfigured) throw new Error("Odoo not configured.");
   const uid = await odooLoginCached();
@@ -22463,6 +22620,20 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
     ]]
   ).catch(() => []);
 
+  let followup_activity = { ok: true, skipped: true, reason: "not_requested" };
+  try {
+    followup_activity = await syncOdooFollowupActivityForCall({
+      uid,
+      callLogId: id,
+      row: rows?.[0] || {},
+      note: vals.x_studio_x_studio_x_note,
+      followupStatus: vals.x_studio_x_studio_x_followup_status
+    });
+  } catch (activityError) {
+    console.warn("Odoo follow-up activity sync failed:", activityError?.message || activityError);
+    followup_activity = { ok: false, error: activityError?.message || String(activityError) };
+  }
+
   return {
     ok: true,
     id,
@@ -22472,6 +22643,7 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
     followup_status: vals.x_studio_x_studio_x_followup_status,
     callback_done: vals.x_studio_x_studio_x_callback_done === true,
     callback_done_at: vals.x_studio_x_studio_x_callback_done_at || "",
+    followup_activity,
     row: rows?.[0] || null
   };
 }
@@ -22651,7 +22823,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-5-7-company-preserve-composite-2026-05-28",
+    version: "phase3-11-odoo-followup-activity-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22712,7 +22884,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-5-7-company-preserve-composite-2026-05-28",
+      version: "phase3-11-odoo-followup-activity-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
