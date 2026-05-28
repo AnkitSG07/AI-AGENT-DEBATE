@@ -21944,6 +21944,26 @@ function odooCallLogTimestampMs(row = {}) {
   return Number.isFinite(fallback) ? fallback : Date.now();
 }
 
+
+function odooCompositeCompanyName(value = "", personName = "") {
+  const text = aiModeSafeString(value || "", 260);
+  if (!text || !text.includes(",")) return "";
+  const parts = text.split(",").map((x) => aiModeSafeString(x, 180)).filter(Boolean);
+  if (parts.length < 2) return "";
+  const company = parts[0];
+  const personPart = parts.slice(1).join(", ");
+  const person = aiModeSafeString(personName || "", 180);
+  if (!company || !personPart) return "";
+  if (person && company.toLowerCase() === person.toLowerCase()) return "";
+  // If Odoo display_name/complete_name is formatted as "Company, Person",
+  // keep the left side as company only when the right side matches the contact name.
+  if (!person) return company;
+  const p1 = person.toLowerCase();
+  const p2 = personPart.toLowerCase();
+  if (p1 === p2 || p1.includes(p2) || p2.includes(p1)) return company;
+  return "";
+}
+
 function normalizeOdooPartnerDetails(partner = {}) {
   if (!partner || typeof partner !== "object") return null;
 
@@ -21966,12 +21986,8 @@ function normalizeOdooPartnerDetails(partner = {}) {
   // Odoo person contacts can show the UI "Company" from parent_name/parent_id,
   // while company_name can stay blank. Also, complete_name/display_name can be
   // formatted like "Buns To Burgers, kushagra". Keep diagnostics explicit.
-  let inferredCompany = "";
   const completeOrDisplay = aiModeSafeString(partner.complete_name || partner.display_name || "", 220);
-  if (completeOrDisplay.includes(",")) {
-    const parts = completeOrDisplay.split(",").map((x) => x.trim()).filter(Boolean);
-    if (parts.length >= 2) inferredCompany = parts[0];
-  }
+  let inferredCompany = odooCompositeCompanyName(completeOrDisplay, partnerName);
 
   let companyName = aiModeSafeString(
     partner.company_name ||
@@ -22018,6 +22034,14 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
     bestPartnerName || bestCustomerName || phone || "WhatsApp caller",
     160
   );
+  const compositeCompanyName = odooCompositeCompanyName(
+    row?.x_studio_x_customer_name || row?.display_name || row?.x_name || "",
+    customerName
+  );
+  const bestCompanyName = aiModeSafeString(
+    partnerDetails?.company_name || compositeCompanyName || "",
+    180
+  );
 
   return {
     id: `odoo-${row?.id || callId}`,
@@ -22030,7 +22054,8 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
     customer_name: customerName,
     partner_id: partnerId,
     partner_name: bestPartnerName || partnerName,
-    partner_company: aiModeSafeString(partnerDetails?.company_name || "", 180),
+    partner_company: bestCompanyName,
+    company_name: bestCompanyName,
     partner_email: aiModeSafeString(partnerDetails?.email || "", 240),
     contact_source: partnerDetails?.contact_source || (partnerId ? "odoo_call_log_partner" : (bestCustomerName ? "odoo_call_log_name" : "phone")),
     phone_number_id: aiModeSafeString(row?.x_studio_x_phone_number_id || "", 120),
@@ -22262,13 +22287,21 @@ function applyOdooPartnerDetailsToCall(call = {}, partner = null) {
   if (!partner?.id) return call;
   const phone = whatsappCallCleanPhone(call?.customer_phone || "");
   const partnerName = whatsappCallValidDisplayName(partner.display_name || partner.name, phone) || call.customer_name || "";
+  const compositeCompanyName = odooCompositeCompanyName(
+    partner.complete_name || partner.display_name || call.customer_name || call.partner_name || "",
+    partnerName
+  );
+  const bestCompanyName = aiModeSafeString(
+    partner.company_name || call.partner_company || call.company_name || compositeCompanyName || "",
+    180
+  );
   return {
     ...call,
     customer_name: aiModeSafeString(partnerName || call.customer_name || phone || "WhatsApp caller", 160),
     partner_id: partner.id || call.partner_id || false,
     partner_name: aiModeSafeString(partnerName || call.partner_name || "", 180),
-    partner_company: aiModeSafeString(partner.company_name || call.partner_company || call.company_name || "", 180),
-    company_name: aiModeSafeString(partner.company_name || call.company_name || call.partner_company || "", 180),
+    partner_company: bestCompanyName,
+    company_name: bestCompanyName,
     partner_email: aiModeSafeString(partner.email || call.partner_email || call.email || "", 240),
     email: aiModeSafeString(partner.email || call.email || call.partner_email || "", 240),
     contact_source: partner.contact_source || call.contact_source || "odoo_partner_phone_lookup"
@@ -22473,7 +22506,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-5-2-phone-partner-lookup-2026-05-28",
+    version: "phase3-5-7-company-preserve-composite-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22501,7 +22534,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-5-2-phone-partner-lookup-2026-05-28",
+      version: "phase3-5-7-company-preserve-composite-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
