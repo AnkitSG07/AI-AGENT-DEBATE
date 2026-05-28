@@ -21955,7 +21955,7 @@ function normalizeOdooPartnerDetails(partner = {}) {
     180
   );
   const email = aiModeSafeString(partner.email || "", 240);
-  const phone = whatsappCallCleanPhone(partner.mobile || partner.phone_sanitized || partner.mobile || partner.phone || "");
+  const phone = whatsappCallCleanPhone(partner.phone_sanitized || partner.phone_mobile_search || partner.phone || "");
   return {
     id: partner.id || false,
     name: partnerName,
@@ -21963,7 +21963,6 @@ function normalizeOdooPartnerDetails(partner = {}) {
     company_name: companyName,
     email,
     phone,
-    mobile: whatsappCallCleanPhone(partner.mobile || ""),
     phone_sanitized: whatsappCallCleanPhone(partner.phone_sanitized || ""),
     phone_mobile_search: whatsappCallCleanPhone(partner.phone_mobile_search || ""),
     contact_source: partner.id ? "odoo_partner" : "none"
@@ -22056,7 +22055,7 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
         uid,
         "res.partner",
         "read",
-        [partnerIds, ["id", "name", "display_name", "complete_name", "email", "phone", "mobile", "phone_sanitized", "phone_mobile_search", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id", "is_company", "company_type"]]
+        [partnerIds, ["id", "name", "display_name", "complete_name", "email", "phone", "phone_sanitized", "phone_mobile_search", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id", "is_company", "company_type"]]
       );
       for (const partner of partners || []) {
         const details = normalizeOdooPartnerDetails(partner);
@@ -22140,7 +22139,6 @@ async function findOdooPartnerForCallPhone(phone = "") {
     "display_name",
     "complete_name",
     "phone",
-    "mobile",
     "phone_sanitized",
     "phone_mobile_search",
     "email",
@@ -22160,8 +22158,7 @@ async function findOdooPartnerForCallPhone(phone = "") {
       const conditions = [
         ["phone_sanitized", "ilike", needle],
         ["phone_mobile_search", "ilike", needle],
-        ["phone", "ilike", needle],
-        ["mobile", "ilike", needle]
+        ["phone", "ilike", needle]
       ];
       const domain = odooOrDomain(conditions);
       const rows = await odooExecute(
@@ -22181,12 +22178,11 @@ async function findOdooPartnerForCallPhone(phone = "") {
       if (byId.size >= 5) break;
     }
 
-    // Last-resort fallback using just phone/mobile if helper fields failed.
+    // Last-resort fallback using just phone if helper fields failed.
     if (!byId.size) {
       for (const needle of needles.slice(1)) {
         const domain = odooOrDomain([
-          ["phone", "ilike", needle],
-          ["mobile", "ilike", needle]
+          ["phone", "ilike", needle]
         ]);
         const rows = await odooExecute(
           uid,
@@ -22204,15 +22200,13 @@ async function findOdooPartnerForCallPhone(phone = "") {
 
     const ranked = [...byId.values()].map((row) => {
       const phoneA = whatsappCallCleanPhone(row?.phone || "");
-      const phoneB = whatsappCallCleanPhone(row?.mobile || "");
       const sanitized = whatsappCallCleanPhone(row?.phone_sanitized || "");
       const mobileSearch = whatsappCallCleanPhone(row?.phone_mobile_search || "");
       let score = 0;
 
-      if (sanitized === clean || mobileSearch === clean || phoneA === clean || phoneB === clean) score += 220;
-      if (sanitized.endsWith(key10) || mobileSearch.endsWith(key10) || phoneA.endsWith(key10) || phoneB.endsWith(key10)) score += 160;
+      if (sanitized === clean || mobileSearch === clean || phoneA === clean) score += 220;
+      if (sanitized.endsWith(key10) || mobileSearch.endsWith(key10) || phoneA.endsWith(key10)) score += 160;
       if (phoneA && clean.endsWith(phoneA.slice(-10))) score += 80;
-      if (phoneB && clean.endsWith(phoneB.slice(-10))) score += 80;
       if (sanitized || mobileSearch) score += 35;
       if (row?.display_name || row?.complete_name || row?.name) score += 20;
       if (row?.company_name) score += 18;
