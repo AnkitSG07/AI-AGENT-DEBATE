@@ -21262,6 +21262,7 @@ async function processWhatsappCallWebhook(body = {}) {
   }
 
   const stored = await storeWhatsappCallEvents(events);
+  const odooSaveResults = await saveWhatsappCallEventsToOdoo(events);
 
   const pushResults = [];
   const pushCandidatesById = new Map();
@@ -21303,7 +21304,7 @@ async function processWhatsappCallWebhook(body = {}) {
     });
   }
 
-  return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults };
+  return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults, odoo_save_results: odooSaveResults };
 }
 
 function handleWhatsappWebhookVerify(req, res) {
@@ -21881,6 +21882,156 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
   return (Array.isArray(rows) ? rows : []).map(normalizeOdooCallLogRow);
 }
 
+
+function odooCallSelectionEvent(event = "") {
+  const e = String(event || "").toLowerCase();
+  if (e.includes("outgoing") || e.includes("dial")) return "outgoing";
+  if (e.includes("reject") || e.includes("declin")) return "reject";
+  if (e.includes("terminat") || e.includes("end") || e.includes("miss") || e.includes("timeout")) return "terminate";
+  if (e.includes("fail")) return "failed";
+  return "connect";
+}
+
+function odooCallStatusForEvent(event = "", direction = "incoming", lifecycle = null, previous = {}) {
+  const e = String(event || "").toLowerCase();
+  const dir = String(direction || lifecycle?.direction || "incoming").toLowerCase() === "outgoing" ? "outgoing" : "incoming";
+  const wasConnected =
+    !!lifecycle?.connected ||
+    Number(lifecycle?.duration_seconds || 0) > 0 ||
+    String(previous?.x_studio_x_status || "").toLowerCase() === "connected";
+
+  if (e.includes("fail")) return "failed";
+  if (e.includes("reject") || e.includes("declin")) return dir === "incoming" ? "declined" : "ended";
+  if (e.includes("accept") || e.includes("connected")) return "connected";
+  if (e.includes("terminat") || e.includes("end") || e.includes("miss") || e.includes("timeout")) {
+    if (dir === "outgoing") return "ended";
+    return wasConnected ? "ended" : "missed";
+  }
+  if (wasConnected) return "connected";
+  return "ringing";
+}
+
+function odooDateTimeFromMs(value = Date.now()) {
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 19).replace("T", " ") : false;
+}
+
+async function findOdooPartnerForCallPhone(phone = "") {
+  if (!odooConfigured) return null;
+  const clean = whatsappCallCleanPhone(phone);
+  if (!clean) return null;
+  const key = clean.slice(-10) || clean;
+  try {
+    const uid = await odooLoginCached();
+    const rows = await odooExecute(
+      uid,
+      "res.partner",
+      "search_read",
+      [["|", "|", ["phone", "ilike", key], ["mobile", "ilike", key], ["commercial_partner_id.phone", "ilike", key]], ["id", "name", "phone", "mobile"]],
+      { limit: 5 }
+    );
+    const ranked = (rows || []).map((row) => {
+      const phoneA = whatsappCallCleanPhone(row?.phone || "");
+      const phoneB = whatsappCallCleanPhone(row?.mobile || "");
+      let score = 0;
+      if (phoneA === clean || phoneB === clean) score += 100;
+      if (phoneA.endsWith(key) || phoneB.endsWith(key)) score += 50;
+      if (row?.name) score += 5;
+      return { ...row, score };
+    }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    return ranked[0] || null;
+  } catch (error) {
+    console.warn("Odoo call partner lookup failed:", error?.message || error);
+    return null;
+  }
+}
+
+async function saveWhatsappCallEventToOdoo(row = {}) {
+  if (!odooConfigured) return { ok: false, skipped: true, reason: "odoo_not_configured" };
+  const callId = aiModeSafeString(row?.call_id || row?.callId || row?.id || "", 220);
+  if (!callId) return { ok: false, skipped: true, reason: "missing_call_id" };
+
+  try {
+    const uid = await odooLoginCached();
+    const allRows = await readWhatsappCallLogs().catch(() => []);
+    const localRowsForCall = allRows.filter((item) => {
+      const itemId = aiModeSafeString(item?.call_id || item?.id || "", 220);
+      return itemId && (itemId === callId || itemId.startsWith(callId) || callId.startsWith(itemId));
+    });
+    const lifecycle = whatsappCallLifecycleFromRows([row, ...localRowsForCall]);
+    const direction = String(row?.direction || lifecycle?.direction || "incoming").toLowerCase() === "outgoing" ? "outgoing" : "incoming";
+    const selectionEvent = odooCallSelectionEvent(row?.event || lifecycle?.event || lifecycle?.status || "connect");
+    const phone = whatsappCallCleanPhone(row?.customer_phone || lifecycle?.customer_phone || row?.wa_id || row?.from || row?.to || "");
+    const partner = await findOdooPartnerForCallPhone(phone);
+    const rawName = aiModeSafeString(row?.customer_name || lifecycle?.customer_name || partner?.name || phone || "WhatsApp caller", 160);
+    const finalName = partner?.name || rawName || phone || "WhatsApp caller";
+    const tsMs = whatsappCallTimestampMs(row) || Date.now();
+    const ids = await odooExecute(
+      uid,
+      ODOO_CALL_LOG_MODEL,
+      "search",
+      [[["x_studio_x_call_id", "=", callId]]],
+      { limit: 1 }
+    );
+    const existingId = Array.isArray(ids) ? ids[0] : 0;
+    let previous = {};
+    if (existingId) {
+      const previousRows = await odooExecute(
+        uid,
+        ODOO_CALL_LOG_MODEL,
+        "read",
+        [[existingId], ["x_studio_x_call_started_at", "x_studio_x_status", "x_studio_x_customer_name", "x_studio_x_partner_id"]]
+      ).catch(() => []);
+      previous = previousRows?.[0] || {};
+    }
+
+    const status = odooCallStatusForEvent(row?.event || lifecycle?.event || selectionEvent, direction, lifecycle, previous);
+    const vals = {
+      x_name: `${direction === "outgoing" ? "Outgoing" : "Incoming"} ${selectionEvent} - ${finalName}`,
+      x_active: true,
+      x_studio_x_call_id: callId,
+      x_studio_x_customer_phone: phone,
+      x_studio_x_customer_name: finalName,
+      x_studio_x_direction: direction,
+      x_studio_x_event: selectionEvent,
+      x_studio_event_1: selectionEvent,
+      x_studio_x_status: status,
+      x_studio_x_phone_number_id: aiModeSafeString(row?.phone_number_id || lifecycle?.phone_number_id || row?.raw?.metadata?.phone_number_id || "", 120),
+      x_studio_x_last_event_at: odooDateTimeFromMs(tsMs),
+      x_studio_x_operator: aiModeSafeString(row?.operator || row?.operator_name || "Operator Hub", 120),
+      x_studio_x_raw_payload: aiModeSafeString(JSON.stringify(row?.raw || row).slice(0, 3500), 3500)
+    };
+
+    if (!previous?.x_studio_x_call_started_at) vals.x_studio_x_call_started_at = odooDateTimeFromMs(tsMs);
+    if (["ended", "missed", "declined", "failed"].includes(status)) vals.x_studio_x_call_ended_at = odooDateTimeFromMs(tsMs);
+    if (partner?.id) vals.x_studio_x_partner_id = partner.id;
+    if (Number(lifecycle?.duration_seconds || 0) > 0) vals.x_studio_x_duration_seconds = Math.floor(Number(lifecycle.duration_seconds));
+
+    Object.keys(vals).forEach((key) => {
+      if (vals[key] === "" || vals[key] === false || vals[key] === undefined || vals[key] === null) delete vals[key];
+    });
+
+    if (existingId) {
+      await odooExecute(uid, ODOO_CALL_LOG_MODEL, "write", [[existingId], vals]);
+      return { ok: true, action: "updated", id: existingId, call_id: callId };
+    }
+
+    const newId = await odooExecute(uid, ODOO_CALL_LOG_MODEL, "create", [vals]);
+    return { ok: true, action: "created", id: newId, call_id: callId };
+  } catch (error) {
+    console.warn("Odoo WhatsApp call log save failed:", error?.message || error);
+    return { ok: false, error: error?.message || String(error), call_id: callId };
+  }
+}
+
+async function saveWhatsappCallEventsToOdoo(rows = []) {
+  const results = [];
+  for (const row of rows || []) {
+    results.push(await saveWhatsappCallEventToOdoo(row));
+  }
+  return results;
+}
+
 function latestWhatsappCallStates(calls = []) {
   const byCall = new Map();
   for (const lifecycle of collapseWhatsappCallLifecycles(calls)) {
@@ -21904,6 +22055,7 @@ async function appendSyntheticWhatsappCallEvent({ callId, action, base = {}, ext
   };
   const existing = await readWhatsappCallLogs();
   await writeWhatsappCallLogs([row, ...existing]);
+  await saveWhatsappCallEventToOdoo(row);
   return row;
 }
 
