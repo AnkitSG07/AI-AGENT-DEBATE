@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-13-2-pending-outgoing-cancel";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-13-4-talktime-client-duration";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -21903,7 +21903,32 @@ function whatsappCallExistingDurationSeconds(rows = []) {
   return values.length ? Math.max(...values) : 0;
 }
 
+function whatsappCallClientTerminatedDurationSeconds(rows = []) {
+  const terminalRows = (rows || [])
+    .filter((row) => {
+      const text = String(`${row?.event || ""} ${row?.status || ""}`).toLowerCase();
+      return /terminate|terminated|end|ended/.test(text);
+    })
+    .map((row) => ({ row, ts: whatsappCallTimestampMs(row) || 0 }))
+    .sort((a, b) => b.ts - a.ts);
+
+  for (const item of terminalRows) {
+    const row = item.row || {};
+    const explicit = Number(row?.client_duration_seconds ?? row?.duration_seconds ?? row?.talk_duration_seconds ?? 0);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+
+    const connectedMs = Number(row?.connected_at_ms || 0);
+    const endedMs = Number(row?.ended_at_ms || 0);
+    if (Number.isFinite(connectedMs) && Number.isFinite(endedMs) && connectedMs > 0 && endedMs >= connectedMs) {
+      return Math.floor((endedMs - connectedMs) / 1000);
+    }
+  }
+  return 0;
+}
+
 function whatsappCallConnectedDurationSeconds(rows = []) {
+  const clientTerminated = whatsappCallClientTerminatedDurationSeconds(rows);
+  if (clientTerminated > 0) return Math.floor(clientTerminated);
   const existing = whatsappCallExistingDurationSeconds(rows);
   if (existing > 0) return Math.floor(existing);
   const connectedAt = whatsappCallConnectedAtMs(rows);
@@ -22914,7 +22939,7 @@ async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "") {
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-13-2-pending-outgoing-cancel-2026-05-28",
+    version: "phase3-13-4-talktime-client-duration-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22975,7 +23000,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-13-2-pending-outgoing-cancel-2026-05-28",
+      version: "phase3-13-4-talktime-client-duration-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -23261,7 +23286,23 @@ app.post("/api/whatsapp-calls/terminate", async (req, res) => {
     const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const terminated = await whatsappCallGraphAction({ phoneNumberId, callId, action: "terminate" });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "terminated", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || body.direction || base?.direction || "outgoing", customer_phone: lifecycle?.customer_phone || base?.customer_phone || body.customer_phone || body.phone || "" } });
+    const clientDurationSeconds = Math.max(0, Math.floor(Number(body.duration_seconds || body.client_duration_seconds || 0)));
+    const clientConnectedAtMs = Math.max(0, Math.floor(Number(body.connected_at_ms || 0)));
+    const clientEndedAtMs = Math.max(0, Math.floor(Number(body.ended_at_ms || Date.now())));
+    const actionEvent = await appendSyntheticWhatsappCallEvent({
+      callId,
+      action: "terminated",
+      base,
+      extra: {
+        phone_number_id: phoneNumberId,
+        direction: lifecycle?.direction || body.direction || base?.direction || "outgoing",
+        customer_phone: lifecycle?.customer_phone || base?.customer_phone || body.customer_phone || body.phone || "",
+        duration_seconds: clientDurationSeconds,
+        client_duration_seconds: clientDurationSeconds,
+        connected_at_ms: clientConnectedAtMs,
+        ended_at_ms: clientEndedAtMs
+      }
+    });
     return res.json({ ok: true, call_id: callId, terminate: terminated, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
