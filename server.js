@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-10-odoo-notes-followup-sync";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-10-1-odoo-actual-note-fields";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -21931,12 +21931,12 @@ function whatsappCallLifecycleFromRows(rows = []) {
     timestamp: Math.floor(latestMs / 1000),
     date: new Date(latestMs).toISOString(),
     events_count: validRows.length,
-    note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_note)?.x_studio_x_note || "", 4000),
-    call_note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_note)?.x_studio_x_note || "", 4000),
-    followup_status: aiModeSafeString(validRows.find((r) => r?.followup_status || r?.x_studio_x_followup_status)?.followup_status || validRows.find((r) => r?.x_studio_x_followup_status)?.x_studio_x_followup_status || "none", 40) || "none",
-    callback_done: validRows.some((r) => r?.callback_done === true || r?.x_studio_x_callback_done === true),
-    callback_done_at: aiModeSafeString(validRows.find((r) => r?.callback_done_at || r?.x_studio_x_callback_done_at)?.callback_done_at || validRows.find((r) => r?.x_studio_x_callback_done_at)?.x_studio_x_callback_done_at || "", 80),
-    note_updated_at: aiModeSafeString(validRows.find((r) => r?.note_updated_at || r?.x_studio_x_note_updated_at)?.note_updated_at || validRows.find((r) => r?.x_studio_x_note_updated_at)?.x_studio_x_note_updated_at || "", 80),
+    note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_studio_x_note)?.x_studio_x_studio_x_note || "", 4000),
+    call_note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_studio_x_note)?.x_studio_x_studio_x_note || "", 4000),
+    followup_status: aiModeSafeString(validRows.find((r) => r?.followup_status || r?.x_studio_x_studio_x_followup_status)?.followup_status || validRows.find((r) => r?.x_studio_x_studio_x_followup_status)?.x_studio_x_studio_x_followup_status || "none", 40) || "none",
+    callback_done: validRows.some((r) => r?.callback_done === true || r?.x_studio_x_studio_x_callback_done === true),
+    callback_done_at: aiModeSafeString(validRows.find((r) => r?.callback_done_at || r?.x_studio_x_studio_x_callback_done_at)?.callback_done_at || validRows.find((r) => r?.x_studio_x_studio_x_callback_done_at)?.x_studio_x_studio_x_callback_done_at || "", 80),
+    note_updated_at: aiModeSafeString(validRows.find((r) => r?.note_updated_at || r?.x_studio_x_studio_x_note_updated_at)?.note_updated_at || validRows.find((r) => r?.x_studio_x_studio_x_note_updated_at)?.x_studio_x_studio_x_note_updated_at || "", 80),
     source: "whatsapp_call_lifecycle",
     latest_row: latest,
     events: validRows.slice(0, 20)
@@ -22103,12 +22103,12 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
     date: new Date(tsMs).toISOString(),
     received_at: row?.x_studio_x_last_event_at || row?.write_date || "",
     duration_seconds: Number(row?.x_studio_x_duration_seconds || 0),
-    note: aiModeSafeString(row?.x_studio_x_note || "", 4000),
-    call_note: aiModeSafeString(row?.x_studio_x_note || "", 4000),
-    followup_status: aiModeSafeString(row?.x_studio_x_followup_status || "none", 40) || "none",
-    callback_done: row?.x_studio_x_callback_done === true,
-    callback_done_at: row?.x_studio_x_callback_done_at || "",
-    note_updated_at: row?.x_studio_x_note_updated_at || "",
+    note: aiModeSafeString(row?.x_studio_x_studio_x_note || "", 4000),
+    call_note: aiModeSafeString(row?.x_studio_x_studio_x_note || "", 4000),
+    followup_status: aiModeSafeString(row?.x_studio_x_studio_x_followup_status || "none", 40) || "none",
+    callback_done: row?.x_studio_x_studio_x_callback_done === true,
+    callback_done_at: row?.x_studio_x_studio_x_callback_done_at || "",
+    note_updated_at: row?.x_studio_x_studio_x_note_updated_at || "",
     source: "odoo_call_log",
     raw: { odoo_call_log: row, partner: partnerDetails || null }
   };
@@ -22136,11 +22136,11 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
     "x_studio_x_call_ended_at",
     "x_studio_x_last_event_at",
     "x_studio_x_duration_seconds",
-    "x_studio_x_note",
-    "x_studio_x_followup_status",
-    "x_studio_x_callback_done",
-    "x_studio_x_callback_done_at",
-    "x_studio_x_note_updated_at",
+    "x_studio_x_studio_x_note",
+    "x_studio_x_studio_x_followup_status",
+    "x_studio_x_studio_x_callback_done",
+    "x_studio_x_studio_x_callback_done_at",
+    "x_studio_x_studio_x_note_updated_at",
     "write_date",
     "create_date"
   ];
@@ -22419,15 +22419,15 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
 
   const nowValue = odooDateTimeFromMs(Date.now());
   const vals = {
-    x_studio_x_note: aiModeSafeString(note || "", 10000),
-    x_studio_x_followup_status: normalizeCallFollowupStatus(followupStatus),
-    x_studio_x_note_updated_at: nowValue
+    x_studio_x_studio_x_note: aiModeSafeString(note || "", 10000),
+    x_studio_x_studio_x_followup_status: normalizeCallFollowupStatus(followupStatus),
+    x_studio_x_studio_x_note_updated_at: nowValue
   };
 
   if (callbackDone !== null && callbackDone !== undefined) {
     const done = callbackDone === true || String(callbackDone).toLowerCase() === "true";
-    vals.x_studio_x_callback_done = done;
-    vals.x_studio_x_callback_done_at = done ? nowValue : false;
+    vals.x_studio_x_studio_x_callback_done = done;
+    vals.x_studio_x_studio_x_callback_done_at = done ? nowValue : false;
   }
 
   await odooExecute(uid, ODOO_CALL_LOG_MODEL, "write", [[id], vals]);
@@ -22453,11 +22453,11 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
       "x_studio_x_call_ended_at",
       "x_studio_x_last_event_at",
       "x_studio_x_duration_seconds",
-      "x_studio_x_note",
-      "x_studio_x_followup_status",
-      "x_studio_x_callback_done",
-      "x_studio_x_callback_done_at",
-      "x_studio_x_note_updated_at",
+      "x_studio_x_studio_x_note",
+      "x_studio_x_studio_x_followup_status",
+      "x_studio_x_studio_x_callback_done",
+      "x_studio_x_studio_x_callback_done_at",
+      "x_studio_x_studio_x_note_updated_at",
       "write_date",
       "create_date"
     ]]
@@ -22468,10 +22468,10 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
     id,
     odoo_id: id,
     call_id: rows?.[0]?.x_studio_x_call_id || safeCallId,
-    note: vals.x_studio_x_note,
-    followup_status: vals.x_studio_x_followup_status,
-    callback_done: vals.x_studio_x_callback_done === true,
-    callback_done_at: vals.x_studio_x_callback_done_at || "",
+    note: vals.x_studio_x_studio_x_note,
+    followup_status: vals.x_studio_x_studio_x_followup_status,
+    callback_done: vals.x_studio_x_studio_x_callback_done === true,
+    callback_done_at: vals.x_studio_x_studio_x_callback_done_at || "",
     row: rows?.[0] || null
   };
 }
