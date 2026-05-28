@@ -21793,11 +21793,19 @@ app.get("/api/whatsapp-calls/incoming", async (req, res) => {
   }
 });
 
-app.get("/api/whatsapp-calls/:callId", async (req, res) => {
+app.get("/api/whatsapp-calls/:callId", async (req, res, next) => {
   try {
     const callId = req.params.callId || "";
+    // IMPORTANT: this dynamic route sits before /recent and /logs in the file.
+    // Let reserved collection routes continue to their real handlers instead of
+    // treating "recent" or "logs" as a call_id. Without this, the operator
+    // page sees an empty history and Call Back / Call Again never appears.
+    if (["recent", "logs", "config", "incoming", "test"].includes(String(callId).toLowerCase())) {
+      return next();
+    }
     const calls = await readWhatsappCallLogs();
-    const rows = calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(aiModeSafeString(callId, 220)));
+    const safeCallId = aiModeSafeString(callId, 220);
+    const rows = calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(safeCallId));
     const call = whatsappCallLifecycleFromRows(rows);
     if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
     return res.json({ ok: true, normalized: true, call, events: call.events || [] });
@@ -21988,13 +21996,21 @@ app.get("/api/whatsapp-calls/logs", async (req, res) => {
 
 app.get("/api/whatsapp-calls/recent", async (req, res) => {
   try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 100)));
     const sinceMs = Number(req.query.since_ms || req.query.since || 0);
     const minTimeMs = sinceMs > 0 ? sinceMs : Date.now() - WHATSAPP_CALL_RECENT_WINDOW_MS;
-    const rawCalls = (await readWhatsappCallLogs()).filter((row) => {
+    const allRows = await readWhatsappCallLogs();
+    let rawCalls = allRows.filter((row) => {
       const ts = whatsappCallTimestampMs(row);
       return !minTimeMs || ts >= minTimeMs;
     });
-    const calls = collapseWhatsappCallLifecycles(rawCalls).slice(0, 100);
+
+    // If no rows fall inside the short recent window, still return the latest
+    // collapsed history. This keeps Call Back / Call Again available after a
+    // test call, while /incoming remains strict and only returns active incoming calls.
+    if (!rawCalls.length && allRows.length) rawCalls = allRows;
+
+    const calls = collapseWhatsappCallLifecycles(rawCalls).slice(0, limit);
     return res.json({ ok: true, normalized: true, since_ms: minTimeMs, count: calls.length, calls });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
