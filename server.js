@@ -21946,14 +21946,46 @@ function odooCallLogTimestampMs(row = {}) {
 
 function normalizeOdooPartnerDetails(partner = {}) {
   if (!partner || typeof partner !== "object") return null;
-  const partnerName = aiModeSafeString(partner.display_name || partner.name || "", 180);
-  const companyName = aiModeSafeString(
+
+  const partnerName = aiModeSafeString(
+    partner.name || partner.display_name || partner.complete_name || "",
+    180
+  );
+
+  const parentName = aiModeSafeString(
+    (Array.isArray(partner.parent_id) ? partner.parent_id[1] : "") || partner.parent_name || "",
+    180
+  );
+  const commercialName = aiModeSafeString(
     partner.commercial_company_name ||
-    partner.company_name ||
-    (Array.isArray(partner.parent_id) ? partner.parent_id[1] : "") ||
+    (Array.isArray(partner.commercial_partner_id) ? partner.commercial_partner_id[1] : "") ||
     "",
     180
   );
+
+  // Odoo person contacts can show the UI "Company" from parent_name/parent_id,
+  // while company_name can stay blank. Also, complete_name/display_name can be
+  // formatted like "Buns To Burgers, kushagra". Keep diagnostics explicit.
+  let inferredCompany = "";
+  const completeOrDisplay = aiModeSafeString(partner.complete_name || partner.display_name || "", 220);
+  if (completeOrDisplay.includes(",")) {
+    const parts = completeOrDisplay.split(",").map((x) => x.trim()).filter(Boolean);
+    if (parts.length >= 2) inferredCompany = parts[0];
+  }
+
+  let companyName = aiModeSafeString(
+    partner.company_name ||
+    parentName ||
+    commercialName ||
+    inferredCompany ||
+    "",
+    180
+  );
+
+  // Avoid showing the person name as company when Odoo's commercial entity is the same contact.
+  if (companyName && whatsappCallCleanPhone(companyName) === whatsappCallCleanPhone(partnerName)) companyName = "";
+  if (companyName && companyName.toLowerCase() === String(partnerName || "").toLowerCase()) companyName = "";
+
   const email = aiModeSafeString(partner.email || "", 240);
   const phone = whatsappCallCleanPhone(partner.phone_sanitized || partner.phone_mobile_search || partner.phone || "");
   return {
@@ -21961,6 +21993,8 @@ function normalizeOdooPartnerDetails(partner = {}) {
     name: partnerName,
     display_name: partnerName,
     company_name: companyName,
+    parent_name: parentName,
+    commercial_company_name: commercialName,
     email,
     phone,
     phone_sanitized: whatsappCallCleanPhone(partner.phone_sanitized || ""),
@@ -22055,7 +22089,7 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
         uid,
         "res.partner",
         "read",
-        [partnerIds, ["id", "name", "display_name", "complete_name", "email", "phone", "phone_sanitized", "phone_mobile_search", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id", "is_company", "company_type"]]
+        [partnerIds, ["id", "name", "display_name", "complete_name", "email", "phone", "phone_sanitized", "phone_mobile_search", "company_name", "commercial_company_name", "parent_id", "parent_name", "commercial_partner_id", "is_company", "company_type"]]
       );
       for (const partner of partners || []) {
         const details = normalizeOdooPartnerDetails(partner);
@@ -22145,6 +22179,7 @@ async function findOdooPartnerForCallPhone(phone = "") {
     "company_name",
     "commercial_company_name",
     "parent_id",
+    "parent_name",
     "commercial_partner_id",
     "is_company",
     "company_type"
