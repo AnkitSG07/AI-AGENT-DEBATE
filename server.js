@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-11-odoo-followup-activity";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-13-2-pending-outgoing-cancel";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15429,6 +15429,52 @@ const WHATSAPP_WEBHOOK_DEBUG_MAX = Math.max(20, Math.min(500, Number(process.env
 const WHATSAPP_CALL_LOG_MAX = Math.max(100, Number(process.env.WHATSAPP_CALL_LOG_MAX || 1000));
 const WHATSAPP_CALL_RECENT_WINDOW_MS = Math.max(5000, Number(process.env.WHATSAPP_CALL_RECENT_WINDOW_MS || 30 * 60 * 1000));
 const whatsappCallSeenIds = new Set();
+const WHATSAPP_CALL_PENDING_CANCEL_TTL_MS = Math.max(15000, Number(process.env.WHATSAPP_CALL_PENDING_CANCEL_TTL_MS || 120000));
+const whatsappCallPendingOutgoingCancels = new Map();
+
+function whatsappCallPendingCancelKey(phone = "", deviceId = "") {
+  const clean = whatsappCallCleanPhone(phone);
+  const dev = aiModeSafeString(deviceId || "", 120);
+  return `${clean.slice(-12) || clean}|${dev || "any"}`;
+}
+
+function whatsappCallPrunePendingOutgoingCancels() {
+  const nowMs = Date.now();
+  for (const [key, row] of whatsappCallPendingOutgoingCancels.entries()) {
+    if (!row?.created_at_ms || nowMs - row.created_at_ms > WHATSAPP_CALL_PENDING_CANCEL_TTL_MS) {
+      whatsappCallPendingOutgoingCancels.delete(key);
+    }
+  }
+}
+
+function whatsappCallMarkPendingOutgoingCancel({ phone = "", deviceId = "", reason = "operator_cancelled_before_call_id" } = {}) {
+  whatsappCallPrunePendingOutgoingCancels();
+  const clean = whatsappCallCleanPhone(phone);
+  if (!clean) return null;
+  const row = {
+    phone: clean,
+    device_id: aiModeSafeString(deviceId || "", 120),
+    reason: aiModeSafeString(reason || "operator_cancelled_before_call_id", 200),
+    created_at_ms: Date.now()
+  };
+  whatsappCallPendingOutgoingCancels.set(whatsappCallPendingCancelKey(clean, row.device_id), row);
+  whatsappCallPendingOutgoingCancels.set(whatsappCallPendingCancelKey(clean, ""), row);
+  return row;
+}
+
+function whatsappCallGetPendingOutgoingCancel({ phone = "", deviceId = "" } = {}) {
+  whatsappCallPrunePendingOutgoingCancels();
+  const clean = whatsappCallCleanPhone(phone);
+  if (!clean) return null;
+  return whatsappCallPendingOutgoingCancels.get(whatsappCallPendingCancelKey(clean, deviceId)) || whatsappCallPendingOutgoingCancels.get(whatsappCallPendingCancelKey(clean, "")) || null;
+}
+
+function whatsappCallClearPendingOutgoingCancel({ phone = "", deviceId = "" } = {}) {
+  const clean = whatsappCallCleanPhone(phone);
+  if (!clean) return;
+  whatsappCallPendingOutgoingCancels.delete(whatsappCallPendingCancelKey(clean, deviceId));
+  whatsappCallPendingOutgoingCancels.delete(whatsappCallPendingCancelKey(clean, ""));
+}
 
 // Meta Calling API configuration for direct incoming-call answer/reject/end from Operator Hub.
 // Add META_WHATSAPP_ACCESS_TOKEN in Render. WHATSAPP_PHONE_NUMBER_ID is optional because
@@ -22820,10 +22866,55 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
   return data;
 }
 
+function whatsappCallSamePhone(a = "", b = "") {
+  const x = whatsappCallCleanPhone(a);
+  const y = whatsappCallCleanPhone(b);
+  if (!x || !y) return false;
+  const lx = x.slice(-10);
+  const ly = y.slice(-10);
+  return lx === ly || x.endsWith(ly) || y.endsWith(lx);
+}
+
+async function whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone = "", deviceId = "", reason = "operator_cancelled_before_call_id" } = {}) {
+  if (!lifecycle?.call_id) return null;
+  const phoneNumberId = whatsappCallResolvePhoneNumberId({ body: {}, call: lifecycle });
+  const graph = await whatsappCallGraphAction({ phoneNumberId, callId: lifecycle.call_id, action: "terminate" });
+  const actionEvent = await appendSyntheticWhatsappCallEvent({
+    callId: lifecycle.call_id,
+    action: "terminated",
+    base: lifecycle,
+    extra: {
+      phone_number_id: phoneNumberId,
+      direction: "outgoing",
+      customer_phone: lifecycle.customer_phone || phone,
+      cancel_reason: reason,
+      operator_device_id: aiModeSafeString(deviceId || "", 120),
+      graph
+    }
+  });
+  whatsappCallClearPendingOutgoingCancel({ phone: lifecycle.customer_phone || phone, deviceId });
+  return { ok: true, call_id: lifecycle.call_id, graph, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle.events || [])]) };
+}
+
+async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "") {
+  const clean = whatsappCallCleanPhone(phone);
+  if (!clean) return null;
+  const lifecycles = collapseWhatsappCallLifecycles(await readWhatsappCallLogs());
+  const nowMs = Date.now();
+  return lifecycles.find((call) => {
+    if (call.direction !== "outgoing") return false;
+    if (!whatsappCallSamePhone(call.customer_phone || call.phone || "", clean)) return false;
+    const ts = Date.parse(call.updated_at || call.date || call.received_at || "") || Number(call.timestamp || 0) * 1000 || 0;
+    if (ts && nowMs - ts > WHATSAPP_CALL_PENDING_CANCEL_TTL_MS) return false;
+    const status = String(call.status || "").toLowerCase();
+    return !["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"].includes(status);
+  }) || null;
+}
+
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-11-odoo-followup-activity-2026-05-28",
+    version: "phase3-13-2-pending-outgoing-cancel-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22832,7 +22923,7 @@ app.get("/api/whatsapp-calls/config", async (req, res) => {
     odoo_call_log_model: ODOO_CALL_LOG_MODEL,
     active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
     outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS,
-    note: "Phase 3.5 diagnostics are read-only. They do not create call history."
+    note: "Phase 3.13.2 adds pending outgoing cancel safety. Diagnostics remain read-only."
   });
 });
 
@@ -22884,7 +22975,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-11-odoo-followup-activity-2026-05-28",
+      version: "phase3-13-2-pending-outgoing-cancel-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -22949,6 +23040,39 @@ app.get("/api/whatsapp-calls/:callId", async (req, res, next) => {
     const call = whatsappCallLifecycleFromRows(rows);
     if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
     return res.json({ ok: true, normalized: true, call, events: call.events || [] });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/whatsapp-calls/cancel-pending-outgoing", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const phone = whatsappCallCleanPhone(body.to || body.phone || body.customer_phone || "");
+    const deviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 120);
+    const reason = aiModeSafeString(body.reason || "operator_cancelled_before_call_id", 200);
+    if (!phone) throw new Error("Customer phone number is required to cancel pending outgoing call.");
+
+    const pending = whatsappCallMarkPendingOutgoingCancel({ phone, deviceId, reason });
+    let terminated = null;
+    let terminateError = "";
+    try {
+      const lifecycle = await whatsappCallFindRecentOutgoingLifecycleByPhone(phone);
+      if (lifecycle?.call_id) {
+        terminated = await whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone, deviceId, reason });
+      }
+    } catch (error) {
+      terminateError = error?.message || String(error);
+    }
+
+    return res.json({
+      ok: true,
+      pending: !terminated,
+      terminated: !!terminated,
+      call_id: terminated?.call_id || "",
+      pending_cancel: pending,
+      terminate_error: terminateError
+    });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -23024,6 +23148,49 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
         graph
       }
     });
+
+    const pendingCancel = whatsappCallGetPendingOutgoingCancel({ phone: to, deviceId: body.operator_device_id || body.device_id || body.deviceId || "" });
+    if (pendingCancel) {
+      try {
+        const cancelLifecycle = whatsappCallLifecycleFromRows([actionEvent]);
+        const terminated = await whatsappCallTerminateLifecycleForPendingCancel(cancelLifecycle, {
+          phone: to,
+          deviceId: body.operator_device_id || body.device_id || body.deviceId || "",
+          reason: pendingCancel.reason || "operator_cancelled_before_call_id"
+        });
+        return res.json({
+          ok: true,
+          cancelled: true,
+          call_id: callId,
+          id: callId,
+          call: terminated?.call || cancelLifecycle,
+          event: "terminated",
+          direction: "outgoing",
+          customer_phone: to,
+          customer_name: customerName,
+          phone_number_id: phoneNumberId,
+          graph,
+          terminate: terminated?.graph || null,
+          log_event: terminated?.event || actionEvent
+        });
+      } catch (cancelError) {
+        return res.json({
+          ok: true,
+          cancel_pending: true,
+          cancel_error: cancelError?.message || String(cancelError),
+          call_id: callId,
+          id: callId,
+          call: whatsappCallLifecycleFromRows([actionEvent]),
+          event: "outgoing",
+          direction: "outgoing",
+          customer_phone: to,
+          customer_name: customerName,
+          phone_number_id: phoneNumberId,
+          graph,
+          log_event: actionEvent
+        });
+      }
+    }
 
     const lifecycle = whatsappCallLifecycleFromRows([actionEvent]);
     return res.json({
