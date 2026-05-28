@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-5-4-odoo-domain-fix";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-7-cache-deploy-reliability";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -49,7 +49,41 @@ app.use(express.json({
     }
   }
 }));
-app.use(express.static("public"));
+
+function setOperatorNoStoreHeaders(res) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+}
+
+app.use((req, res, next) => {
+  const path = String(req.path || "");
+  if (
+    path === "/operator-notifications" ||
+    path === "/operator-notifications.html" ||
+    path === "/operator-hub" ||
+    path === "/api/operator-app/version" ||
+    path === "/api/whatsapp-calls/config" ||
+    path === "/api/whatsapp-calls/diagnostics"
+  ) {
+    setOperatorNoStoreHeaders(res);
+  }
+  next();
+});
+
+app.use(express.static("public", {
+  setHeaders: (res, filePath) => {
+    const p = String(filePath || "");
+    if (
+      p.endsWith("operator-notifications.html") ||
+      p.endsWith("sh-operator-sw.js") ||
+      p.endsWith("manifest.json")
+    ) {
+      setOperatorNoStoreHeaders(res);
+    }
+  }
+}));
 
 const PORT = process.env.PORT || 3000;
 
@@ -20652,7 +20686,21 @@ function startAiModeBackgroundWorker() {
 // Use this page once on each operator phone to allow notifications and save a push subscription.
 // The actual Operator Hub may still remain inside Odoo; tapping a notification opens OPERATOR_HUB_URL.
 app.get(["/operator-notifications", "/operator-hub"], (req, res) => {
+  setOperatorNoStoreHeaders(res);
   res.sendFile(`${process.cwd()}/public/operator-notifications.html`);
+});
+
+app.get("/api/operator-app/version", (req, res) => {
+  setOperatorNoStoreHeaders(res);
+  return res.json({
+    ok: true,
+    version: "phase3-7-cache-deploy-reliability-2026-05-28",
+    server_patch_version: SERVER_PATCH_VERSION,
+    generated_at: new Date().toISOString(),
+    cache_policy: "operator page, service worker, diagnostics, and version endpoints are no-store",
+    odoo_configured: !!odooConfigured,
+    odoo_call_log_model: ODOO_CALL_MODEL
+  });
 });
 
 // Lightweight Render-hosted WhatsApp call receiver.
@@ -22506,7 +22554,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-5-7-company-preserve-composite-2026-05-28",
+    version: "phase3-7-cache-deploy-reliability-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22515,7 +22563,7 @@ app.get("/api/whatsapp-calls/config", async (req, res) => {
     odoo_call_log_model: ODOO_CALL_LOG_MODEL,
     active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
     outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS,
-    note: "Phase 3.5 diagnostics are read-only. They do not create call history."
+    note: "Phase 3.7 diagnostics/version endpoints are read-only. They do not create call history."
   });
 });
 
@@ -22534,7 +22582,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-5-7-company-preserve-composite-2026-05-28",
+      version: "phase3-7-cache-deploy-reliability-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
