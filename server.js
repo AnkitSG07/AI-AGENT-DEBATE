@@ -21685,6 +21685,96 @@ function collapseWhatsappCallLifecycles(calls = []) {
     .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
 }
 
+
+// Odoo call logs were previously read from server-outgoing-wrapper.js.
+// In direct server.js mode we keep the same history source here, without using
+// the wrapper/proxy/injected-JS architecture. This is for HISTORY ONLY; live
+// incoming calls still come from fresh Meta webhook/local call logs.
+const ODOO_CALL_LOG_MODEL = process.env.ODOO_CALL_LOG_MODEL || "x_call_logs";
+
+function odooCallLogTimestampMs(row = {}) {
+  const raw =
+    row?.x_studio_x_last_event_at ||
+    row?.x_studio_x_call_ended_at ||
+    row?.x_studio_x_call_started_at ||
+    row?.write_date ||
+    row?.create_date ||
+    "";
+  const parsed = Date.parse(String(raw || "").replace(" ", "T") + (String(raw || "").includes("Z") ? "" : "Z"));
+  if (Number.isFinite(parsed)) return parsed;
+  const fallback = Date.parse(String(raw || ""));
+  return Number.isFinite(fallback) ? fallback : Date.now();
+}
+
+function normalizeOdooCallLogRow(row = {}) {
+  const tsMs = odooCallLogTimestampMs(row);
+  const callId = aiModeSafeString(row?.x_studio_x_call_id || `odoo-${row?.id || tsMs}`, 220);
+  const direction = String(row?.x_studio_x_direction || "").toLowerCase() === "outgoing" ? "outgoing" : "incoming";
+  const event = aiModeSafeString(row?.x_studio_x_event || row?.x_studio_event_1 || row?.x_studio_x_status || "connect", 80);
+  const phone = whatsappCallCleanPhone(row?.x_studio_x_customer_phone || "");
+  const partnerName = Array.isArray(row?.x_studio_x_partner_id) ? row.x_studio_x_partner_id[1] : "";
+  const customerName = aiModeSafeString(
+    row?.x_studio_x_customer_name || partnerName || phone || "WhatsApp caller",
+    160
+  );
+
+  return {
+    id: `odoo-${row?.id || callId}`,
+    odoo_id: row?.id || 0,
+    call_id: callId,
+    event,
+    status: row?.x_studio_x_status || "",
+    direction,
+    customer_phone: phone,
+    customer_name: customerName,
+    partner_id: Array.isArray(row?.x_studio_x_partner_id) ? row.x_studio_x_partner_id[0] : false,
+    partner_name: partnerName,
+    phone_number_id: aiModeSafeString(row?.x_studio_x_phone_number_id || "", 120),
+    timestamp: Math.floor(tsMs / 1000),
+    date: new Date(tsMs).toISOString(),
+    received_at: row?.x_studio_x_last_event_at || row?.write_date || "",
+    duration_seconds: Number(row?.x_studio_x_duration_seconds || 0),
+    source: "odoo_call_log",
+    raw: { odoo_call_log: row }
+  };
+}
+
+async function readOdooWhatsappCallLogRows(limit = 100) {
+  if (!odooConfigured) return [];
+  const uid = await odooLoginCached();
+  const safeLimit = Math.max(1, Math.min(200, Number(limit || 100)));
+  const fields = [
+    "id",
+    "x_name",
+    "display_name",
+    "x_active",
+    "x_studio_x_call_id",
+    "x_studio_x_customer_phone",
+    "x_studio_x_customer_name",
+    "x_studio_x_partner_id",
+    "x_studio_x_direction",
+    "x_studio_x_event",
+    "x_studio_event_1",
+    "x_studio_x_status",
+    "x_studio_x_phone_number_id",
+    "x_studio_x_call_started_at",
+    "x_studio_x_call_ended_at",
+    "x_studio_x_last_event_at",
+    "x_studio_x_duration_seconds",
+    "write_date",
+    "create_date"
+  ];
+
+  const rows = await odooExecute(
+    uid,
+    ODOO_CALL_LOG_MODEL,
+    "search_read",
+    [[], fields],
+    { order: "x_studio_x_last_event_at desc, write_date desc, id desc", limit: safeLimit }
+  );
+  return (Array.isArray(rows) ? rows : []).map(normalizeOdooCallLogRow);
+}
+
 function latestWhatsappCallStates(calls = []) {
   const byCall = new Map();
   for (const lifecycle of collapseWhatsappCallLifecycles(calls)) {
@@ -21994,11 +22084,58 @@ app.get("/api/whatsapp-calls/logs", async (req, res) => {
   }
 });
 
+app.get("/api/odoo/call-log/recent", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 100)));
+    const rows = await readOdooWhatsappCallLogRows(limit);
+    const calls = collapseWhatsappCallLifecycles(rows).slice(0, limit);
+    return res.json({
+      ok: true,
+      source: "odoo",
+      model: ODOO_CALL_LOG_MODEL,
+      count: calls.length,
+      raw_count: rows.length,
+      calls
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      source: "odoo",
+      model: ODOO_CALL_LOG_MODEL,
+      error: error?.message || String(error),
+      calls: []
+    });
+  }
+});
+
 app.get("/api/whatsapp-calls/recent", async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(200, Number(req.query.limit || 100)));
     const sinceMs = Number(req.query.since_ms || req.query.since || 0);
     const minTimeMs = sinceMs > 0 ? sinceMs : Date.now() - WHATSAPP_CALL_RECENT_WINDOW_MS;
+
+    // Prefer Odoo for call history, exactly like the old wrapper did. This is
+    // why the Odoo Call Logs list can populate the operator history again.
+    // Live incoming call detection does NOT use Odoo history.
+    let odooError = "";
+    try {
+      const odooRows = await readOdooWhatsappCallLogRows(limit);
+      const odooCalls = collapseWhatsappCallLifecycles(odooRows).slice(0, limit);
+      if (odooCalls.length) {
+        return res.json({
+          ok: true,
+          normalized: true,
+          source: "odoo",
+          model: ODOO_CALL_LOG_MODEL,
+          count: odooCalls.length,
+          calls: odooCalls
+        });
+      }
+    } catch (error) {
+      odooError = error?.message || String(error);
+      console.warn("Odoo call history fetch failed:", odooError);
+    }
+
     const allRows = await readWhatsappCallLogs();
     let rawCalls = allRows.filter((row) => {
       const ts = whatsappCallTimestampMs(row);
@@ -22011,7 +22148,7 @@ app.get("/api/whatsapp-calls/recent", async (req, res) => {
     if (!rawCalls.length && allRows.length) rawCalls = allRows;
 
     const calls = collapseWhatsappCallLifecycles(rawCalls).slice(0, limit);
-    return res.json({ ok: true, normalized: true, since_ms: minTimeMs, count: calls.length, calls });
+    return res.json({ ok: true, normalized: true, source: "local", since_ms: minTimeMs, count: calls.length, calls, odoo_error: odooError });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
