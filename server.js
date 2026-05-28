@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-5-3-phone-sanitized-partner-lookup";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-5-4-odoo-domain-fix";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -22106,10 +22106,15 @@ function odooDateTimeFromMs(value = Date.now()) {
 }
 
 function odooOrDomain(conditions = []) {
-  const valid = (conditions || []).filter(Boolean);
+  const valid = (conditions || []).filter((condition) => {
+    return Array.isArray(condition) && condition.length >= 3;
+  });
   if (!valid.length) return [];
-  if (valid.length === 1) return valid[0];
-  return ["|", valid[0], odooOrDomain(valid.slice(1))];
+  if (valid.length === 1) return [valid[0]];
+  // Odoo domains must be a flat prefix list, e.g. ["|", "|", A, B, C].
+  // Nested lists like ["|", A, ["|", B, C]] can trigger RPC errors such as
+  // "unhashable type: 'list'" on Odoo Online.
+  return [...Array(valid.length - 1).fill("|"), ...valid];
 }
 
 async function findOdooPartnerForCallPhone(phone = "") {
