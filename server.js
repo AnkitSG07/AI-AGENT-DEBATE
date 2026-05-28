@@ -21700,6 +21700,21 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   const latest = ordered[0] || {};
   const latestEvent = String(latest?.event || latest?.status || "").toLowerCase();
   const latestStatus = String(latest?.status || "").toLowerCase();
+
+  // Phase 3.1: Odoo x_call_logs already stores the final call status.
+  // Trust explicit terminal Odoo statuses instead of recalculating "ended" as "missed"
+  // from the final terminate event. This keeps answered incoming calls as Ended.
+  const explicitStatuses = ordered
+    .map((r) => String(r?.status || r?.raw?.odoo_call_log?.x_studio_x_status || "").toLowerCase())
+    .filter(Boolean);
+  if (explicitStatuses.includes("failed")) return "failed";
+  if (explicitStatuses.includes("busy")) return "busy";
+  if (explicitStatuses.includes("declined")) return "declined";
+  if (explicitStatuses.includes("rejected")) return "rejected";
+  if (explicitStatuses.includes("missed")) return "missed";
+  if (explicitStatuses.includes("no_answer")) return direction === "outgoing" ? "no_answer" : "missed";
+  if (explicitStatuses.includes("ended")) return "ended";
+
   const anyAccepted = ordered.some((r) => {
     const text = String(`${r?.event || ""} ${r?.status || ""} ${r?.latest_event || ""}`).toLowerCase();
     const duration = Number(r?.duration_seconds || r?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0);
@@ -21709,13 +21724,13 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   const anyOutgoingRemoteAnswer = direction === "outgoing" && ordered.some(whatsappCallRowHasRemoteAnswerSdp);
   const wasConnected = anyAccepted || anyOutgoingRemoteAnswer;
 
-  if (/failed/.test(latestEvent) || latestStatus === "failed") return "failed";
-  if (/busy/.test(latestEvent) || latestStatus === "busy") return "busy";
-  if (/reject|rejected|declin/.test(latestEvent) || ["declined", "rejected"].includes(latestStatus)) return direction === "incoming" ? "declined" : "rejected";
-  if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent) || ["missed", "no_answer"].includes(latestStatus)) {
+  if (/failed/.test(latestEvent)) return "failed";
+  if (/busy/.test(latestEvent)) return "busy";
+  if (/reject|rejected|declin/.test(latestEvent)) return direction === "incoming" ? "declined" : "rejected";
+  if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent)) {
     return wasConnected ? "ended" : (direction === "incoming" ? "missed" : "no_answer");
   }
-  if (/terminate|terminated|end|ended/.test(latestEvent) || latestStatus === "ended") {
+  if (/terminate|terminated|end|ended/.test(latestEvent)) {
     if (direction === "outgoing") return "ended";
     return wasConnected ? "ended" : "missed";
   }
@@ -21733,6 +21748,8 @@ function whatsappCallLifecycleFromRows(rows = []) {
   const direction = validRows.some(whatsappCallRowLooksOutgoing) ? "outgoing" : "incoming";
   const status = whatsappCallStatusFromRows(validRows, direction);
   const latest = validRows[0];
+  const durationSeconds = Math.max(0, ...validRows.map((r) => Number(r?.duration_seconds || r?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0)).filter((n) => Number.isFinite(n)));
+  const wasConnected = ["connected", "ended"].includes(status) || durationSeconds > 0 || validRows.some((r) => /accepted|accept|connected|answered/i.test(String(`${r?.event || ""} ${r?.status || ""}`)));
   const sdpRow = direction === "outgoing"
     ? (validRows.find(whatsappCallRowHasRemoteAnswerSdp) || validRows.find(whatsappCallHasSdp) || null)
     : (validRows.find(whatsappCallHasSdp) || null);
@@ -21758,6 +21775,10 @@ function whatsappCallLifecycleFromRows(rows = []) {
     sdp: sdpRow ? whatsappCallExtractSdp(sdpRow) : "",
     sdp_type: sdpRow ? whatsappCallExtractSdpType(sdpRow) : "",
     remote_answer_available: direction === "outgoing" && !!sdpRow && whatsappCallRowHasRemoteAnswerSdp(sdpRow),
+    connected: wasConnected,
+    duration_seconds: durationSeconds,
+    display_status: status,
+    history_kind: direction === "outgoing" ? "outgoing" : (status === "missed" ? "missed" : "incoming"),
     event: latest?.event || latest?.status || status,
     latest_event: latest?.event || latest?.status || "",
     started_at: new Date((validRows[validRows.length - 1] ? whatsappCallTimestampMs(validRows[validRows.length - 1]) : latestMs) || latestMs).toISOString(),
@@ -21897,8 +21918,9 @@ function odooCallStatusForEvent(event = "", direction = "incoming", lifecycle = 
   const dir = String(direction || lifecycle?.direction || "incoming").toLowerCase() === "outgoing" ? "outgoing" : "incoming";
   const wasConnected =
     !!lifecycle?.connected ||
+    ["connected", "ended"].includes(String(lifecycle?.status || "").toLowerCase()) ||
     Number(lifecycle?.duration_seconds || 0) > 0 ||
-    String(previous?.x_studio_x_status || "").toLowerCase() === "connected";
+    ["connected", "ended"].includes(String(previous?.x_studio_x_status || "").toLowerCase());
 
   if (e.includes("fail")) return "failed";
   if (e.includes("reject") || e.includes("declin")) return dir === "incoming" ? "declined" : "ended";
