@@ -37,7 +37,7 @@
 <div class="note-modal" id="noteModal" aria-hidden="true">
   <div class="note-sheet" role="dialog" aria-modal="true" aria-labelledby="noteModalTitle">
     <div class="note-head">
-      <div><h3 id="noteModalTitle">Call Note</h3><p id="noteModalSub">Local note only. Odoo sync can be added later.</p></div>
+      <div><h3 id="noteModalTitle">Call Note</h3><p id="noteModalSub">Saved locally and synced to Odoo when available.</p></div>
       <button class="note-close" id="noteCloseBtn" type="button">×</button>
     </div>
     <textarea class="note-field note-text" id="noteText" placeholder="Write call note here..."></textarea>
@@ -50,13 +50,13 @@
       <button class="btn ghost" id="noteDeleteBtn" type="button">Clear Note</button>
       <button class="btn primary" id="noteSaveBtn" type="button">Save Note</button>
     </div>
-    <div class="note-small">Saved in this browser only. It will not create or edit Odoo logs.</div>
+    <div class="note-small">Saved locally first, then synced to the existing Odoo call log when available. It never creates new Odoo logs.</div>
   </div>
 </div><audio id="remoteAudio" autoplay playsinline></audio>
 <script>
 
 const $ = (id) => document.getElementById(id);
-const CALL_UI_VERSION = 'phase3-9-notes-followup-workflow-2026-05-28-v1';
+const CALL_UI_VERSION = 'phase3-10-odoo-notes-followup-sync-2026-05-28-v1';
 let currentSub = null;
 let device = loadDevice();
 let callsCache = [];
@@ -91,8 +91,8 @@ function readCallbackDoneMap(){try{return JSON.parse(localStorage.getItem(CALLBA
 let callbackDoneMap = readCallbackDoneMap();
 function writeCallbackDoneMap(){try{localStorage.setItem(CALLBACK_DONE_KEY,JSON.stringify(callbackDoneMap||{}))}catch{}}
 function callbackKey(c){return String(callIdOf(c)||cleanPhone(callPhone(c))||'').trim()}
-function isCallbackDone(c){const key=callbackKey(c);return !!(key&&callbackDoneMap[key])}
-function setCallbackDone(c,done=true){const key=callbackKey(c);if(!key)return;if(done)callbackDoneMap[key]={done:true,at:new Date().toISOString(),phone:cleanPhone(callPhone(c)),name:callName(c)};else delete callbackDoneMap[key];writeCallbackDoneMap();renderCalls()}
+function isCallbackDone(c){const key=callbackKey(c);if(key&&Object.prototype.hasOwnProperty.call(callbackDoneMap,key))return !!callbackDoneMap[key]?.done;return c?.callback_done===true||String(c?.x_studio_x_callback_done||'').toLowerCase()==='true'}
+function setCallbackDone(c,done=true){const key=callbackKey(c);if(!key)return;callbackDoneMap[key]={done:!!done,at:new Date().toISOString(),phone:cleanPhone(callPhone(c)),name:callName(c)};writeCallbackDoneMap();syncNoteToOdoo(c,{callback_done:!!done,followup_status:followupStatusOf(c)}).catch(e=>console.warn('Odoo callback sync failed:',e?.message||e));renderCalls()}
 function isMissedCallbackCandidate(c){return callKind(c)==='missed'&&!isOwnNumber(cleanPhone(callPhone(c)))}
 function needsCallback(c){return isMissedCallbackCandidate(c)&&!isCallbackDone(c)}
 
@@ -106,17 +106,19 @@ function noteKeysForCall(c={}){return uniqueKeys([callIdOf(c),cleanPhone(callPho
 function activeCallNoteObject(){return currentCall||{call_id:callId,customer_phone:phone,customer_name:callerName,direction:outgoingMode?'outgoing':'incoming',status:callModeActive?'active':''}}
 function activeNoteKeys(){return uniqueKeys([callId,cleanPhone(phone)])}
 function getNoteEntryByKeys(keys=[]){for(const key of keys){if(callNotesMap[key])return callNotesMap[key]}return null}
-function getCallNoteEntry(c={}){return getNoteEntryByKeys(noteKeysForCall(c))}
+function odooNoteEntryFromCall(c={}){const text=String(c.note||c.call_note||c.x_studio_x_note||'').trim();const follow=String(c.followup_status||c.x_studio_x_followup_status||'none').trim()||'none';if(!text&&follow==='none')return null;return{text,followup:['none','needed','done'].includes(follow)?follow:'none',updated_at:c.note_updated_at||c.x_studio_x_note_updated_at||'',phone:cleanPhone(callPhone(c)),name:callName(c),source:'odoo'}}
+function getCallNoteEntry(c={}){return getNoteEntryByKeys(noteKeysForCall(c))||odooNoteEntryFromCall(c)}
 function noteTextOf(c={}){return String(getCallNoteEntry(c)?.text||'').trim()}
 function followupStatusOf(c={}){return String(getCallNoteEntry(c)?.followup||'none')}
 function followupLabel(v){const s=String(v||'none');if(s==='needed')return 'Follow-up needed';if(s==='done')return 'Follow-up done';return ''}
 function notePreviewText(v,max=110){const text=String(v||'').replace(/\s+/g,' ').trim();return text.length>max?text.slice(0,max-1)+'…':text}
-function saveNoteForKeys(keys=[],text='',followup='none',meta={}){const safeKeys=uniqueKeys(keys);if(!safeKeys.length)return;const cleanText=String(text||'').trim();const cleanFollowup=['none','needed','done'].includes(String(followup))?String(followup):'none';if(!cleanText&&cleanFollowup==='none'){safeKeys.forEach(k=>delete callNotesMap[k]);writeCallNotesMap();return}const entry={text:cleanText,followup:cleanFollowup,updated_at:new Date().toISOString(),phone:cleanPhone(meta.phone||phone||''),name:String(meta.name||callerName||'').trim()};safeKeys.forEach(k=>{callNotesMap[k]=entry});writeCallNotesMap()}
-function openNoteModalForCall(c={},source='history'){const keys=noteKeysForCall(c);if(!keys.length){alert('No call key available for this note.');return}const entry=getNoteEntryByKeys(keys)||{};activeNoteContext={source,keys,call:c};$('noteModalTitle').textContent=source==='active'?'Active Call Note':'Call Note';$('noteModalSub').textContent=`${callName(c)||'WhatsApp caller'} • ${fmtPhone(callPhone(c))}`;$('noteText').value=entry.text||'';$('followupStatus').value=entry.followup||'none';$('noteModal').classList.add('show');$('noteModal').setAttribute('aria-hidden','false');setTimeout(()=>$('noteText')?.focus(),120)}
+function saveNoteForKeys(keys=[],text='',followup='none',meta={}){const safeKeys=uniqueKeys(keys);if(!safeKeys.length)return;const cleanText=String(text||'').trim();const cleanFollowup=['none','needed','done'].includes(String(followup))?String(followup):'none';if(!cleanText&&cleanFollowup==='none'){safeKeys.forEach(k=>delete callNotesMap[k]);writeCallNotesMap();return}const entry={text:cleanText,followup:cleanFollowup,updated_at:new Date().toISOString(),phone:cleanPhone(meta.phone||phone||''),name:String(meta.name||callerName||'').trim(),source:'local'};safeKeys.forEach(k=>{callNotesMap[k]=entry});writeCallNotesMap()}
+async function syncNoteToOdoo(c={},override={}){const payload={call_id:callIdOf(c)||callId||'',odoo_id:c.odoo_id||c.odooId||0,note:override.note!==undefined?override.note:noteTextOf(c),followup_status:override.followup_status||followupStatusOf(c)||'none'};if(override.callback_done!==undefined)payload.callback_done=!!override.callback_done;if(!payload.call_id&&!payload.odoo_id)return{ok:false,skipped:true,reason:'missing_call_reference'};const r=await fetch('/api/odoo/call-log/update-note',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||'Odoo note sync failed');return j}
+function openNoteModalForCall(c={},source='history'){const keys=noteKeysForCall(c);if(!keys.length){alert('No call key available for this note.');return}const entry=getCallNoteEntry(c)||{};activeNoteContext={source,keys,call:c};$('noteModalTitle').textContent=source==='active'?'Active Call Note':'Call Note';$('noteModalSub').textContent=`${callName(c)||'WhatsApp caller'} • ${fmtPhone(callPhone(c))}`;$('noteText').value=entry.text||'';$('followupStatus').value=entry.followup||'none';$('noteModal').classList.add('show');$('noteModal').setAttribute('aria-hidden','false');setTimeout(()=>$('noteText')?.focus(),120)}
 function openActiveNoteModal(){const obj=activeCallNoteObject();const keys=activeNoteKeys();if(!keys.length){alert('Call note is available after a phone number or call ID is present.');return}obj.call_id=callId||obj.call_id;obj.customer_phone=phone||obj.customer_phone;obj.customer_name=callerName||obj.customer_name;openNoteModalForCall(obj,'active')}
 function closeNoteModal(){activeNoteContext=null;$('noteModal').classList.remove('show');$('noteModal').setAttribute('aria-hidden','true')}
-function saveCurrentNote(){if(!activeNoteContext)return;const c=activeNoteContext.call||{};const keys=activeNoteContext.keys||noteKeysForCall(c);saveNoteForKeys(keys,$('noteText').value,$('followupStatus').value,{phone:callPhone(c)||phone,name:callName(c)||callerName});closeNoteModal();renderCalls()}
-function clearCurrentNote(){if(!activeNoteContext)return;saveNoteForKeys(activeNoteContext.keys||[], '', 'none');closeNoteModal();renderCalls()}
+function saveCurrentNote(){if(!activeNoteContext)return;const c=activeNoteContext.call||{};const keys=activeNoteContext.keys||noteKeysForCall(c);const text=$('noteText').value;const follow=$('followupStatus').value;saveNoteForKeys(keys,text,follow,{phone:callPhone(c)||phone,name:callName(c)||callerName});syncNoteToOdoo(c,{note:text,followup_status:follow}).then(()=>setTimeout(loadCalls,700)).catch(e=>console.warn('Odoo note sync failed:',e?.message||e));closeNoteModal();renderCalls()}
+function clearCurrentNote(){if(!activeNoteContext)return;const c=activeNoteContext.call||{};saveNoteForKeys(activeNoteContext.keys||[], '', 'none');syncNoteToOdoo(c,{note:'',followup_status:'none'}).then(()=>setTimeout(loadCalls,700)).catch(e=>console.warn('Odoo note clear failed:',e?.message||e));closeNoteModal();renderCalls()}
 
 function persistHandledCallIds() {
   try { sessionStorage.setItem('sh_operator_handled_call_ids_v1', JSON.stringify([...handledCallIds].slice(-80))); } catch {}
