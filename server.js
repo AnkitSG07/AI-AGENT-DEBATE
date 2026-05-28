@@ -22310,7 +22310,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-5-contact-crm-linking-2026-05-28",
+    version: "phase3-5-1-diagnostics-completeness-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22338,7 +22338,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-5-contact-crm-linking-2026-05-28",
+      version: "phase3-5-1-diagnostics-completeness-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -22347,14 +22347,22 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
       lifecycle_count: lifecycles.length,
       own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
       sample: lifecycles.map((c) => ({
-        call_id: c.call_id,
-        direction: c.direction,
-        status: c.status,
-        customer_phone: c.customer_phone,
-        customer_name: c.customer_name,
-        duration_seconds: c.duration_seconds,
-        updated_at: c.updated_at,
-        source: c.source
+        call_id: c.call_id || "",
+        direction: c.direction || "",
+        status: c.status || "",
+        customer_phone: c.customer_phone || "",
+        customer_name: c.customer_name || "",
+        partner_id: c.partner_id || false,
+        partner_name: c.partner_name || "",
+        company_name: c.partner_company || c.company_name || "",
+        email: c.partner_email || c.email || "",
+        contact_source: c.contact_source || "",
+        duration_seconds: Number(c.duration_seconds || 0),
+        ringing_duration_seconds: Number(c.ringing_duration_seconds || 0),
+        connected_at: c.connected_at || "",
+        ended_at: c.ended_at || "",
+        updated_at: c.updated_at || "",
+        source: c.source || ""
       }))
     });
   } catch (error) {
