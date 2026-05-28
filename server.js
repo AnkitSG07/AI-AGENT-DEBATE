@@ -21553,27 +21553,72 @@ function whatsappCallCandidateNames(row = {}) {
   return out.filter(Boolean);
 }
 
+function whatsappCallCandidateNameScore(candidate = "", row = {}, phone = "") {
+  const valid = whatsappCallValidDisplayName(candidate, phone);
+  if (!valid) return null;
+
+  let score = 10;
+  const odoo = row?.raw?.odoo_call_log || {};
+  const partnerName = Array.isArray(row?.x_studio_x_partner_id)
+    ? row.x_studio_x_partner_id[1]
+    : (row?.partner_name || (Array.isArray(odoo?.x_studio_x_partner_id) ? odoo.x_studio_x_partner_id[1] : ""));
+
+  if (partnerName && valid === whatsappCallValidDisplayName(partnerName, phone)) score += 1000;
+  if (row?.source === "odoo_call_log" || odoo?.id) score += 350;
+  if (row?.partner_id || odoo?.x_studio_x_partner_id) score += 250;
+  if (row?.customer_name && valid === whatsappCallValidDisplayName(row.customer_name, phone)) score += 160;
+  if (odoo?.x_studio_x_customer_name && valid === whatsappCallValidDisplayName(odoo.x_studio_x_customer_name, phone)) score += 140;
+  if (row?.raw?.contacts || row?.raw?.call?.contacts) score += 70;
+  if (String(valid).trim().split(/\s+/).length >= 2) score += 20;
+  score += Math.min(50, Math.floor((whatsappCallTimestampMs(row) || 0) / 1000 / 86400 / 365));
+
+  return { name: valid, score };
+}
+
 function whatsappCallBestNameFromRows(rows = [], phone = "") {
   const cleanPhone = whatsappCallCleanPhone(phone);
+  const scored = [];
   for (const row of rows || []) {
     for (const candidate of whatsappCallCandidateNames(row)) {
-      const valid = whatsappCallValidDisplayName(candidate, cleanPhone);
-      if (valid) return valid;
+      const item = whatsappCallCandidateNameScore(candidate, row, cleanPhone);
+      if (item) scored.push(item);
     }
   }
-  return cleanPhone || "WhatsApp caller";
+  scored.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  return scored[0]?.name || cleanPhone || "WhatsApp caller";
+}
+
+function whatsappCallPhoneCandidatesFromRow(row = {}) {
+  const values = [
+    row?.customer_phone,
+    row?.customerPhone,
+    row?.phone,
+    row?.wa_id,
+    row?.from,
+    row?.to,
+    row?.raw?.call?.from,
+    row?.raw?.call?.to,
+    row?.raw?.odoo_call_log?.x_studio_x_customer_phone
+  ];
+  return values.map(whatsappCallCleanPhone).filter(Boolean);
 }
 
 function whatsappCallNameMapFromRows(rows = []) {
-  const map = new Map();
-  const ordered = [...(rows || [])].sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
-  for (const row of ordered) {
-    const phone = whatsappCallCleanPhone(row?.customer_phone || row?.customerPhone || row?.phone || row?.wa_id || row?.from || row?.to || row?.raw?.call?.from || row?.raw?.call?.to || "");
-    const key = whatsappCallLast10(phone);
-    if (!key || map.has(key)) continue;
-    const best = whatsappCallBestNameFromRows([row], phone);
-    if (whatsappCallValidDisplayName(best, phone)) map.set(key, best);
+  const candidatesByPhone = new Map();
+  for (const row of rows || []) {
+    for (const phone of whatsappCallPhoneCandidatesFromRow(row)) {
+      const key = whatsappCallLast10(phone);
+      if (!key || whatsappCallIsOwnNumber(phone)) continue;
+      for (const candidate of whatsappCallCandidateNames(row)) {
+        const item = whatsappCallCandidateNameScore(candidate, row, phone);
+        if (!item) continue;
+        const existing = candidatesByPhone.get(key);
+        if (!existing || item.score > existing.score) candidatesByPhone.set(key, item);
+      }
+    }
   }
+  const map = new Map();
+  for (const [key, item] of candidatesByPhone.entries()) map.set(key, item.name);
   return map;
 }
 
@@ -22208,13 +22253,56 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase2-outgoing-answer-2026-05-28",
+    version: "phase3-3-contact-diagnostics-2026-05-28",
+    server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
     own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
+    odoo_configured: !!odooConfigured,
+    odoo_call_log_model: ODOO_CALL_LOG_MODEL,
     active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
-    outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS
+    outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS,
+    note: "Phase 3.3 diagnostics are read-only. They do not create call history."
   });
+});
+
+app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
+  try {
+    const localRows = await readWhatsappCallLogs().catch(() => []);
+    let odooRows = [];
+    let odooError = "";
+    try {
+      odooRows = await readOdooWhatsappCallLogRows(Math.min(Number(req.query.limit || 20), 80));
+    } catch (error) {
+      odooError = error?.message || String(error);
+    }
+    const combined = [...odooRows, ...localRows];
+    const lifecycles = collapseWhatsappCallLifecycles(combined).slice(0, Math.min(Number(req.query.limit || 20), 80));
+    return res.json({
+      ok: true,
+      read_only: true,
+      version: "phase3-3-contact-diagnostics-2026-05-28",
+      odoo_configured: !!odooConfigured,
+      odoo_call_log_model: ODOO_CALL_LOG_MODEL,
+      odoo_error: odooError,
+      local_row_count: localRows.length,
+      odoo_row_count: odooRows.length,
+      lifecycle_count: lifecycles.length,
+      own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
+      sample: lifecycles.map((c) => ({
+        call_id: c.call_id,
+        direction: c.direction,
+        status: c.status,
+        customer_phone: c.customer_phone,
+        customer_name: c.customer_name,
+        duration_seconds: c.duration_seconds,
+        updated_at: c.updated_at,
+        source: c.source
+      }))
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, read_only: true, error: error?.message || String(error) });
+  }
 });
 
 app.get("/api/whatsapp-calls/incoming", async (req, res) => {
@@ -22241,7 +22329,7 @@ app.get("/api/whatsapp-calls/:callId", async (req, res, next) => {
     // Let reserved collection routes continue to their real handlers instead of
     // treating "recent" or "logs" as a call_id. Without this, the operator
     // page sees an empty history and Call Back / Call Again never appears.
-    if (["recent", "logs", "config", "incoming", "test"].includes(String(callId).toLowerCase())) {
+    if (["recent", "logs", "config", "diagnostics", "incoming", "test"].includes(String(callId).toLowerCase())) {
       return next();
     }
     const calls = await readWhatsappCallLogs();
