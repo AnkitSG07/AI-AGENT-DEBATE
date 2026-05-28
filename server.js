@@ -21478,31 +21478,217 @@ app.get("/api/debug/webhooks/router-status", async (req, res) => {
 });
 
 
+
+// ===================== PHASE 1 NORMALIZED WHATSAPP CALL ENGINE =====================
+// Phase 1 goal: render CALLS, not raw webhook EVENTS.
+// It prevents operator/business outgoing calls from being returned as incoming calls,
+// collapses history by call_id, and gives the frontend a single normalized schema.
+const WHATSAPP_CALL_ACTIVE_WINDOW_MS = Math.max(
+  15000,
+  Number(process.env.WHATSAPP_CALL_ACTIVE_WINDOW_MS || 2 * 60 * 1000)
+);
+const WHATSAPP_CALL_OUTGOING_TIMEOUT_MS = Math.max(
+  15000,
+  Number(process.env.WHATSAPP_CALL_OUTGOING_TIMEOUT_MS || 75 * 1000)
+);
+
+function whatsappCallLast10(value = "") {
+  const phone = whatsappCallCleanPhone(value);
+  return phone.length >= 10 ? phone.slice(-10) : phone;
+}
+
+function whatsappCallOwnNumbers() {
+  return [
+    process.env.WHATSAPP_DISPLAY_PHONE_NUMBER,
+    process.env.META_WHATSAPP_DISPLAY_PHONE_NUMBER,
+    process.env.WHATSAPP_BUSINESS_NUMBER,
+    process.env.META_WHATSAPP_BUSINESS_NUMBER,
+    process.env.WHATSAPP_BUSINESS_PHONE_NUMBER,
+    process.env.META_WHATSAPP_BUSINESS_PHONE_NUMBER,
+    process.env.WHATSAPP_OPERATOR_OWN_NUMBER,
+    process.env.OPERATOR_OWN_NUMBER,
+    process.env.SMART_HANDICRAFTS_WHATSAPP_NUMBER
+  ].map(whatsappCallCleanPhone).filter(Boolean);
+}
+
+function whatsappCallIsOwnNumber(phone = "") {
+  const clean = whatsappCallCleanPhone(phone);
+  const last10 = whatsappCallLast10(clean);
+  if (!clean || !last10) return false;
+  return whatsappCallOwnNumbers().some((own) => {
+    const ownLast10 = whatsappCallLast10(own);
+    return !!ownLast10 && (clean === own || last10 === ownLast10);
+  });
+}
+
+function whatsappCallTimestampMs(row = {}) {
+  const raw = row?.timestamp || row?.time || row?.date || row?.received_at || row?.created_at || 0;
+  if (typeof raw === "number") return raw < 2000000000 ? raw * 1000 : raw;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n) return n < 2000000000 ? n * 1000 : n;
+  const parsed = Date.parse(String(raw || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function whatsappCallExtractSdp(row = {}) {
+  return String(
+    row?.session?.sdp ||
+    row?.raw?.call?.session?.sdp ||
+    row?.raw?.call?.connect?.session?.sdp ||
+    row?.raw?.call?.answer?.session?.sdp ||
+    row?.graph?.session?.sdp ||
+    ""
+  );
+}
+
+function whatsappCallHasSdp(row = {}) {
+  return !!whatsappCallExtractSdp(row);
+}
+
 function whatsappCallFindByCallId(calls = [], callId = "") {
-  const wanted = aiModeSafeString(callId || "", 180);
+  const wanted = aiModeSafeString(callId || "", 220);
   if (!wanted) return null;
-  return (calls || [])
+  const rows = (calls || [])
     .filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(wanted))
-    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))[0] || null;
+    .sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
+  // Prefer latest row with SDP for active WebRTC screens; otherwise latest row.
+  return rows.find(whatsappCallHasSdp) || rows[0] || null;
 }
 
 function whatsappCallIsOpenEvent(event = "") {
   const e = String(event || "").toLowerCase();
-  return ["connect", "ringing", "incoming", "pre_accept"].includes(e);
+  return ["connect", "ringing", "incoming", "pre_accept", "outgoing", "dialing", "connect_requested", "accepted"].includes(e);
 }
 
 function whatsappCallIsClosedEvent(event = "") {
   const e = String(event || "").toLowerCase();
-  return ["terminate", "terminated", "end", "ended", "reject", "rejected", "missed", "timeout", "busy", "failed"].includes(e);
+  return ["terminate", "terminated", "end", "ended", "reject", "rejected", "missed", "timeout", "busy", "failed", "no_answer", "no.answer", "unanswered"].includes(e);
+}
+
+function whatsappCallEventRank(row = {}) {
+  const e = String(row?.event || row?.status || "").toLowerCase();
+  if (["terminated", "terminate", "ended", "end", "rejected", "reject", "missed", "timeout", "failed", "busy", "no_answer"].some((x) => e.includes(x))) return 50;
+  if (["accepted", "accept", "connected"].some((x) => e.includes(x))) return 40;
+  if (["pre_accept", "ringing", "connect", "incoming", "outgoing", "dialing"].some((x) => e.includes(x))) return 30;
+  return 10;
+}
+
+function whatsappCallRowLooksOutgoing(row = {}) {
+  const direction = String(row?.direction || "").toLowerCase();
+  const event = String(row?.event || row?.status || row?.type || "").toLowerCase();
+  const from = whatsappCallCleanPhone(row?.from || row?.raw?.call?.from || "");
+  const to = whatsappCallCleanPhone(row?.to || row?.raw?.call?.to || "");
+  const ownNumbers = whatsappCallOwnNumbers();
+  const fromIsOwn = !!from && ownNumbers.some((own) => whatsappCallLast10(own) === whatsappCallLast10(from));
+  const toIsOwn = !!to && ownNumbers.some((own) => whatsappCallLast10(own) === whatsappCallLast10(to));
+  return (
+    direction === "outgoing" ||
+    row?.is_business_outgoing === true ||
+    event.includes("outgoing") ||
+    event.includes("dial") ||
+    event.includes("connect_requested") ||
+    fromIsOwn ||
+    (from && to && !toIsOwn && fromIsOwn)
+  );
+}
+
+function whatsappCallCustomerPhoneFromRows(rows = [], direction = "incoming") {
+  const ordered = [...rows].sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
+  for (const row of ordered) {
+    const direct = whatsappCallCleanPhone(row?.customer_phone || row?.customerPhone || row?.phone || row?.wa_id || "");
+    if (direct && !whatsappCallIsOwnNumber(direct)) return direct;
+    const from = whatsappCallCleanPhone(row?.from || row?.raw?.call?.from || "");
+    const to = whatsappCallCleanPhone(row?.to || row?.raw?.call?.to || "");
+    const candidate = direction === "outgoing" ? (to || direct || from) : (from || direct || to);
+    if (candidate && !whatsappCallIsOwnNumber(candidate)) return candidate;
+  }
+  return whatsappCallCleanPhone(ordered[0]?.customer_phone || ordered[0]?.wa_id || ordered[0]?.from || ordered[0]?.to || "");
+}
+
+function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
+  const ordered = [...rows].sort((a, b) => {
+    const diff = whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a);
+    if (diff) return diff;
+    return whatsappCallEventRank(b) - whatsappCallEventRank(a);
+  });
+  const latest = ordered[0] || {};
+  const latestEvent = String(latest?.event || latest?.status || "").toLowerCase();
+  const anyAccepted = ordered.some((r) => /accepted|accept|connected/.test(String(r?.event || r?.status || "").toLowerCase()));
+  const anyOutgoing = ordered.some(whatsappCallRowLooksOutgoing) || direction === "outgoing";
+
+  if (/failed/.test(latestEvent)) return "failed";
+  if (/busy/.test(latestEvent)) return "busy";
+  if (/reject|rejected|declin/.test(latestEvent)) return direction === "incoming" ? "declined" : "rejected";
+  if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent)) return direction === "incoming" ? "missed" : "no_answer";
+  if (/terminate|terminated|end|ended/.test(latestEvent)) return anyAccepted ? "ended" : (direction === "incoming" ? "missed" : "ended");
+  if (anyAccepted) return "connected";
+  if (anyOutgoing) return "outgoing_ringing";
+  if (/connect|ringing|incoming|pre_accept/.test(latestEvent)) return "incoming_ringing";
+  return direction === "outgoing" ? "outgoing_ringing" : "unknown";
+}
+
+function whatsappCallLifecycleFromRows(rows = []) {
+  const validRows = (rows || []).filter(Boolean).sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
+  if (!validRows.length) return null;
+  const callId = aiModeSafeString(validRows[0]?.call_id || validRows[0]?.id || "", 220);
+  if (!callId) return null;
+
+  const direction = validRows.some(whatsappCallRowLooksOutgoing) ? "outgoing" : "incoming";
+  const status = whatsappCallStatusFromRows(validRows, direction);
+  const latest = validRows[0];
+  const sdpRow = validRows.find(whatsappCallHasSdp) || null;
+  const customerPhone = whatsappCallCustomerPhoneFromRows(validRows, direction);
+  const nowMs = Date.now();
+  const latestMs = whatsappCallTimestampMs(latest) || nowMs;
+  const terminalStatuses = new Set(["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"]);
+  const active = !terminalStatuses.has(status) && (nowMs - latestMs) <= WHATSAPP_CALL_ACTIVE_WINDOW_MS;
+  const answerable = direction === "incoming" && active && !!sdpRow && status === "incoming_ringing";
+
+  return {
+    id: callId,
+    call_id: callId,
+    direction,
+    status,
+    active,
+    answerable,
+    customer_phone: customerPhone,
+    customer_name: aiModeSafeString(validRows.find((r) => r?.customer_name)?.customer_name || validRows.find((r) => r?.name)?.name || customerPhone || "WhatsApp caller", 160),
+    phone_number_id: aiModeSafeString(validRows.find((r) => r?.phone_number_id)?.phone_number_id || latest?.raw?.metadata?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID || "", 120),
+    has_sdp: !!sdpRow,
+    session: sdpRow?.session || sdpRow?.raw?.call?.session || sdpRow?.raw?.call?.connect?.session || null,
+    sdp: sdpRow ? whatsappCallExtractSdp(sdpRow) : "",
+    event: latest?.event || latest?.status || status,
+    latest_event: latest?.event || latest?.status || "",
+    started_at: new Date((validRows[validRows.length - 1] ? whatsappCallTimestampMs(validRows[validRows.length - 1]) : latestMs) || latestMs).toISOString(),
+    updated_at: new Date(latestMs).toISOString(),
+    ended_at: terminalStatuses.has(status) ? new Date(latestMs).toISOString() : "",
+    timestamp: Math.floor(latestMs / 1000),
+    date: new Date(latestMs).toISOString(),
+    events_count: validRows.length,
+    source: "whatsapp_call_lifecycle",
+    latest_row: latest,
+    events: validRows.slice(0, 20)
+  };
+}
+
+function collapseWhatsappCallLifecycles(calls = []) {
+  const grouped = new Map();
+  for (const row of calls || []) {
+    const callId = aiModeSafeString(row?.call_id || row?.id || "", 220);
+    if (!callId) continue;
+    if (!grouped.has(callId)) grouped.set(callId, []);
+    grouped.get(callId).push(row);
+  }
+  return [...grouped.values()]
+    .map(whatsappCallLifecycleFromRows)
+    .filter(Boolean)
+    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
 }
 
 function latestWhatsappCallStates(calls = []) {
   const byCall = new Map();
-  for (const row of calls || []) {
-    const callId = aiModeSafeString(row?.call_id || row?.id || "", 220);
-    if (!callId) continue;
-    const existing = byCall.get(callId);
-    if (!existing || Number(row?.timestamp || 0) >= Number(existing?.timestamp || 0)) byCall.set(callId, row);
+  for (const lifecycle of collapseWhatsappCallLifecycles(calls)) {
+    byCall.set(lifecycle.call_id, lifecycle);
   }
   return byCall;
 }
@@ -21578,18 +21764,30 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
   return data;
 }
 
+app.get("/api/whatsapp-calls/config", async (req, res) => {
+  return res.json({
+    ok: true,
+    version: "phase1-call-engine-2026-05-27",
+    phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
+    access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
+    own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
+    active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
+    outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS
+  });
+});
+
 app.get("/api/whatsapp-calls/incoming", async (req, res) => {
   try {
-    const calls = await readWhatsappCallLogs();
-    const states = latestWhatsappCallStates(calls);
-    const openCalls = Array.from(states.values())
-      .filter((row) => {
-        if (String(row?.direction || "").toLowerCase() === "outgoing" || row?.is_business_outgoing === true) return false;
-        return whatsappCallIsOpenEvent(row?.event) && !whatsappCallIsClosedEvent(row?.event);
+    const lifecycles = collapseWhatsappCallLifecycles(await readWhatsappCallLogs());
+    const openCalls = lifecycles
+      .filter((call) => {
+        if (call.direction !== "incoming") return false;
+        if (!call.active) return false;
+        if (whatsappCallIsOwnNumber(call.customer_phone)) return false;
+        return call.status === "incoming_ringing" || call.answerable;
       })
-      .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
       .slice(0, 20);
-    return res.json({ ok: true, count: openCalls.length, calls: openCalls });
+    return res.json({ ok: true, normalized: true, count: openCalls.length, calls: openCalls });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -21597,10 +21795,12 @@ app.get("/api/whatsapp-calls/incoming", async (req, res) => {
 
 app.get("/api/whatsapp-calls/:callId", async (req, res) => {
   try {
+    const callId = req.params.callId || "";
     const calls = await readWhatsappCallLogs();
-    const call = whatsappCallFindByCallId(calls, req.params.callId || "");
+    const rows = calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(aiModeSafeString(callId, 220)));
+    const call = whatsappCallLifecycleFromRows(rows);
     if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
-    return res.json({ ok: true, call });
+    return res.json({ ok: true, normalized: true, call, events: call.events || [] });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -21622,6 +21822,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
     );
 
     if (!to) throw new Error("Customer phone number is required.");
+    if (whatsappCallIsOwnNumber(to)) throw new Error("Blocked: this is your own WhatsApp/business number. Outgoing calls to the business number are not allowed.");
     if (!sdp) throw new Error("Browser WebRTC offer SDP is required for outgoing WhatsApp call.");
     if (!WHATSAPP_CALL_ACCESS_TOKEN) {
       throw new Error("WHATSAPP_CALL_ACCESS_TOKEN / META_WHATSAPP_ACCESS_TOKEN / WHATSAPP_ACCESS_TOKEN is missing in Render environment variables.");
@@ -21676,10 +21877,12 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       }
     });
 
+    const lifecycle = whatsappCallLifecycleFromRows([actionEvent]);
     return res.json({
       ok: true,
       call_id: callId,
       id: callId,
+      call: lifecycle,
       event: "outgoing",
       direction: "outgoing",
       customer_phone: to,
@@ -21698,6 +21901,8 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
     const body = req.body || {};
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220))));
+    if (lifecycle?.direction === "outgoing") throw new Error("Cannot accept an outgoing call as incoming.");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const sdp = String(body.sdp || body.answer_sdp || body.localDescription?.sdp || "");
@@ -21709,8 +21914,8 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
       preAccept = await whatsappCallGraphAction({ phoneNumberId, callId, action: "pre_accept", sdp, sdpType });
     }
     const accepted = await whatsappCallGraphAction({ phoneNumberId, callId, action: "accept", sdp, sdpType });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "accepted", base, extra: { phone_number_id: phoneNumberId } });
-    return res.json({ ok: true, call_id: callId, pre_accept: preAccept, accept: accepted, event: actionEvent });
+    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "accepted", base, extra: { phone_number_id: phoneNumberId, direction: "incoming" } });
+    return res.json({ ok: true, call_id: callId, pre_accept: preAccept, accept: accepted, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -21722,10 +21927,11 @@ app.post("/api/whatsapp-calls/reject", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const rejected = await whatsappCallGraphAction({ phoneNumberId, callId, action: "reject" });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "rejected", base, extra: { phone_number_id: phoneNumberId } });
-    return res.json({ ok: true, call_id: callId, reject: rejected, event: actionEvent });
+    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "rejected", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || "incoming", customer_phone: lifecycle?.customer_phone || base?.customer_phone || "" } });
+    return res.json({ ok: true, call_id: callId, reject: rejected, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -21737,10 +21943,11 @@ app.post("/api/whatsapp-calls/terminate", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const terminated = await whatsappCallGraphAction({ phoneNumberId, callId, action: "terminate" });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "terminated", base, extra: { phone_number_id: phoneNumberId } });
-    return res.json({ ok: true, call_id: callId, terminate: terminated, event: actionEvent });
+    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "terminated", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || body.direction || base?.direction || "outgoing", customer_phone: lifecycle?.customer_phone || base?.customer_phone || body.customer_phone || body.phone || "" } });
+    return res.json({ ok: true, call_id: callId, terminate: terminated, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -21756,14 +21963,12 @@ app.get("/api/whatsapp-calls/logs", async (req, res) => {
     if (phone) {
       const last10 = phone.slice(-10);
       calls = calls.filter((row) => {
-        const rowPhone = whatsappCallCleanPhone(row?.customer_phone || row?.wa_id || row?.from || "");
+        const rowPhone = whatsappCallCleanPhone(row?.customer_phone || row?.wa_id || row?.from || row?.to || "");
         return rowPhone.endsWith(last10) || last10.endsWith(rowPhone.slice(-10));
       });
     }
 
     if (channelId) {
-      // Do not hide call events only because Odoo channel lookup failed.
-      // When phone filtering is already applied, rows without odoo_channel_id still belong to this customer.
       calls = calls.filter((row) => {
         const rowChannelId = Number(row?.odoo_channel_id || 0);
         if (!rowChannelId && phone) return true;
@@ -21785,15 +21990,12 @@ app.get("/api/whatsapp-calls/recent", async (req, res) => {
   try {
     const sinceMs = Number(req.query.since_ms || req.query.since || 0);
     const minTimeMs = sinceMs > 0 ? sinceMs : Date.now() - WHATSAPP_CALL_RECENT_WINDOW_MS;
-    const calls = (await readWhatsappCallLogs())
-      .filter((row) => {
-        const ts = Number(row?.timestamp || 0) * 1000;
-        return ts >= minTimeMs;
-      })
-      .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
-      .slice(0, 100);
-
-    return res.json({ ok: true, since_ms: minTimeMs, count: calls.length, calls });
+    const rawCalls = (await readWhatsappCallLogs()).filter((row) => {
+      const ts = whatsappCallTimestampMs(row);
+      return !minTimeMs || ts >= minTimeMs;
+    });
+    const calls = collapseWhatsappCallLifecycles(rawCalls).slice(0, 100);
+    return res.json({ ok: true, normalized: true, since_ms: minTimeMs, count: calls.length, calls });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
