@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-26-ai-mode-manual-default-v34";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-2-duration-accuracy";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -21739,6 +21739,66 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   if (/connect|ringing|incoming|pre_accept/.test(latestEvent) || latestStatus === "ringing") return "incoming_ringing";
   return direction === "outgoing" ? "outgoing_ringing" : "unknown";
 }
+
+function whatsappCallRowMarksConnected(row = {}) {
+  const text = String(`${row?.event || ""} ${row?.status || ""} ${row?.latest_event || ""} ${row?.raw?.odoo_call_log?.x_studio_x_status || ""}`).toLowerCase();
+  const duration = Number(row?.duration_seconds || row?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0);
+  return (
+    /accepted|accept|connected|answered/.test(text) ||
+    whatsappCallRowHasRemoteAnswerSdp(row) ||
+    duration > 0
+  );
+}
+
+function whatsappCallRowMarksTerminal(row = {}) {
+  const text = String(`${row?.event || ""} ${row?.status || ""} ${row?.latest_event || ""} ${row?.raw?.odoo_call_log?.x_studio_x_status || ""}`).toLowerCase();
+  return /terminate|terminated|end|ended|miss|timeout|no.answer|no_answer|unanswered|reject|rejected|declin|failed|busy/.test(text);
+}
+
+function whatsappCallConnectedAtMs(rows = []) {
+  const points = (rows || [])
+    .filter(whatsappCallRowMarksConnected)
+    .map((row) => whatsappCallTimestampMs(row))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return points.length ? Math.min(...points) : 0;
+}
+
+function whatsappCallTerminalAtMs(rows = []) {
+  const points = (rows || [])
+    .filter(whatsappCallRowMarksTerminal)
+    .map((row) => whatsappCallTimestampMs(row))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return points.length ? Math.max(...points) : 0;
+}
+
+function whatsappCallExistingDurationSeconds(rows = []) {
+  const values = (rows || [])
+    .map((row) => Number(row?.duration_seconds || row?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return values.length ? Math.max(...values) : 0;
+}
+
+function whatsappCallConnectedDurationSeconds(rows = []) {
+  const existing = whatsappCallExistingDurationSeconds(rows);
+  if (existing > 0) return Math.floor(existing);
+  const connectedAt = whatsappCallConnectedAtMs(rows);
+  const endedAt = whatsappCallTerminalAtMs(rows);
+  if (connectedAt && endedAt && endedAt >= connectedAt) {
+    return Math.max(0, Math.floor((endedAt - connectedAt) / 1000));
+  }
+  return 0;
+}
+
+function whatsappCallRingingDurationSeconds(rows = []) {
+  const ordered = (rows || []).filter(Boolean).sort((a, b) => whatsappCallTimestampMs(a) - whatsappCallTimestampMs(b));
+  if (!ordered.length) return 0;
+  const startedAt = whatsappCallTimestampMs(ordered[0]);
+  const connectedAt = whatsappCallConnectedAtMs(ordered);
+  const endedAt = whatsappCallTerminalAtMs(ordered);
+  const stopAt = connectedAt || endedAt || 0;
+  if (!startedAt || !stopAt || stopAt < startedAt) return 0;
+  return Math.max(0, Math.floor((stopAt - startedAt) / 1000));
+}
 function whatsappCallLifecycleFromRows(rows = []) {
   const validRows = (rows || []).filter(Boolean).sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
   if (!validRows.length) return null;
@@ -21748,8 +21808,11 @@ function whatsappCallLifecycleFromRows(rows = []) {
   const direction = validRows.some(whatsappCallRowLooksOutgoing) ? "outgoing" : "incoming";
   const status = whatsappCallStatusFromRows(validRows, direction);
   const latest = validRows[0];
-  const durationSeconds = Math.max(0, ...validRows.map((r) => Number(r?.duration_seconds || r?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0)).filter((n) => Number.isFinite(n)));
-  const wasConnected = ["connected", "ended"].includes(status) || durationSeconds > 0 || validRows.some((r) => /accepted|accept|connected|answered/i.test(String(`${r?.event || ""} ${r?.status || ""}`)));
+  const connectedAtMs = whatsappCallConnectedAtMs(validRows);
+  const terminalAtMs = whatsappCallTerminalAtMs(validRows);
+  const durationSeconds = whatsappCallConnectedDurationSeconds(validRows);
+  const ringingDurationSeconds = whatsappCallRingingDurationSeconds(validRows);
+  const wasConnected = ["connected", "ended"].includes(status) || durationSeconds > 0 || connectedAtMs > 0 || validRows.some(whatsappCallRowMarksConnected);
   const sdpRow = direction === "outgoing"
     ? (validRows.find(whatsappCallRowHasRemoteAnswerSdp) || validRows.find(whatsappCallHasSdp) || null)
     : (validRows.find(whatsappCallHasSdp) || null);
@@ -21777,13 +21840,15 @@ function whatsappCallLifecycleFromRows(rows = []) {
     remote_answer_available: direction === "outgoing" && !!sdpRow && whatsappCallRowHasRemoteAnswerSdp(sdpRow),
     connected: wasConnected,
     duration_seconds: durationSeconds,
+    ringing_duration_seconds: ringingDurationSeconds,
     display_status: status,
     history_kind: direction === "outgoing" ? "outgoing" : (status === "missed" ? "missed" : "incoming"),
     event: latest?.event || latest?.status || status,
     latest_event: latest?.event || latest?.status || "",
     started_at: new Date((validRows[validRows.length - 1] ? whatsappCallTimestampMs(validRows[validRows.length - 1]) : latestMs) || latestMs).toISOString(),
+    connected_at: connectedAtMs ? new Date(connectedAtMs).toISOString() : "",
     updated_at: new Date(latestMs).toISOString(),
-    ended_at: terminalStatuses.has(status) ? new Date(latestMs).toISOString() : "",
+    ended_at: terminalStatuses.has(status) ? new Date((terminalAtMs || latestMs)).toISOString() : "",
     timestamp: Math.floor(latestMs / 1000),
     date: new Date(latestMs).toISOString(),
     events_count: validRows.length,
@@ -22002,7 +22067,7 @@ async function saveWhatsappCallEventToOdoo(row = {}) {
         uid,
         ODOO_CALL_LOG_MODEL,
         "read",
-        [[existingId], ["x_studio_x_call_started_at", "x_studio_x_status", "x_studio_x_customer_name", "x_studio_x_partner_id"]]
+        [[existingId], ["x_studio_x_call_started_at", "x_studio_x_status", "x_studio_x_customer_name", "x_studio_x_partner_id", "x_studio_x_duration_seconds"]]
       ).catch(() => []);
       previous = previousRows?.[0] || {};
     }
@@ -22025,9 +22090,15 @@ async function saveWhatsappCallEventToOdoo(row = {}) {
     };
 
     if (!previous?.x_studio_x_call_started_at) vals.x_studio_x_call_started_at = odooDateTimeFromMs(tsMs);
-    if (["ended", "missed", "declined", "failed"].includes(status)) vals.x_studio_x_call_ended_at = odooDateTimeFromMs(tsMs);
+    const terminalStatus = ["ended", "missed", "declined", "failed"].includes(status);
+    if (terminalStatus) vals.x_studio_x_call_ended_at = odooDateTimeFromMs(tsMs);
     if (partner?.id) vals.x_studio_x_partner_id = partner.id;
-    if (Number(lifecycle?.duration_seconds || 0) > 0) vals.x_studio_x_duration_seconds = Math.floor(Number(lifecycle.duration_seconds));
+    const connectedDurationSeconds = Math.floor(Number(lifecycle?.duration_seconds || 0));
+    // Phase 3.2: store talk duration only, not ringing duration.
+    // For missed/unanswered calls this remains blank/unchanged, so Odoo duration means connected conversation time.
+    if (connectedDurationSeconds > 0 && (terminalStatus || status === "connected" || previous?.x_studio_x_duration_seconds)) {
+      vals.x_studio_x_duration_seconds = connectedDurationSeconds;
+    }
 
     Object.keys(vals).forEach((key) => {
       if (vals[key] === "" || vals[key] === false || vals[key] === undefined || vals[key] === null) delete vals[key];
