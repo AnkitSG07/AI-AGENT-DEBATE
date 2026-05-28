@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-2-duration-accuracy";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-5-3-phone-sanitized-partner-lookup";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -21955,7 +21955,7 @@ function normalizeOdooPartnerDetails(partner = {}) {
     180
   );
   const email = aiModeSafeString(partner.email || "", 240);
-  const phone = whatsappCallCleanPhone(partner.mobile || partner.phone || "");
+  const phone = whatsappCallCleanPhone(partner.mobile || partner.phone_sanitized || partner.mobile || partner.phone || "");
   return {
     id: partner.id || false,
     name: partnerName,
@@ -21964,6 +21964,8 @@ function normalizeOdooPartnerDetails(partner = {}) {
     email,
     phone,
     mobile: whatsappCallCleanPhone(partner.mobile || ""),
+    phone_sanitized: whatsappCallCleanPhone(partner.phone_sanitized || ""),
+    phone_mobile_search: whatsappCallCleanPhone(partner.phone_mobile_search || ""),
     contact_source: partner.id ? "odoo_partner" : "none"
   };
 }
@@ -22054,7 +22056,7 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
         uid,
         "res.partner",
         "read",
-        [partnerIds, ["id", "name", "display_name", "email", "phone", "mobile", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id"]]
+        [partnerIds, ["id", "name", "display_name", "complete_name", "email", "phone", "mobile", "phone_sanitized", "phone_mobile_search", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id", "is_company", "company_type"]]
       );
       for (const partner of partners || []) {
         const details = normalizeOdooPartnerDetails(partner);
@@ -22103,36 +22105,163 @@ function odooDateTimeFromMs(value = Date.now()) {
   return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 19).replace("T", " ") : false;
 }
 
+function odooOrDomain(conditions = []) {
+  const valid = (conditions || []).filter(Boolean);
+  if (!valid.length) return [];
+  if (valid.length === 1) return valid[0];
+  return ["|", valid[0], odooOrDomain(valid.slice(1))];
+}
+
 async function findOdooPartnerForCallPhone(phone = "") {
   if (!odooConfigured) return null;
   const clean = whatsappCallCleanPhone(phone);
   if (!clean) return null;
-  const key = clean.slice(-10) || clean;
+
+  // Phase 3.5.3: prefer Odoo's normalized phone fields when available.
+  // res.partner has phone_sanitized and phone_mobile_search, so use them first;
+  // then fall back to shorter fragments for human-formatted phones like "+91 97181 95182".
+  const key10 = clean.slice(-10) || clean;
+  const needles = Array.from(new Set([
+    clean,
+    key10,
+    clean.slice(-8),
+    clean.slice(-6),
+    clean.slice(-5)
+  ].filter((v) => String(v || "").length >= 5)));
+
+  const partnerFields = [
+    "id",
+    "name",
+    "display_name",
+    "complete_name",
+    "phone",
+    "mobile",
+    "phone_sanitized",
+    "phone_mobile_search",
+    "email",
+    "company_name",
+    "commercial_company_name",
+    "parent_id",
+    "commercial_partner_id",
+    "is_company",
+    "company_type"
+  ];
+
   try {
     const uid = await odooLoginCached();
-    const rows = await odooExecute(
-      uid,
-      "res.partner",
-      "search_read",
-      [["|", "|", ["phone", "ilike", key], ["mobile", "ilike", key], ["commercial_partner_id.phone", "ilike", key]], ["id", "name", "display_name", "phone", "mobile", "email", "company_name", "commercial_company_name", "parent_id", "commercial_partner_id"]],
-      { limit: 8 }
-    );
-    const ranked = (rows || []).map((row) => {
+    const byId = new Map();
+
+    for (const needle of needles) {
+      const conditions = [
+        ["phone_sanitized", "ilike", needle],
+        ["phone_mobile_search", "ilike", needle],
+        ["phone", "ilike", needle],
+        ["mobile", "ilike", needle]
+      ];
+      const domain = odooOrDomain(conditions);
+      const rows = await odooExecute(
+        uid,
+        "res.partner",
+        "search_read",
+        [domain, partnerFields],
+        { limit: 20 }
+      ).catch((error) => {
+        // Some Odoo databases may not expose every phone helper field through RPC.
+        console.warn(`Odoo partner lookup attempt failed for ${needle}:`, error?.message || error);
+        return [];
+      });
+      for (const row of rows || []) {
+        if (row?.id && !byId.has(row.id)) byId.set(row.id, row);
+      }
+      if (byId.size >= 5) break;
+    }
+
+    // Last-resort fallback using just phone/mobile if helper fields failed.
+    if (!byId.size) {
+      for (const needle of needles.slice(1)) {
+        const domain = odooOrDomain([
+          ["phone", "ilike", needle],
+          ["mobile", "ilike", needle]
+        ]);
+        const rows = await odooExecute(
+          uid,
+          "res.partner",
+          "search_read",
+          [domain, partnerFields.filter((f) => !["phone_sanitized", "phone_mobile_search"].includes(f))],
+          { limit: 20 }
+        ).catch(() => []);
+        for (const row of rows || []) {
+          if (row?.id && !byId.has(row.id)) byId.set(row.id, row);
+        }
+        if (byId.size) break;
+      }
+    }
+
+    const ranked = [...byId.values()].map((row) => {
       const phoneA = whatsappCallCleanPhone(row?.phone || "");
       const phoneB = whatsappCallCleanPhone(row?.mobile || "");
+      const sanitized = whatsappCallCleanPhone(row?.phone_sanitized || "");
+      const mobileSearch = whatsappCallCleanPhone(row?.phone_mobile_search || "");
       let score = 0;
-      if (phoneA === clean || phoneB === clean) score += 120;
-      if (phoneA.endsWith(key) || phoneB.endsWith(key)) score += 70;
-      if (row?.display_name || row?.name) score += 20;
+
+      if (sanitized === clean || mobileSearch === clean || phoneA === clean || phoneB === clean) score += 220;
+      if (sanitized.endsWith(key10) || mobileSearch.endsWith(key10) || phoneA.endsWith(key10) || phoneB.endsWith(key10)) score += 160;
+      if (phoneA && clean.endsWith(phoneA.slice(-10))) score += 80;
+      if (phoneB && clean.endsWith(phoneB.slice(-10))) score += 80;
+      if (sanitized || mobileSearch) score += 35;
+      if (row?.display_name || row?.complete_name || row?.name) score += 20;
+      if (row?.company_name) score += 18;
+      if (row?.commercial_company_name || row?.parent_id || row?.commercial_partner_id) score += 12;
       if (row?.email) score += 8;
-      if (row?.commercial_company_name || row?.company_name || row?.parent_id) score += 8;
+
       return { ...row, ...normalizeOdooPartnerDetails(row), score };
     }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
     return ranked[0] || null;
   } catch (error) {
     console.warn("Odoo call partner lookup failed:", error?.message || error);
     return null;
   }
+}
+
+function applyOdooPartnerDetailsToCall(call = {}, partner = null) {
+  if (!partner?.id) return call;
+  const phone = whatsappCallCleanPhone(call?.customer_phone || "");
+  const partnerName = whatsappCallValidDisplayName(partner.display_name || partner.name, phone) || call.customer_name || "";
+  return {
+    ...call,
+    customer_name: aiModeSafeString(partnerName || call.customer_name || phone || "WhatsApp caller", 160),
+    partner_id: partner.id || call.partner_id || false,
+    partner_name: aiModeSafeString(partnerName || call.partner_name || "", 180),
+    partner_company: aiModeSafeString(partner.company_name || call.partner_company || call.company_name || "", 180),
+    company_name: aiModeSafeString(partner.company_name || call.company_name || call.partner_company || "", 180),
+    partner_email: aiModeSafeString(partner.email || call.partner_email || call.email || "", 240),
+    email: aiModeSafeString(partner.email || call.email || call.partner_email || "", 240),
+    contact_source: partner.contact_source || call.contact_source || "odoo_partner_phone_lookup"
+  };
+}
+
+async function enrichWhatsappCallLifecyclesWithOdooPartners(calls = []) {
+  if (!odooConfigured || !Array.isArray(calls) || !calls.length) return calls;
+  const cache = new Map();
+  const enriched = [];
+
+  for (const call of calls) {
+    const phone = whatsappCallCleanPhone(call?.customer_phone || "");
+    const key = whatsappCallLast10(phone);
+    const needsLookup = phone && (!call?.partner_id || !call?.partner_company || !call?.partner_email);
+    if (!needsLookup) {
+      enriched.push(call);
+      continue;
+    }
+
+    if (!cache.has(key)) {
+      cache.set(key, await findOdooPartnerForCallPhone(phone));
+    }
+    enriched.push(applyOdooPartnerDetailsToCall(call, cache.get(key)));
+  }
+
+  return enriched;
 }
 
 async function saveWhatsappCallEventToOdoo(row = {}) {
@@ -22310,7 +22439,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-5-1-diagnostics-completeness-2026-05-28",
+    version: "phase3-5-2-phone-partner-lookup-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22334,11 +22463,11 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
       odooError = error?.message || String(error);
     }
     const combined = [...odooRows, ...localRows];
-    const lifecycles = collapseWhatsappCallLifecycles(combined).slice(0, Math.min(Number(req.query.limit || 20), 80));
+    const lifecycles = await enrichWhatsappCallLifecyclesWithOdooPartners(collapseWhatsappCallLifecycles(combined).slice(0, Math.min(Number(req.query.limit || 20), 80)));
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-5-1-diagnostics-completeness-2026-05-28",
+      version: "phase3-5-2-phone-partner-lookup-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -22639,7 +22768,7 @@ app.get("/api/whatsapp-calls/recent", async (req, res) => {
     if (!localRows.length && allRows.length) localRows = allRows;
 
     const sourceRows = [...odooRows, ...localRows];
-    const calls = collapseWhatsappCallLifecycles(sourceRows).slice(0, limit);
+    const calls = await enrichWhatsappCallLifecyclesWithOdooPartners(collapseWhatsappCallLifecycles(sourceRows).slice(0, limit));
     return res.json({
       ok: true,
       normalized: true,
