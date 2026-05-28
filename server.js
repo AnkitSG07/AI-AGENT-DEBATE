@@ -21541,8 +21541,38 @@ function whatsappCallExtractSdp(row = {}) {
   );
 }
 
+function whatsappCallExtractSdpType(row = {}) {
+  return String(
+    row?.session?.sdp_type ||
+    row?.session?.type ||
+    row?.raw?.call?.session?.sdp_type ||
+    row?.raw?.call?.session?.type ||
+    row?.raw?.call?.connect?.session?.sdp_type ||
+    row?.raw?.call?.connect?.session?.type ||
+    row?.raw?.call?.answer?.session?.sdp_type ||
+    row?.raw?.call?.answer?.session?.type ||
+    row?.graph?.session?.sdp_type ||
+    row?.graph?.session?.type ||
+    ""
+  ).toLowerCase();
+}
+
 function whatsappCallHasSdp(row = {}) {
   return !!whatsappCallExtractSdp(row);
+}
+
+function whatsappCallRowHasRemoteAnswerSdp(row = {}) {
+  if (!whatsappCallHasSdp(row)) return false;
+  const type = whatsappCallExtractSdpType(row);
+  const source = String(row?.source || "").toLowerCase();
+  const direction = String(row?.direction || "").toLowerCase();
+  const event = String(row?.event || row?.status || "").toLowerCase();
+  // Phase 2: outgoing call answer detection. The browser sends an offer to
+  // Meta. A later webhook SDP for the same outgoing call is treated as the
+  // remote answer unless it is explicitly marked as an offer.
+  if (type.includes("answer") || type.includes("pranswer")) return true;
+  if (type.includes("offer")) return false;
+  return direction === "outgoing" && source.includes("whatsapp_calls_webhook") && !event.includes("outgoing");
 }
 
 function whatsappCallFindByCallId(calls = [], callId = "") {
@@ -21615,13 +21645,14 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   const latestEvent = String(latest?.event || latest?.status || "").toLowerCase();
   const anyAccepted = ordered.some((r) => /accepted|accept|connected/.test(String(r?.event || r?.status || "").toLowerCase()));
   const anyOutgoing = ordered.some(whatsappCallRowLooksOutgoing) || direction === "outgoing";
+  const anyOutgoingRemoteAnswer = direction === "outgoing" && ordered.some(whatsappCallRowHasRemoteAnswerSdp);
 
   if (/failed/.test(latestEvent)) return "failed";
   if (/busy/.test(latestEvent)) return "busy";
   if (/reject|rejected|declin/.test(latestEvent)) return direction === "incoming" ? "declined" : "rejected";
   if (/miss|timeout|no.answer|no_answer|unanswered/.test(latestEvent)) return direction === "incoming" ? "missed" : "no_answer";
-  if (/terminate|terminated|end|ended/.test(latestEvent)) return anyAccepted ? "ended" : (direction === "incoming" ? "missed" : "ended");
-  if (anyAccepted) return "connected";
+  if (/terminate|terminated|end|ended/.test(latestEvent)) return anyAccepted || anyOutgoingRemoteAnswer ? "ended" : (direction === "incoming" ? "missed" : "ended");
+  if (anyAccepted || anyOutgoingRemoteAnswer) return "connected";
   if (anyOutgoing) return "outgoing_ringing";
   if (/connect|ringing|incoming|pre_accept/.test(latestEvent)) return "incoming_ringing";
   return direction === "outgoing" ? "outgoing_ringing" : "unknown";
@@ -21636,7 +21667,9 @@ function whatsappCallLifecycleFromRows(rows = []) {
   const direction = validRows.some(whatsappCallRowLooksOutgoing) ? "outgoing" : "incoming";
   const status = whatsappCallStatusFromRows(validRows, direction);
   const latest = validRows[0];
-  const sdpRow = validRows.find(whatsappCallHasSdp) || null;
+  const sdpRow = direction === "outgoing"
+    ? (validRows.find(whatsappCallRowHasRemoteAnswerSdp) || validRows.find(whatsappCallHasSdp) || null)
+    : (validRows.find(whatsappCallHasSdp) || null);
   const customerPhone = whatsappCallCustomerPhoneFromRows(validRows, direction);
   const nowMs = Date.now();
   const latestMs = whatsappCallTimestampMs(latest) || nowMs;
@@ -21655,8 +21688,10 @@ function whatsappCallLifecycleFromRows(rows = []) {
     customer_name: aiModeSafeString(validRows.find((r) => r?.customer_name)?.customer_name || validRows.find((r) => r?.name)?.name || customerPhone || "WhatsApp caller", 160),
     phone_number_id: aiModeSafeString(validRows.find((r) => r?.phone_number_id)?.phone_number_id || latest?.raw?.metadata?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID || "", 120),
     has_sdp: !!sdpRow,
-    session: sdpRow?.session || sdpRow?.raw?.call?.session || sdpRow?.raw?.call?.connect?.session || null,
+    session: sdpRow?.session || sdpRow?.raw?.call?.session || sdpRow?.raw?.call?.connect?.session || sdpRow?.raw?.call?.answer?.session || null,
     sdp: sdpRow ? whatsappCallExtractSdp(sdpRow) : "",
+    sdp_type: sdpRow ? whatsappCallExtractSdpType(sdpRow) : "",
+    remote_answer_available: direction === "outgoing" && !!sdpRow && whatsappCallRowHasRemoteAnswerSdp(sdpRow),
     event: latest?.event || latest?.status || status,
     latest_event: latest?.event || latest?.status || "",
     started_at: new Date((validRows[validRows.length - 1] ? whatsappCallTimestampMs(validRows[validRows.length - 1]) : latestMs) || latestMs).toISOString(),
@@ -21857,7 +21892,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase1-call-engine-2026-05-27",
+    version: "phase2-outgoing-answer-2026-05-28",
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
     own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
