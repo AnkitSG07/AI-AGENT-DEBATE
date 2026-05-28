@@ -21,7 +21,7 @@
 <script>
 
 const $ = (id) => document.getElementById(id);
-const CALL_UI_VERSION = 'phase1-call-engine-2026-05-27-v1';
+const CALL_UI_VERSION = 'phase2-1-history-classification-2026-05-28-v1';
 let currentSub = null;
 let device = loadDevice();
 let callsCache = [];
@@ -84,7 +84,7 @@ function callPhone(c){return c.customer_phone||c.customerPhone||c.phone||c.from|
 function callIdOf(c){return c.call_id||c.callId||c.id||c.call?.id||''}
 function callInitial(c){const s=String(callName(c)||callPhone(c)||'?').trim();return(s[0]||'?').toUpperCase()}
 function eventText(c){return String(c.status||c.event||c.type||c.direction||c.action||'WhatsApp call')}
-function callKind(c){const direction=String(c.direction||'').toLowerCase();const status=String(c.status||eventText(c)||'').toLowerCase();if(direction==='outgoing')return'outgoing';if(/miss|declin|reject|failed|ended|terminate|timeout|no.answer|no_answer|unanswered|busy/.test(status))return'missed';return'incoming'}
+function callKind(c){const direction=String(c.direction||'').toLowerCase();const status=String(c.status||eventText(c)||'').toLowerCase();if(direction==='outgoing')return'outgoing';if(/miss|declin|reject|failed|timeout|no.answer|no_answer|unanswered|busy/.test(status))return'missed';return'incoming'}
 function statusLabel(c){const s=String(c.status||eventText(c)||'').replace(/_/g,' ');return s? s[0].toUpperCase()+s.slice(1):'Call'}
 function dedupeCalls(rows=[]){const map=new Map();for(const r of rows||[]){const id=callIdOf(r)||`${callPhone(r)}-${r.timestamp||r.date||Math.random()}`;const prev=map.get(id);if(!prev||Number(r.timestamp||0)>=Number(prev.timestamp||0))map.set(id,r)}return[...map.values()].sort((a,b)=>Number(b.timestamp||0)-Number(a.timestamp||0))}
 function cardHtml(c){const kind=callKind(c),name=esc(callName(c)),ph=esc(callPhone(c)),digits=cleanPhone(ph),time=esc(shortTime(c.date||c.updated_at||c.received_at||c.created_at||c.timestamp||c.time||''));const label=kind==='outgoing'?'Call Again':'Call Back';const disabled=!digits||isOwnNumber(digits);const call=disabled?`<button class="client-call" disabled>${isOwnNumber(digits)?'Own No.':'No No.'}</button>`:`<button class="client-call" data-out-phone="${digits}" data-out-name="${name}">${label}</button>`;return `<div class="client-card ${kind}"><div class="client-avatar">${esc(callInitial(c))}</div><div class="client-name">${name}</div><div class="client-phone">${digits?('+'+digits):'No number'}</div><div class="client-meta">${esc(statusLabel(c))}${time?' • '+time:''}</div><div class="client-badge ${kind}">${kind}</div><div class="card-actions">${call}</div></div>`}
