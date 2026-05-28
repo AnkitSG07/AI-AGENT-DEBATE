@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-7-cache-deploy-reliability";
+const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-10-odoo-notes-followup-sync";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -20686,21 +20686,7 @@ function startAiModeBackgroundWorker() {
 // Use this page once on each operator phone to allow notifications and save a push subscription.
 // The actual Operator Hub may still remain inside Odoo; tapping a notification opens OPERATOR_HUB_URL.
 app.get(["/operator-notifications", "/operator-hub"], (req, res) => {
-  setOperatorNoStoreHeaders(res);
   res.sendFile(`${process.cwd()}/public/operator-notifications.html`);
-});
-
-app.get("/api/operator-app/version", (req, res) => {
-  setOperatorNoStoreHeaders(res);
-  return res.json({
-    ok: true,
-    version: "phase3-7-cache-deploy-reliability-2026-05-28",
-    server_patch_version: SERVER_PATCH_VERSION,
-    generated_at: new Date().toISOString(),
-    cache_policy: "operator page, service worker, diagnostics, and version endpoints are no-store",
-    odoo_configured: !!odooConfigured,
-    odoo_call_log_model: ODOO_CALL_MODEL
-  });
 });
 
 // Lightweight Render-hosted WhatsApp call receiver.
@@ -21945,6 +21931,12 @@ function whatsappCallLifecycleFromRows(rows = []) {
     timestamp: Math.floor(latestMs / 1000),
     date: new Date(latestMs).toISOString(),
     events_count: validRows.length,
+    note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_note)?.x_studio_x_note || "", 4000),
+    call_note: aiModeSafeString(validRows.find((r) => r?.note || r?.call_note || r?.x_studio_x_note)?.note || validRows.find((r) => r?.call_note || r?.x_studio_x_note)?.call_note || validRows.find((r) => r?.x_studio_x_note)?.x_studio_x_note || "", 4000),
+    followup_status: aiModeSafeString(validRows.find((r) => r?.followup_status || r?.x_studio_x_followup_status)?.followup_status || validRows.find((r) => r?.x_studio_x_followup_status)?.x_studio_x_followup_status || "none", 40) || "none",
+    callback_done: validRows.some((r) => r?.callback_done === true || r?.x_studio_x_callback_done === true),
+    callback_done_at: aiModeSafeString(validRows.find((r) => r?.callback_done_at || r?.x_studio_x_callback_done_at)?.callback_done_at || validRows.find((r) => r?.x_studio_x_callback_done_at)?.x_studio_x_callback_done_at || "", 80),
+    note_updated_at: aiModeSafeString(validRows.find((r) => r?.note_updated_at || r?.x_studio_x_note_updated_at)?.note_updated_at || validRows.find((r) => r?.x_studio_x_note_updated_at)?.x_studio_x_note_updated_at || "", 80),
     source: "whatsapp_call_lifecycle",
     latest_row: latest,
     events: validRows.slice(0, 20)
@@ -22111,6 +22103,12 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
     date: new Date(tsMs).toISOString(),
     received_at: row?.x_studio_x_last_event_at || row?.write_date || "",
     duration_seconds: Number(row?.x_studio_x_duration_seconds || 0),
+    note: aiModeSafeString(row?.x_studio_x_note || "", 4000),
+    call_note: aiModeSafeString(row?.x_studio_x_note || "", 4000),
+    followup_status: aiModeSafeString(row?.x_studio_x_followup_status || "none", 40) || "none",
+    callback_done: row?.x_studio_x_callback_done === true,
+    callback_done_at: row?.x_studio_x_callback_done_at || "",
+    note_updated_at: row?.x_studio_x_note_updated_at || "",
     source: "odoo_call_log",
     raw: { odoo_call_log: row, partner: partnerDetails || null }
   };
@@ -22138,6 +22136,11 @@ async function readOdooWhatsappCallLogRows(limit = 100) {
     "x_studio_x_call_ended_at",
     "x_studio_x_last_event_at",
     "x_studio_x_duration_seconds",
+    "x_studio_x_note",
+    "x_studio_x_followup_status",
+    "x_studio_x_callback_done",
+    "x_studio_x_callback_done_at",
+    "x_studio_x_note_updated_at",
     "write_date",
     "create_date"
   ];
@@ -22379,6 +22382,100 @@ async function enrichWhatsappCallLifecyclesWithOdooPartners(calls = []) {
   return enriched;
 }
 
+
+function normalizeCallFollowupStatus(value = "none") {
+  const v = String(value || "none").trim().toLowerCase();
+  if (["needed", "followup_needed", "follow-up needed", "follow_up_needed"].includes(v)) return "needed";
+  if (["done", "followup_done", "follow-up done", "follow_up_done"].includes(v)) return "done";
+  return "none";
+}
+
+async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", followupStatus = "none", callbackDone = null } = {}) {
+  if (!odooConfigured) throw new Error("Odoo not configured.");
+  const uid = await odooLoginCached();
+  const safeCallId = aiModeSafeString(callId || "", 220);
+  const safeOdooId = Number(odooId || 0);
+  let ids = [];
+
+  if (safeOdooId > 0) {
+    ids = [safeOdooId];
+  } else if (safeCallId) {
+    ids = await odooExecute(
+      uid,
+      ODOO_CALL_LOG_MODEL,
+      "search",
+      [[ ["x_studio_x_call_id", "=", safeCallId] ]],
+      { limit: 1 }
+    );
+  }
+
+  const id = Array.isArray(ids) ? Number(ids[0] || 0) : 0;
+  if (!id) {
+    const label = safeCallId || safeOdooId || "unknown";
+    const err = new Error(`Odoo call log not found for ${label}.`);
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const nowValue = odooDateTimeFromMs(Date.now());
+  const vals = {
+    x_studio_x_note: aiModeSafeString(note || "", 10000),
+    x_studio_x_followup_status: normalizeCallFollowupStatus(followupStatus),
+    x_studio_x_note_updated_at: nowValue
+  };
+
+  if (callbackDone !== null && callbackDone !== undefined) {
+    const done = callbackDone === true || String(callbackDone).toLowerCase() === "true";
+    vals.x_studio_x_callback_done = done;
+    vals.x_studio_x_callback_done_at = done ? nowValue : false;
+  }
+
+  await odooExecute(uid, ODOO_CALL_LOG_MODEL, "write", [[id], vals]);
+
+  const rows = await odooExecute(
+    uid,
+    ODOO_CALL_LOG_MODEL,
+    "read",
+    [[id], [
+      "id",
+      "x_name",
+      "display_name",
+      "x_studio_x_call_id",
+      "x_studio_x_customer_phone",
+      "x_studio_x_customer_name",
+      "x_studio_x_partner_id",
+      "x_studio_x_direction",
+      "x_studio_x_event",
+      "x_studio_event_1",
+      "x_studio_x_status",
+      "x_studio_x_phone_number_id",
+      "x_studio_x_call_started_at",
+      "x_studio_x_call_ended_at",
+      "x_studio_x_last_event_at",
+      "x_studio_x_duration_seconds",
+      "x_studio_x_note",
+      "x_studio_x_followup_status",
+      "x_studio_x_callback_done",
+      "x_studio_x_callback_done_at",
+      "x_studio_x_note_updated_at",
+      "write_date",
+      "create_date"
+    ]]
+  ).catch(() => []);
+
+  return {
+    ok: true,
+    id,
+    odoo_id: id,
+    call_id: rows?.[0]?.x_studio_x_call_id || safeCallId,
+    note: vals.x_studio_x_note,
+    followup_status: vals.x_studio_x_followup_status,
+    callback_done: vals.x_studio_x_callback_done === true,
+    callback_done_at: vals.x_studio_x_callback_done_at || "",
+    row: rows?.[0] || null
+  };
+}
+
 async function saveWhatsappCallEventToOdoo(row = {}) {
   if (!odooConfigured) return { ok: false, skipped: true, reason: "odoo_not_configured" };
   const callId = aiModeSafeString(row?.call_id || row?.callId || row?.id || "", 220);
@@ -22554,7 +22651,7 @@ async function whatsappCallGraphAction({ phoneNumberId, callId, action, sdp = ""
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-7-cache-deploy-reliability-2026-05-28",
+    version: "phase3-5-7-company-preserve-composite-2026-05-28",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -22563,8 +22660,41 @@ app.get("/api/whatsapp-calls/config", async (req, res) => {
     odoo_call_log_model: ODOO_CALL_LOG_MODEL,
     active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
     outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS,
-    note: "Phase 3.7 diagnostics/version endpoints are read-only. They do not create call history."
+    note: "Phase 3.5 diagnostics are read-only. They do not create call history."
   });
+});
+
+
+app.post("/api/odoo/call-log/update-note", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await updateOdooCallLogNote({
+      callId: body.call_id || body.callId || "",
+      odooId: body.odoo_id || body.odooId || 0,
+      note: body.note || body.call_note || "",
+      followupStatus: body.followup_status || body.followupStatus || "none",
+      callbackDone: body.callback_done === undefined ? null : body.callback_done
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/whatsapp-calls/note", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await updateOdooCallLogNote({
+      callId: body.call_id || body.callId || "",
+      odooId: body.odoo_id || body.odooId || 0,
+      note: body.note || body.call_note || "",
+      followupStatus: body.followup_status || body.followupStatus || "none",
+      callbackDone: body.callback_done === undefined ? null : body.callback_done
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
+  }
 });
 
 app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
@@ -22582,7 +22712,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-7-cache-deploy-reliability-2026-05-28",
+      version: "phase3-5-7-company-preserve-composite-2026-05-28",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
