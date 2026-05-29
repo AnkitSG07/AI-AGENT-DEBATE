@@ -197,6 +197,7 @@ function needsFollowup(c){return followupStatusOf(c)==='needed'}
 function followupDone(c){return followupStatusOf(c)==='done'}
 function hasCallNote(c){return !!noteTextOf(c)}
 function quotationStatusOf(c={}){const entry=getCallNoteEntry(c)||{};const raw=entry.quotation_status||c.quotation_status||c.x_studio_quotation_status||'';const v=String(raw||'none').trim().toLowerCase().replace(/[\s-]+/g,'_');if(['pending','created','not_required','none'].includes(v))return v;if(outcomeOf(c)==='quotation_needed')return 'pending';return 'none'}
+function quotationStatusLabel(v){const q=String(v||'none').trim().toLowerCase().replace(/[\s-]+/g,'_');if(q==='pending')return 'Quotation pending';if(q==='created')return 'Quotation created';if(q==='not_required')return 'No quotation required';return ''}
 function needsQuotation(c){const q=quotationStatusOf(c);if(q==='created'||q==='not_required')return false;if(q==='pending')return true;return outcomeOf(c)==='quotation_needed'&&followupStatusOf(c)!=='done'}
 function odooCallLogUrl(c={}){return String(c.odoo_call_log_url||c.odooCallLogUrl||'').trim()}
 function odooPartnerUrl(c={}){return String(c.odoo_partner_url||c.odooPartnerUrl||'').trim()}
