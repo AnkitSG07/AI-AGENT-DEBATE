@@ -22136,6 +22136,15 @@ function normalizeOdooPartnerDetails(partner = {}) {
   };
 }
 
+
+function odooWebRecordUrl(model = "", id = 0) {
+  const base = String(ODOO_URL || "").replace(/\/$/, "");
+  const safeModel = aiModeSafeString(model || "", 120);
+  const safeId = Number(id || 0);
+  if (!base || !safeModel || !safeId) return "";
+  return `${base}/web#id=${encodeURIComponent(safeId)}&model=${encodeURIComponent(safeModel)}&view_type=form`;
+}
+
 function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
   const tsMs = odooCallLogTimestampMs(row);
   const callId = aiModeSafeString(row?.x_studio_x_call_id || `odoo-${row?.id || tsMs}`, 220);
@@ -22163,6 +22172,7 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
   return {
     id: `odoo-${row?.id || callId}`,
     odoo_id: row?.id || 0,
+    odoo_call_log_url: odooWebRecordUrl(ODOO_CALL_LOG_MODEL, row?.id || 0),
     call_id: callId,
     event,
     status: row?.x_studio_x_status || "",
@@ -22170,6 +22180,7 @@ function normalizeOdooCallLogRow(row = {}, partnerDetailsById = new Map()) {
     customer_phone: phone,
     customer_name: customerName,
     partner_id: partnerId,
+    odoo_partner_url: odooWebRecordUrl("res.partner", partnerId || 0),
     partner_name: bestPartnerName || partnerName,
     partner_company: bestCompanyName,
     company_name: bestCompanyName,
@@ -22979,7 +22990,7 @@ async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "") {
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-19-1-quotation-status-sync-2026-05-29",
+    version: "phase3-20-manual-quotation-handoff-2026-05-29",
     server_patch_version: SERVER_PATCH_VERSION,
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
@@ -23044,7 +23055,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-19-1-quotation-status-sync-2026-05-29",
+      version: "phase3-20-manual-quotation-handoff-2026-05-29",
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -23059,6 +23070,8 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
         customer_phone: c.customer_phone || "",
         customer_name: c.customer_name || "",
         partner_id: c.partner_id || false,
+        odoo_call_log_url: c.odoo_call_log_url || "",
+        odoo_partner_url: c.odoo_partner_url || "",
         partner_name: c.partner_name || "",
         company_name: c.partner_company || c.company_name || "",
         email: c.partner_email || c.email || "",
