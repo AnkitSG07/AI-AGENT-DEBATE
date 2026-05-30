@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-28-call-engine-phase3-13-4-talktime-client-duration";
+const SERVER_PATCH_VERSION = "2026-05-30-call-engine-phase4-1-operator-lock";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -23089,16 +23089,160 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
   }
 });
 
+
+// ===================== PHASE 4.1 OPERATOR CALL LOCKS =====================
+// In-memory call ownership lock. This prevents two operator devices from
+// accepting/handling the same live incoming call at the same time.
+// Safe behavior: GET/read routes do not create history. Locks are transient
+// and expire automatically.
+const OPERATOR_CALL_LOCK_TTL_MS = Math.max(30000, Number(process.env.OPERATOR_CALL_LOCK_TTL_MS || 120000));
+const operatorCallLocks = new Map(); // call_id -> lock
+
+function operatorLockNowMs() {
+  return Date.now();
+}
+
+function cleanOperatorCallLocks() {
+  const nowMs = operatorLockNowMs();
+  for (const [callId, lock] of operatorCallLocks.entries()) {
+    if (!lock?.expires_at_ms || lock.expires_at_ms <= nowMs) {
+      operatorCallLocks.delete(callId);
+    }
+  }
+}
+
+function normalizeOperatorLockPayload(body = {}) {
+  return {
+    call_id: aiModeSafeString(body.call_id || body.callId || "", 220),
+    operator_device_id: aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160),
+    operator_name: aiModeSafeString(body.operator_name || body.operatorName || body.operator || "Operator", 160),
+    device_label: aiModeSafeString(body.device_label || body.deviceLabel || "", 160),
+    action: aiModeSafeString(body.action || "handling", 80)
+  };
+}
+
+function getOperatorCallLock(callId = "") {
+  cleanOperatorCallLocks();
+  const safeCallId = aiModeSafeString(callId || "", 220);
+  if (!safeCallId) return null;
+  return operatorCallLocks.get(safeCallId) || null;
+}
+
+function claimOperatorCallLock(body = {}) {
+  cleanOperatorCallLocks();
+  const payload = normalizeOperatorLockPayload(body);
+  if (!payload.call_id) throw new Error("call_id is required to claim call lock.");
+  if (!payload.operator_device_id) throw new Error("operator_device_id is required to claim call lock.");
+
+  const existing = operatorCallLocks.get(payload.call_id);
+  const nowMs = operatorLockNowMs();
+  if (existing && existing.operator_device_id !== payload.operator_device_id && existing.expires_at_ms > nowMs) {
+    return {
+      ok: false,
+      locked: true,
+      error: "Call is already being handled by another operator.",
+      lock: existing
+    };
+  }
+
+  const lock = {
+    call_id: payload.call_id,
+    operator_device_id: payload.operator_device_id,
+    operator_name: payload.operator_name,
+    device_label: payload.device_label,
+    action: payload.action,
+    claimed_at: new Date(nowMs).toISOString(),
+    claimed_at_ms: nowMs,
+    expires_at: new Date(nowMs + OPERATOR_CALL_LOCK_TTL_MS).toISOString(),
+    expires_at_ms: nowMs + OPERATOR_CALL_LOCK_TTL_MS
+  };
+
+  operatorCallLocks.set(payload.call_id, lock);
+  return { ok: true, locked: false, lock };
+}
+
+function releaseOperatorCallLock(body = {}) {
+  cleanOperatorCallLocks();
+  const payload = normalizeOperatorLockPayload(body);
+  const callId = payload.call_id;
+  if (!callId) return { ok: true, released: false, reason: "missing_call_id" };
+  const existing = operatorCallLocks.get(callId);
+  if (!existing) return { ok: true, released: false, reason: "not_locked" };
+  if (payload.operator_device_id && existing.operator_device_id && payload.operator_device_id !== existing.operator_device_id) {
+    return { ok: false, released: false, error: "Call lock belongs to another operator.", lock: existing };
+  }
+  operatorCallLocks.delete(callId);
+  return { ok: true, released: true, call_id: callId };
+}
+
+function attachOperatorLockToCall(call = {}, requesterDeviceId = "") {
+  if (!call || typeof call !== "object") return call;
+  const lock = getOperatorCallLock(call.call_id || call.id || "");
+  if (!lock) {
+    return {
+      ...call,
+      lock: null,
+      locked: false,
+      locked_by_other: false
+    };
+  }
+  const deviceId = aiModeSafeString(requesterDeviceId || "", 160);
+  return {
+    ...call,
+    lock,
+    locked: true,
+    locked_by_other: !!(deviceId && lock.operator_device_id && lock.operator_device_id !== deviceId)
+  };
+}
+
+app.get("/api/operator-call-locks/active", async (req, res) => {
+  try {
+    cleanOperatorCallLocks();
+    const callId = aiModeSafeString(req.query.call_id || req.query.callId || "", 220);
+    const locks = [...operatorCallLocks.values()];
+    if (callId) {
+      const lock = getOperatorCallLock(callId);
+      return res.json({ ok: true, call_id: callId, locked: !!lock, lock });
+    }
+    return res.json({ ok: true, count: locks.length, locks });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/operator-call-locks/claim", async (req, res) => {
+  try {
+    const result = claimOperatorCallLock(req.body || {});
+    return res.status(result.ok ? 200 : 409).json(result);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
+app.post("/api/operator-call-locks/release", async (req, res) => {
+  try {
+    const result = releaseOperatorCallLock(req.body || {});
+    return res.status(result.ok ? 200 : 409).json(result);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error?.message || String(error) });
+  }
+});
+
 app.get("/api/whatsapp-calls/incoming", async (req, res) => {
   try {
+    const requesterDeviceId = aiModeSafeString(req.query.operator_device_id || req.query.device_id || req.query.deviceId || "", 160);
     const lifecycles = collapseWhatsappCallLifecycles(await readWhatsappCallLogs());
     const openCalls = lifecycles
       .filter((call) => {
         if (call.direction !== "incoming") return false;
         if (!call.active) return false;
         if (whatsappCallIsOwnNumber(call.customer_phone)) return false;
-        return call.status === "incoming_ringing" || call.answerable;
+        if (!(call.status === "incoming_ringing" || call.answerable)) return false;
+        const lock = getOperatorCallLock(call.call_id || call.id || "");
+        if (lock && requesterDeviceId && lock.operator_device_id !== requesterDeviceId) return false;
+        return true;
       })
+      .map((call) => attachOperatorLockToCall(call, requesterDeviceId))
       .slice(0, 20);
     return res.json({ ok: true, normalized: true, count: openCalls.length, calls: openCalls });
   } catch (error) {
@@ -23121,7 +23265,8 @@ app.get("/api/whatsapp-calls/:callId", async (req, res, next) => {
     const rows = calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(safeCallId));
     const call = whatsappCallLifecycleFromRows(rows);
     if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
-    return res.json({ ok: true, normalized: true, call, events: call.events || [] });
+    const requesterDeviceId = aiModeSafeString(req.query.operator_device_id || req.query.device_id || req.query.deviceId || "", 160);
+    return res.json({ ok: true, normalized: true, call: attachOperatorLockToCall(call, requesterDeviceId), events: call.events || [] });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -23294,6 +23439,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
 });
 
 app.post("/api/whatsapp-calls/accept", async (req, res) => {
+  let claimedLock = null;
   try {
     const body = req.body || {};
     const calls = await readWhatsappCallLogs();
@@ -23306,14 +23452,48 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
     const sdpType = aiModeSafeString(body.sdp_type || body.sdpType || body.localDescription?.type || "answer", 40);
     if (!sdp) throw new Error("Browser WebRTC answer SDP is required to accept the WhatsApp call.");
 
+    const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
+    if (operatorDeviceId) {
+      const claim = claimOperatorCallLock({
+        call_id: callId,
+        operator_device_id: operatorDeviceId,
+        operator_name: body.operator_name || body.operatorName || "",
+        device_label: body.device_label || body.deviceLabel || "",
+        action: "accepting"
+      });
+      if (!claim.ok) {
+        return res.status(409).json({
+          ok: false,
+          locked: true,
+          error: claim.error || "Call is already being handled by another operator.",
+          lock: claim.lock
+        });
+      }
+      claimedLock = claim.lock;
+    }
+
     let preAccept = null;
     if (WHATSAPP_CALL_PRE_ACCEPT_ENABLED) {
       preAccept = await whatsappCallGraphAction({ phoneNumberId, callId, action: "pre_accept", sdp, sdpType });
     }
     const accepted = await whatsappCallGraphAction({ phoneNumberId, callId, action: "accept", sdp, sdpType });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "accepted", base, extra: { phone_number_id: phoneNumberId, direction: "incoming" } });
-    return res.json({ ok: true, call_id: callId, pre_accept: preAccept, accept: accepted, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
+    const actionEvent = await appendSyntheticWhatsappCallEvent({
+      callId,
+      action: "accepted",
+      base,
+      extra: {
+        phone_number_id: phoneNumberId,
+        direction: "incoming",
+        operator_device_id: operatorDeviceId,
+        operator_name: body.operator_name || body.operatorName || "",
+        device_label: body.device_label || body.deviceLabel || ""
+      }
+    });
+    return res.json({ ok: true, call_id: callId, lock: claimedLock, pre_accept: preAccept, accept: accepted, event: actionEvent, call: attachOperatorLockToCall(whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]), operatorDeviceId) });
   } catch (error) {
+    if (claimedLock?.call_id) {
+      releaseOperatorCallLock({ call_id: claimedLock.call_id, operator_device_id: claimedLock.operator_device_id });
+    }
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
 });
@@ -23327,8 +23507,9 @@ app.post("/api/whatsapp-calls/reject", async (req, res) => {
     const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const rejected = await whatsappCallGraphAction({ phoneNumberId, callId, action: "reject" });
-    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "rejected", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || "incoming", customer_phone: lifecycle?.customer_phone || base?.customer_phone || "" } });
-    return res.json({ ok: true, call_id: callId, reject: rejected, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
+    const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "rejected", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || "incoming", customer_phone: lifecycle?.customer_phone || base?.customer_phone || "", operator_device_id: body.operator_device_id || body.device_id || body.deviceId || "", operator_name: body.operator_name || body.operatorName || "", device_label: body.device_label || body.deviceLabel || "" } });
+    const lockRelease = releaseOperatorCallLock({ call_id: callId, operator_device_id: body.operator_device_id || body.device_id || body.deviceId || "" });
+    return res.json({ ok: true, call_id: callId, reject: rejected, lock_release: lockRelease, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
@@ -23357,10 +23538,14 @@ app.post("/api/whatsapp-calls/terminate", async (req, res) => {
         duration_seconds: clientDurationSeconds,
         client_duration_seconds: clientDurationSeconds,
         connected_at_ms: clientConnectedAtMs,
-        ended_at_ms: clientEndedAtMs
+        ended_at_ms: clientEndedAtMs,
+        operator_device_id: body.operator_device_id || body.device_id || body.deviceId || "",
+        operator_name: body.operator_name || body.operatorName || "",
+        device_label: body.device_label || body.deviceLabel || ""
       }
     });
-    return res.json({ ok: true, call_id: callId, terminate: terminated, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
+    const lockRelease = releaseOperatorCallLock({ call_id: callId, operator_device_id: body.operator_device_id || body.device_id || body.deviceId || "" });
+    return res.json({ ok: true, call_id: callId, terminate: terminated, lock_release: lockRelease, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   }
