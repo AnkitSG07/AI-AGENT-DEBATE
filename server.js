@@ -15788,6 +15788,7 @@ function normalizePushSubscriptionPayload(body = {}) {
     operator_status: status,
     receive_calls: body?.receiveCalls === false || body?.receive_calls === false ? false : true,
     receive_chats: body?.receiveChats === false || body?.receive_chats === false ? false : true,
+    in_call: body?.inCall === true || body?.in_call === true || body?.callModeActive === true,
     audience: aiModeSafeString(body?.audience || WEB_PUSH_OPERATOR_AUDIENCE, 120),
     created_at: body?.created_at || now(),
     updated_at: now(),
@@ -15803,6 +15804,7 @@ function operatorDeviceSummary(row = {}) {
     status: normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online"),
     receive_calls: row?.receive_calls !== false,
     receive_chats: row?.receive_chats !== false,
+    in_call: row?.in_call === true || row?.inCall === true,
     last_seen_at: row?.last_seen_at || row?.updated_at || "",
     last_call_push_at: row?.last_call_push_at || "",
     last_sent_at: row?.last_sent_at || "",
@@ -15814,7 +15816,8 @@ function operatorDeviceSummary(row = {}) {
 function operatorDeviceReceivesCall(row = {}) {
   const status = normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
   if (row?.receive_calls === false) return false;
-  return !["busy", "dnd", "offline"].includes(status);
+  if (row?.in_call === true || row?.inCall === true) return false;
+  return status === "online";
 }
 
 function operatorDeviceReceivesChat(row = {}) {
@@ -15826,10 +15829,13 @@ function operatorDeviceReceivesChat(row = {}) {
 function choosePushTargets(subscriptions = [], type = "chat") {
   const rows = Array.isArray(subscriptions) ? subscriptions : [];
   const preferred = rows.filter((row) => type === "call" ? operatorDeviceReceivesCall(row) : operatorDeviceReceivesChat(row));
+  if (type === "call") {
+    // Phase 4.2: do not fall back to busy/away/DND/offline devices for calls.
+    return new Set(preferred.map((row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim()).filter(Boolean));
+  }
   if (preferred.length) return new Set(preferred.map((row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim()).filter(Boolean));
-  // Safety fallback: if all devices are busy/offline by stale state, still notify devices that have not opted out.
   return new Set(rows
-    .filter((row) => type === "call" ? row?.receive_calls !== false : row?.receive_chats !== false)
+    .filter((row) => row?.receive_chats !== false)
     .map((row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim())
     .filter(Boolean));
 }
@@ -20802,7 +20808,7 @@ app.get("/api/operator-devices", async (req, res) => {
     const counts = devices.reduce((acc, d) => {
       acc.total += 1;
       acc[d.status] = (acc[d.status] || 0) + 1;
-      if (d.receive_calls && !["busy", "dnd", "offline"].includes(d.status)) acc.call_ready += 1;
+      if (operatorDeviceReceivesCall(d)) acc.call_ready += 1;
       if (d.receive_chats && d.status !== "offline") acc.chat_ready += 1;
       return acc;
     }, { total: 0, online: 0, busy: 0, away: 0, dnd: 0, offline: 0, call_ready: 0, chat_ready: 0 });
@@ -20835,6 +20841,7 @@ app.post("/api/operator-devices/status", async (req, res) => {
         operator_status: status,
         receive_calls: req.body?.receiveCalls === undefined && req.body?.receive_calls === undefined ? row?.receive_calls !== false : !(req.body?.receiveCalls === false || req.body?.receive_calls === false),
         receive_chats: req.body?.receiveChats === undefined && req.body?.receive_chats === undefined ? row?.receive_chats !== false : !(req.body?.receiveChats === false || req.body?.receive_chats === false),
+        in_call: req.body?.inCall === undefined && req.body?.in_call === undefined ? (row?.in_call === true || row?.inCall === true) : (req.body?.inCall === true || req.body?.in_call === true),
         updated_at: now(),
         last_seen_at: now()
       };
@@ -20858,7 +20865,17 @@ app.post("/api/operator-devices/heartbeat", async (req, res) => {
       const matches = (deviceId && rowDeviceId === deviceId) || (endpoint && rowEndpoint === endpoint);
       if (!matches) return row;
       updated = true;
-      return { ...row, device_id: deviceId || rowDeviceId, deviceId: deviceId || rowDeviceId, last_seen_at: now(), updated_at: now() };
+      const status = req.body?.status ? normalizeOperatorDeviceStatus(req.body.status || row?.status || "online") : normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
+      return {
+        ...row,
+        device_id: deviceId || rowDeviceId,
+        deviceId: deviceId || rowDeviceId,
+        status,
+        operator_status: status,
+        in_call: req.body?.inCall === undefined && req.body?.in_call === undefined ? (row?.in_call === true || row?.inCall === true) : (req.body?.inCall === true || req.body?.in_call === true),
+        last_seen_at: now(),
+        updated_at: now()
+      };
     });
     const saved = await writePushSubscriptions(next);
     res.json({ ok: true, updated, count: saved.length });
@@ -23111,6 +23128,17 @@ function cleanOperatorCallLocks() {
   }
 }
 
+
+async function findOperatorDeviceByLockId(operatorDeviceId = "") {
+  const target = aiModeSafeString(operatorDeviceId || "", 160);
+  if (!target) return null;
+  const rows = await readPushSubscriptions();
+  return (rows || []).find((row) => {
+    const rowId = aiModeSafeString(row?.device_id || row?.deviceId || "", 160);
+    return rowId === target || target.startsWith(`${rowId}_`);
+  }) || null;
+}
+
 function normalizeOperatorLockPayload(body = {}) {
   return {
     call_id: aiModeSafeString(body.call_id || body.callId || "", 220),
@@ -23212,6 +23240,17 @@ app.get("/api/operator-call-locks/active", async (req, res) => {
 
 app.post("/api/operator-call-locks/claim", async (req, res) => {
   try {
+    const payload = normalizeOperatorLockPayload(req.body || {});
+    const deviceRow = await findOperatorDeviceByLockId(payload.operator_device_id);
+    if (deviceRow && !operatorDeviceReceivesCall(deviceRow)) {
+      return res.status(409).json({
+        ok: false,
+        locked: false,
+        unavailable: true,
+        error: "This operator device is not available for calls.",
+        device: operatorDeviceSummary(deviceRow)
+      });
+    }
     const result = claimOperatorCallLock(req.body || {});
     return res.status(result.ok ? 200 : 409).json(result);
   } catch (error) {
