@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SH Global Outreach</title>
+  <link rel="stylesheet" href="/css/outreach.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">SH</div>
+        <div>
+          <h1>Global Outreach</h1>
+          <p>Smart Handicrafts</p>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="nav-btn" data-tab="leads">Leads</button>
+        <button class="nav-btn" data-tab="campaigns">Campaigns</button>
+        <button class="nav-btn" data-tab="templates">Templates</button>
+        <button class="nav-btn" data-tab="analytics">Analytics</button>
+        <button class="nav-btn" data-tab="settings">Settings</button>
+      </nav>
+      <div class="sidebar-note">
+        <strong>Purpose</strong>
+        <span>B2B partner outreach for lamp, smart-lighting and OEM manufacturers.</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Partner Network CRM</p>
+          <h2 id="pageTitle">Dashboard</h2>
+        </div>
+        <button id="refreshBtn" class="primary-btn">Refresh</button>
+      </header>
+
+      <section id="dashboard" class="tab active">
+        <div class="cards">
+          <div class="metric"><span>Total Leads</span><strong id="totalLeads">0</strong></div>
+          <div class="metric"><span>Usable Leads</span><strong id="usableLeads">0</strong></div>
+          <div class="metric"><span>Campaigns</span><strong id="campaignsCount">0</strong></div>
+          <div class="metric"><span>Unsubscribed</span><strong id="unsubscribedCount">0</strong></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Pipeline</h3>
+            <div class="pipeline">
+              <span>New Lead</span><span>Email Drafted</span><span>Interested</span><span>Meeting</span><span>Sample Sent</span><span>Customer</span>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Recent Activity</h3>
+            <div id="activityList" class="activity-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="leads" class="tab">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h3>Lead Database</h3><p>Import CSV or add a company manually.</p></div>
+            <form id="csvForm" class="inline-form">
+              <input type="file" id="csvFile" accept=".csv" />
+              <button class="primary-btn" type="submit">Import CSV</button>
+            </form>
+          </div>
+          <form id="leadForm" class="form-grid">
+            <input name="companyName" placeholder="Company Name" required />
+            <input name="email" placeholder="Email" required />
+            <input name="website" placeholder="Website" />
+            <input name="country" placeholder="Country" />
+            <input name="category" placeholder="Category" />
+            <input name="sourceUrl" placeholder="Source URL" />
+            <button class="secondary-btn" type="submit">Add Lead</button>
+          </form>
+          <div class="filters">
+            <input id="leadSearch" placeholder="Search leads..." />
+            <button id="loadLeadsBtn" class="secondary-btn">Load Leads</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Company</th><th>Email</th><th>Country</th><th>Category</th><th>Status</th></tr></thead><tbody id="leadsTable"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="campaigns" class="tab">
+        <div class="panel">
+          <h3>Campaign Planner</h3>
+          <form id="campaignForm" class="form-grid">
+            <input name="name" placeholder="Campaign Name" />
+            <input name="subject" placeholder="Email Subject" />
+            <input name="dailyLimit" type="number" min="1" max="100" placeholder="Daily review limit" />
+            <button class="primary-btn" type="submit">Create Campaign</button>
+          </form>
+          <div id="campaignList" class="campaign-list"></div>
+        </div>
+      </section>
+
+      <section id="templates" class="tab">
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Email Template</h3>
+            <input id="testTo" placeholder="Send test to email" />
+            <input id="testSubject" value="Rechargeable smart lighting integration for your lamp collections" />
+            <textarea id="testBody" rows="12">Hello,
+
+We are Smart Handicrafts, an electronics integration partner for lamp makers and smart lighting brands.
+
+We help manufacturers upgrade normal lamps into rechargeable, touch-controlled, dimmable, USB-C powered and smart-ready lighting products without developing electronics from scratch.
+
+We can support you with LED drivers, battery systems, COB LEDs, wiring, touch dimming, OEM/ODM customization and technical integration.
+
+Would you be open to seeing our product catalogue or discussing a sample integration?
+
+Regards,
+Smart Handicrafts Team</textarea>
+            <button id="sendTestBtn" class="primary-btn">Send Test Email</button>
+          </div>
+          <div class="panel preview">
+            <h3>Live Preview</h3>
+            <div id="emailPreview"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="analytics" class="tab">
+        <div class="panel"><h3>Logs</h3><div id="logsBox" class="logs-box"></div></div>
+      </section>
+
+      <section id="settings" class="tab">
+        <div class="panel">
+          <h3>SMTP Settings</h3>
+          <p class="muted">Configure SMTP in <code>email-outreach-app/.env</code>. Use app passwords, not your normal mailbox password.</p>
+          <pre>SMTP_HOST=smtp.zoho.in
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=you@domain.com
+SMTP_PASS=app-password
+FROM_NAME=Smart Handicrafts
+FROM_EMAIL=you@domain.com</pre>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/js/outreach.js"></script>
+</body>
+</html>
