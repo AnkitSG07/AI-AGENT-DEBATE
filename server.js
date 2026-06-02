@@ -23276,7 +23276,7 @@ function findPendingTransferForDevice(deviceId = "") {
   const safeDevice = aiModeSafeString(deviceId || "", 180);
   if (!safeDevice) return null;
   return [...operatorCallTransfers.values()]
-    .filter((row) => row.to_device_id === safeDevice && ["pending", "accepted"].includes(String(row.status || "")))
+    .filter((row) => row.to_device_id === safeDevice && String(row.status || "") === "pending")
     .sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0))[0] || null;
 }
 
