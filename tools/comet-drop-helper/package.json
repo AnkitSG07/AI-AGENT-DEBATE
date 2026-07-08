@@ -1,0 +1,15 @@
+{
+  "name": "safe-comet-drop-helper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Safe manual drop helper plus fake local COD checkout automation demo.",
+  "scripts": {
+    "drop:helper": "node timed-drop-helper.mjs",
+    "demo:install": "npm install",
+    "demo:fake-cod": "node fake_cod_bot.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.54.1"
+  }
+}

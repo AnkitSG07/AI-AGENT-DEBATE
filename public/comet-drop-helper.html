@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Comet Drop Helper - Safe Manual Checkout</title>
+  <style>
+    :root {
+      --bg: #0e0f13;
+      --card: #171923;
+      --muted: #a9afc3;
+      --text: #f7f8ff;
+      --accent: #8bffca;
+      --warn: #ffd166;
+      --danger: #ff6b6b;
+      --border: rgba(255, 255, 255, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(139, 255, 202, 0.16), transparent 38%),
+        radial-gradient(circle at bottom right, rgba(255, 209, 102, 0.12), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .wrap {
+      width: min(960px, 100%);
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero, .card {
+      background: rgba(23, 25, 35, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+    }
+
+    .hero { padding: 28px; }
+    .card { padding: 20px; }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 54px);
+      line-height: 1;
+      letter-spacing: -0.06em;
+    }
+
+    p { color: var(--muted); line-height: 1.55; }
+
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 15px;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+      font-size: 15px;
+      outline: none;
+    }
+
+    input:focus { border-color: rgba(139, 255, 202, 0.62); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .timer {
+      font-size: clamp(38px, 9vw, 92px);
+      font-weight: 900;
+      letter-spacing: -0.08em;
+      margin: 12px 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .status {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      min-height: 52px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    button, a.button {
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 18px;
+      color: #07100c;
+      background: var(--accent);
+      font-weight: 800;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+
+    button:hover, a.button:hover { transform: translateY(-1px); }
+    button.secondary, a.secondary { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+    button.warn { background: var(--warn); color: #1b1200; }
+
+    .note {
+      border-left: 4px solid var(--warn);
+      padding: 12px 14px;
+      background: rgba(255, 209, 102, 0.1);
+      border-radius: 12px;
+      color: #ffe7a3;
+    }
+
+    .danger {
+      border-left-color: var(--danger);
+      background: rgba(255, 107, 107, 0.1);
+      color: #ffc2c2;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .step {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      min-height: 92px;
+    }
+
+    .step strong { display: block; margin-bottom: 6px; color: var(--accent); }
+    .step span { color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+    @media (max-width: 760px) {
+      body { padding: 14px; align-items: start; }
+      .grid, .steps { grid-template-columns: 1fr; }
+      .hero { padding: 20px; }
+      .actions button, .actions a { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Comet Drop Helper</h1>
+      <p>
+        Safe timer for limited drops. It opens the product page and alerts you at the right time,
+        but it does not click Add to Cart, bypass queues, solve CAPTCHA, select COD, or place orders.
+      </p>
+      <div class="note danger">
+        Manual checkout only: size → Add to Cart → checkout → Cash on Delivery → Place Order.
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="grid">
+        <div>
+          <label for="productUrl">Product URL</label>
+          <input id="productUrl" value="https://www.wearcomet.com/products/extra-toppings-only" />
+        </div>
+        <div>
+          <label for="saleTime">Sale time, India time</label>
+          <input id="saleTime" type="datetime-local" value="2026-07-09T18:00" />
+        </div>
+      </div>
+
+      <div class="timer" id="timer">--:--:--</div>
+      <div class="status" id="status">Set the product URL and sale time, then press Start.</div>
+
+      <div class="actions">
+        <button id="startBtn">Start helper</button>
+        <button class="secondary" id="testBeepBtn">Test beep</button>
+        <a class="button secondary" id="openNow" href="https://www.wearcomet.com/products/extra-toppings-only" target="_blank" rel="noopener">Open page now</a>
+      </div>
+
+      <div class="steps">
+        <div class="step"><strong>5:30 PM</strong><span>Login to Comet and finish OTP.</span></div>
+        <div class="step"><strong>5:55 PM</strong><span>Keep product page open and decide size.</span></div>
+        <div class="step"><strong>5:59:50 PM</strong><span>Beep alert. Keep mouse ready.</span></div>
+        <div class="step"><strong>6:00 PM</strong><span>Open/refresh page, then checkout manually.</span></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const productUrlEl = document.getElementById("productUrl");
+    const saleTimeEl = document.getElementById("saleTime");
+    const timerEl = document.getElementById("timer");
+    const statusEl = document.getElementById("status");
+    const startBtn = document.getElementById("startBtn");
+    const testBeepBtn = document.getElementById("testBeepBtn");
+    const openNow = document.getElementById("openNow");
+
+    const state = {
+      running: false,
+      openedEarly: false,
+      warned10: false,
+      openedAtDrop: false,
+      interval: null,
+      audioCtx: null,
+      productWindow: null
+    };
+
+    function normalizeUrl(url) {
+      const trimmed = String(url || "").trim();
+      if (!/^https:\/\//i.test(trimmed)) {
+        throw new Error("Use a valid https product URL.");
+      }
+      return trimmed;
+    }
+
+    function saleDate() {
+      const value = saleTimeEl.value;
+      if (!value) throw new Error("Please set sale time.");
+      return new Date(value);
+    }
+
+    function formatRemaining(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      const h = String(Math.floor(total / 3600)).padStart(2, "0");
+      const m = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+      const s = String(total % 60).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
+
+    function beep(times = 3) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      if (!state.audioCtx) state.audioCtx = new AudioContext();
+
+      for (let i = 0; i < times; i += 1) {
+        const osc = state.audioCtx.createOscillator();
+        const gain = state.audioCtx.createGain();
+        osc.frequency.value = i % 2 ? 1400 : 980;
+        gain.gain.value = 0.08;
+        osc.connect(gain);
+        gain.connect(state.audioCtx.destination);
+        const start = state.audioCtx.currentTime + i * 0.22;
+        osc.start(start);
+        osc.stop(start + 0.14);
+      }
+    }
+
+    function openProduct(url, reason) {
+      // User clicks Start first, so most browsers allow this controlled helper window.
+      if (!state.productWindow || state.productWindow.closed) {
+        state.productWindow = window.open(url, "comet_drop_product");
+      } else {
+        state.productWindow.location.href = url;
+        state.productWindow.focus();
+      }
+      statusEl.textContent = reason;
+    }
+
+    function tick() {
+      try {
+        const url = normalizeUrl(productUrlEl.value);
+        const dropAt = saleDate();
+        openNow.href = url;
+
+        const now = new Date();
+        const remaining = dropAt.getTime() - now.getTime();
+        timerEl.textContent = formatRemaining(remaining);
+
+        if (remaining > 180000) {
+          statusEl.textContent = "Waiting. The helper will open the page 3 minutes before sale.";
+          return;
+        }
+
+        if (remaining <= 180000 && remaining > 10000 && !state.openedEarly) {
+          state.openedEarly = true;
+          beep(2);
+          openProduct(url, "Opened product page 3 minutes before sale. Login and keep size ready.");
+          return;
+        }
+
+        if (remaining <= 10000 && remaining > 0 && !state.warned10) {
+          state.warned10 = true;
+          beep(6);
+          statusEl.textContent = "10 seconds left. Keep mouse ready for manual size/Add to Cart.";
+          return;
+        }
+
+        if (remaining <= 0 && !state.openedAtDrop) {
+          state.openedAtDrop = true;
+          beep(10);
+          openProduct(url, "Sale time reached. Manually select size, Add to Cart, COD, and Place Order.");
+          clearInterval(state.interval);
+          return;
+        }
+      } catch (error) {
+        statusEl.textContent = error.message;
+      }
+    }
+
+    startBtn.addEventListener("click", () => {
+      try {
+        normalizeUrl(productUrlEl.value);
+        saleDate();
+        state.running = true;
+        state.openedEarly = false;
+        state.warned10 = false;
+        state.openedAtDrop = false;
+        if (state.interval) clearInterval(state.interval);
+        beep(1);
+        tick();
+        state.interval = setInterval(tick, 250);
+        startBtn.textContent = "Helper running";
+      } catch (error) {
+        statusEl.textContent = error.message;
+      }
+    });
+
+    testBeepBtn.addEventListener("click", () => beep(4));
+    productUrlEl.addEventListener("input", () => { openNow.href = productUrlEl.value; });
+  </script>
+</body>
+</html>
