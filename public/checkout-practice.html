@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkout Practice Helper</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    color: #eee; min-height: 100vh;
+    display: flex; justify-content: center; align-items: flex-start; padding: 30px 20px;
+  }
+  .container {
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+    padding: 32px; width: 100%; max-width: 580px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 20px; }
+  label { display: block; font-size: 0.8rem; color: #aaa; margin: 12px 0 4px; }
+  input, select, textarea {
+    width: 100%; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+    color: #eee; font-size: 0.9rem; font-family: inherit;
+  }
+  textarea { min-height: 80px; resize: vertical; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: #4f8cff; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  .section {
+    margin-top: 18px; padding: 14px; border-radius: 10px;
+    background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.08);
+  }
+  .section h3 { font-size: 0.85rem; color: #4f8cff; margin-bottom: 4px; }
+  .hint { font-size: 0.72rem; color: #777; margin-top: 4px; line-height: 1.45; }
+  button, a.button {
+    width: 100%; margin-top: 14px; padding: 12px;
+    background: linear-gradient(90deg, #4f8cff, #6a5acd);
+    border: none; border-radius: 8px; color: white;
+    font-size: 1rem; font-weight: 600; cursor: pointer; text-decoration: none;
+    display: inline-flex; justify-content: center; align-items: center;
+  }
+  button.secondary { background: rgba(255,255,255,0.12); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #cancelBtn { background: #7a2020; display: none; margin-top: 8px; }
+  #countdown {
+    display: none; text-align: center; margin-top: 16px;
+    font-size: 1.6rem; font-family: monospace; color: #ffd700;
+  }
+  #logs {
+    margin-top: 20px; background: #0d0d1a; border-radius: 8px;
+    padding: 14px; font-family: monospace; font-size: 0.78rem;
+    max-height: 240px; overflow-y: auto; display: none;
+  }
+  .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.75rem; margin-top: 12px;
+  }
+  .scheduled { background: #002a3a; color: #4fc3f7; }
+  .running { background: #3a3a00; color: #ffd700; }
+  .completed { background: #003a1a; color: #4caf50; }
+  .failed { background: #3a0000; color: #ff5252; }
+  .cod-tag {
+    display: inline-block; background: #1a3a1a; color: #7bd88f;
+    padding: 2px 8px; border-radius: 6px; font-size: 0.7rem; margin-left: 6px;
+  }
+  .warning {
+    margin: 0 0 16px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(255, 193, 7, 0.12); color: #ffd77a;
+    border: 1px solid rgba(255, 193, 7, 0.25); font-size: 0.8rem; line-height: 1.45;
+  }
+  @media (max-width: 700px) { .row { flex-direction: column; gap: 0; } }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🛒 Checkout Practice Helper</h1>
+  <p class="subtitle">Timer + checkout notes + COD reminder <span class="cod-tag">Cash on Delivery</span></p>
+  <div class="warning">
+    This page runs inside your current Render app. It is a browser-only helper for practice, timing, copy buttons, and demo logs. It does not control or submit any real checkout page.
+  </div>
+
+  <label>Product URL</label>
+  <input id="url" value="https://www.saucedemo.com">
+  <a class="button" id="openLink" href="https://www.saucedemo.com" target="_blank" rel="noopener">Open product / practice site</a>
+
+  <div class="row">
+    <div><label>Username / email</label><input id="username" value="standard_user"></div>
+    <div><label>Password</label><input id="password" type="password" value="secret_sauce"></div>
+  </div>
+
+  <label>Product Name</label>
+  <input id="product" value="Sauce Labs Backpack">
+
+  <div class="row">
+    <div><label>First Name</label><input id="first_name" value="John"></div>
+    <div><label>Last Name</label><input id="last_name" value="Doe"></div>
+    <div><label>PIN / Zip Code</label><input id="zip_code" value="12345"></div>
+  </div>
+
+  <label>Address</label>
+  <textarea id="address" placeholder="Paste your address here for quick copy"></textarea>
+
+  <div class="section">
+    <h3>⏰ Drop Timer</h3>
+    <label>Run mode</label>
+    <select id="runMode" onchange="toggleTimer()">
+      <option value="now">▶️ Run practice steps immediately</option>
+      <option value="scheduled">⏰ Schedule for a specific time</option>
+    </select>
+    <div id="timerFields" style="display:none;">
+      <label>Drop date &amp; time (your local time)</label>
+      <input type="datetime-local" id="schedule_time" step="1">
+      <p class="hint">The countdown fires in this browser tab at the exact second.</p>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>💵 Cash on Delivery note</h3>
+    <label>COD option text / note</label>
+    <input id="cod_note" value="Cash on Delivery">
+    <p class="hint">Use this as a reminder/copy field when you manually select COD during checkout.</p>
+  </div>
+
+  <button id="startBtn" onclick="startPractice()">🚀 Start Practice</button>
+  <button id="cancelBtn" onclick="cancelPractice()">🛑 Cancel Scheduled Practice</button>
+  <button class="secondary" onclick="copyAllDetails()">📋 Copy all checkout details</button>
+  <div id="countdown"></div>
+  <div id="statusBadge"></div>
+  <div id="logs"></div>
+</div>
+
+<script>
+let countdownInterval, targetTime = null, cancelled = false;
+
+const idsToSave = ['url','username','password','product','first_name','last_name','zip_code','address','cod_note'];
+idsToSave.forEach(id => {
+  const el = document.getElementById(id);
+  const saved = localStorage.getItem('checkout_practice_' + id);
+  if (saved !== null && id !== 'password') el.value = saved;
+  el.addEventListener('input', () => {
+    localStorage.setItem('checkout_practice_' + id, el.value);
+    if (id === 'url') document.getElementById('openLink').href = el.value;
+  });
+});
+document.getElementById('openLink').href = document.getElementById('url').value;
+
+function toggleTimer() {
+  const scheduled = document.getElementById('runMode').value === 'scheduled';
+  document.getElementById('timerFields').style.display = scheduled ? 'block' : 'none';
+}
+
+function nowTime() { return new Date().toLocaleTimeString('en-GB', { hour12: false }); }
+function addLog(message) {
+  const logsEl = document.getElementById('logs');
+  logsEl.style.display = 'block';
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.textContent = `[${nowTime()}] ${message}`;
+  logsEl.appendChild(line);
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
+function setBadge(status) {
+  document.getElementById('statusBadge').innerHTML = `<span class="badge ${status}">${status.toUpperCase()}</span>`;
+}
+function resetUi() {
+  const btn = document.getElementById('startBtn');
+  btn.disabled = false;
+  btn.textContent = '🚀 Start Practice';
+  document.getElementById('cancelBtn').style.display = 'none';
+}
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function startPractice() {
+  const btn = document.getElementById('startBtn');
+  cancelled = false;
+  document.getElementById('logs').innerHTML = '';
+  document.getElementById('statusBadge').innerHTML = '';
+
+  if (document.getElementById('runMode').value === 'scheduled') {
+    const localVal = document.getElementById('schedule_time').value;
+    if (!localVal) { alert('Pick a drop time first!'); return; }
+    const local = new Date(localVal);
+    if (local <= new Date()) { alert('Drop time must be in the future!'); return; }
+    targetTime = local;
+  } else {
+    targetTime = null;
+  }
+
+  btn.disabled = true;
+  btn.textContent = targetTime ? '⏳ Scheduled...' : '⏳ Running practice...';
+
+  if (targetTime) {
+    setBadge('scheduled');
+    addLog(`⏰ Scheduled for ${targetTime.toLocaleString()}`);
+    startCountdown();
+  } else {
+    runPracticeFlow();
+  }
+}
+
+function startCountdown() {
+  const el = document.getElementById('countdown');
+  el.style.display = 'block';
+  document.getElementById('cancelBtn').style.display = 'block';
+  countdownInterval = setInterval(() => {
+    if (cancelled) return;
+    const diff = Math.max(0, Math.floor((targetTime - new Date()) / 1000));
+    const h = String(Math.floor(diff / 3600)).padStart(2, '0');
+    const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+    const s = String(diff % 60).padStart(2, '0');
+    el.textContent = diff > 0 ? `⏰ ${h}:${m}:${s}` : '🔥 TIME NOW';
+    if (diff <= 0) {
+      stopCountdown(false);
+      runPracticeFlow();
+    }
+  }, 250);
+}
+
+function stopCountdown(hide = true) {
+  clearInterval(countdownInterval);
+  document.getElementById('cancelBtn').style.display = 'none';
+  if (hide) document.getElementById('countdown').style.display = 'none';
+}
+function cancelPractice() {
+  cancelled = true;
+  stopCountdown();
+  setBadge('failed');
+  addLog('🛑 Scheduled practice cancelled');
+  resetUi();
+}
+
+async function runPracticeFlow() {
+  if (cancelled) return;
+  setBadge('running');
+  document.getElementById('startBtn').textContent = '⏳ Running practice...';
+  const url = document.getElementById('url').value;
+  const product = document.getElementById('product').value;
+  const firstName = document.getElementById('first_name').value;
+  const lastName = document.getElementById('last_name').value;
+  const zip = document.getElementById('zip_code').value;
+  const cod = document.getElementById('cod_note').value;
+
+  addLog('🔥 Time reached. Open the product page now.');
+  window.open(url, 'checkout_practice_window');
+  await sleep(500); addLog('🔐 Login step reminder: use saved account details if needed.');
+  await sleep(500); addLog(`🛒 Product reminder: ${product}`);
+  await sleep(500); addLog('✅ Manually add item to cart when ready.');
+  await sleep(500); addLog(`📦 Checkout details: ${firstName} ${lastName}, ${zip}`);
+  await sleep(500); addLog(`💵 Payment reminder: ${cod}`);
+  await sleep(500); addLog('🧾 Final step reminder: review order manually before confirming.');
+  await sleep(500); addLog('🎉 Practice flow complete.');
+  setBadge('completed');
+  stopCountdown();
+  resetUi();
+}
+
+async function copyAllDetails() {
+  const text = [
+    `Username: ${document.getElementById('username').value}`,
+    `Product: ${document.getElementById('product').value}`,
+    `Name: ${document.getElementById('first_name').value} ${document.getElementById('last_name').value}`,
+    `PIN/Zip: ${document.getElementById('zip_code').value}`,
+    `Address: ${document.getElementById('address').value}`,
+    `Payment: ${document.getElementById('cod_note').value}`
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    addLog('📋 Checkout details copied to clipboard');
+  } catch {
+    alert(text);
+  }
+}
+</script>
+</body>
+</html>
