@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Comet Drop Helper - Safe Manual Checkout</title>
+  <title>Comet Drop Helper + Fake Auto Demo</title>
   <style>
     :root {
       --bg: #0e0f13;
@@ -13,6 +13,7 @@
       --accent: #8bffca;
       --warn: #ffd166;
       --danger: #ff6b6b;
+      --ok: #78ff9d;
       --border: rgba(255, 255, 255, 0.12);
     }
 
@@ -28,13 +29,13 @@
         var(--bg);
       color: var(--text);
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       padding: 24px;
     }
 
     .wrap {
-      width: min(960px, 100%);
+      width: min(980px, 100%);
       display: grid;
       gap: 18px;
     }
@@ -56,6 +57,7 @@
       letter-spacing: -0.06em;
     }
 
+    h2 { margin: 0 0 10px; }
     p { color: var(--muted); line-height: 1.55; }
 
     label {
@@ -68,7 +70,7 @@
       letter-spacing: 0.08em;
     }
 
-    input {
+    input, select {
       width: 100%;
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -79,7 +81,8 @@
       outline: none;
     }
 
-    input:focus { border-color: rgba(139, 255, 202, 0.62); }
+    option { color: #111; }
+    input:focus, select:focus { border-color: rgba(139, 255, 202, 0.62); }
 
     .grid {
       display: grid;
@@ -95,13 +98,21 @@
       font-variant-numeric: tabular-nums;
     }
 
-    .status {
+    .status, .log {
       padding: 14px 16px;
       border-radius: 16px;
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid var(--border);
       color: var(--muted);
       min-height: 52px;
+    }
+
+    .log {
+      min-height: 150px;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      line-height: 1.5;
+      background: rgba(0, 0, 0, 0.22);
     }
 
     .actions {
@@ -163,6 +174,23 @@
     .step strong { display: block; margin-bottom: 6px; color: var(--accent); }
     .step span { color: var(--muted); font-size: 13px; line-height: 1.45; }
 
+    .fake-product {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.04);
+      margin-top: 12px;
+    }
+
+    .fake-status {
+      margin-top: 12px;
+      font-size: 22px;
+      font-weight: 900;
+      color: var(--ok);
+    }
+
+    .hidden { display: none; }
+
     @media (max-width: 760px) {
       body { padding: 14px; align-items: start; }
       .grid, .steps { grid-template-columns: 1fr; }
@@ -176,15 +204,16 @@
     <section class="hero">
       <h1>Comet Drop Helper</h1>
       <p>
-        Safe timer for limited drops. It opens the product page and alerts you at the right time,
-        but it does not click Add to Cart, bypass queues, solve CAPTCHA, select COD, or place orders.
+        Top section is for the real limited drop. It opens the product page and alerts you at the right time.
+        It does not click Add to Cart, bypass queues, solve CAPTCHA, select COD, or place a real order.
       </p>
       <div class="note danger">
-        Manual checkout only: size → Add to Cart → checkout → Cash on Delivery → Place Order.
+        Real Comet checkout remains manual only: size → Add to Cart → checkout → Cash on Delivery → Place Order.
       </div>
     </section>
 
     <section class="card">
+      <h2>Real drop timer</h2>
       <div class="grid">
         <div>
           <label for="productUrl">Product URL</label>
@@ -209,8 +238,76 @@
         <div class="step"><strong>5:30 PM</strong><span>Login to Comet and finish OTP.</span></div>
         <div class="step"><strong>5:55 PM</strong><span>Keep product page open and decide size.</span></div>
         <div class="step"><strong>5:59:50 PM</strong><span>Beep alert. Keep mouse ready.</span></div>
-        <div class="step"><strong>6:00 PM</strong><span>Open/refresh page, then checkout manually.</span></div>
+        <div class="step"><strong>6:00 PM</strong><span>Open page, then checkout manually.</span></div>
       </div>
+    </section>
+
+    <section class="card" id="fakeDemoSection">
+      <h2>Fake auto Add-to-Cart demo on this same page</h2>
+      <p>
+        This demo shows the automation flow safely on a fake product below. Press <b>Start Fake Auto Demo</b>
+        and it will select size, press Add to Cart, fill fake checkout, select COD, and place a fake order.
+      </p>
+      <div class="note">
+        This fake demo runs only inside this page. It does not control the real Comet tab/window.
+      </div>
+
+      <div class="fake-product" id="fakeProductCard">
+        <h2>Fake Limited Edition Shoe</h2>
+        <p>800 demo pairs only · ₹5,299 fake price</p>
+
+        <label for="fakeSize">Size</label>
+        <select id="fakeSize">
+          <option value="">Select size</option>
+          <option>UK 7</option>
+          <option>UK 8</option>
+          <option>UK 9</option>
+          <option>UK 10</option>
+          <option>UK 11</option>
+        </select>
+
+        <div class="actions">
+          <button id="fakeAddToCartBtn">Add to Cart</button>
+          <button class="secondary" id="startFakeDemoBtn">Start Fake Auto Demo</button>
+        </div>
+      </div>
+
+      <div class="fake-product hidden" id="fakeCheckoutCard">
+        <h2>Fake checkout</h2>
+        <div class="grid">
+          <div>
+            <label for="fakeName">Full name</label>
+            <input id="fakeName" />
+          </div>
+          <div>
+            <label for="fakePhone">Phone</label>
+            <input id="fakePhone" />
+          </div>
+          <div>
+            <label for="fakePincode">Pincode</label>
+            <input id="fakePincode" />
+          </div>
+          <div>
+            <label for="fakePayment">Payment</label>
+            <select id="fakePayment">
+              <option value="">Select payment</option>
+              <option>UPI</option>
+              <option>Card</option>
+              <option>Cash on Delivery</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="fakeAddress">Address</label>
+        <input id="fakeAddress" />
+
+        <div class="actions">
+          <button id="fakePlaceOrderBtn">Place Fake Order</button>
+        </div>
+      </div>
+
+      <div class="fake-status" id="fakeFinalStatus"></div>
+      <div class="log" id="fakeLog">Ready. Press Start Fake Auto Demo.</div>
     </section>
   </main>
 
@@ -274,7 +371,6 @@
     }
 
     function openProduct(url, reason) {
-      // User clicks Start first, so most browsers allow this controlled helper window.
       if (!state.productWindow || state.productWindow.closed) {
         state.productWindow = window.open(url, "comet_drop_product");
       } else {
@@ -345,6 +441,93 @@
 
     testBeepBtn.addEventListener("click", () => beep(4));
     productUrlEl.addEventListener("input", () => { openNow.href = productUrlEl.value; });
+
+    // ===================== SAME-PAGE FAKE AUTOMATION DEMO =====================
+    const fakeDemoCustomer = {
+      size: "UK 9",
+      name: "Demo Customer",
+      phone: "9999999999",
+      pincode: "110017",
+      address: "Demo Address, New Delhi - fake page only",
+      payment: "Cash on Delivery"
+    };
+
+    const fakeLogEl = document.getElementById("fakeLog");
+    const fakeFinalStatus = document.getElementById("fakeFinalStatus");
+    const fakeCheckoutCard = document.getElementById("fakeCheckoutCard");
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function resetFakeLog() {
+      fakeLogEl.textContent = "Starting fake automation on this page...";
+      fakeFinalStatus.textContent = "";
+    }
+
+    function fakeLog(message) {
+      fakeLogEl.textContent += "\n" + message;
+    }
+
+    document.getElementById("fakeAddToCartBtn").addEventListener("click", () => {
+      const selectedSize = document.getElementById("fakeSize").value;
+      if (!selectedSize) {
+        alert("Select size first");
+        return;
+      }
+      fakeCheckoutCard.classList.remove("hidden");
+      fakeLog(`Fake Add to Cart clicked for ${selectedSize}. Fake checkout opened.`);
+    });
+
+    document.getElementById("fakePlaceOrderBtn").addEventListener("click", () => {
+      const fields = ["fakeName", "fakePhone", "fakePincode", "fakeAddress", "fakePayment"];
+      const missing = fields.filter((id) => !String(document.getElementById(id).value || "").trim());
+      if (missing.length) {
+        alert("Fill all fake checkout fields first");
+        return;
+      }
+      fakeFinalStatus.textContent = "Fake COD order placed successfully.";
+      fakeLog("Fake Place Order clicked. Demo complete.");
+      beep(3);
+    });
+
+    document.getElementById("startFakeDemoBtn").addEventListener("click", async () => {
+      resetFakeLog();
+      fakeCheckoutCard.classList.add("hidden");
+      document.getElementById("fakeSize").value = "";
+      document.getElementById("fakeName").value = "";
+      document.getElementById("fakePhone").value = "";
+      document.getElementById("fakePincode").value = "";
+      document.getElementById("fakeAddress").value = "";
+      document.getElementById("fakePayment").value = "";
+
+      await wait(450);
+      document.getElementById("fakeSize").value = fakeDemoCustomer.size;
+      fakeLog(`Selected size: ${fakeDemoCustomer.size}`);
+
+      await wait(450);
+      document.getElementById("fakeAddToCartBtn").click();
+
+      await wait(450);
+      document.getElementById("fakeName").value = fakeDemoCustomer.name;
+      fakeLog("Filled fake name.");
+
+      await wait(300);
+      document.getElementById("fakePhone").value = fakeDemoCustomer.phone;
+      fakeLog("Filled fake phone.");
+
+      await wait(300);
+      document.getElementById("fakePincode").value = fakeDemoCustomer.pincode;
+      fakeLog("Filled fake pincode.");
+
+      await wait(300);
+      document.getElementById("fakeAddress").value = fakeDemoCustomer.address;
+      fakeLog("Filled fake address.");
+
+      await wait(300);
+      document.getElementById("fakePayment").value = fakeDemoCustomer.payment;
+      fakeLog("Selected Cash on Delivery.");
+
+      await wait(450);
+      document.getElementById("fakePlaceOrderBtn").click();
+    });
   </script>
 </body>
 </html>
