@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fake Comet Auto Add-to-Cart Demo</title>
+  <style>
+    :root {
+      --bg: #0d0f14;
+      --card: #171a24;
+      --text: #f7f8ff;
+      --muted: #aeb5c8;
+      --accent: #8bffca;
+      --border: rgba(255,255,255,0.12);
+      --warn: #ffd166;
+      --ok: #7dff9b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(139,255,202,0.16), transparent 36%),
+        radial-gradient(circle at bottom right, rgba(255,209,102,0.14), transparent 32%),
+        var(--bg);
+      color: var(--text);
+      padding: 24px;
+    }
+
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      background: rgba(23,26,36,0.94);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 22px;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.28);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(30px, 5vw, 56px);
+      letter-spacing: -0.06em;
+      line-height: 1;
+    }
+
+    h2 { margin-top: 0; }
+    p { color: var(--muted); line-height: 1.55; }
+
+    .warning {
+      border-left: 4px solid var(--warn);
+      background: rgba(255,209,102,0.1);
+      color: #ffe6a6;
+      border-radius: 14px;
+      padding: 12px 14px;
+      line-height: 1.5;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 13px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+    }
+
+    option { color: #111; }
+
+    button, a.button {
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 18px;
+      background: var(--accent);
+      color: #06100b;
+      font-weight: 900;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    button.secondary { background: rgba(255,255,255,0.12); color: var(--text); }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .log {
+      min-height: 140px;
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(0,0,0,0.22);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    .success { color: var(--ok); font-weight: 900; }
+    .hidden { display: none; }
+
+    @media (max-width: 720px) {
+      body { padding: 14px; }
+      .grid { grid-template-columns: 1fr; }
+      .actions button, .actions a { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>Fake Auto Add-to-Cart Demo</h1>
+      <p>
+        This is an example page for learning how automation flow works. It auto-selects size,
+        presses Add to Cart, fills a fake checkout, selects Cash on Delivery, and places a fake order.
+      </p>
+      <div class="warning">
+        This demo is local to this page only. It does not control Comet, does not place a real order,
+        and does not bypass queue, CAPTCHA, payment, or checkout protection.
+      </div>
+    </section>
+
+    <section class="card" id="productCard">
+      <h2>Fake Limited Edition Shoe</h2>
+      <p>800 demo pairs only · ₹5,299 demo price</p>
+
+      <label for="size">Size</label>
+      <select id="size">
+        <option value="">Select size</option>
+        <option>UK 7</option>
+        <option>UK 8</option>
+        <option>UK 9</option>
+        <option>UK 10</option>
+        <option>UK 11</option>
+      </select>
+
+      <div class="actions">
+        <button id="addToCart">Add to Cart</button>
+        <button class="secondary" id="startDemo">Start Auto Demo</button>
+      </div>
+    </section>
+
+    <section class="card hidden" id="checkoutCard">
+      <h2>Fake Checkout</h2>
+      <div class="grid">
+        <div>
+          <label for="name">Full name</label>
+          <input id="name" />
+        </div>
+        <div>
+          <label for="phone">Phone</label>
+          <input id="phone" />
+        </div>
+        <div>
+          <label for="pincode">Pincode</label>
+          <input id="pincode" />
+        </div>
+        <div>
+          <label for="payment">Payment</label>
+          <select id="payment">
+            <option value="">Select payment</option>
+            <option>UPI</option>
+            <option>Card</option>
+            <option>Cash on Delivery</option>
+          </select>
+        </div>
+      </div>
+
+      <label for="address">Address</label>
+      <input id="address" />
+
+      <div class="actions">
+        <button id="placeOrder">Place Fake Order</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <div class="log" id="log">Ready. Press Start Auto Demo.</div>
+      <h2 id="finalStatus"></h2>
+    </section>
+  </main>
+
+  <script>
+    const demoCustomer = {
+      size: "UK 9",
+      name: "Demo Customer",
+      phone: "9999999999",
+      pincode: "110017",
+      address: "Demo Address, New Delhi - fake page only",
+      payment: "Cash on Delivery"
+    };
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const logEl = document.getElementById("log");
+    const finalStatus = document.getElementById("finalStatus");
+
+    function log(message) {
+      logEl.textContent += "\n" + message;
+    }
+
+    function resetLog() {
+      logEl.textContent = "Starting fake automation...";
+      finalStatus.textContent = "";
+      finalStatus.className = "";
+    }
+
+    document.getElementById("addToCart").addEventListener("click", () => {
+      const selectedSize = document.getElementById("size").value;
+      if (!selectedSize) {
+        alert("Select size first");
+        return;
+      }
+      document.getElementById("checkoutCard").classList.remove("hidden");
+      log(`Add to Cart clicked for ${selectedSize}. Fake checkout opened.`);
+    });
+
+    document.getElementById("placeOrder").addEventListener("click", () => {
+      const fields = ["name", "phone", "pincode", "address", "payment"];
+      const missing = fields.filter((id) => !document.getElementById(id).value.trim());
+      if (missing.length) {
+        alert("Fill all fake checkout fields first");
+        return;
+      }
+      finalStatus.className = "success";
+      finalStatus.textContent = "Fake COD order placed successfully.";
+      log("Fake Place Order clicked. Demo complete.");
+    });
+
+    document.getElementById("startDemo").addEventListener("click", async () => {
+      resetLog();
+
+      await wait(500);
+      document.getElementById("size").value = demoCustomer.size;
+      log(`Selected size: ${demoCustomer.size}`);
+
+      await wait(500);
+      document.getElementById("addToCart").click();
+
+      await wait(500);
+      document.getElementById("name").value = demoCustomer.name;
+      log("Filled name.");
+
+      await wait(300);
+      document.getElementById("phone").value = demoCustomer.phone;
+      log("Filled phone.");
+
+      await wait(300);
+      document.getElementById("pincode").value = demoCustomer.pincode;
+      log("Filled pincode.");
+
+      await wait(300);
+      document.getElementById("address").value = demoCustomer.address;
+      log("Filled address.");
+
+      await wait(300);
+      document.getElementById("payment").value = demoCustomer.payment;
+      log("Selected Cash on Delivery.");
+
+      await wait(500);
+      document.getElementById("placeOrder").click();
+    });
+  </script>
+</body>
+</html>
