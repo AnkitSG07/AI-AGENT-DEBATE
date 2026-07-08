@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: auto-checkout-bot
+    env: docker
+    plan: free
+    healthCheckPath: /
