@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fake COD Sneaker Shop Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 32px 18px;
+      background: #f5f5f5;
+      color: #151515;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 18px;
+      padding: 22px;
+      margin: 16px 0;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.06);
+    }
+    label { display: block; margin: 12px 0 6px; font-weight: 700; }
+    input, select, button {
+      width: 100%;
+      padding: 13px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+      font-size: 15px;
+    }
+    button {
+      margin-top: 14px;
+      border: 0;
+      background: #111;
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .success { color: #067a30; font-weight: 900; }
+    .warning {
+      background: #fff4cf;
+      border: 1px solid #f0d06d;
+      border-radius: 12px;
+      padding: 12px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <h1>Fake Limited Sneaker Drop</h1>
+  <p class="warning">
+    Local demo only. This page is intentionally fake so automation can be learned safely
+    without placing a real order or affecting a real limited drop.
+  </p>
+
+  <section class="card">
+    <h2>Product</h2>
+    <p>Fake Extra Toppings Only - 800 demo pairs</p>
+
+    <label for="size">Size</label>
+    <select id="size">
+      <option value="">Select size</option>
+      <option>UK 7</option>
+      <option>UK 8</option>
+      <option>UK 9</option>
+      <option>UK 10</option>
+      <option>UK 11</option>
+    </select>
+
+    <button id="addToCart">Add to Cart</button>
+  </section>
+
+  <section id="checkout" class="card" style="display:none;">
+    <h2>Fake Checkout</h2>
+
+    <label for="name">Full name</label>
+    <input id="name" placeholder="Full name" />
+
+    <label for="phone">Phone</label>
+    <input id="phone" placeholder="Phone" />
+
+    <label for="address">Address</label>
+    <input id="address" placeholder="Address" />
+
+    <label for="pincode">Pincode</label>
+    <input id="pincode" placeholder="Pincode" />
+
+    <label for="payment">Payment</label>
+    <select id="payment">
+      <option value="">Select payment</option>
+      <option>UPI</option>
+      <option>Card</option>
+      <option>Cash on Delivery</option>
+    </select>
+
+    <button id="placeOrder">Place Fake Order</button>
+  </section>
+
+  <h2 id="status"></h2>
+
+  <script>
+    document.getElementById("addToCart").addEventListener("click", () => {
+      const size = document.getElementById("size").value;
+      if (!size) {
+        alert("Select size first");
+        return;
+      }
+      document.getElementById("checkout").style.display = "block";
+    });
+
+    document.getElementById("placeOrder").addEventListener("click", () => {
+      const required = ["name", "phone", "address", "pincode", "payment"];
+      const missing = required.filter((id) => !document.getElementById(id).value.trim());
+      if (missing.length) {
+        alert("Fill all fake checkout fields first");
+        return;
+      }
+      document.getElementById("status").className = "success";
+      document.getElementById("status").textContent = "Fake COD order placed successfully.";
+    });
+  </script>
+</body>
+</html>
