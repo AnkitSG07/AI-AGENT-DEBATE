@@ -1,30 +1,23 @@
 from flask import Flask, render_template, request, jsonify
 import threading
 import uuid
-from bot import run_checkout_bot, JOBS, normalize_practice_url
+from bot import run_checkout_bot, JOBS
 
 app = Flask(__name__)
-
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-
 @app.route("/start", methods=["POST"])
 def start_bot():
-    data = request.json or {}
+    data = request.json
     job_id = str(uuid.uuid4())[:8]
-
-    try:
-        url = normalize_practice_url(data.get("url", "https://www.saucedemo.com"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
 
     JOBS[job_id] = {"status": "running", "logs": [], "result": None}
 
     config = {
-        "url": url,
+        "url": data.get("url", "https://www.saucedemo.com"),
         "username": data.get("username", "standard_user"),
         "password": data.get("password", "secret_sauce"),
         "product": data.get("product", "Sauce Labs Backpack"),
@@ -38,14 +31,12 @@ def start_bot():
 
     return jsonify({"job_id": job_id})
 
-
 @app.route("/status/<job_id>")
 def status(job_id):
     job = JOBS.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
