@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto Checkout Bot</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    color: #eee; min-height: 100vh;
+    display: flex; justify-content: center; align-items: center; padding: 20px;
+  }
+  .container {
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;
+    padding: 32px; width: 100%; max-width: 520px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 24px; }
+  label { display: block; font-size: 0.8rem; color: #aaa; margin: 12px 0 4px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+    color: #eee; font-size: 0.9rem;
+  }
+  input:focus { outline: none; border-color: #4f8cff; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  button {
+    width: 100%; margin-top: 20px; padding: 12px;
+    background: linear-gradient(90deg, #4f8cff, #6a5acd);
+    border: none; border-radius: 8px; color: white;
+    font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #logs {
+    margin-top: 20px; background: #0d0d1a; border-radius: 8px;
+    padding: 14px; font-family: monospace; font-size: 0.8rem;
+    max-height: 220px; overflow-y: auto; display: none;
+  }
+  .log-line { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.75rem; margin-top: 12px;
+  }
+  .running { background: #3a3a00; color: #ffd700; }
+  .completed { background: #003a1a; color: #4caf50; }
+  .failed { background: #3a0000; color: #ff5252; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🤖 Auto Checkout Bot</h1>
+  <p class="subtitle">Demo bot for saucedemo.com practice site</p>
+
+  <label>Site URL</label>
+  <input id="url" value="https://www.saucedemo.com">
+
+  <div class="row">
+    <div><label>Username</label><input id="username" value="standard_user"></div>
+    <div><label>Password</label><input id="password" type="password" value="secret_sauce"></div>
+  </div>
+
+  <label>Product Name</label>
+  <input id="product" value="Sauce Labs Backpack">
+
+  <div class="row">
+    <div><label>First Name</label><input id="first_name" value="John"></div>
+    <div><label>Last Name</label><input id="last_name" value="Doe"></div>
+    <div><label>Zip Code</label><input id="zip_code" value="12345"></div>
+  </div>
+
+  <button id="startBtn" onclick="startBot()">🚀 Start Checkout</button>
+  <div id="statusBadge"></div>
+  <div id="logs"></div>
+</div>
+
+<script>
+let pollInterval;
+
+async function startBot() {
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Running...';
+  document.getElementById('logs').style.display = 'block';
+  document.getElementById('logs').innerHTML = '';
+  document.getElementById('statusBadge').innerHTML = '';
+
+  const payload = {};
+  ['url','username','password','product','first_name','last_name','zip_code']
+    .forEach(id => payload[id] = document.getElementById(id).value);
+
+  const res = await fetch('/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const { job_id } = await res.json();
+
+  pollInterval = setInterval(() => pollStatus(job_id), 1000);
+}
+
+async function pollStatus(jobId) {
+  const res = await fetch('/status/' + jobId);
+  const job = await res.json();
+
+  document.getElementById('logs').innerHTML =
+    job.logs.map(l => `<div class="log-line">${l}</div>`).join('');
+
+  if (job.status !== 'running') {
+    clearInterval(pollInterval);
+    const btn = document.getElementById('startBtn');
+    btn.disabled = false;
+    btn.textContent = '🚀 Start Checkout';
+    document.getElementById('statusBadge').innerHTML =
+      `<span class="badge ${job.status}">${job.status.toUpperCase()}</span>`;
+  }
+}
+</script>
+</body>
+</html>
