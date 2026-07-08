@@ -45,3 +45,12 @@ Response includes `answer` plus retrieval metadata (`strategy`, `sources`, `pric
 
 
 - `sales_automation` mode supports JSON workflow outputs for quote intake templates.
+
+## Safe Comet Drop Helper
+
+A separate safe helper has been added for manual limited-drop preparation:
+
+- Render/static page: `public/comet-drop-helper.html`
+- CLI helper + fake local COD demo: `tools/comet-drop-helper/`
+
+The real-drop helper only opens the page and alerts at sale time. The fake COD bot is locked to a local demo page and must not be pointed at a real checkout.
