@@ -4,7 +4,7 @@ import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { buildKitControllerPromptInstructions, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
+import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
 
 dotenv.config();
 
@@ -7085,6 +7085,19 @@ function kitAiQuestionLooksLikeExactProductSelection(question = "", history = []
   const q = String(question || "").trim();
   if (!q) return false;
 
+  /*
+    V25.1 controller safety:
+    Product names mentioned inside conditional/negative examples are NOT selections.
+    Example: "if Lug Wire length needs my choice, stop and ask me" must never become
+    a deterministic "add Lug Wire" action.
+  */
+  if (
+    /\b(?:do\s+not|don't|dont|never|instead\s+of|stop\s+and\s+ask|ask\s+me|needs?\s+(?:my|a)\s+choice|without\s+guessing)\b/i.test(q) ||
+    /\b(?:if|when)\b.{0,100}\b(?:length|option|choice|needs?|requires?)\b/i.test(q)
+  ) {
+    return false;
+  }
+
   const productMatches = findExactLiveProductsMentionedInText(q, liveProducts);
   if (!productMatches.length) return false;
 
@@ -7172,12 +7185,14 @@ function repairUnsupportedImmediateKitMutationClaim({
   answer = "",
   activeKitActions = [],
   recommendedProducts = [],
+  kitPlan = null,
   liveProducts = [],
   question = ""
 } = {}) {
   if (!kitAiAnswerClaimsImmediateKitMutation(answer)) return answer;
   if ((Array.isArray(activeKitActions) && activeKitActions.length) ||
-      (Array.isArray(recommendedProducts) && recommendedProducts.length)) {
+      (Array.isArray(recommendedProducts) && recommendedProducts.length) ||
+      (Array.isArray(kitPlan?.actions) && kitPlan.actions.length && kitPlan.rejected !== true)) {
     return answer;
   }
 
@@ -11549,7 +11564,9 @@ app.post("/kit-ai-chat", async (req, res) => {
       lampReferenceSummary,
       projectState,
       conversationState,
-      sessionId
+      sessionId,
+      controller_mode: requestedControllerMode,
+      buildGoal: incomingBuildGoal
     } = req.body || {};
     const wantsStream = String(req.headers.accept || "").toLowerCase().includes("text/event-stream") || req.body?.stream === true;
     const normalizedLampReferenceImage = normalizeKitAiLampReferenceImage(lampReferenceImage);
@@ -11639,6 +11656,23 @@ app.post("/kit-ai-chat", async (req, res) => {
     });
     const approvedRulesPrompt = formatApprovedRulesForPrompt(relevantApprovedRules);
 
+    const requestedControllerModeNormalized = String(requestedControllerMode || req.body?.controllerMode || "").trim().toLowerCase();
+    const controllerBridgeActive = !!(
+      kitContext?.controllerAvailable ||
+      kitContext?.kitBuilderSnapshot?.controller ||
+      kitContext?.kitBuilderSnapshot?.planningCatalog
+    );
+    const explicitControllerMutationRequest =
+      /\b(?:build|configure|complete|finish|fix|control|apply|update|change|replace)\b.{0,80}\b(?:kit|builder|configuration|lamp)\b/i.test(safeQuestion) ||
+      /\b(?:build it for me|make it for me|complete it|control the kit builder|do it for me)\b/i.test(safeQuestion);
+    const controllerMutationMode = !!(
+      controllerBridgeActive &&
+      (
+        ["guide", "apply", "auto_build"].includes(requestedControllerModeNormalized) ||
+        explicitControllerMutationRequest
+      )
+    );
+
     if (!liveProductResult.ok || !liveProducts.length) {
       return res.json({
         ok: true,
@@ -11664,13 +11698,15 @@ app.post("/kit-ai-chat", async (req, res) => {
       - "without sleeve" from being sent back to the model when it is clearly the battery-variant answer
       - "it is there" after a false availability claim from switching to the opposite with-sleeve battery
     */
-    const directControllerResponse = kitAiBuildDirectControllerResponse({
-      question: safeQuestion,
-      history: effectiveHistory,
-      conversationState: incomingConversationState,
-      kitContext: kitContext || {},
-      liveProducts
-    });
+    const directControllerResponse = controllerMutationMode
+      ? null
+      : kitAiBuildDirectControllerResponse({
+          question: safeQuestion,
+          history: effectiveHistory,
+          conversationState: incomingConversationState,
+          kitContext: kitContext || {},
+          liveProducts
+        });
 
     if (directControllerResponse) {
       const directKitPlan = resolveKitPlanForPayload({
@@ -11754,6 +11790,13 @@ app.post("/kit-ai-chat", async (req, res) => {
 
     const resolvedProjectState = sanitizeKitAiProjectState(projectStateResult?.state || priorProjectState);
 
+    const resolvedBuildGoal = deriveKitBuildGoal({
+      question: safeQuestion,
+      projectState: resolvedProjectState,
+      kitContext: kitContext || {},
+      incomingBuildGoal: incomingBuildGoal || req.body?.build_goal || null
+    });
+
     const structuredDecisionPolicy = buildKitAiDecisionPolicyFromProjectState({
       projectState: resolvedProjectState,
       fallbackQuestion: safeQuestion,
@@ -11826,34 +11869,38 @@ app.post("/kit-ai-chat", async (req, res) => {
         ? findDefault202CompletionLiveProducts(liveProducts, kitContext || {}, safeQuestion)
         : [];
 
-    const deterministicDirectAddActions =
-      findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {}, resolvedProjectState || {});
+    const deterministicDirectAddActions = controllerMutationMode
+      ? []
+      : findDirectAddLiveActionsFromQuestion(safeQuestion, liveProducts, kitContext || {}, resolvedProjectState || {});
 
-    const deterministicConfirmedFollowupActions =
-      findConfirmedLiveActionsFromPreviousAssistant(
-        safeQuestion,
-        compactHistory || [],
-        liveProducts,
-        kitContext || {},
-        resolvedProjectState || {}
-      );
+    const deterministicConfirmedFollowupActions = controllerMutationMode
+      ? []
+      : findConfirmedLiveActionsFromPreviousAssistant(
+          safeQuestion,
+          compactHistory || [],
+          liveProducts,
+          kitContext || {},
+          resolvedProjectState || {}
+        );
 
-    const deterministicExactSelectionActions =
-      findExactLiveSelectionActionsFromQuestion(
-        safeQuestion,
-        liveProducts,
-        kitContext || {},
-        effectiveHistory
-      );
+    const deterministicExactSelectionActions = controllerMutationMode
+      ? []
+      : findExactLiveSelectionActionsFromQuestion(
+          safeQuestion,
+          liveProducts,
+          kitContext || {},
+          effectiveHistory
+        );
 
-    const deterministicCorrectionRecovery =
-      findCorrectionRecoveryLiveActionsFromQuestion(
-        safeQuestion,
-        effectiveHistory,
-        liveProducts,
-        kitContext || {},
-        resolvedProjectState || {}
-      );
+    const deterministicCorrectionRecovery = controllerMutationMode
+      ? { actions: [] }
+      : findCorrectionRecoveryLiveActionsFromQuestion(
+          safeQuestion,
+          effectiveHistory,
+          liveProducts,
+          kitContext || {},
+          resolvedProjectState || {}
+        );
 
     const lampReferencePromptContext = {
       imageAttachedThisTurn: !!normalizedLampReferenceImage,
@@ -12141,7 +12188,7 @@ ${safeQuestion}
 
 Answer using only LIVE ODOO WEBSITE PRODUCTS.
 `;
-    const prompt = basePrompt + buildKitControllerPromptInstructions(kitContext || {});
+    const prompt = basePrompt + buildKitControllerPromptInstructions(kitContext || {}, resolvedBuildGoal);
 
     const kitAiGeminiContents = buildKitAiGeminiContents(prompt, normalizedLampReferenceImage);
 
@@ -12323,11 +12370,13 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
     recommendedProducts = filterAlreadyActiveRecommendations(recommendedProducts, kitContext || {});
     recommendedProducts = enforceKitAiDualLedWireQuantity(recommendedProducts, kitContext || {});
 
-    let activeKitActions = normalizeKitAiActiveKitActions(
-      parsedResponse.active_kit_actions || [],
-      liveProducts,
-      kitContext || {}
-    );
+    let activeKitActions = controllerMutationMode
+      ? []
+      : normalizeKitAiActiveKitActions(
+          parsedResponse.active_kit_actions || [],
+          liveProducts,
+          kitContext || {}
+        );
 
     if (
       isKitAiExplicitDirectAddQuestion(safeQuestion) &&
@@ -12492,24 +12541,50 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       }
     }
 
-    const guidedFlow = applyGuidedKitAiFlowOverrides({
-      question: safeQuestion,
-      kitContext: {
-        ...(kitContext || {}),
-        history: effectiveHistory
-      },
-      liveProducts,
-      answer,
-      recommendedProducts,
-      activeKitActions,
-      alternativeProducts,
-      actionOffer: parsedResponse.action_offer || (recommendedProducts.length ? "active_kit" : "none")
-    });
+    const guidedFlow = controllerMutationMode
+      ? {
+          answer,
+          recommendedProducts,
+          activeKitActions: [],
+          alternativeProducts,
+          actionOffer: "none"
+        }
+      : applyGuidedKitAiFlowOverrides({
+          question: safeQuestion,
+          kitContext: {
+            ...(kitContext || {}),
+            history: effectiveHistory
+          },
+          liveProducts,
+          answer,
+          recommendedProducts,
+          activeKitActions,
+          alternativeProducts,
+          actionOffer: parsedResponse.action_offer || (recommendedProducts.length ? "active_kit" : "none")
+        });
 
-    updateFinalAnswer(guidedFlow.answer, "guided_stepwise_flow_override");
+    if (!controllerMutationMode) {
+      updateFinalAnswer(guidedFlow.answer, "guided_stepwise_flow_override");
+    }
     recommendedProducts = guidedFlow.recommendedProducts;
     activeKitActions = guidedFlow.activeKitActions;
     alternativeProducts = guidedFlow.alternativeProducts;
+
+    const kitPlan = resolveKitPlanForPayload({
+      parsedResponse,
+      activeKitActions,
+      kitContext: kitContext || {},
+      buildGoal: resolvedBuildGoal,
+      controllerMode: controllerMutationMode,
+      allowLegacyFallback: !controllerMutationMode
+    });
+
+    if (controllerMutationMode && kitPlan && kitPlan.rejected !== true && Array.isArray(kitPlan.actions) && kitPlan.actions.length) {
+      const controllerAnswer = kitPlan.mode === "guide"
+        ? "I prepared an exact Kit Builder plan from your current requirements. Review the visible plan and approve it when you want me to apply the changes."
+        : "I’m applying your exact requested configuration through the verified Kit Builder now. I’ll stop before guessing any required live product option.";
+      updateFinalAnswer(controllerAnswer, "controller_goal_plan_answer");
+    }
 
     /*
       Final honesty guardrails:
@@ -12531,6 +12606,7 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
         answer,
         activeKitActions,
         recommendedProducts,
+        kitPlan,
         liveProducts,
         question: safeQuestion
       }),
@@ -12602,11 +12678,6 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       activeKitActions = batteryVariantGuard.activeKitActions;
     }
 
-    const kitPlan = resolveKitPlanForPayload({
-      parsedResponse,
-      activeKitActions,
-      kitContext: kitContext || {}
-    });
     const finalPayload = {
       ok: true,
       session_id: normalizedSessionId || null,
@@ -12620,6 +12691,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       active_kit_actions: activeKitActions,
       kit_plan: kitPlan,
       kit_plan_summary: summarizeKitPlan(kitPlan),
+      build_goal: resolvedBuildGoal,
+      controller_mode_active: controllerMutationMode,
       alternative_products: alternativeProducts,
       action_offer: guidedFlow.actionOffer || (recommendedProducts.length ? "active_kit" : "none"),
       live_products_available: true,
