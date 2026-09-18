@@ -4,6 +4,7 @@ import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { buildKitControllerPromptInstructions, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
 
 dotenv.config();
 
@@ -11672,6 +11673,11 @@ app.post("/kit-ai-chat", async (req, res) => {
     });
 
     if (directControllerResponse) {
+      const directKitPlan = resolveKitPlanForPayload({
+        parsedResponse: {},
+        activeKitActions: directControllerResponse.active_kit_actions || [],
+        kitContext: kitContext || {}
+      });
       const directPayload = {
         ok: true,
         session_id: normalizedSessionId || null,
@@ -11683,6 +11689,8 @@ app.post("/kit-ai-chat", async (req, res) => {
         image_analyzed_this_turn: false,
         recommended_products: directControllerResponse.recommended_products || [],
         active_kit_actions: directControllerResponse.active_kit_actions || [],
+        kit_plan: directKitPlan,
+        kit_plan_summary: summarizeKitPlan(directKitPlan),
         alternative_products: [],
         action_offer: directControllerResponse.action_offer || "none",
         live_products_available: true,
@@ -11852,7 +11860,7 @@ app.post("/kit-ai-chat", async (req, res) => {
       priorReferenceImageSummary: priorLampReferenceSummary || ""
     };
 
-    const prompt = `
+    const basePrompt = `
 You are Smart Handicrafts® Kit Expert.
 
 You are not a generic chatbot. You are a technical product assistant and sales engineer for Smart Handicrafts®, a B2B brand providing plug-and-play electronics modules for lamps, handicrafts, fountains, diffusers, and export-ready lighting products.
@@ -11981,6 +11989,13 @@ Do not output multiple JSON objects.
       "reason": "short reason"
     }
   ],
+  "kit_plan": {
+    "mode": "guide | apply | auto_build",
+    "summary": "short purpose",
+    "requires_user_input": false,
+    "user_input_reason": "",
+    "actions": []
+  },
   "action_offer": "active_kit | cart | none"
 }
 Rules for recommended_products:
@@ -12126,6 +12141,7 @@ ${safeQuestion}
 
 Answer using only LIVE ODOO WEBSITE PRODUCTS.
 `;
+    const prompt = basePrompt + buildKitControllerPromptInstructions(kitContext || {});
 
     const kitAiGeminiContents = buildKitAiGeminiContents(prompt, normalizedLampReferenceImage);
 
@@ -12586,6 +12602,11 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       activeKitActions = batteryVariantGuard.activeKitActions;
     }
 
+    const kitPlan = resolveKitPlanForPayload({
+      parsedResponse,
+      activeKitActions,
+      kitContext: kitContext || {}
+    });
     const finalPayload = {
       ok: true,
       session_id: normalizedSessionId || null,
@@ -12597,6 +12618,8 @@ Answer using only LIVE ODOO WEBSITE PRODUCTS.
       image_analyzed_this_turn: !!normalizedLampReferenceImage,
       recommended_products: recommendedProducts,
       active_kit_actions: activeKitActions,
+      kit_plan: kitPlan,
+      kit_plan_summary: summarizeKitPlan(kitPlan),
       alternative_products: alternativeProducts,
       action_offer: guidedFlow.actionOffer || (recommendedProducts.length ? "active_kit" : "none"),
       live_products_available: true,
