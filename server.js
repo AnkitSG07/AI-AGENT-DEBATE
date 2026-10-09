@@ -1122,6 +1122,95 @@ function mapPartnerToAddress(p) {
   };
 }
 
+// FedEx-only product metadata. These fields depend on installed Odoo modules,
+// so discover supported names before requesting them. A missing optional field
+// must never prevent the original order or other dashboard tabs from loading.
+async function odooFedexProductMetadata(uid, lines = []) {
+  const ids = [...new Set(lines.map(l => l.product_id?.[0]).filter(Boolean))];
+  const result = new Map();
+  if (!ids.length) return result;
+
+  const candidates = ["id", "type", "product_tmpl_id", "weight", "hs_code",
+    "harmonized_code", "x_studio_hs_code", "x_hs_code",
+    "country_of_origin", "country_of_origin_id", "origin_country_id",
+    "x_studio_country_of_origin", "x_country_of_origin"];
+  const supported = async model => {
+    const meta = await odooExecute(uid, model, "fields_get", [candidates], {attributes: ["type"]});
+    return meta || {};
+  };
+  const codeFieldNames = ["hs_code", "harmonized_code", "x_studio_hs_code", "x_hs_code"];
+  const originFieldNames = ["country_of_origin", "country_of_origin_id", "origin_country_id",
+    "x_studio_country_of_origin", "x_country_of_origin"];
+  const readOrigin = (record, fields) => {
+    for (const field of originFieldNames) {
+      if (!fields[field] || !record?.[field]) continue;
+      const raw = record[field];
+      if (fields[field].type === "many2one" && Array.isArray(raw) && Number.isInteger(raw[0])) {
+        return {countryId: raw[0]};
+      }
+      if (typeof raw === "string" && /^[A-Za-z]{2}$/.test(raw.trim())) {
+        return {code: raw.trim().toUpperCase()};
+      }
+    }
+    return {};
+  };
+  const extract = (record, fields) => ({
+    hsCode: codeFieldNames.map(f => fields[f] && record?.[f]).find(v => typeof v === "string" && /^\d{6,12}$/.test(v.replace(/\s/g,"")))?.replace(/\s/g,"") || "",
+    weightKg: Number(record?.weight) >= 0.001 ? Number(record.weight) : null,
+    origin: readOrigin(record, fields)
+  });
+
+  try {
+    const variantFields = await supported("product.product");
+    const variantReadFields = candidates.filter(f => variantFields[f]);
+    // Product type is mandatory for filtering services; this is an Odoo core field.
+    if (!variantReadFields.includes("type")) variantReadFields.push("type");
+    const variants = await odooExecute(uid,"product.product","read",[ids,variantReadFields]);
+    const templateIds = [...new Set((variants || []).map(v => v.product_tmpl_id?.[0]).filter(Boolean))];
+    let templateFields = {}, templates = new Map();
+    if (templateIds.length) {
+      try {
+        templateFields = await supported("product.template");
+        const templateReadFields = candidates.filter(f => templateFields[f] && f !== "product_tmpl_id");
+        const records = await odooExecute(uid,"product.template","read",[templateIds,templateReadFields]);
+        templates = new Map((records || []).map(x => [x.id,x]));
+      } catch (error) {
+        console.warn("FedEx optional product template metadata not available:", error.message);
+      }
+    }
+    const countryIds = new Set();
+    for (const v of variants || []) {
+      const own = extract(v, variantFields);
+      const template = extract(templates.get(v.product_tmpl_id?.[0]),templateFields);
+      const origin = own.origin.countryId || own.origin.code ? own.origin : template.origin;
+      if (origin.countryId) countryIds.add(origin.countryId);
+      result.set(v.id,{
+        isService: v.type === "service",
+        hsCode: own.hsCode || template.hsCode || "",
+        weightKg: own.weightKg ?? template.weightKg ?? null,
+        origin
+      });
+    }
+    if (countryIds.size) {
+      const countries = await odooExecute(uid,"res.country","read",[[...countryIds],["id","code"]]);
+      const codes = new Map((countries || []).map(c => [c.id,String(c.code || "").toUpperCase()]));
+      for (const item of result.values()) {
+        if (item.origin?.countryId) item.origin = {code:codes.get(item.origin.countryId) || ""};
+      }
+    }
+  } catch(error) {
+    console.warn("FedEx optional product metadata lookup failed:",error.message);
+    // Keep core service filtering even when optional customs fields aren't present.
+    try {
+      const variants=await odooExecute(uid,"product.product","read",[ids,["id","type","weight"]]);
+      for(const v of variants || []) result.set(v.id,{isService:v.type === "service",weightKg:Number(v.weight)>=0.001 ? Number(v.weight) : null});
+    } catch (fallbackError) {
+      console.warn("FedEx product service classification unavailable:",fallbackError.message);
+    }
+  }
+  return result;
+}
+
 async function odooGetPaymentStatus(uid, invoiceIds) {
   if (!Array.isArray(invoiceIds) || invoiceIds.length === 0) {
     return { payment_status: "no_invoice", invoices: [] };
@@ -1160,7 +1249,8 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
     [[ ["name", "=", ref] ], [
       "id", "name", "partner_shipping_id", "partner_invoice_id", "partner_id",
       "date_order", "amount_total", "state", "note", "client_order_ref",
-      "carrier_id", "invoice_status", "picking_ids", "invoice_ids"
+      "carrier_id", "invoice_status", "picking_ids", "invoice_ids",
+      ...(options.forFedex ? ["currency_id"] : [])
     ]],
     { limit: 1 }
   );
@@ -1182,13 +1272,27 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
     "sale.order.line",
     "search_read",
     [[ ["order_id", "=", so.id] ], options.forFedex
-      ? ["name", "product_uom_qty", "product_id", "is_delivery", "display_type"]
+      ? ["name", "product_uom_qty", "product_id", "is_delivery", "display_type", "price_unit", "price_subtotal", "discount"]
       : ["name", "product_uom_qty", "product_id"]],
     { limit: 200 }
   );
 
   const shipTo = mapPartnerToAddress(shipPartner);
-  const serviceProductIds = new Set();
+  let fedexProductMeta = new Map();
+  let fedexCurrency = "";
+  if (options.forFedex) {
+    const rawCurrencyId = so.currency_id?.[0];
+    if (rawCurrencyId) {
+      try {
+        const records = await odooExecute(uid,"res.currency","read",[[rawCurrencyId],["name"]]);
+        fedexCurrency = String(records?.[0]?.name || "").toUpperCase();
+      } catch (error) { console.warn("FedEx order currency lookup failed:",error.message); }
+    }
+    if (!/^[A-Z]{3}$/.test(fedexCurrency)) {
+      const displayed=String(so.currency_id?.[1] || "").trim().toUpperCase();
+      fedexCurrency=/^[A-Z]{3}$/.test(displayed) ? displayed : "";
+    }
+  }
   if (options.forFedex) {
     // Odoo's display country ("Czech Republic") is NOT a valid FedEx code.
     // Read the canonical ISO-3166 code from res.country instead of guessing.
@@ -1207,11 +1311,7 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
 
     // Delivery products, convenience fees and other services must not be
     // declared as physical commodities on a FedEx commercial invoice.
-    const productIds = [...new Set((lines || []).map(l => l.product_id?.[0]).filter(Boolean))];
-    if (productIds.length) {
-      const products = await odooExecute(uid, "product.product", "read", [productIds, ["id", "type"]]);
-      for (const p of products || []) if (p.type === "service") serviceProductIds.add(p.id);
-    }
+    fedexProductMeta = await odooFedexProductMetadata(uid,lines || []);
   }
 
   const paymentInfo = await odooGetPaymentStatus(uid, so.invoice_ids || []);
@@ -1230,6 +1330,7 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
     invoices: paymentInfo.invoices,
     picking_ids: so.picking_ids || [],
     ship_to: shipTo,
+    ...(options.forFedex ? {currencyCode:fedexCurrency} : {}),
     bill_to: mapPartnerToAddress(billPartner),
     items: (lines || []).map(l => ({
       name: l.name,
@@ -1238,8 +1339,14 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
       product_name: l.product_id?.[1] || "",
       ...(options.forFedex ? {
         is_delivery: l.is_delivery === true,
-        is_service: serviceProductIds.has(l.product_id?.[0]),
-        display_type: l.display_type || ""
+        is_service: fedexProductMeta.get(l.product_id?.[0])?.isService === true,
+        display_type: l.display_type || "",
+        sale_price_unit: l.price_unit,
+        sale_price_subtotal: l.price_subtotal,
+        sale_discount_pct: l.discount,
+        hsCode: fedexProductMeta.get(l.product_id?.[0])?.hsCode || "",
+        weightKg: fedexProductMeta.get(l.product_id?.[0])?.weightKg ?? null,
+        countryOfManufacture: fedexProductMeta.get(l.product_id?.[0])?.origin?.code || ""
       } : {})
     }))
   };

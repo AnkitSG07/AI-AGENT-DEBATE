@@ -38,7 +38,7 @@
   function basePayload(){return {from:readAddress('From'),to:readAddress('To'),package:packageDetails(),battery:value('fxBattery')};}
   function commodityRow(item={}) {
     const tr=document.createElement('tr');
-    const data={description:item.description||'',quantity:item.quantity||1,unitPrice:item.unitPrice||'',currency:item.currency||'USD',hsCode:item.hsCode||'',countryOfManufacture:item.countryOfManufacture||'IN',weightKg:item.weightKg||''};
+    const data={description:item.description||'',quantity:item.quantity||1,unitPrice:item.unitPrice ?? '',currency:item.currency||'',hsCode:item.hsCode||'',countryOfManufacture:item.countryOfManufacture||'',weightKg:item.weightKg ?? ''};
     const kinds={quantity:'number',unitPrice:'number',weightKg:'number'};
     Object.entries(data).forEach(([k,v])=>{
       const td=document.createElement('td'), input=document.createElement('input');
@@ -65,10 +65,22 @@
     const {order}=await api('/orders?ref='+encodeURIComponent(ref)); currentOrder=order;
     fillAddress('To',order.ship_to||{});
     $('fxCommodityRows').replaceChildren();
-    (order.items||[]).filter(i=>Number(i.qty)>0).slice(0,30).forEach(item=>commodityRow({description:item.product_name||item.name,quantity:Math.max(1,Math.ceil(Number(item.qty)))}));
+    (order.items||[]).filter(i=>Number(i.qty)>0).slice(0,30).forEach(item=>commodityRow({
+      description:item.product_name||item.name,
+      quantity:Math.max(1,Math.ceil(Number(item.qty))),
+      unitPrice:item.unitPrice,
+      currency:item.currency||order.currencyCode||'',
+      hsCode:item.hsCode||'',
+      countryOfManufacture:item.countryOfManufacture||'',
+      weightKg:item.weightKg
+    }));
     if(!$('fxCommodityRows').children.length)commodityRow();
     const excluded = Number(order.excludedLines) || 0;
-    text('fxOrderInfo',`${order.ref} · ${order.state||'Unknown state'} · ${(order.items||[]).length} physical item line(s). ${excluded ? `${excluded} non-commodity line(s) excluded (e.g. delivery/service charges). ` : ''}Verify customs values, HS codes, weights and addresses before shipping.`);
+    const suggested=(order.items||[]).filter(i=>i.unitPrice != null).length;
+    const missingHs=(order.items||[]).filter(i=>!i.hsCode).length;
+    const missingWeight=(order.items||[]).filter(i=>!(Number(i.weightKg)>=0.001)).length;
+    const missingOrigin=(order.items||[]).filter(i=>!i.countryOfManufacture).length;
+    text('fxOrderInfo',`${order.ref} · ${order.state||'Unknown state'} · ${(order.items||[]).length} physical item line(s). ${excluded ? `${excluded} non-commodity line(s) excluded. ` : ''}Suggested ${suggested} sale-order unit price(s). ${missingHs} HS code(s), ${missingWeight} weight(s), ${missingOrigin} origin(s) still require review or entry. These are editable customs suggestions, not verified declarations.`);
     clearQuote();notify(`Loaded sales order ${order.ref}. ${excluded ? `Excluded ${excluded} service/delivery line(s). ` : ''}Review the destination and customs values before requesting rates.`,'success');
   }
   async function loadConfig(){

@@ -87,6 +87,26 @@ function isNonCommodityOrderLine(item = {}) {
     || /^\s*\[(?:delivery|shipping|freight)[^\]]*\]/i.test(desc);
 }
 
+// Suggest a declared unit value from the sales-order line, NOT the catalog
+// price or order total. Odoo's price_subtotal includes line discounts and
+// excludes tax. Free/zero-value lines must be reviewed and priced manually.
+function suggestedUnitValue(line = {}) {
+  const qty = Number(line.qty);
+  if (!Number.isFinite(qty) || qty <= 0) return null;
+  const subtotal = line.sale_price_subtotal;
+  let netUnit;
+  if (subtotal !== undefined && subtotal !== null && subtotal !== false && subtotal !== '') {
+    netUnit = Number(subtotal) / qty;
+  } else {
+    const listUnit = Number(line.sale_price_unit);
+    const discount = Number(line.sale_discount_pct || 0);
+    netUnit = listUnit * (1 - discount / 100);
+  }
+  if (!Number.isFinite(netUnit) || netUnit <= 0) return null;
+  const rounded = Number(netUnit.toFixed(2));
+  return rounded >= 0.01 ? rounded : null;
+}
+
 function fedexImportOrder(order = {}) {
   const items = (order.items || []).filter(i =>
     Number(i.qty) > 0 && !isNonCommodityOrderLine(i)
@@ -96,7 +116,15 @@ function fedexImportOrder(order = {}) {
     ref: order.ref,
     state: order.state,
     ship_to: fedexImportAddress(order.ship_to),
-    items: items.map(i => ({ name: i.name, qty: i.qty, product_name: i.product_name })),
+    currencyCode: /^[A-Z]{3}$/.test(String(order.currencyCode || '').toUpperCase()) ? String(order.currencyCode).toUpperCase() : '',
+    items: items.map(i => ({
+      name: i.name, qty: i.qty, product_name: i.product_name,
+      unitPrice: suggestedUnitValue(i),
+      currency: /^[A-Z]{3}$/.test(String(order.currencyCode || '').toUpperCase()) ? String(order.currencyCode).toUpperCase() : '',
+      hsCode: /^\d{6,12}$/.test(String(i.hsCode || '').replace(/\s/g,'')) ? String(i.hsCode).replace(/\s/g,'') : '',
+      weightKg: Number(i.weightKg) >= 0.001 ? Number(i.weightKg) : null,
+      countryOfManufacture: /^[A-Z]{2}$/.test(String(i.countryOfManufacture || '').toUpperCase()) ? String(i.countryOfManufacture).toUpperCase() : ''
+    })),
     excludedLines: (order.items || []).length - items.length
   };
 }

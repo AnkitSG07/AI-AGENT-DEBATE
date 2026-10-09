@@ -44,6 +44,49 @@ test('FedEx import: Czech full-street format becomes a valid recipient; delivery
  assert.equal(order.items[0].qty,10);
  assert.equal(__fedexTest.isNonCommodityOrderLine({name:'[Delivery 007] Standard delivery',product_id:99,qty:1}),true);
 });
+test('FedEx import suggests discounted tax-exclusive sale-order unit prices and real product metadata',()=>{
+ const order=__fedexTest.fedexImportOrder({
+   ref:'SO-26/27-00353',state:'sale',currencyCode:'USD',ship_to:{countryCode:'CZ'},
+   items:[
+     {name:'Rechargeable LED driver',product_id:1,product_name:'LED driver',qty:10,
+      sale_price_unit:8,sale_price_subtotal:72,sale_discount_pct:10,
+      hsCode:'85437090',countryOfManufacture:'CN',weightKg:0.025},
+     {name:'DOB Driver',product_id:2,product_name:'DOB Driver',qty:2,
+      sale_price_unit:20,sale_price_subtotal:30,sale_discount_pct:25,
+      hsCode:'',countryOfManufacture:'',weightKg:null},
+     {name:'Standard Delivery',product_id:3,is_delivery:true,qty:1,
+      sale_price_unit:12,sale_price_subtotal:12}
+   ]
+ });
+ assert.equal(order.currencyCode,'USD');
+ assert.equal(order.items.length,2);
+ assert.equal(order.items[0].unitPrice,7.2);
+ assert.equal(order.items[0].currency,'USD');
+ assert.equal(order.items[0].hsCode,'85437090');
+ assert.equal(order.items[0].countryOfManufacture,'CN');
+ assert.equal(order.items[0].weightKg,0.025);
+ assert.equal(order.items[1].unitPrice,15);
+ assert.equal(order.items[1].hsCode,'');
+ assert.equal(order.items[1].countryOfManufacture,'');
+ assert.equal(order.items[1].weightKg,null);
+ assert.equal(order.excludedLines,1);
+});
+test('FedEx import leaves zero/unknown sale price and unverified customs data blank',()=>{
+ const order=__fedexTest.fedexImportOrder({
+   ref:'S00002',ship_to:{countryCode:'US'},items:[
+     {name:'Free promotional sample',product_id:1,qty:1,sale_price_unit:50,sale_price_subtotal:0,hsCode:'NOT VERIFIED',weightKg:0,countryOfManufacture:'China'},
+     {name:'Item with unknown price',product_id:2,qty:2,weightKg:null},
+     {name:'Price fallback without subtotal',product_id:3,qty:3,sale_price_unit:10,sale_discount_pct:20}
+   ]
+ });
+ assert.equal(order.items[0].unitPrice,null);
+ assert.equal(order.items[0].hsCode,'');
+ assert.equal(order.items[0].weightKg,null);
+ assert.equal(order.items[0].countryOfManufacture,'');
+ assert.equal(order.items[0].currency,'');
+ assert.equal(order.items[1].unitPrice,null);
+ assert.equal(order.items[2].unitPrice,8);
+});
 test('FedEx importer does not guess incomplete non-Czech addresses or overwrite populated structured fields',()=>{
  const us=__fedexTest.fedexImportAddress({line1:'Building 42, Market Street',city:'',pin:'',country:'United States',countryCode:'US'});
  assert.equal(us.country,'US');assert.equal(us.line1,'Building 42, Market Street');assert.equal(us.city,'');assert.equal(us.pin,'');
