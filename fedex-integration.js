@@ -196,16 +196,43 @@ async function sendFedex(path, data, kind='shipping') {
   }
   return obj;
 }
-function rateNormalize(resp) {
-  return (resp.output?.rateReplyDetails||[]).map(r=>{
-    const rated=r.ratedShipmentDetails||[];
-    const best=rated.find(s=>s.rateType==='ACCOUNT' || s.rateType==='PAYOR_ACCOUNT_SHIPMENT') || rated[0] || {};
-    const amountObj=best.totalNetChargeWithDutiesAndTaxes ?? best.totalNetCharge ?? best.totalBaseCharge;
-    const amount=amountObj && typeof amountObj==='object' ? amountObj.amount : amountObj;
-    const transit=r.commit || r.operationalDetail || {};
-    return {service:r.serviceType, name:r.serviceName||r.serviceType, amount: Number.isFinite(Number(amount))?Number(amount):null, currency:(amountObj && typeof amountObj==='object' ? amountObj.currency : null) || best.currency || best.currencyCode || null, transit:transit.dateDetail?.dayFormat||transit.dateDetail?.dayOfWeek||transit.dateDetail?.dayCxsFormat||transit.deliveryDate||transit.transitTime||null, rateType:best.rateType||''};
-  }).filter(r=>r.service);
+// Keep currency and rate type together: FedEx may return both the account's
+// billing-currency rate and a preferred-currency rate for the same service.
+// Selecting the first ACCOUNT row would silently discard a requested USD rate.
+function rateNormalize(resp, requestedCurrency = '') {
+  const preferred = /^[A-Z]{3}$/.test(String(requestedCurrency).toUpperCase())
+    ? String(requestedCurrency).toUpperCase() : '';
+  const amountOf = rate => rate?.totalNetChargeWithDutiesAndTaxes ?? rate?.totalNetCharge ?? rate?.totalBaseCharge;
+  const currencyOf = rate => {
+    const charge = amountOf(rate);
+    return safeStr((charge && typeof charge === 'object' ? charge.currency : null)
+      || rate?.currency || rate?.currencyCode, 3).toUpperCase();
+  };
+  const accountRate = rate => /(?:^|_)ACCOUNT(?:_|$)/.test(String(rate?.rateType || ''));
+  return (resp.output?.rateReplyDetails || []).map(reply => {
+    const rated = reply.ratedShipmentDetails || [];
+    const inPreferredCurrency = rate => !!preferred && currencyOf(rate) === preferred;
+    const best = rated.find(rate => accountRate(rate) && inPreferredCurrency(rate) && String(rate.rateType).includes('PREFERRED'))
+      || rated.find(rate => accountRate(rate) && inPreferredCurrency(rate))
+      || rated.find(rate => accountRate(rate))
+      || rated.find(inPreferredCurrency)
+      || rated[0] || {};
+    const amountObj = amountOf(best);
+    const amount = amountObj && typeof amountObj === 'object' ? amountObj.amount : amountObj;
+    const currency = currencyOf(best);
+    const transit = reply.commit || reply.operationalDetail || {};
+    return {
+      service: reply.serviceType,
+      name: reply.serviceName || reply.serviceType,
+      amount: amount !== undefined && amount !== null && amount !== '' && Number.isFinite(Number(amount)) ? Number(amount) : null,
+      currency: /^[A-Z]{3}$/.test(currency) ? currency : null,
+      transit: transit.dateDetail?.dayFormat || transit.dateDetail?.dayOfWeek || transit.dateDetail?.dayCxsFormat || transit.deliveryDate || transit.transitTime || null,
+      rateType: best.rateType || '',
+      preferredCurrencyMatched: preferred ? currency === preferred : null
+    };
+  }).filter(rate => rate.service);
 }
+
 function fxModeAssert(mutating) {
   if (!['sandbox','production',''].includes(env('FEDEX_MODE'))) fail('Invalid FEDEX_MODE; use sandbox or production.',503);
   if (!account()) fail(`Configure ${isProduction()?'FEDEX_ACCOUNT_NUMBER':'FEDEX_SANDBOX_ACCOUNT'} in Render.`,503);
@@ -251,9 +278,16 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
     // Use the *same validated* commodity values at rating and label creation.
     // Never silently invent customs values from the sales-order total.
     const declared=commodities(req.body.commodities);
-    const rateRequest={accountNumber:{value:account()},rateRequestControlParameters:{returnTransitTimes:true},requestedShipment:{shipper:{address:data.from.address},recipient:{address:data.to.address},pickupType:'CONTACT_FEDEX_TO_SCHEDULE',packagingType:'YOUR_PACKAGING',rateRequestType:['ACCOUNT','LIST'],requestedPackageLineItems:[{groupPackageCount:1,...data.pkg}],totalPackageCount:1,customsClearanceDetail:{commodities:declared.normalized,customsValue:declared.value,commercialInvoice:{shipmentPurpose:'SOLD'}}}};
+    // Prefer the actual Odoo Sales Order currency provided by the FedEx order
+    // workspace. Legacy callers without it use the declared customs currency.
+    const suppliedCurrency = safeStr(req.body.orderCurrency, 3).toUpperCase();
+    if (req.body.orderCurrency != null && req.body.orderCurrency !== '' && !/^[A-Z]{3}$/.test(String(req.body.orderCurrency).trim().toUpperCase())) fail('Sales order currency must be a three-letter ISO code.');
+    const requestedCurrency = suppliedCurrency || declared.value.currency;
+    // PREFERRED tells FedEx to return account rates in requestedShipment.preferredCurrency
+    // where supported. LIST keeps the published rates available as a fallback.
+    const rateRequest={accountNumber:{value:account()},rateRequestControlParameters:{returnTransitTimes:true},requestedShipment:{shipper:{address:data.from.address},recipient:{address:data.to.address},pickupType:'CONTACT_FEDEX_TO_SCHEDULE',packagingType:'YOUR_PACKAGING',rateRequestType:['PREFERRED','LIST'],preferredCurrency:requestedCurrency,requestedPackageLineItems:[{groupPackageCount:1,...data.pkg}],totalPackageCount:1,customsClearanceDetail:{commodities:declared.normalized,customsValue:declared.value,commercialInvoice:{shipmentPurpose:'SOLD'}}}};
     const raw=await sendFedex('/rate/v1/rates/quotes',rateRequest);
-    res.json({ok:true,mode:isProduction()?'production':'sandbox',rates:rateNormalize(raw),warnings:raw.output?.alerts||[]});
+    res.json({ok:true,mode:isProduction()?'production':'sandbox',requestedCurrency,rates:rateNormalize(raw,requestedCurrency),warnings:raw.output?.alerts||[]});
   }));
   app.post('/api/fedex/shipments',withError(async(req,res)=>{
     fxModeAssert(true);

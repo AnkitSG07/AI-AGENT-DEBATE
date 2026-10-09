@@ -57,7 +57,7 @@
   function readCommodities(){return [...$('fxCommodityRows').querySelectorAll('tr')].map(tr=>Object.fromEntries([...tr.querySelectorAll('input[data-field]')].map(el=>[el.dataset.field,el.type==='number'?Number(el.value):el.value.trim()])));}
   function localDateIndia(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()).replace(/(\d{2})\/(\d{2})\/(\d{4})/,'$3-$1-$2'); }
   function renderRates(){
-    $('fxRates').innerHTML=rates.length?rates.map((r,i)=>`<tr><td><input class="fx-rate-radio" type="radio" name="fxService" value="${html(r.service)}" ${r.service===selectedService?'checked':''} aria-label="Select ${html(r.name)}"></td><td>${html(r.name)}</td><td>${r.amount==null?'Check FedEx response':html(new Intl.NumberFormat('en-US',{style:'currency',currency:/^[A-Z]{3}$/.test(r.currency||'')?r.currency:'USD'}).format(r.amount))}</td><td>${html(r.transit||'Not supplied')}</td></tr>`).join(''):'<tr><td colspan="4">No eligible FedEx rates returned for this route. Check the service and sandbox test account.</td></tr>';
+    $('fxRates').innerHTML=rates.length?rates.map((r,i)=>`<tr><td><input class="fx-rate-radio" type="radio" name="fxService" value="${html(r.service)}" ${r.service===selectedService?'checked':''} aria-label="Select ${html(r.name)}"></td><td>${html(r.name)}</td><td>${r.amount==null||!/^[A-Z]{3}$/.test(r.currency||'')?'Check FedEx currency/amount':html(new Intl.NumberFormat('en-US',{style:'currency',currency:r.currency}).format(r.amount))}</td><td>${html(r.transit||'Not supplied')}</td></tr>`).join(''):'<tr><td colspan="4">No eligible FedEx rates returned for this route. Check the service and sandbox test account.</td></tr>';
     $('fxRates').querySelectorAll('input[name="fxService"]').forEach(el=>el.addEventListener('change',()=>{selectedService=el.value;$('fxCreateShipment').disabled=!configured;}));
   }
   async function loadOrder(){
@@ -98,18 +98,23 @@
     if (!currentOrder) throw new Error('Load the Odoo sales order first.');
     // Customs detail is mandatory for our India-origin international rate
     // request, not just for generating the final AWB/label.
-    const payload={...basePayload(),commodities:readCommodities()};
+    const payload={...basePayload(),commodities:readCommodities(),orderCurrency:currentOrder.currencyCode||''};
     if(payload.battery!=='none')throw new Error('Battery-containing or unverified shipments are blocked in this version. Review transport compliance first.');
     clearQuote();text('fxRateStatus','Requesting FedEx prices…');
     const response=await api('/rates',{method:'POST',body:JSON.stringify(payload)});
     rates=response.rates||[];ratedPayload=JSON.stringify(payload);
-    text('fxRateStatus',rates.length?`${rates.length} FedEx service(s) returned. Rates may differ from actual invoice.`:'No rates returned. Review route and sandbox test account.');renderRates();
+    const requestedCurrency=response.requestedCurrency||currentOrder.currencyCode||'';
+    const mismatched=rates.filter(r=>r.currency!==requestedCurrency);
+    const returnedCurrencies=[...new Set(mismatched.map(r=>r.currency||'unknown currency'))].join(', ');
+    text('fxRateStatus', rates.length
+      ? `${rates.length} FedEx service(s) returned. ${mismatched.length ? `${requestedCurrency} requested; ${mismatched.length} quote(s) returned in ${returnedCurrencies}. Amounts are shown in FedEx's original currency; no automatic conversion was made. ` : `Quotes returned in ${requestedCurrency}. `}Rates may differ from actual invoice.`
+      : 'No rates returned. Review route and sandbox test account.');renderRates();
     notify(rates.length?'Select the desired FedEx service. The quote uses the declared customs commodities shown above.':'FedEx returned no rates for these details.',rates.length?'success':'error');
   }
   async function createShipment(){
     if(!currentOrder)throw new Error('Load the order first.');
     if(!selectedService)throw new Error('Select a FedEx service quote.');
-    const payload={...basePayload(),commodities:readCommodities()};if(JSON.stringify(payload)!==ratedPayload)throw new Error('Shipping or customs details changed since the quote. Request a new quote.');
+    const payload={...basePayload(),commodities:readCommodities(),orderCurrency:currentOrder.currencyCode||''};if(JSON.stringify(payload)!==ratedPayload)throw new Error('Shipping or customs details changed since the quote. Request a new quote.');
     const items=payload.commodities;if(!items.length)throw new Error('Add at least one customs commodity.');
     const actionText=mode==='sandbox'?'TEST label':'LIVE billable FedEx label';
     if(!window.confirm(`Create ${actionText} for order ${currentOrder.ref}?\n\nService: ${selectedService}\nShipment origin: ${payload.from.city}, ${payload.from.country}\nDestination: ${payload.to.city}, ${payload.to.country}\n\nThis does not request courier pickup.`))return;

@@ -54,3 +54,8 @@ For production **later**, after FedEx approval: set `FEDEX_MODE=production`; con
 Run: `node --check server.js && node --check public/fedex.js && node --test tests/fedex.test.mjs`
 
 Tests use **mock FedEx responses**, not real API credentials/network. They cover sample rate parsing, server-side battery/HS checks, test AWB label and pickup/tracking flows, and duplicate operation blocking. Real FedEx sandbox functionality can only be validated after deployment with your account.
+
+### FedEx rate quotation currency (2026-10-09 patch)
+
+When loading a Sales Order, the FedEx workspace passes its Odoo currency (for example `USD`) to the rates endpoint. The server asks FedEx for `rateRequestType: ["PREFERRED", "LIST"]` and `requestedShipment.preferredCurrency: "USD"`. It chooses the **account-specific preferred-currency** rate when FedEx returns one. If FedEx only returns EUR or another currency, the dashboard displays the **actual currency returned**, with a clear warning, rather than relabeling a EUR amount as USD. Rate currency is separate from the customs declaration currency and from the currency FedEx ultimately bills. The existing Ship API and pickup routes are unchanged. No extra Render variables are required.
+

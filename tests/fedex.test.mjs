@@ -22,6 +22,31 @@ test('normalizes nested FedEx amount objects to a numeric quote',()=>{
  const q=__fedexTest.rateNormalize({output:{rateReplyDetails:[{serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[{rateType:'ACCOUNT',totalNetCharge:{amount:25.75,currency:'USD'}}]}]}});
  assert.equal(q[0].amount,25.75);assert.equal(q[0].currency,'USD');
 });
+test('selects FedEx preferred account quote in Odoo order currency instead of billing-currency ACCOUNT quote',()=>{
+ const q=__fedexTest.rateNormalize({output:{rateReplyDetails:[{
+  serviceType:'INTERNATIONAL_ECONOMY',ratedShipmentDetails:[
+   {rateType:'PAYOR_ACCOUNT_SHIPMENT',totalNetCharge:{amount:237.63,currency:'EUR'}},
+   {rateType:'PREFERRED_ACCOUNT_SHIPMENT',totalNetCharge:{amount:272.11,currency:'USD'}},
+   {rateType:'PREFERRED_LIST_SHIPMENT',totalNetCharge:{amount:310.00,currency:'USD'}}
+  ]
+ }]}},'USD');
+ assert.equal(q.length,1);
+ assert.equal(q[0].amount,272.11);
+ assert.equal(q[0].currency,'USD');
+ assert.equal(q[0].rateType,'PREFERRED_ACCOUNT_SHIPMENT');
+ assert.equal(q[0].preferredCurrencyMatched,true);
+});
+test('preserves FedEx EUR amount if a USD preferred quote is unavailable (never relabels as USD)',()=>{
+ const q=__fedexTest.rateNormalize({output:{rateReplyDetails:[{
+  serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[
+   {rateType:'PAYOR_ACCOUNT_SHIPMENT',totalNetCharge:{amount:287.89,currency:'EUR'}},
+   {rateType:'LIST',totalNetCharge:{amount:321.89,currency:'EUR'}}
+  ]
+ }]}},'USD');
+ assert.equal(q[0].amount,287.89);
+ assert.equal(q[0].currency,'EUR');
+ assert.equal(q[0].preferredCurrencyMatched,false);
+});
 test('FedEx import: Czech full-street format becomes a valid recipient; delivery and service fees are omitted',()=>{
  const order=__fedexTest.fedexImportOrder({
   id:353,ref:'SO-26/27-00353',state:'sale',
@@ -140,6 +165,17 @@ test('sandbox mocked end-to-end: rate → create label → pickup → tracking; 
   assert.ok(rateCall);
   const rateRequest=JSON.parse(rateCall.body);
   assert.deepEqual(rateRequest.requestedShipment.customsClearanceDetail.customsValue,{amount:12.5,currency:'USD'});
+  assert.equal(rateRequest.requestedShipment.preferredCurrency,'USD');
+  assert.deepEqual(rateRequest.requestedShipment.rateRequestType,['PREFERRED','LIST']);
+  assert.equal(q.requestedCurrency,'USD');
+  // Rate currency is driven by the *Odoo order*, not by manually edited customs values.
+  const otherQuote=await run('POST','/api/fedex/rates',{...sample(),commodities:sampleCommodities(),orderCurrency:'INR'});
+  assert.equal(otherQuote.status,200);
+  const requestsToRates=requests.filter(x=>x.endpoint.endsWith('/rate/v1/rates/quotes'));
+  assert.equal(JSON.parse(requestsToRates.at(-1).body).requestedShipment.preferredCurrency,'INR');
+  assert.equal(otherQuote.data.requestedCurrency,'INR');
+  assert.equal(otherQuote.data.rates[0].currency,'USD');
+  assert.equal(otherQuote.data.rates[0].preferredCurrencyMatched,false);
   assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].harmonizedCode,'854370');
   assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].weight.value,0.3);
   const payload={...sample(),commodities:sampleCommodities(),service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',confirm:true,operationId:randomUUID()};
