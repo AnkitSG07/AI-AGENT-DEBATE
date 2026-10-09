@@ -133,6 +133,26 @@ test('FedEx origin never merges legacy SHIP_FROM_LINE2 with a different pickup l
  }
 });
 
+test('FedEx pickup address inherits existing Label Maker SHIP_FROM values after pre-label update',()=>{
+ const keys=['FEDEX_ORIGIN_CONTACT','FEDEX_ORIGIN_COMPANY','FEDEX_ORIGIN_PHONE','FEDEX_ORIGIN_EMAIL','FEDEX_ORIGIN_LINE1','FEDEX_ORIGIN_LINE2','FEDEX_ORIGIN_CITY','FEDEX_ORIGIN_STATE_CODE','FEDEX_ORIGIN_POSTAL','FEDEX_ORIGIN_COUNTRY','SHIP_FROM_NAME','SHIP_FROM_COMPANY','SHIP_FROM_PHONE','SHIP_FROM_EMAIL','SHIP_FROM_LINE1','SHIP_FROM_LINE2','SHIP_FROM_CITY','SHIP_FROM_STATE','SHIP_FROM_PIN','SHIP_FROM_COUNTRY'];
+ const saved=new Map(keys.map(k=>[k,process.env[k]]));
+ try {
+  for(const k of keys) delete process.env[k];
+  Object.assign(process.env,{SHIP_FROM_NAME:'Smart Handicrafts',SHIP_FROM_COMPANY:'Vaidahi Kala Pvt Ltd',SHIP_FROM_PHONE:'1234567890',SHIP_FROM_LINE1:'First Floor A23 Okhla Phase I',SHIP_FROM_CITY:'New Delhi',SHIP_FROM_STATE:'DL',SHIP_FROM_PIN:'110020',SHIP_FROM_COUNTRY:'India',SHIP_FROM_LINE2:'Mayapuri, New Delhi'});
+  const origin=__fedexTest.originAddress();
+  assert.equal(origin.name,'Smart Handicrafts');
+  assert.equal(origin.line1,'First Floor A23 Okhla Phase I');
+  assert.equal(origin.city,'New Delhi');
+  assert.equal(origin.state,'DL');
+  assert.equal(origin.pin,'110020');
+  assert.equal(origin.country,'IN');
+  assert.equal(origin.line2,'','Do not restore conflicting legacy second address line');
+  process.env.FEDEX_ORIGIN_STATE_CODE='DL';
+  process.env.FEDEX_ORIGIN_LINE2='Actual warehouse suite';
+  assert.equal(__fedexTest.originAddress().line2,'Actual warehouse suite');
+ } finally {for(const [k,v] of saved){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
+});
+
 test('Czech destination import drops stale US state code from Odoo',()=>{
  const result=__fedexTest.fedexImportAddress({line1:'Hrobce 142',city:'Hrobce',pin:'41183',countryCode:'CZ',state:'US',stateCode:'US'});
  assert.equal(result.country,'CZ');assert.equal(result.state,'');

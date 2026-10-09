@@ -36,9 +36,14 @@ function originAddress() { return {
   // genuinely has a second street line; otherwise leave it blank.
   line2: env('FEDEX_ORIGIN_LINE2'),
   city: env('FEDEX_ORIGIN_CITY') || env('SHIP_FROM_CITY'),
-  state: env('FEDEX_ORIGIN_STATE_CODE'),
+  // The pre-existing Label Maker reads SHIP_FROM_STATE. Keep this fallback
+  // so the FedEx sender address does not silently lose its state code.
+  state: env('FEDEX_ORIGIN_STATE_CODE') || env('SHIP_FROM_STATE'),
   pin: env('FEDEX_ORIGIN_POSTAL') || env('SHIP_FROM_PIN'),
-  country: env('FEDEX_ORIGIN_COUNTRY') || 'IN'
+  // SHIP_FROM_COUNTRY can be a full name (e.g. India); FedEx needs ISO-2.
+  country: ({ INDIA:'IN', 'UNITED STATES':'US', 'UNITED KINGDOM':'GB' }[
+    (env('FEDEX_ORIGIN_COUNTRY') || env('SHIP_FROM_COUNTRY') || 'IN').toUpperCase()
+  ] || env('FEDEX_ORIGIN_COUNTRY') || env('SHIP_FROM_COUNTRY') || 'IN')
 }; }
 
 // Normalize the Odoo data for FedEx only. Never rewrite Odoo contact records.

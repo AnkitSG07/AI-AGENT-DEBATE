@@ -35,13 +35,17 @@
     try {await fn();} catch(err){notify(err.message || 'Operation failed.','error');}
     finally {busy=false;if(button){button.disabled=false;button.textContent=old;} $('fxRunPreflight').disabled=!selectedService||!ratedPayload||!configured||!currentInvoice; $('fxCreateShipment').disabled=!preflightToken||!selectedService||!ratedPayload||!configured;}
   }
-  function fillAddress(prefix, address={}) {
+  function fillAddress(prefix, address={}, preserveExisting=false) {
     const a = {...address};
     if (a.country) {
       const names={'INDIA':'IN','CZECH REPUBLIC':'CZ','CZECHIA':'CZ','UNITED STATES':'US','USA':'US','UNITED KINGDOM':'GB','GREAT BRITAIN':'GB','GERMANY':'DE','FRANCE':'FR','CANADA':'CA','UAE':'AE','UNITED ARAB EMIRATES':'AE'};
       a.country=names[String(a.country).trim().toUpperCase()] || a.country;
     }
-    fields.forEach(k=>set('fx'+prefix+k,a[k[0].toLowerCase()+k.slice(1)]));
+    fields.forEach(k=>{
+      const id='fx'+prefix+k;
+      // Never overwrite sender fields already corrected by the operator.
+      if(!preserveExisting || !value(id))set(id,a[k[0].toLowerCase()+k.slice(1)]);
+    });
   }
   function readAddress(prefix) {
     return Object.fromEntries(fields.map(k=>[k[0].toLowerCase()+k.slice(1), value('fx'+prefix+k)]));
@@ -104,6 +108,9 @@
   }
   async function loadOrder(){
     const ref=value('fxOrderRef');if(!ref)throw new Error('Enter a Sales Order reference.');
+    // Retrying /config after login is critical: it may have failed at startup
+    // before the operator authenticated. Only fill missing sender fields.
+    await loadConfig({preserveExisting:true});
     const {order}=await api('/orders?ref='+encodeURIComponent(ref)); currentOrder=order;
     fillAddress('To',order.ship_to||{});
     $('fxCommodityRows').replaceChildren();
@@ -126,15 +133,22 @@
     text('fxOrderInfo',`${order.ref} · ${order.state||'Unknown state'} · ${(order.items||[]).length} physical item line(s). ${excluded ? `${excluded} non-commodity line(s) excluded. ` : ''}Suggested ${suggested} sale-order unit price(s). ${missingHs} HS code(s), ${missingWeight} weight(s), ${missingOrigin} origin(s) still require review or entry. These are editable customs suggestions, not verified declarations.`);
     clearQuote();await loadInvoice();notify(`Loaded sales order ${order.ref}. ${excluded ? `Excluded ${excluded} service/delivery line(s). ` : ''}Review the destination and customs values before requesting rates.`,'success');
   }
-  async function loadConfig(){
+  async function loadConfig({preserveExisting=true}={}){
     try {
       const cfg=await api('/config');mode=cfg.mode||'sandbox';configured=Boolean(cfg.shippingConfigured);
       text('fxModePill',mode==='sandbox'?'SANDBOX · Test only':cfg.liveEnabled?'PRODUCTION · LIVE ENABLED':'PRODUCTION · Live actions locked');
       text('fxConnection',`Shipping credentials: ${configured?'configured':'missing'} · Tracking: ${cfg.trackingConfigured?'configured':'missing'} · ${mode==='sandbox'?'No real FedEx labels or pickups will be created.':'Live creation requires explicit Render enable switch and confirmation.'}`);
       $('fxConnection').classList.toggle('warn',!configured);
-      fillAddress('From',cfg.origin||{});
+      fillAddress('From',cfg.origin||{},preserveExisting);
       if(!value('fxFromCountry'))set('fxFromCountry','IN');
-      if(!configured){$('fxGetRates').disabled=true;$('fxCreateShipment').disabled=true;}
+      const required=[['fxFromName','contact'],['fxFromPhone','phone'],['fxFromLine1','street'],['fxFromCity','city'],['fxFromPin','postal code']];
+      const missing=required.filter(([id])=>!value(id)).map(([,name])=>name);
+      if(missing.length){
+        text('fxConnection', $('fxConnection').textContent+` · Sender defaults incomplete (${missing.join(', ')}). Check existing SHIP_FROM_* / FEDEX_ORIGIN_* on Render.`);
+        $('fxConnection').classList.add('warn');
+      }
+      $('fxGetRates').disabled=!configured;
+      if(!configured)$('fxCreateShipment').disabled=true;
     } catch(err){text('fxModePill','Not connected');text('fxConnection',err.message);$('fxGetRates').disabled=true;}
   }
   async function getRates(){
