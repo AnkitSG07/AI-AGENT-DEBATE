@@ -3,7 +3,8 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
 import { readFile, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
+import { registerFedexRoutes } from "./fedex-integration.js";
 import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
 
 dotenv.config();
@@ -111,7 +112,13 @@ const profilePasswords = {
   Accounts: process.env.PROFILE_PASS_ACCOUNTS || "",
   SUDO: process.env.PROFILE_PASS_SUDO || ""
 };
+// Signed profile sessions are required for privileged FedEx operations.
+// Existing unsigned sessions must sign in once after deployment.
+const PROFILE_SIGNING_KEY = process.env.PROFILE_SESSION_SECRET || Object.values(profilePasswords).join(":");
 const PROFILE_SESSION_COOKIE = "profile_session";
+function profileSignature(payload) {
+  return createHmac("sha256", PROFILE_SIGNING_KEY).update(payload).digest("base64url");
+}
 const PROFILE_SESSION_TTL_SECONDS = 2 * 60 * 60;
 
 function now() {
@@ -132,7 +139,7 @@ function parseCookies(req) {
 function buildSessionCookie(profile) {
   const payload = JSON.stringify({ profile, exp: Date.now() + PROFILE_SESSION_TTL_SECONDS * 1000 });
   const encoded = Buffer.from(payload).toString("base64url");
-  return `${PROFILE_SESSION_COOKIE}=${encoded}; Max-Age=${PROFILE_SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax`;
+  return `${PROFILE_SESSION_COOKIE}=${encoded}.${profileSignature(encoded)}; Max-Age=${PROFILE_SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`;
 }
 
 function readProfileSession(req) {
@@ -141,7 +148,13 @@ function readProfileSession(req) {
     const token = cookies[PROFILE_SESSION_COOKIE];
     if (!token) return null;
 
-    const parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+    if (!PROFILE_SIGNING_KEY) return null;
+    const parts = token.split(".");
+    if (parts.length !== 2) return null;
+    const supplied = Buffer.from(parts[1], "utf8");
+    const expected = Buffer.from(profileSignature(parts[0]), "utf8");
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+    const parsed = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
     const profile = String(parsed?.profile || "");
     const exp = Number(parsed?.exp || 0);
     if (!profile || !Object.prototype.hasOwnProperty.call(profilePasswords, profile)) return null;
@@ -24016,6 +24029,9 @@ app.post("/api/whatsapp-calls/test", async (req, res) => {
   }
 });
 
+
+// FedEx has a separate protected route family; no existing order or label routes are replaced.
+registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderByRef });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured, googleContactsConfigured }));
 // ===================== RENDER 30-SECOND KEEP ALIVE =====================

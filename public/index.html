@@ -1447,6 +1447,7 @@
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+<link rel="stylesheet" href="/fedex.css">
 </head>
 
 <body>
@@ -1508,6 +1509,11 @@
       <div class="nav-item" data-page="dashboard">
         <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
         <span class="nav-tooltip">Order Dashboard</span>
+      </div>
+
+      <div class="nav-item" data-page="fedex" title="FedEx Shipping">
+        <svg viewBox="0 0 24 24"><path d="M3 7h11v10H3zM14 10h4l3 4v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+        <span class="nav-tooltip">FedEx Shipping</span>
       </div>
 
       <div class="sidebar-spacer"></div>
@@ -1859,6 +1865,59 @@
           </div>
         </div>
       </section>
+
+      <!-- ═══════════════ PAGE: FEDEX ═══════════════ -->
+      <section class="page" id="page-fedex">
+        <div class="section-header"><div><div class="section-title">FedEx Shipping</div><div class="section-sub">Order to international AWB, pickup and tracking — sandbox-first.</div></div>
+        <span id="fxModePill" class="fx-mode">Checking connection…</span></div>
+        <div class="fx-note" id="fxConnection">Connecting to Render shipping backend…</div>
+        <div class="fx-steps"><span>1 · Order &amp; address</span><span>2 · Package &amp; customs</span><span>3 · Compare rates</span><span>4 · Label / pickup</span></div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">Sales order</div></div>
+          <div class="card-inner">
+            <div class="fx-inline"><input id="fxOrderRef" type="text" placeholder="Sales Order (e.g. S00001)" aria-label="Sales order reference"><button id="fxLoadOrder" class="btn btn-primary" type="button">Load Odoo order</button></div>
+            <div id="fxOrderInfo" class="fx-secondary">Choose a confirmed order from Order Dashboard or enter its sales order reference.</div>
+          </div></div>
+        <div class="fx-two-cols">
+          <div class="card fx-card"><div class="card-header"><div class="card-title">Pickup / sender address</div></div><div class="card-inner fx-fields" data-fx-address="from">
+            <label>Contact name<input id="fxFromName" autocomplete="off"></label><label>Company<input id="fxFromCompany"></label><label>Phone<input id="fxFromPhone" type="tel"></label><label>Email<input id="fxFromEmail" type="email"></label>
+            <label class="fx-span">Street line 1<input id="fxFromLine1"></label><label class="fx-span">Street line 2<input id="fxFromLine2"></label>
+            <label>City<input id="fxFromCity"></label><label>State code (e.g. DL)<input id="fxFromState" maxlength="4"></label><label>Postal code<input id="fxFromPin"></label><label>Country code<input id="fxFromCountry" value="IN" maxlength="2"></label>
+          </div></div>
+          <div class="card fx-card"><div class="card-header"><div class="card-title">Destination address</div></div><div class="card-inner fx-fields" data-fx-address="to">
+            <label>Contact name<input id="fxToName"></label><label>Company<input id="fxToCompany"></label><label>Phone<input id="fxToPhone" type="tel"></label><label>Email<input id="fxToEmail" type="email"></label>
+            <label class="fx-span">Street line 1<input id="fxToLine1"></label><label class="fx-span">Street line 2<input id="fxToLine2"></label>
+            <label>City<input id="fxToCity"></label><label>State code (e.g. CA)<input id="fxToState" maxlength="4"></label><label>Postal code<input id="fxToPin"></label><label>Country code<input id="fxToCountry" placeholder="US" maxlength="2"></label>
+          </div></div>
+        </div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">Package details &amp; safety</div></div><div class="card-inner">
+          <div class="fx-fields fx-package"><label>Weight (kg)<input id="fxWeight" type="number" min="0.01" step="0.01" placeholder="0.50"></label><label>Length (cm)<input id="fxLength" type="number" min="1" step="1" placeholder="20"></label><label>Width (cm)<input id="fxWidth" type="number" min="1" step="1" placeholder="15"></label><label>Height (cm)<input id="fxHeight" type="number" min="1" step="1" placeholder="10"></label>
+          <label class="fx-span">Battery declaration<select id="fxBattery"><option value="unknown">Not verified — select declaration</option><option value="none">No lithium batteries in this shipment</option><option value="contained">Lithium batteries contained in equipment</option><option value="packed">Lithium batteries packed with equipment</option><option value="standalone">Standalone lithium batteries / cells</option></select></label></div>
+          <div class="fx-alert">Battery-containing or uncertain shipments are blocked from automatic rate and label requests until the FedEx/IATA compliance workflow is approved. Never select “No lithium batteries” for rechargeable kits or cells.</div>
+        </div></div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">Customs commodities (international exports)</div></div>
+          <div class="card-inner"><p class="fx-secondary">Review the actual shipped items. Quantity, per-unit customs value, HS code, manufacturing country and unit weight must be accurate. Order prices are not assumed to be customs values.</p>
+          <div class="table-wrap"><table class="fx-table"><thead><tr><th>Detailed description</th><th>Qty</th><th>Value / unit</th><th>Currency</th><th>HS code</th><th>Origin</th><th>kg / unit</th><th></th></tr></thead><tbody id="fxCommodityRows"></tbody></table></div>
+          <button type="button" id="fxAddCommodity" class="btn btn-sm">+ Add item</button></div>
+        </div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">FedEx international services</div></div><div class="card-inner">
+          <div class="fx-inline"><button id="fxGetRates" type="button" class="btn btn-primary">Get live FedEx rates</button><span id="fxRateStatus" class="fx-secondary">Get a quote before creating a label.</span></div>
+          <div class="table-wrap"><table class="fx-table"><thead><tr><th>Choose</th><th>Service</th><th>Account quote</th><th>Estimated transit</th></tr></thead><tbody id="fxRates"><tr><td colspan="4" class="fx-secondary">No quotes requested.</td></tr></tbody></table></div>
+          <div class="fx-actions"><button id="fxCreateShipment" type="button" class="btn btn-primary" disabled>Confirm &amp; create FedEx label / AWB</button><span class="fx-secondary">Creating a label does not schedule a pickup.</span></div>
+        </div></div>
+        <div class="fx-two-cols">
+          <div class="card fx-card"><div class="card-header"><div class="card-title">Schedule pickup</div></div><div class="card-inner">
+            <label>Shipment / AWB<select id="fxPickupShipment"><option value="">Choose a created shipment</option></select></label>
+            <div class="fx-fields"><label>Pickup date (India)<input id="fxPickupDate" type="date"></label><label>Ready from<input id="fxPickupReady" type="time" value="11:00"></label><label>Close time<input id="fxPickupClose" type="time" value="17:00"></label><label>Package weight (kg)<input id="fxPickupWeight" type="number" min="0.01" step="0.01"></label></div>
+            <label>Courier instructions<input id="fxPickupRemarks" maxlength="100" placeholder="Reception / warehouse gate"></label>
+            <button id="fxBookPickup" type="button" class="btn btn-primary">Confirm &amp; request pickup</button><div id="fxPickupStatus" class="fx-secondary">Pickup may incur an additional FedEx charge.</div>
+          </div></div>
+          <div class="card fx-card"><div class="card-header"><div class="card-title">Tracking</div></div><div class="card-inner"><div class="fx-inline"><input id="fxTrackingNo" placeholder="FedEx tracking number"><button id="fxTrack" class="btn btn-primary" type="button">Track</button></div><div id="fxTrackingResult" class="fx-secondary">Enter an AWB to view FedEx tracking events.</div></div></div>
+        </div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">FedEx shipment history</div><button id="fxRefreshHistory" class="btn btn-sm" type="button">Refresh</button></div><div class="card-inner"><div class="table-wrap"><table class="fx-table"><thead><tr><th>Order</th><th>AWB</th><th>Service</th><th>Status</th><th>Pickup</th><th>Label</th></tr></thead><tbody id="fxHistory"><tr><td colspan="6">No shipments yet.</td></tr></tbody></table></div>
+          <p class="fx-secondary">FedEx labels and request history are stored server-side. Configure a persistent Render disk for reliable history across deployments.</p>
+        </div></div>
+        <div id="fxMessage" class="fx-message" role="status" aria-live="polite"></div>
+      </section>
     </div>
   </div>
 
@@ -1875,6 +1934,10 @@
     <button class="bottom-nav-item" data-page="dashboard">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       Dashboard
+    </button>
+    <button class="bottom-nav-item" data-page="fedex" type="button">
+      <svg viewBox="0 0 24 24"><path d="M3 7h11v10H3zM14 10h4l3 4v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      FedEx
     </button>
   </nav>
   <div class="modal-backdrop" id="docModalBack">
@@ -1980,8 +2043,8 @@
 
     const profilePageAccess = {
       'Accounts': ['dashboard'],
-      'Smart handicrafts': ['labels', 'dashboard'],
-      'SUDO': ['debate', 'labels', 'dashboard']
+      'Smart handicrafts': ['labels', 'dashboard', 'fedex'],
+      'SUDO': ['debate', 'labels', 'dashboard', 'fedex']
     };
 
     function canOpenSalesOrderFromDashboard() {
@@ -2164,7 +2227,8 @@
     const pageInfo = {
       debate: { title: 'AI Agent Debate', sub: 'Multi-agent reasoning with Gemini · Llama · Gemma' },
       labels: { title: 'Shipping Labels', sub: 'Fetch from Odoo · Edit addresses · Generate PDF labels' },
-      dashboard: { title: 'Order Dashboard', sub: 'SmartHandicrafts® — Browse and manage all Sales Orders' }
+      dashboard: { title: 'Order Dashboard', sub: 'SmartHandicrafts® — Browse and manage all Sales Orders' },
+      fedex: { title: 'FedEx Shipping', sub: 'International shipping · Labels · Pickups · Tracking' }
     };
 
     function setPage(name) {
@@ -2977,6 +3041,7 @@
               <td>${esc(r.invoice_status || '-')}</td>
               <td style="display:flex;gap:8px;flex-wrap:wrap">
                 ${canOpenSalesOrderFromDashboard() ? `<button class="btn btn-sm" data-open-so="${esc(String(r.ref || ''))}">Open ↗</button>` : ''}
+                ${canOpenSalesOrderFromDashboard() ? `<button class="btn btn-sm" data-fedex-so="${esc(String(r.ref || ''))}">FedEx →</button>` : ''}
                 <button class="btn btn-sm" data-doc-view data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}" data-doc-ref="${esc(String(r.ref || ''))}">View</button>
                 <button class="btn btn-sm" data-doc-download data-doc-type="sale_order" data-doc-id="${esc(String(r.id || ''))}">Download</button>
               </td>
@@ -2989,6 +3054,9 @@
               setActiveTab('labels');
               btnFetchSO.click();
             });
+          });
+          dashTbody.querySelectorAll('[data-fedex-so]').forEach(el => {
+            el.addEventListener('click', () => window.SHSelectFedexOrder?.(el.dataset.fedexSo || ''));
           });
           attachDashboardDocActions();
         }
@@ -3148,5 +3216,6 @@
     setDashboardTab('sale_orders');
     loadShipFromOptions();
   </script>
+<script src="/fedex.js" defer></script>
 </body>
 </html>

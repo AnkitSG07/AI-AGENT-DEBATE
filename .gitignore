@@ -1,3 +1,6 @@
 node_modules/
 .env
 .DS_Store
+
+# FedEx locally stored manifests and label PDFs
+fedex-data/

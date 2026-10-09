@@ -1,0 +1,62 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {registerFedexRoutes, __fedexTest} from '../fedex-integration.js';
+
+const sample = () => ({
+ from:{name:'Warehouse Operator',company:'Smart Handicrafts',phone:'9999999999',line1:'Industrial Area',city:'New Delhi',state:'DL',pin:'110020',country:'IN'},
+ to:{name:'Test Recipient',company:'Client Co',phone:'1111111111',line1:'Main Street',city:'New York',state:'NY',pin:'10001',country:'US'},
+ package:{weight:1,length:20,width:15,height:10},battery:'none'
+});
+test('validates shipment and battery safety on server',()=>{
+ const ok=__fedexTest.shipment(sample());assert.equal(ok.from.address.countryCode,'IN');
+ for(const mode of ['contained','packed','standalone','unknown']) assert.throws(()=>__fedexTest.shipment({...sample(),battery:mode}),/blocked/);
+ assert.throws(()=>__fedexTest.shipment({...sample(),to:{...sample().to,country:'IN'}}),/international/);
+ assert.throws(()=>__fedexTest.commodities([{description:'A test item',quantity:1,unitPrice:10,currency:'USD',weightKg:0.1,countryOfManufacture:'IN',hsCode:'invalid'}]),/HS code/);
+});
+test('normalizes nested FedEx amount objects to a numeric quote',()=>{
+ const q=__fedexTest.rateNormalize({output:{rateReplyDetails:[{serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[{rateType:'ACCOUNT',totalNetCharge:{amount:25.75,currency:'USD'}}]}]}});
+ assert.equal(q[0].amount,25.75);assert.equal(q[0].currency,'USD');
+});
+test('sandbox mocked end-to-end: rate → create label → pickup → tracking; duplicate blocked',async()=>{
+ const previous=globalThis.fetch;
+ const path=await mkdtemp(join(tmpdir(),'sh-fedex-test-'));
+ const requests=[];
+ const before=Object.fromEntries(['FEDEX_MODE','FEDEX_SANDBOX_ACCOUNT','FEDEX_SHIPPING_CLIENT_ID','FEDEX_SHIPPING_CLIENT_SECRET','FEDEX_TRACKING_CLIENT_ID','FEDEX_TRACKING_CLIENT_SECRET','FEDEX_DATA_DIR','PROFILE_SESSION_SECRET'].map(k=>[k,process.env[k]]));
+ Object.assign(process.env,{FEDEX_MODE:'sandbox',FEDEX_SANDBOX_ACCOUNT:'999999999',FEDEX_SHIPPING_CLIENT_ID:'test-shipping',FEDEX_SHIPPING_CLIENT_SECRET:'shipping-secret',FEDEX_TRACKING_CLIENT_ID:'test-tracking',FEDEX_TRACKING_CLIENT_SECRET:'tracking-secret',FEDEX_DATA_DIR:path,PROFILE_SESSION_SECRET:'a-long-random-test-secret-not-used-in-production'});
+ globalThis.fetch=async(url,init)=>{
+  const endpoint=new URL(url).pathname;requests.push({endpoint,body:init.body});
+  const result=endpoint==='/oauth/token'?{access_token:'dummy-oauth-token',expires_in:3600}:
+    endpoint.endsWith('/rate/v1/rates/quotes')?{output:{rateReplyDetails:[{serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[{rateType:'ACCOUNT',totalNetCharge:{amount:51.44,currency:'USD'}}]}]}}:
+    endpoint.endsWith('/ship/v1/shipments')?{output:{transactionShipments:[{pieceResponses:[{trackingNumber:'123456789012',packageDocuments:[{encodedLabel:Buffer.from('%PDF-1.4\n'+ 'a'.repeat(150)).toString('base64')}]}]}]}}:
+    endpoint.endsWith('/pickup/v1/pickups')?{output:{pickupConfirmationCode:'PICKUP-TEST-123'}}:
+    endpoint.endsWith('/track/v1/trackingnumbers')?{output:{completeTrackResults:[{trackResults:[{latestStatusDetail:{statusByLocale:'In transit'},scanEvents:[{date:'2026-10-09',eventDescription:'Departed',scanLocation:{city:'Memphis'}}]}]}]}}:{};
+  return {ok:true,status:200,json:async()=>result};
+ };
+ const routes={};const app={use:(path,fn)=>{routes['PROTECT '+path]=fn;},get:(path,fn)=>{routes['GET '+path]=fn;},post:(path,fn)=>{routes['POST '+path]=fn;}};
+ registerFedexRoutes(app,{readProfileSession:()=>({profile:'Smart handicrafts'}),odooGetSaleOrderByRef:async ref=>({id:1,ref,state:'sale',ship_to:sample().to,items:[]})});
+ async function run(method,pathName,body={},query={}){
+  const req={body,query,headers:{host:'test.local'},get(k){return this.headers[k.toLowerCase()];},params:{}};
+  let output,statusCode=200;
+  const res={status(c){statusCode=c;return this;},json(v){output=v;return this;},set(){return this;},send(v){output=v;return this;}};
+  await routes[method+' '+pathName](req,res);
+  return {status:statusCode,data:output};
+ }
+ try{
+  const {data:q}=await run('POST','/api/fedex/rates',sample());assert.equal(q.rates[0].amount,51.44);
+  assert.ok(requests.some(x=>x.endpoint.endsWith('/rate/v1/rates/quotes')));
+  const payload={...sample(),commodities:[{description:'LED controller',quantity:1,unitPrice:12.5,currency:'USD',hsCode:'854370',weightKg:0.3,countryOfManufacture:'IN'}],service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',confirm:true,operationId:randomUUID()};
+  const shipment=await run('POST','/api/fedex/shipments',payload);
+  assert.equal(shipment.status,200,JSON.stringify(shipment.data));
+  assert.equal(shipment.data.record.trackingNumber,'123456789012');assert.equal(shipment.data.record.labelAvailable,true);
+  const again=await run('POST','/api/fedex/shipments',payload);assert.equal(again.status,409);
+  const all=await run('GET','/api/fedex/shipments');assert.equal(all.data.shipments.length,1);
+  const pickup=await run('POST','/api/fedex/pickups',{shipmentId:shipment.data.record.id,date:new Date(Date.now()+2*864e5).toISOString().slice(0,10),ready:'11:00',close:'17:00',confirm:true});
+  assert.equal(pickup.status,200,JSON.stringify(pickup.data));assert.equal(pickup.data.pickup.confirmation,'PICKUP-TEST-123');
+  const track=await run('POST','/api/fedex/track',{trackingNumber:'123456789012'});
+  assert.equal(track.data.status,'In transit');
+ } finally {globalThis.fetch=previous;for(const [k,v] of Object.entries(before)){if(v===undefined)delete process.env[k];else process.env[k]=v;}await rm(path,{recursive:true,force:true});}
+});

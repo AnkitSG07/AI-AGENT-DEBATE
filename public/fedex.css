@@ -1,0 +1,38 @@
+/* FedEx shipping workspace — scoped to the fourth tab only */
+#page-fedex { padding-bottom: 48px; }
+#page-fedex .fx-mode { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--border-strong); padding: 7px 12px; border-radius: 30px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+#page-fedex .fx-note { background: var(--accent-soft); border: 1px solid var(--border-strong); padding: 14px; border-radius: 12px; margin: 12px 0 18px; }
+#page-fedex .fx-note.warn { background: var(--warn-soft); }
+#page-fedex .fx-steps { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+#page-fedex .fx-steps span { padding: 8px 12px; border-radius: 100px; background: var(--surface-2); color: var(--text-secondary); font-size: 12px; }
+#page-fedex .fx-card { margin-bottom: 18px; min-width: 0; }
+#page-fedex .fx-card .card-inner { padding: 18px; }
+#page-fedex .fx-two-cols { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+#page-fedex .fx-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+#page-fedex label { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+#page-fedex input, #page-fedex select { width: 100%; min-width: 0; background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: 9px; color: var(--text-primary); padding: 11px; font: inherit; outline-offset: 2px; }
+#page-fedex input:focus, #page-fedex select:focus { border-color: var(--accent); }
+#page-fedex .fx-fields .fx-span { grid-column: 1 / -1; }
+#page-fedex .fx-inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#page-fedex .fx-inline input { width: min(300px,100%); flex: 1; }
+#page-fedex .fx-secondary { font-size: 12px; color: var(--text-secondary); margin: 7px 0; }
+#page-fedex .fx-alert { padding: 12px 14px; margin-top: 14px; color: var(--warn); background: var(--warn-soft); border-radius: 10px; font-size: 12px; line-height: 1.6; }
+#page-fedex .fx-table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 12px; }
+#page-fedex .fx-table th, #page-fedex .fx-table td { padding: 9px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+#page-fedex .fx-table th { color: var(--text-secondary); white-space: nowrap; }
+#page-fedex .fx-table input { min-width: 62px; padding: 9px 7px; }
+#page-fedex .fx-table input[data-field="description"] { min-width: 160px; }
+#page-fedex .fx-table input[data-field="hsCode"] { min-width: 90px; }
+#page-fedex .fx-table input[data-field="unitPrice"], #page-fedex .fx-table input[data-field="weightKg"] { min-width: 70px; }
+#page-fedex .fx-actions { display: flex; align-items: center; gap: 12px; margin-top: 15px; flex-wrap: wrap; }
+#page-fedex .fx-message { padding: 13px; border-radius: 12px; margin-top: 12px; display: none; }
+#page-fedex .fx-message.visible { display: block; background: var(--accent-soft); }
+#page-fedex .fx-message.error { background: var(--danger-soft); color: var(--danger); }
+#page-fedex .fx-message.success { background: var(--ok-soft); color: var(--ok); }
+#page-fedex .fx-link { color: var(--accent); text-decoration: underline; }
+#page-fedex .fx-rate-radio { width: auto; margin: 0 6px 0 0; accent-color: var(--accent); }
+#page-fedex button:disabled { opacity: .48; cursor: not-allowed; }
+#page-fedex .fx-events { padding-left: 18px; margin-top: 8px; }
+#page-fedex .fx-events li { padding: 5px 0; }
+@media(max-width:900px) { #page-fedex .fx-two-cols { grid-template-columns: 1fr; } }
+@media(max-width:520px) { #page-fedex .fx-card .card-inner {padding: 12px;} #page-fedex .fx-fields {grid-template-columns:1fr;} #page-fedex .fx-steps span {font-size:10px;} #page-fedex .fx-inline > button {width:100%;} }
