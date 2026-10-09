@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {registerFedexRoutes, __fedexTest} from '../fedex-integration.js';
+import {checkInvoiceAgainstCustoms} from '../fedex-commercial-invoice.js';
 
 const sample = () => ({
  from:{name:'Warehouse Operator',company:'Smart Handicrafts',phone:'9999999999',line1:'Industrial Area',city:'New Delhi',state:'DL',pin:'110020',country:'IN'},
@@ -131,6 +132,65 @@ test('FedEx origin never merges legacy SHIP_FROM_LINE2 with a different pickup l
   if(specific===undefined)delete process.env.FEDEX_ORIGIN_LINE2;else process.env.FEDEX_ORIGIN_LINE2=specific;
  }
 });
+
+test('Czech destination import drops stale US state code from Odoo',()=>{
+ const result=__fedexTest.fedexImportAddress({line1:'Hrobce 142',city:'Hrobce',pin:'41183',countryCode:'CZ',state:'US',stateCode:'US'});
+ assert.equal(result.country,'CZ');assert.equal(result.state,'');
+ const payload={...sample(),to:{...sample().to,country:'CZ',city:'Hrobce',state:result.state,pin:'41183',line1:'Hrobce 142'}};
+ assert.equal(__fedexTest.shipment(payload).to.address.stateOrProvinceCode,undefined);
+});
+test('pre-label check blocks mistaken Czech state, inconsistent weights, unreviewed details and country names',()=>{
+ const base={...sample(),commodities:sampleCommodities(),orderRef:'S0001',service:'INTERNATIONAL_ECONOMY',reviewConfirmed:true};
+ assert.equal(__fedexTest.preflightReport(base).passed,true);
+ const czBad={...base,to:{...base.to,country:'CZ',state:'US',pin:'41183',city:'Hrobce'}};
+ assert.equal(__fedexTest.preflightReport(czBad).passed,false);
+ assert.match(__fedexTest.preflightReport(czBad).checks.find(x=>x.status==='block').detail,/State Code blank/);
+ const badWeights={...base,commodities:[{...sampleCommodities()[0],weightKg:2}]};
+ assert.equal(__fedexTest.preflightReport(badWeights).passed,false);
+ assert.match(__fedexTest.preflightReport(badWeights).checks.find(x=>x.name==='Commodity and package weights').detail,/exceeds package/);
+ assert.equal(__fedexTest.preflightReport({...base,reviewConfirmed:false}).passed,false);
+ assert.throws(()=>__fedexTest.shipment({...base,to:{...base.to,country:'Czech Republic'}}),/two-letter country/);
+});
+test('preflight approval expires and detects edits before creating label',()=>{
+ const previous=process.env.PROFILE_SESSION_SECRET;
+ process.env.PROFILE_SESSION_SECRET='test-secret-longer-than-thirty-two-characters';
+ const base={...sample(),commodities:sampleCommodities(),orderRef:'S0001',service:'INTERNATIONAL_PRIORITY',reviewConfirmed:true};
+ try{
+  const preflightToken=__fedexTest.preflightToken(base);
+  assert.doesNotThrow(()=>__fedexTest.requirePreflightToken({...base,preflightToken}));
+  assert.throws(()=>__fedexTest.requirePreflightToken({...base,package:{...base.package,weight:2},preflightToken}),/changed/);
+  assert.throws(()=>__fedexTest.requirePreflightToken({...base,service:'INTERNATIONAL_ECONOMY',preflightToken}),/changed/);
+ }finally{if(previous===undefined)delete process.env.PROFILE_SESSION_SECRET;else process.env.PROFILE_SESSION_SECRET=previous;}
+});
+test('commercial invoice requires a posted invoice and exact customs product/quantity/value',()=>{
+  const invoice={status:'ready',invoiceId:7,invoiceNumber:'INV-2026-0004',currency:'USD',goodsTotal:12.5,
+    lines:[{productId:101,quantity:1,unitPrice:12.5,subtotal:12.5}]};
+  const customs=[{...sampleCommodities()[0],productId:101}];
+  assert.equal(checkInvoiceAgainstCustoms(invoice,customs).passed,true);
+  assert.equal(checkInvoiceAgainstCustoms({...invoice,status:'missing'},customs).passed,false);
+  assert.match(checkInvoiceAgainstCustoms(invoice,[{...customs[0],unitPrice:10}]).detail,/differs from posted invoice/);
+  assert.match(checkInvoiceAgainstCustoms(invoice,[{...customs[0],quantity:2}]).detail,/quantity/);
+  assert.equal(checkInvoiceAgainstCustoms(invoice,[{...customs[0],productId:null}]).passed,false);
+});
+test('pre-label invoice check blocks missing posted invoice before contacting FedEx for a label',async()=>{
+  const routes={};
+  const app={use:()=>{},get:(p,f)=>{routes['GET '+p]=f;},post:(p,f)=>{routes['POST '+p]=f;}};
+  const before=process.env.PROFILE_SESSION_SECRET;
+  const beforeAccount=process.env.FEDEX_SANDBOX_ACCOUNT;
+  process.env.PROFILE_SESSION_SECRET='sandbox-fake-secret-longer-than-32-chars';
+  process.env.FEDEX_SANDBOX_ACCOUNT='999999999';
+  registerFedexRoutes(app,{readProfileSession:()=>({profile:'SUDO'}),odooGetSaleOrderByRef:async ref=>({ref}),
+    odooGetFedexInvoiceForOrder:async()=>({status:'missing',message:'Create and post the customer invoice in Odoo first.'})});
+  const req={body:{...sample(),commodities:[{...sampleCommodities()[0],productId:101}],orderRef:'S0001',service:'INTERNATIONAL_PRIORITY',reviewConfirmed:true},get:()=>null};
+  let output;
+  const res={status(){return this;},json(x){output=x;return this;},set(){return this;}};
+  try{await routes['POST /api/fedex/preflight'](req,res);
+    assert.equal(output.passed,false);
+    assert.ok(output.checks.some(c=>c.status==='block'&&/Create and post/.test(c.detail)));
+    assert.equal(output.token,null);
+  }finally{if(before===undefined) delete process.env.PROFILE_SESSION_SECRET;else process.env.PROFILE_SESSION_SECRET=before;
+    if(beforeAccount===undefined)delete process.env.FEDEX_SANDBOX_ACCOUNT;else process.env.FEDEX_SANDBOX_ACCOUNT=beforeAccount;}
+});
 test('sandbox mocked end-to-end: rate → create label → pickup → tracking; duplicate blocked',async()=>{
  const previous=globalThis.fetch;
  const path=await mkdtemp(join(tmpdir(),'sh-fedex-test-'));
@@ -141,13 +201,13 @@ test('sandbox mocked end-to-end: rate → create label → pickup → tracking; 
   const endpoint=new URL(url).pathname;requests.push({endpoint,body:init.body});
   const result=endpoint==='/oauth/token'?{access_token:'dummy-oauth-token',expires_in:3600}:
     endpoint.endsWith('/rate/v1/rates/quotes')?{output:{rateReplyDetails:[{serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[{rateType:'ACCOUNT',totalNetCharge:{amount:51.44,currency:'USD'}}]}]}}:
-    endpoint.endsWith('/ship/v1/shipments')?{output:{transactionShipments:[{pieceResponses:[{trackingNumber:'123456789012',packageDocuments:[{encodedLabel:Buffer.from('%PDF-1.4\n'+ 'a'.repeat(150)).toString('base64')}]}]}]}}:
+    endpoint.endsWith('/ship/v1/shipments')?{output:{transactionShipments:[{pieceResponses:[{trackingNumber:'123456789012',packageDocuments:[{encodedLabel:Buffer.from('%PDF-1.4\n'+ 'a'.repeat(150)+'\n%%EOF\n').toString('base64')}]}]}]}}:
     endpoint.endsWith('/pickup/v1/pickups')?{output:{pickupConfirmationCode:'PICKUP-TEST-123'}}:
     endpoint.endsWith('/track/v1/trackingnumbers')?{output:{completeTrackResults:[{trackResults:[{latestStatusDetail:{statusByLocale:'In transit'},scanEvents:[{date:'2026-10-09',eventDescription:'Departed',scanLocation:{city:'Memphis'}}]}]}]}}:{};
   return {ok:true,status:200,json:async()=>result};
  };
  const routes={};const app={use:(path,fn)=>{routes['PROTECT '+path]=fn;},get:(path,fn)=>{routes['GET '+path]=fn;},post:(path,fn)=>{routes['POST '+path]=fn;}};
- registerFedexRoutes(app,{readProfileSession:()=>({profile:'Smart handicrafts'}),odooGetSaleOrderByRef:async ref=>({id:1,ref,state:'sale',ship_to:sample().to,items:[]})});
+ registerFedexRoutes(app,{readProfileSession:()=>({profile:'Smart handicrafts'}),odooGetSaleOrderByRef:async ref=>({id:1,ref,state:'sale',ship_to:sample().to,items:[]}),odooGetFedexInvoiceForOrder:async(ref,id)=>({status:'ready',invoiceId:7,invoiceNumber:'INV2026007',currency:'USD',goodsTotal:12.5,lines:[{productId:101,quantity:1,unitPrice:12.5,subtotal:12.5}]}),createCommercialInvoicePdf:async()=>Buffer.from('%PDF-1.4\n'+ 'a'.repeat(1500) +'\n%%EOF\n')});
  async function run(method,pathName,body={},query={}){
   const req={body,query,headers:{host:'test.local'},get(k){return this.headers[k.toLowerCase()];},params:{}};
   let output,statusCode=200;
@@ -178,11 +238,20 @@ test('sandbox mocked end-to-end: rate → create label → pickup → tracking; 
   assert.equal(otherQuote.data.rates[0].preferredCurrencyMatched,false);
   assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].harmonizedCode,'854370');
   assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].weight.value,0.3);
-  const payload={...sample(),commodities:sampleCommodities(),service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',confirm:true,operationId:randomUUID()};
-  const shipment=await run('POST','/api/fedex/shipments',payload);
+  const payload={...sample(),commodities:[{...sampleCommodities()[0],productId:101}],service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',invoiceId:7,reviewConfirmed:true,confirm:true,operationId:randomUUID()};
+  const checkInvoice=await run('GET','/api/fedex/invoice',{}, {ref:'S0001'});
+  assert.equal(checkInvoice.data.invoice.invoiceNumber,'INV2026007');
+  const withoutPreflight=await run('POST','/api/fedex/shipments',payload);
+  assert.equal(withoutPreflight.status,400);
+  const beforeApproval=await run('POST','/api/fedex/preflight',payload);
+  assert.equal(beforeApproval.status,200);
+  assert.equal(beforeApproval.data.passed,true,JSON.stringify(beforeApproval.data));
+  const shipmentPayload={...payload,preflightToken:beforeApproval.data.token};
+  const shipment=await run('POST','/api/fedex/shipments',shipmentPayload);
   assert.equal(shipment.status,200,JSON.stringify(shipment.data));
   assert.equal(shipment.data.record.trackingNumber,'123456789012');assert.equal(shipment.data.record.labelAvailable,true);
-  const again=await run('POST','/api/fedex/shipments',payload);assert.equal(again.status,409);
+  const listing=await run('GET','/api/fedex/shipments');assert.equal(listing.data.shipments[0].invoiceAvailable,true);assert.equal(listing.data.shipments[0].invoiceNumber,'INV2026007');
+  const again=await run('POST','/api/fedex/shipments',shipmentPayload);assert.equal(again.status,409);
   const all=await run('GET','/api/fedex/shipments');assert.equal(all.data.shipments.length,1);
   const pickup=await run('POST','/api/fedex/pickups',{shipmentId:shipment.data.record.id,date:new Date(Date.now()+2*864e5).toISOString().slice(0,10),ready:'11:00',close:'17:00',confirm:true});
   assert.equal(pickup.status,200,JSON.stringify(pickup.data));assert.equal(pickup.data.pickup.confirmation,'PICKUP-TEST-123');

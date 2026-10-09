@@ -59,3 +59,24 @@ Tests use **mock FedEx responses**, not real API credentials/network. They cover
 
 When loading a Sales Order, the FedEx workspace passes its Odoo currency (for example `USD`) to the rates endpoint. The server asks FedEx for `rateRequestType: ["PREFERRED", "LIST"]` and `requestedShipment.preferredCurrency: "USD"`. It chooses the **account-specific preferred-currency** rate when FedEx returns one. If FedEx only returns EUR or another currency, the dashboard displays the **actual currency returned**, with a clear warning, rather than relabeling a EUR amount as USD. Rate currency is separate from the customs declaration currency and from the currency FedEx ultimately bills. The existing Ship API and pickup routes are unchanged. No extra Render variables are required.
 
+
+
+### FedEx Pre-label Check and Czech destination state fix (2026-10-09)
+
+- The FedEx order importer now **clears a stale Odoo state code for Czech (`CZ`) recipients**, so `US` or another unrelated region is never copied into the FedEx request for Hrobce. If a user manually enters a Czech state, server-side validation blocks label creation and asks them to leave it blank. This fixes the **request data** issue; a FedEx sandbox label could still contain FedEx-generated sample placeholders, so always inspect the returned PDF.
+- After receiving rates, choose a service, review and tick the verification checkbox, then press **Run pre-label check**. The server checks sender/recipient fields, valid country codes, required customs declaration fields, battery blocking, commodity-vs-parcel weight, selected service and order reference. Missing/mismatched items appear in the results.
+- Label creation is **blocked** without a valid server-issued approval token, valid for 10 minutes and cryptographically bound to the exact shipment data, service and reviewer confirmation. Changes after checking or expiration require another check. An existing prior sandbox/production shipment attempt for that order is also blocked.
+- For returned FedEx PDF labels, the server checks the PDF header/trailer and basic file size. This does **NOT** verify barcode scan quality, all address fields printed on the FedEx template, 4x6 page cropping, customs legality, or physical shipment eligibility. Users must open and visually verify the generated document at actual scale before printing. `TEST LABEL - DO NOT SHIP` sandbox documents may not be used for actual shipping.
+- No additional Render secrets, environment variables, dependencies or production permissions are needed. Keep `FEDEX_MODE=sandbox` until FedEx production validation has been completed.
+
+## October 9 commercial-invoice and pre-label release
+
+- The fourth tab now includes **Linked customer invoice & FedEx commercial invoice** immediately after sales order loading.
+- Only `posted` `out_invoice` documents referenced by `sale.order.invoice_ids` count. If there are no posted invoices, the label action is blocked and the operator is instructed to create/post the Odoo invoice first. If several posted invoices exist, the operator must select one.
+- The commercial-invoice generator uses *linked Odoo account.move.line* goods quantities, discounted untaxed line amounts and invoice currency, not the manually typed order total. Shipping/convenience-fee service lines are excluded. HS classification, origins and weights still require operator verification.
+- **Download customs invoice PDF** makes a separate printable exporter-issued commercial invoice (not an Odoo invoice template or FedEx AWB). The same commercial invoice is also attached to the FedEx shipment's download links on successful label generation. In sandbox it bears a clear test warning.
+- Pre-label check verifies a genuine posted invoice on the server and compares physical items, quantities, currencies and values to customs lines. Any mismatch blocks the label. Preflight approval is still tied to the exact shipment data and expires after 10 minutes.
+- The provided `FedEx-794881292586.pdf` is an AWB/label, **not a commercial invoice design reference**. The included exporter commercial invoice uses a clean professional layout. Upload a FedEx commercial-invoice template if you require an exact visual match.
+- Printing the PDF and uploading it as FedEx Electronic Trade Documents are different operations. **Automatic ETD upload is not implemented in this release**. Use the downloaded invoice for manual paperwork until separately validated.
+- There are no new Render environment variables. This uses the existing Odoo account connection and `pdfkit` dependency from `package.json`. All FedEx API keys remain on the server.
+- The server must have permission to read the linked Odoo invoice (`account.move`, `account.move.line`). PDF invoice generation and real Odoo fields must be tested after deployment; unit tests use stubs, not a live Odoo/FedEx account.

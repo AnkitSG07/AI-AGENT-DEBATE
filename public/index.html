@@ -1447,7 +1447,7 @@
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
-<link rel="stylesheet" href="/fedex.css">
+<link rel="stylesheet" href="/fedex.css?v=20261009-commercial-invoice-check-v1">
 </head>
 
 <body>
@@ -1871,12 +1871,24 @@
         <div class="section-header"><div><div class="section-title">FedEx Shipping</div><div class="section-sub">Order to international AWB, pickup and tracking — sandbox-first.</div></div>
         <span id="fxModePill" class="fx-mode">Checking connection…</span></div>
         <div class="fx-note" id="fxConnection">Connecting to Render shipping backend…</div>
-        <div class="fx-steps"><span>1 · Order &amp; address</span><span>2 · Package &amp; customs</span><span>3 · Compare rates</span><span>4 · Label / pickup</span></div>
+        <div class="fx-steps"><span>1 · Order &amp; invoice</span><span>2 · Package &amp; customs</span><span>3 · Compare rates</span><span>4 · Check / label / pickup</span></div>
         <div class="card fx-card"><div class="card-header"><div class="card-title">Sales order</div></div>
           <div class="card-inner">
             <div class="fx-inline"><input id="fxOrderRef" type="text" placeholder="Sales Order (e.g. S00001)" aria-label="Sales order reference"><button id="fxLoadOrder" class="btn btn-primary" type="button">Load Odoo order</button></div>
             <div id="fxOrderInfo" class="fx-secondary">Choose a confirmed order from Order Dashboard or enter its sales order reference.</div>
           </div></div>
+        <div class="card fx-card"><div class="card-header"><div class="card-title">Linked customer invoice &amp; FedEx commercial invoice</div></div>
+          <div class="card-inner">
+            <p class="fx-secondary">A posted Odoo customer invoice linked to this exact sales order is required before generating a FedEx label. This creates a separate export commercial-invoice PDF; it does not modify the Odoo invoice. It is not an AWB.</p>
+            <div class="fx-inline">
+              <select id="fxInvoiceSelect" aria-label="Linked posted customer invoice" style="max-width:360px"><option value="">Load an order first</option></select>
+              <button type="button" id="fxRefreshInvoice" class="btn">Refresh invoice status</button>
+              <button type="button" id="fxDownloadInvoice" class="btn btn-primary" disabled>Download customs invoice PDF</button>
+            </div>
+            <div id="fxInvoiceStatus" class="fx-secondary" role="status">Load a sales order to check for a linked, posted invoice.</div>
+            <div class="fx-alert">The commercial invoice uses the posted invoice's actual physical product quantities and net values. Any difference in declared customs lines blocks approval. In sandbox, PDFs are marked TEST. Uploading trade documents electronically to FedEx is a separate API step.</div>
+          </div>
+        </div>
         <div class="fx-two-cols">
           <div class="card fx-card"><div class="card-header"><div class="card-title">Pickup / sender address</div></div><div class="card-inner fx-fields" data-fx-address="from">
             <label>Contact name<input id="fxFromName" autocomplete="off"></label><label>Company<input id="fxFromCompany"></label><label>Phone<input id="fxFromPhone" type="tel"></label><label>Email<input id="fxFromEmail" type="email"></label>
@@ -1902,7 +1914,13 @@
         <div class="card fx-card"><div class="card-header"><div class="card-title">FedEx international services</div></div><div class="card-inner">
           <div class="fx-inline"><button id="fxGetRates" type="button" class="btn btn-primary">Get live FedEx rates</button><span id="fxRateStatus" class="fx-secondary">Get a quote before creating a label.</span></div>
           <div class="table-wrap"><table class="fx-table"><thead><tr><th>Choose</th><th>Service</th><th>Account quote</th><th>Estimated transit</th></tr></thead><tbody id="fxRates"><tr><td colspan="4" class="fx-secondary">No quotes requested.</td></tr></tbody></table></div>
-          <div class="fx-actions"><button id="fxCreateShipment" type="button" class="btn btn-primary" disabled>Confirm &amp; create FedEx label / AWB</button><span class="fx-secondary">Creating a label does not schedule a pickup.</span></div>
+          <div class="fx-preflight" id="fxPreflightPanel">
+            <div class="fx-preflight-heading">Pre-label safety &amp; printability check</div>
+            <label class="fx-checkline"><input id="fxReviewConfirmed" type="checkbox"> I have verified the recipient, physical contents, lithium-battery declaration, HS codes, manufacturing origins, customs values and actual weights.</label>
+            <div class="fx-actions"><button id="fxRunPreflight" type="button" class="btn" disabled>Run pre-label check</button><span id="fxPreflightStatus" class="fx-secondary">Select a rate and confirm your details to run the checker.</span></div>
+            <div id="fxPreflightResults" class="fx-preflight-results" aria-live="polite"></div>
+          </div>
+          <div class="fx-actions"><button id="fxCreateShipment" type="button" class="btn btn-primary" disabled>Confirm &amp; create FedEx label / AWB</button><span class="fx-secondary">Only enabled after the checker passes. Review the resulting PDF before printing. Creating a label does not schedule a pickup.</span></div>
         </div></div>
         <div class="fx-two-cols">
           <div class="card fx-card"><div class="card-header"><div class="card-title">Schedule pickup</div></div><div class="card-inner">
@@ -3216,6 +3234,6 @@
     setDashboardTab('sale_orders');
     loadShipFromOptions();
   </script>
-<script src="/fedex.js?v=20261009-preferred-currency" defer></script>
+<script src="/fedex.js?v=20261009-commercial-invoice-check-v1" defer></script>
 </body>
 </html>

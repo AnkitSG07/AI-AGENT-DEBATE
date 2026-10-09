@@ -1352,6 +1352,44 @@ async function odooGetSaleOrderByRef(ref, options = {}) {
   };
 }
 
+// FedEx commercial invoices are based on POSTED Odoo customer invoices,
+// not on editable website prices or sales-order totals.
+async function odooGetFedexInvoiceForOrder(ref, requestedInvoiceId = null) {
+  const order=await odooGetSaleOrderByRef(ref,{forFedex:true});
+  const posted=(order.invoices||[]).filter(i=>i.state==='posted');
+  const options=posted.map(i=>({id:i.id,name:i.name}));
+  if(!posted.length) return {status:'missing',message:'No posted customer invoice is linked to this sales order. Create and post the invoice in Odoo first, then reload the order.',options};
+  const selectedId=Number(requestedInvoiceId)||0;
+  if(selectedId && !posted.some(i=>Number(i.id)===selectedId)) return {status:'missing',message:'Selected invoice is not a posted invoice linked to this sales order.',options};
+  if(!selectedId && posted.length>1) return {status:'select',message:'More than one posted invoice is linked. Select the specific invoice for the goods being shipped.',options};
+  const id=selectedId||posted[0].id;
+  const uid=await odooLogin();
+  const inv=(await odooExecute(uid,'account.move','read',[[id],[
+    'id','name','state','move_type','invoice_date','invoice_line_ids','currency_id','partner_id','amount_untaxed','amount_total','invoice_origin'
+  ]]))?.[0];
+  if(!inv||inv.move_type!=='out_invoice'||inv.state!=='posted') return {status:'missing',message:'A posted customer invoice is required. Drafts, proformas and credit notes do not qualify.',options};
+  const currency=String(inv.currency_id?.[1]||order.currencyCode||'').trim().toUpperCase();
+  const properCurrency=/^[A-Z]{3}$/.test(currency)?currency:order.currencyCode;
+  if(!/^[A-Z]{3}$/.test(properCurrency)) throw new Error('Linked invoice currency is not available.');
+  const invoiceLines=inv.invoice_line_ids?.length
+    ? await odooExecute(uid,'account.move.line','read',[inv.invoice_line_ids,[
+        'name','quantity','price_unit','price_subtotal','product_id','display_type'
+      ]]) : [];
+  const physical= new Map((order.items||[]).filter(i=>i.product_id && !i.is_service && !i.is_delivery && !i.display_type).map(i=>[Number(i.product_id),i]));
+  const goods=(invoiceLines||[]).filter(line=>physical.has(Number(line.product_id?.[0]))&&Number(line.quantity)>0).map(line=>{
+    const id=Number(line.product_id[0]);const subtotal=Number(line.price_subtotal);
+    const quantity=Number(line.quantity);
+    return {productId:id,description:line.name||physical.get(id).product_name,
+      quantity,unitPrice:Number((subtotal/quantity).toFixed(4)),subtotal:Number(subtotal.toFixed(2)),
+      currency:properCurrency};
+  });
+  if(!goods.length) return {status:'missing',message:'Posted invoice contains no physical goods linked to the sales order. Review invoice lines.',options};
+  return {status:'ready',options,invoiceId:id,invoiceNumber:inv.name,invoiceDate:inv.invoice_date||'',
+    currency:properCurrency,amountTotal:Number(inv.amount_total),
+    goodsTotal:Number(goods.reduce((sum,line)=>sum+line.subtotal,0).toFixed(2)),
+    lines:goods,billTo:order.bill_to||{},shipTo:order.ship_to||{},orderRef:order.ref};
+}
+
 // ===================== LABEL DRAFTS =====================
 function makeDraftFromSaleOrder(saleOrder) {
   const ship = saleOrder.ship_to || {};
@@ -24177,7 +24215,8 @@ app.post("/api/whatsapp-calls/test", async (req, res) => {
 // FedEx has a separate protected route family; no existing order or label routes are replaced.
 registerFedexRoutes(app, {
   readProfileSession,
-  odooGetSaleOrderByRef: ref => odooGetSaleOrderByRef(ref, { forFedex: true })
+  odooGetSaleOrderByRef: ref => odooGetSaleOrderByRef(ref, { forFedex: true }),
+  odooGetFedexInvoiceForOrder
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured, googleContactsConfigured }));

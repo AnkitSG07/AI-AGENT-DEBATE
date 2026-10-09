@@ -4,14 +4,15 @@
  */
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac, timingSafeEqual } from 'node:crypto';
+import {checkInvoiceAgainstCustoms, renderCommercialInvoicePdf} from './fedex-commercial-invoice.js';
 
 const ISO = /^[A-Z]{2}$/;
 const SERVICES = new Set(['INTERNATIONAL_PRIORITY','INTERNATIONAL_ECONOMY','FEDEX_INTERNATIONAL_PRIORITY','FEDEX_INTERNATIONAL_ECONOMY','INTERNATIONAL_FIRST','FEDEX_INTERNATIONAL_CONNECT_PLUS','FEDEX_INTERNATIONAL_PRIORITY_EXPRESS']);
 const MAX_LABEL_BYTES = 2_000_000;
 const safeStr = (v, n = 120) => String(v ?? '').trim().slice(0, n);
 const num = (v, label, min = 0.001, max = 1000000) => { const n = Number(v); if (!Number.isFinite(n) || n < min || n > max) throw new Error(`Invalid ${label}.`); return n; };
-const country = v => { const c = safeStr(v, 2).toUpperCase(); if (!ISO.test(c)) throw new Error('Use a two-letter country code (e.g. US, IN).'); return c; };
+const country = v => { const c = String(v ?? '').trim().toUpperCase(); if (!ISO.test(c)) throw new Error('Use a two-letter country code (e.g. US, IN).'); return c; };
 const env = name => String(process.env[name] || '').trim();
 const urlBase = () => env('FEDEX_MODE') === 'production' ? 'https://apis.fedex.com' : 'https://apis-sandbox.fedex.com';
 const isProduction = () => env('FEDEX_MODE') === 'production';
@@ -54,7 +55,9 @@ function fedexImportAddress(source = {}) {
   };
   const originalCountry = String(a.country || '').trim().toUpperCase();
   a.country = String(a.countryCode || fallback[originalCountry] || a.country || '').trim().toUpperCase();
-  a.state = a.stateCode || (a.country === 'CZ' ? '' : a.state || '');
+  // Odoo's state_id may be stale or unrelated to the CZ destination. Never
+  // propagate an unverified region code (e.g. US) into a Czech FedEx label.
+  a.state = a.country === 'CZ' ? '' : (a.stateCode || a.state || '');
 
   // Some legacy Odoo partners store their *entire* Czech address in `street`,
   // e.g. "Hrobce 142, 411 83 Hrobce" while leaving city and ZIP blank.
@@ -135,6 +138,8 @@ function asAddress(a, requiredContact=true) {
   const record = { contact: { personName: safeStr(a.name,70), companyName: safeStr(a.company || a.name,70), phoneNumber: phone },
     address: { streetLines: [safeStr(a.line1,35), safeStr(a.line2,35)].filter(Boolean), city: safeStr(a.city,35), postalCode: safeStr(a.pin,15), countryCode: c } };
   const state = safeStr(a.state,4).toUpperCase();
+  if (c === 'CZ' && state) fail('Czech Republic (CZ): leave State Code blank. A foreign region code such as US must not appear on the label.');
+  if (c !== 'US' && c !== 'CA' && state === 'US') fail('The destination State Code US conflicts with the destination country. Clear the State Code and run the check again.');
   if (state) record.address.stateOrProvinceCode = state;
   const email = safeStr(a.email,100); if (email) record.contact.emailAddress=email;
   if (!record.address.streetLines.length || !record.address.city || !record.address.postalCode || (requiredContact && (!record.contact.personName || !phone))) fail('Complete street, city, postal code, contact name and phone for both addresses.');
@@ -175,6 +180,68 @@ function commodities(items) {
   if (normalized.some(x=>x.unitPrice.currency!==cur)) fail('All customs commodities must use the same currency.');
   return { normalized, value:{amount:Number(normalized.reduce((s,c)=>s+c.customsValue.amount,0).toFixed(2)),currency:cur} };
 }
+// Shipment validation is shared between rating, the pre-label check and actual
+// label creation. This is a data/format check, not a substitute for customs,
+// FedEx dangerous-goods approval or inspection of the final PDF/barcodes.
+function preflightReport(body = {}) {
+  const checks = [];
+  const check = (name, run) => {
+    try { const detail=run(); checks.push({name, status:'pass', detail:detail||'Validated'}); return true; }
+    catch(e) { checks.push({name, status:'block', detail:e.message||'Validation failed'}); return false; }
+  };
+  let parsed=null, declared=null;
+  check('Sender and destination', () => {
+    parsed=shipment(body);
+    if (parsed.to.address.countryCode === 'CZ' && parsed.to.address.stateOrProvinceCode) fail('CZ destination must have a blank state code.');
+    return `${parsed.from.address.countryCode} → ${parsed.to.address.countryCode}; region codes checked`;
+  });
+  check('Customs commodities', () => {
+    declared=commodities(body.commodities);
+    if (declared.value.amount <= 0) fail('Customs declaration value must be positive.');
+    return `${declared.normalized.length} item line(s), ${declared.value.amount} ${declared.value.currency}`;
+  });
+  check('Commodity and package weights', () => {
+    if (!parsed || !declared) fail('Complete shipment and commodity fields first.');
+    const itemKg=declared.normalized.reduce((sum,item)=>sum+item.weight.value,0);
+    const parcelKg=parsed.pkg.weight.value;
+    if (itemKg - parcelKg > 0.0005) fail(`Commodity total ${itemKg.toFixed(3)} kg exceeds package ${parcelKg.toFixed(3)} kg. Enter genuine per-unit weights.`);
+    return `Commodities ${itemKg.toFixed(3)} kg; packed weight ${parcelKg.toFixed(3)} kg`;
+  });
+  check('Order reference and chosen service', () => {
+    const ref=safeStr(body.orderRef,80);
+    if (!/^[\w\-/ ]{2,80}$/.test(ref)) fail('Load a valid Odoo order reference.');
+    if (!SERVICES.has(safeStr(body.service,75))) fail('Select a FedEx service from the rate quote.');
+    return `${ref} · ${safeStr(body.service,75)}`;
+  });
+  check('Verified shipping details', () => {
+    if (body.reviewConfirmed !== true) fail('Confirm you checked destination, battery contents, HS codes, country of manufacture, values and actual weights.');
+    return 'Operator review recorded for this snapshot';
+  });
+  const warnings = [
+    'This check cannot independently certify HS classifications, manufacturing origin, customs valuation, FedEx service acceptance, or real-world address deliverability.',
+    'Always inspect the PDF after FedEx generates it: recipient country/region, barcode, layout and print scale. Sandbox labels marked TEST/SAMPLE must never be shipped.'
+  ];
+  return {passed:checks.every(c=>c.status==='pass'),checks,warnings};
+}
+// Bind a short-lived preflight approval to the exact shipment details and
+// selected service. The browser cannot forge/reuse a pass after edits.
+function approvalPayload(body={}) {
+  return JSON.stringify(Object.fromEntries(['from','to','package','battery','commodities','orderCurrency','orderRef','invoiceId','service','reviewConfirmed']
+    .map(key=>[key,body[key]??null])));
+}
+function preflightToken(body) {
+  const timestamp=Date.now();
+  const signature=createHmac('sha256',env('PROFILE_SESSION_SECRET')).update(`${timestamp}.${approvalPayload(body)}`).digest('hex');
+  return `${timestamp}.${signature}`;
+}
+function requirePreflightToken(body) {
+  const match=/^(\d{13})\.([a-f0-9]{64})$/.exec(String(body?.preflightToken||''));
+  if (!match || Math.abs(Date.now()-Number(match[1]))>10*60*1000) fail('Run the pre-label check again. Approval expired or is missing.');
+  const expected=createHmac('sha256',env('PROFILE_SESSION_SECRET')).update(`${match[1]}.${approvalPayload(body)}`).digest();
+  const supplied=Buffer.from(match[2],'hex');
+  if(supplied.length!==expected.length || !timingSafeEqual(supplied,expected)) fail('Shipment details changed after the pre-label check. Run the check again.');
+}
+
 async function sendFedex(path, data, kind='shipping') {
   const {id,secret}=credentials(kind);
   if (!id || !secret) fail(`FedEx ${kind} API credentials are not configured in Render.`,503);
@@ -241,12 +308,13 @@ function fxModeAssert(mutating) {
 const dir=()=> env('FEDEX_DATA_DIR') || './fedex-data';
 const ledgerPath=id=>join(dir(),`${id}.json`);
 async function getRecord(id) { try {return JSON.parse(await readFile(ledgerPath(id),'utf8'));} catch {return null;} }
-async function listRecords() { const {readdir}=await import('node:fs/promises'); try { const ids=(await readdir(dir())).filter(s=>/^[-a-f0-9]{36}\.json$/.test(s)).slice(-500); const all=await Promise.all(ids.map(s=>getRecord(s.slice(0,-5)))); return all.filter(Boolean).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,100).map(({id,orderRef,trackingNumber,service,createdAt,status,pickup,labelAvailable,mode})=>({id,orderRef,trackingNumber,service,createdAt,status,pickup,labelAvailable,mode})); }catch{return [];} }
+async function listRecords() { const {readdir}=await import('node:fs/promises'); try { const ids=(await readdir(dir())).filter(s=>/^[-a-f0-9]{36}\.json$/.test(s)).slice(-500); const all=await Promise.all(ids.map(s=>getRecord(s.slice(0,-5)))); return all.filter(Boolean).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,100).map(({id,orderRef,trackingNumber,service,createdAt,status,pickup,labelAvailable,invoiceAvailable,invoiceNumber,mode})=>({id,orderRef,trackingNumber,service,createdAt,status,pickup,labelAvailable,invoiceAvailable,invoiceNumber,mode})); }catch{return [];} }
 async function allocate(id,rec) { await mkdir(dir(),{recursive:true}); const file=await open(ledgerPath(id),'wx',0o600); try {await file.writeFile(JSON.stringify(rec));}finally {await file.close();} }
 async function updateRecord(id,patch){const old=await getRecord(id);if(!old)fail('Shipment record not found.',404); const next={...old,...patch};await writeFile(ledgerPath(id),JSON.stringify(next),{mode:0o600}); return next;}
 const withError =fn => async(req,res)=>{try{await fn(req,res);}catch(e){const msg=e.name==='TimeoutError'?'FedEx timed out. Check the shipment history BEFORE attempting again.':(e?.message||'FedEx operation failed');res.status(e.status||500).json({ok:false,error:msg});}};
 
-export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderByRef }) {
+export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderByRef, odooGetFedexInvoiceForOrder, createCommercialInvoicePdf }) {
+  const makeInvoicePdf = createCommercialInvoicePdf || (async (invoice,options) => {const {default:PDFDocument}=await import('pdfkit');return renderCommercialInvoicePdf(PDFDocument,invoice,options);});
   const protect=(req,res,next)=>{
     if (!env('PROFILE_SESSION_SECRET') || env('PROFILE_SESSION_SECRET').length < 32) return res.status(503).json({ok:false,error:'Set a random PROFILE_SESSION_SECRET of at least 32 characters in Render before enabling FedEx operations.'});
     const session=readProfileSession(req);
@@ -270,6 +338,45 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
     const q=safeStr(req.query.ref,80); if(!q || !/^[\w\-/ ]{2,80}$/.test(q)) fail('Enter a valid sales order reference.');
     const order=await odooGetSaleOrderByRef(q);
     res.json({ok:true,order:fedexImportOrder(order)});
+  }));
+  app.get('/api/fedex/invoice',withError(async(req,res)=>{
+    const ref=safeStr(req.query.ref,80);
+    if(!ref || !/^[\w\-/ ]{2,80}$/.test(ref)) fail('Load a valid sales order reference.');
+    const invoice=await odooGetFedexInvoiceForOrder(ref,req.query.invoiceId);
+    res.json({ok:true,invoice});
+  }));
+  app.post('/api/fedex/commercial-invoice',withError(async(req,res)=>{
+    const ref=safeStr(req.body?.orderRef,80);
+    if(!ref) fail('Load a sales order before generating a commercial invoice.');
+    const invoice=await odooGetFedexInvoiceForOrder(ref,req.body?.invoiceId);
+    const match=checkInvoiceAgainstCustoms(invoice,req.body?.commodities);
+    if(!match.passed)fail(match.detail);
+    const parsed=shipment(req.body);
+    const items=commodities(req.body.commodities);
+    if(items.value.currency!==invoice.currency) fail('Customs value currency differs from the posted invoice.');
+    // PDFKit is a project dependency loaded only when the PDF is requested.
+    const bytes=await makeInvoicePdf(invoice,{
+      from:req.body.from,to:req.body.to,commodities:req.body.commodities,
+      pkg:req.body.package,orderRef:ref,mode:isProduction()?'production':'sandbox'
+    });
+    if(!bytes?.subarray(0,5).equals(Buffer.from('%PDF-')) || bytes.length<1000)fail('Generated PDF failed integrity checks.',500);
+    res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="Commercial-Invoice-${invoice.invoiceNumber.replace(/[^a-zA-Z0-9-]/g,'-')}.pdf"`,'Cache-Control':'private, no-store'});
+    res.send(bytes);
+  }));
+  app.post('/api/fedex/preflight',withError(async(req,res)=>{
+    fxModeAssert(false);
+    const report=preflightReport(req.body);
+    if(!report.passed) return res.json({ok:true,...report,token:null});
+    // No shipment is created. Prevent a second label for an already submitted order.
+    const ref=safeStr(req.body.orderRef,80);
+    const prior=(await listRecords()).find(r=>r.orderRef===ref && r.mode===(isProduction()?'production':'sandbox') && r.status!=='cancelled');
+    if(prior) return res.json({ok:true,passed:false,checks:[...report.checks,{name:'Duplicate shipment protection',status:'block',detail:`Existing shipment attempt for ${ref}: ${prior.status}. Inspect history before a new label.`}],warnings:report.warnings,token:null});
+    // Require the real posted Odoo invoice and match the exact physical goods.
+    const invoice=await odooGetFedexInvoiceForOrder(ref,req.body.invoiceId);
+    const consistency=checkInvoiceAgainstCustoms(invoice,req.body.commodities);
+    report.checks.push({name:'Posted commercial invoice reconciliation',status:consistency.passed?'pass':'block',detail:consistency.detail});
+    if(!consistency.passed) return res.json({ok:true,...report,passed:false,token:null});
+    res.json({ok:true,...report,invoiceNumber:invoice.invoiceNumber,token:preflightToken(req.body),expiresInSeconds:600});
   }));
   app.post('/api/fedex/rates',withError(async(req,res)=>{
     fxModeAssert(false);
@@ -295,14 +402,29 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
     const id=safeStr(req.body?.operationId,50);
     if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)) fail('Invalid shipment operation ID.');
     const existing=await getRecord(id); if(existing) return res.status(409).json({ok:false,error:'This shipment request has already been submitted. Check shipment history to prevent duplicate labels.',record:existing.id});
+    requirePreflightToken(req.body);
+    const report=preflightReport(req.body);
+    if(!report.passed) fail('Pre-label check no longer passes. Run the check again.');
     const data=shipment(req.body); const declared=commodities(req.body.commodities);
     const service=safeStr(req.body.service,75);if(!SERVICES.has(service)) fail('Choose one of the FedEx international services from your rate quote.');
     const ref=safeStr(req.body.orderRef,80); if(!ref || !/^[\w\-/ ]{2,80}$/.test(ref)) fail('Load a valid sales order first.');
-    // Never create a label for an invented reference (the address itself can still be edited).
-    await odooGetSaleOrderByRef(ref);
+    // Re-check invoice state and its physical lines server-side, preventing
+    // a previously approved PDF from being used after Odoo invoice edits.
+    const invoice=await odooGetFedexInvoiceForOrder(ref,req.body.invoiceId);
+    const reconcile=checkInvoiceAgainstCustoms(invoice,req.body.commodities);
+    if(!reconcile.passed)fail(reconcile.detail);
     const prior=(await listRecords()).find(r=>r.orderRef===ref && r.mode===(isProduction()?'production':'sandbox') && r.status!=='cancelled');
     if(prior) fail(`An earlier FedEx shipment attempt for ${ref} exists (${prior.status}). Review shipment history before attempting another label.`,409);
-    await allocate(id,{id,orderRef:ref,createdAt:new Date().toISOString(),status:'pending_fedex_response',mode:isProduction()?'production':'sandbox',service,origin:data.from,to:data.to,pkg:data.pkg,trackingNumber:null,labelAvailable:false,pickup:null});
+    // Generate exporter commercial invoice before contacting FedEx, so a
+    // successful label always has a corresponding customs document.
+    const invoiceBytes=await makeInvoicePdf(invoice,{
+      from:req.body.from,to:req.body.to,commodities:req.body.commodities,
+      pkg:req.body.package,orderRef:ref,mode:isProduction()?'production':'sandbox'
+    });
+    if(!Buffer.isBuffer(invoiceBytes)||invoiceBytes.length<1000||invoiceBytes.subarray(0,5).toString()!=='%PDF-') fail('Commercial invoice PDF creation failed. FedEx shipment was not submitted.',500);
+    await allocate(id,{id,orderRef:ref,createdAt:new Date().toISOString(),status:'pending_fedex_response',mode:isProduction()?'production':'sandbox',service,invoiceId:invoice.invoiceId,invoiceNumber:invoice.invoiceNumber,invoiceAvailable:false,origin:data.from,to:data.to,pkg:data.pkg,trackingNumber:null,labelAvailable:false,pickup:null});
+    await writeFile(join(dir(),`${id}-commercial-invoice.pdf`),invoiceBytes,{mode:0o600});
+    await updateRecord(id,{invoiceAvailable:true});
     const shipmentBody={accountNumber:{value:account()},labelResponseOptions:'LABEL',requestedShipment:{shipper:data.from,recipients:[data.to],shipDatestamp:todayIndia(),serviceType:service,packagingType:'YOUR_PACKAGING',pickupType:'CONTACT_FEDEX_TO_SCHEDULE',shippingChargesPayment:{paymentType:'SENDER'},labelSpecification:{imageType:'PDF',labelStockType:'PAPER_4X6'},requestedPackageLineItems:[{weight:data.pkg.weight,dimensions:data.pkg.dimensions,customerReferences:[{customerReferenceType:'CUSTOMER_REFERENCE',value:ref}]}],customsClearanceDetail:{commodities:declared.normalized,customsValue:declared.value,commercialInvoice:{shipmentPurpose:'SOLD'},dutiesPayment:{paymentType:'RECIPIENT'}}}};
     try {
       const raw=await sendFedex('/ship/v1/shipments',shipmentBody);
@@ -312,9 +434,9 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
       if(!trackingNumber) fail('FedEx did not return a tracking number; inspect the project transaction logs before trying again.',502);
       const doc=piece.packageDocuments?.find(x=>x.encodedLabel) || transaction.shipmentDocuments?.find(x=>x.encodedLabel);
       let labelAvailable=false;
-      if(doc?.encodedLabel){const pdf=Buffer.from(doc.encodedLabel,'base64');if(pdf.length>100 && pdf.length<MAX_LABEL_BYTES&&pdf.subarray(0,5).toString()==='%PDF-'){await writeFile(join(dir(),`${id}.pdf`),pdf,{mode:0o600});labelAvailable=true;}}
-      const record=await updateRecord(id,{status:labelAvailable?'label_created':'created_label_unavailable',trackingNumber,labelAvailable,transactionId:raw.transactionId||null});
-      res.json({ok:true,record:{id:record.id,orderRef:ref,trackingNumber,status:record.status,labelAvailable,mode:record.mode}});
+      if(doc?.encodedLabel){const pdf=Buffer.from(doc.encodedLabel,'base64');if(pdf.length>100 && pdf.length<MAX_LABEL_BYTES&&pdf.subarray(0,5).toString()==='%PDF-' && pdf.subarray(-2048).includes(Buffer.from('%%EOF'))){await writeFile(join(dir(),`${id}.pdf`),pdf,{mode:0o600});labelAvailable=true;}}
+      const record=await updateRecord(id,{status:labelAvailable?'label_created':'created_label_unavailable',trackingNumber,labelAvailable,printReviewRequired:labelAvailable,transactionId:raw.transactionId||null});
+      res.json({ok:true,record:{id:record.id,orderRef:ref,trackingNumber,status:record.status,labelAvailable,printReviewRequired:labelAvailable,mode:record.mode}});
     } catch(e){await updateRecord(id,{status:'needs_manual_review',lastError:safeStr(e.message,500)});throw e;}
   }));
   app.get('/api/fedex/shipments',withError(async(req,res)=>{res.json({ok:true,shipments:await listRecords()});}));
@@ -322,6 +444,15 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
     const id=safeStr(req.params.id,36); if(!/^[a-f0-9-]{36}$/i.test(id)) fail('Invalid label ID.');
     const r=await getRecord(id); if(!r?.labelAvailable) fail('Printable label is not available for this shipment.',404);
     const bytes=await readFile(join(dir(),`${id}.pdf`));res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="FedEx-${(r.trackingNumber||id).replace(/[^0-9A-Za-z-]/g,'')}.pdf"`,'Cache-Control':'private, no-store'});res.send(bytes);
+  }));
+  app.get('/api/fedex/shipments/:id/commercial-invoice',withError(async(req,res)=>{
+    const id=safeStr(req.params.id,36);
+    if(!/^[a-f0-9-]{36}$/.test(id))fail('Invalid shipment ID.');
+    const record=await getRecord(id);
+    if(!record?.invoiceAvailable)fail('Commercial invoice PDF is not available.',404);
+    const bytes=await readFile(join(dir(),`${id}-commercial-invoice.pdf`));
+    res.set({'Content-Type':'application/pdf','Content-Disposition':`attachment; filename="Commercial-Invoice-${String(record.invoiceNumber||id).replace(/[^a-zA-Z0-9-]/g,'-')}.pdf"`,'Cache-Control':'private, no-store'});
+    res.send(bytes);
   }));
   app.post('/api/fedex/pickups',withError(async(req,res)=>{
     fxModeAssert(true);if(req.body?.confirm!==true) fail('Pickup requires explicit confirmation.');
@@ -348,4 +479,4 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
   }));
 }
 
-export const __fedexTest = {shipment,commodities,packageDetails,rateNormalize,originAddress,fedexImportOrder,fedexImportAddress,isNonCommodityOrderLine};
+export const __fedexTest = {shipment,commodities,packageDetails,rateNormalize,originAddress,fedexImportOrder,fedexImportAddress,isNonCommodityOrderLine,preflightReport,preflightToken,requirePreflightToken};

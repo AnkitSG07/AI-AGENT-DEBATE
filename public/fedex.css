@@ -36,3 +36,14 @@
 #page-fedex .fx-events li { padding: 5px 0; }
 @media(max-width:900px) { #page-fedex .fx-two-cols { grid-template-columns: 1fr; } }
 @media(max-width:520px) { #page-fedex .fx-card .card-inner {padding: 12px;} #page-fedex .fx-fields {grid-template-columns:1fr;} #page-fedex .fx-steps span {font-size:10px;} #page-fedex .fx-inline > button {width:100%;} }
+
+/* FedEx pre-label validation: scoped, accessible, and responsive. */
+#page-fedex .fx-preflight { border:1px solid var(--border-strong); background:var(--surface-2); padding:16px; border-radius:12px; margin-top:16px; }
+#page-fedex .fx-preflight-heading { font-weight:750; color:var(--text-primary); margin-bottom:10px; }
+#page-fedex .fx-checkline { display:flex; flex-direction:row; align-items:flex-start; gap:9px; font-size:13px; color:var(--text-primary); line-height:1.5; }
+#page-fedex .fx-checkline input { width:18px; min-width:18px; height:18px; margin-top:2px; }
+#page-fedex .fx-preflight-results { margin-top:12px; display:grid; gap:7px; }
+#page-fedex .fx-check-result { padding:9px 12px; border-radius:8px; font-size:12px; background:var(--surface-1); border:1px solid var(--border); }
+#page-fedex .fx-check-result.block { color:var(--danger); background:var(--danger-soft); }
+#page-fedex .fx-check-result.pass { color:var(--ok); }
+#page-fedex .fx-check-warning { font-size:12px; color:var(--warn); padding:7px 10px; background:var(--warn-soft); border-radius:8px; }
