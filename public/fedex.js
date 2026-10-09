@@ -26,7 +26,7 @@
   function fillAddress(prefix, address={}) {
     const a = {...address};
     if (a.country) {
-      const names={'INDIA':'IN','UNITED STATES':'US','USA':'US','UNITED KINGDOM':'GB','GREAT BRITAIN':'GB','GERMANY':'DE','FRANCE':'FR','CANADA':'CA','UAE':'AE','UNITED ARAB EMIRATES':'AE'};
+      const names={'INDIA':'IN','CZECH REPUBLIC':'CZ','CZECHIA':'CZ','UNITED STATES':'US','USA':'US','UNITED KINGDOM':'GB','GREAT BRITAIN':'GB','GERMANY':'DE','FRANCE':'FR','CANADA':'CA','UAE':'AE','UNITED ARAB EMIRATES':'AE'};
       a.country=names[String(a.country).trim().toUpperCase()] || a.country;
     }
     fields.forEach(k=>set('fx'+prefix+k,a[k[0].toLowerCase()+k.slice(1)]));
@@ -67,8 +67,9 @@
     $('fxCommodityRows').replaceChildren();
     (order.items||[]).filter(i=>Number(i.qty)>0).slice(0,30).forEach(item=>commodityRow({description:item.product_name||item.name,quantity:Math.max(1,Math.ceil(Number(item.qty)))}));
     if(!$('fxCommodityRows').children.length)commodityRow();
-    text('fxOrderInfo',`${order.ref} · ${order.state||'Unknown state'} · ${(order.items||[]).length} order line(s). Verify customs values, HS codes, weights and addresses before shipping.`);
-    clearQuote();notify(`Loaded sales order ${order.ref}. Verify all shipment fields before requesting FedEx rates.`,'success');
+    const excluded = Number(order.excludedLines) || 0;
+    text('fxOrderInfo',`${order.ref} · ${order.state||'Unknown state'} · ${(order.items||[]).length} physical item line(s). ${excluded ? `${excluded} non-commodity line(s) excluded (e.g. delivery/service charges). ` : ''}Verify customs values, HS codes, weights and addresses before shipping.`);
+    clearQuote();notify(`Loaded sales order ${order.ref}. ${excluded ? `Excluded ${excluded} service/delivery line(s). ` : ''}Review the destination and customs values before requesting rates.`,'success');
   }
   async function loadConfig(){
     try {

@@ -30,12 +30,76 @@ function originAddress() { return {
   phone: env('FEDEX_ORIGIN_PHONE') || env('SHIP_FROM_PHONE'),
   email: env('FEDEX_ORIGIN_EMAIL') || env('SHIP_FROM_EMAIL'),
   line1: env('FEDEX_ORIGIN_LINE1') || env('SHIP_FROM_LINE1'),
-  line2: env('FEDEX_ORIGIN_LINE2') || env('SHIP_FROM_LINE2'),
+  // Do not combine a warehouse street with an unrelated legacy address line.
+  // Configure FEDEX_ORIGIN_LINE2 explicitly if your FedEx pickup address
+  // genuinely has a second street line; otherwise leave it blank.
+  line2: env('FEDEX_ORIGIN_LINE2'),
   city: env('FEDEX_ORIGIN_CITY') || env('SHIP_FROM_CITY'),
   state: env('FEDEX_ORIGIN_STATE_CODE'),
   pin: env('FEDEX_ORIGIN_POSTAL') || env('SHIP_FROM_PIN'),
   country: env('FEDEX_ORIGIN_COUNTRY') || 'IN'
 }; }
+
+// Normalize the Odoo data for FedEx only. Never rewrite Odoo contact records.
+// Prefer canonical country/state codes loaded from Odoo, and leave any
+// ambiguous address elements blank for human review rather than inventing them.
+function fedexImportAddress(source = {}) {
+  const a = { ...source };
+  const fallback = {
+    'INDIA':'IN', 'CZECH REPUBLIC':'CZ', 'CZECHIA':'CZ',
+    'UNITED STATES':'US', 'UNITED STATES OF AMERICA':'US', 'USA':'US',
+    'UNITED KINGDOM':'GB', 'GREAT BRITAIN':'GB', 'GERMANY':'DE',
+    'FRANCE':'FR', 'CANADA':'CA', 'UNITED ARAB EMIRATES':'AE',
+    'UAE':'AE', 'BRAZIL':'BR'
+  };
+  const originalCountry = String(a.country || '').trim().toUpperCase();
+  a.country = String(a.countryCode || fallback[originalCountry] || a.country || '').trim().toUpperCase();
+  a.state = a.stateCode || (a.country === 'CZ' ? '' : a.state || '');
+
+  // Some legacy Odoo partners store their *entire* Czech address in `street`,
+  // e.g. "Hrobce 142, 411 83 Hrobce" while leaving city and ZIP blank.
+  // Extract only this unambiguous CZ pattern; don't guess for other countries.
+  if (a.country === 'CZ') {
+    const street = String(a.line1 || '').trim();
+    const m = street.match(/^(.*?),\s*(\d{3})\s?(\d{2})\s+([^,\d][^,]*)$/u);
+    if (m && m[1].trim()) {
+      const streetZip = m[2] + m[3];
+      const sameZip = !a.pin || String(a.pin).replace(/\s/g, '') === streetZip;
+      const sameCity = !a.city || String(a.city).trim().toLocaleLowerCase() === m[4].trim().toLocaleLowerCase();
+      if (sameZip && sameCity) {
+        a.line1 = m[1].trim();
+        a.pin = a.pin || streetZip;
+        a.city = a.city || m[4].trim();
+      }
+    }
+  }
+  return a;
+}
+
+function isNonCommodityOrderLine(item = {}) {
+  if (item.is_delivery === true || item.is_service === true || item.display_type) return true;
+  if (!item.product_id) return true;
+  const desc = String(item.product_name || item.name || '').trim();
+  // Safety fallback for older Odoo data with missing product-type flags.
+  // Match clear shipping/fee products, not generic products with "delivery"
+  // appearing somewhere in their description.
+  return /^\s*(?:\[[^\]]*(?:delivery|shipping|freight)[^\]]*\]\s*)?(?:standard delivery|delivery charges?|shipping charges?|shipping fees?|payment convenience fee|courier charges?|freight charges?)\b/i.test(desc)
+    || /^\s*\[(?:delivery|shipping|freight)[^\]]*\]/i.test(desc);
+}
+
+function fedexImportOrder(order = {}) {
+  const items = (order.items || []).filter(i =>
+    Number(i.qty) > 0 && !isNonCommodityOrderLine(i)
+  );
+  return {
+    id: order.id,
+    ref: order.ref,
+    state: order.state,
+    ship_to: fedexImportAddress(order.ship_to),
+    items: items.map(i => ({ name: i.name, qty: i.qty, product_name: i.product_name })),
+    excludedLines: (order.items || []).length - items.length
+  };
+}
 function asAddress(a, requiredContact=true) {
   if (!a || typeof a !== 'object') fail('Please enter a shipment address.');
   const c = country(a.country);
@@ -150,7 +214,7 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
   app.get('/api/fedex/orders',withError(async(req,res)=>{
     const q=safeStr(req.query.ref,80); if(!q || !/^[\w\-/ ]{2,80}$/.test(q)) fail('Enter a valid sales order reference.');
     const order=await odooGetSaleOrderByRef(q);
-    res.json({ok:true,order:{id:order.id,ref:order.ref,state:order.state,ship_to:order.ship_to,items:(order.items||[]).map(i=>({name:i.name,qty:i.qty,product_name:i.product_name}))}});
+    res.json({ok:true,order:fedexImportOrder(order)});
   }));
   app.post('/api/fedex/rates',withError(async(req,res)=>{
     fxModeAssert(false);
@@ -222,4 +286,4 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
   }));
 }
 
-export const __fedexTest = {shipment,commodities,packageDetails,rateNormalize,originAddress};
+export const __fedexTest = {shipment,commodities,packageDetails,rateNormalize,originAddress,fedexImportOrder,fedexImportAddress,isNonCommodityOrderLine};

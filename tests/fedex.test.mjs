@@ -22,6 +22,47 @@ test('normalizes nested FedEx amount objects to a numeric quote',()=>{
  const q=__fedexTest.rateNormalize({output:{rateReplyDetails:[{serviceType:'INTERNATIONAL_PRIORITY',ratedShipmentDetails:[{rateType:'ACCOUNT',totalNetCharge:{amount:25.75,currency:'USD'}}]}]}});
  assert.equal(q[0].amount,25.75);assert.equal(q[0].currency,'USD');
 });
+test('FedEx import: Czech full-street format becomes a valid recipient; delivery and service fees are omitted',()=>{
+ const order=__fedexTest.fedexImportOrder({
+  id:353,ref:'SO-26/27-00353',state:'sale',
+  ship_to:{name:'Lukas Jiranek',line1:'Hrobce 142, 411 83 Hrobce',line2:'',city:'',pin:'',country:'Czech Republic',countryCode:'CZ'},
+  items:[
+    {name:'[AS-B-201-SLD-K] KIT - Rechargeable',qty:10,product_id:1,product_name:'Rechargeable KIT'},
+    {name:'[AS-B-202-DLD-K] KIT - Rechargeable',qty:10,product_id:2,product_name:'Rechargeable CCT KIT'},
+    {name:'[AS-B-206-55-DLD] DRIVER',qty:2,product_id:3,product_name:'DOB Driver'},
+    {name:'[Delivery 007] Standard delivery',qty:1,product_id:99,product_name:'Standard delivery',is_delivery:true,is_service:true},
+    {name:'Payment Convenience Fee',qty:1,product_id:100,product_name:'Payment Convenience Fee',is_service:true},
+    {name:'Section',qty:0,display_type:'line_section'}
+  ]
+ });
+ assert.equal(order.ship_to.country,'CZ');
+ assert.equal(order.ship_to.line1,'Hrobce 142');
+ assert.equal(order.ship_to.pin,'41183');
+ assert.equal(order.ship_to.city,'Hrobce');
+ assert.equal(order.items.length,3);
+ assert.equal(order.excludedLines,3);
+ assert.equal(order.items[0].qty,10);
+ assert.equal(__fedexTest.isNonCommodityOrderLine({name:'[Delivery 007] Standard delivery',product_id:99,qty:1}),true);
+});
+test('FedEx importer does not guess incomplete non-Czech addresses or overwrite populated structured fields',()=>{
+ const us=__fedexTest.fedexImportAddress({line1:'Building 42, Market Street',city:'',pin:'',country:'United States',countryCode:'US'});
+ assert.equal(us.country,'US');assert.equal(us.line1,'Building 42, Market Street');assert.equal(us.city,'');assert.equal(us.pin,'');
+ const cz=__fedexTest.fedexImportAddress({line1:'Hrobce 142, 411 83 Hrobce',city:'Another City',pin:'99999',countryCode:'CZ'});
+ assert.equal(cz.line1,'Hrobce 142, 411 83 Hrobce');assert.equal(cz.city,'Another City');assert.equal(cz.pin,'99999');
+});
+test('FedEx origin never merges legacy SHIP_FROM_LINE2 with a different pickup location',()=>{
+ const old=process.env.SHIP_FROM_LINE2;const specific=process.env.FEDEX_ORIGIN_LINE2;
+ try {
+  process.env.SHIP_FROM_LINE2='Mayapuri, New Delhi, Delhi, 110020';
+  delete process.env.FEDEX_ORIGIN_LINE2;
+  assert.equal(__fedexTest.originAddress().line2,'');
+  process.env.FEDEX_ORIGIN_LINE2='Building A, Unit 3';
+  assert.equal(__fedexTest.originAddress().line2,'Building A, Unit 3');
+ } finally {
+  if(old===undefined)delete process.env.SHIP_FROM_LINE2;else process.env.SHIP_FROM_LINE2=old;
+  if(specific===undefined)delete process.env.FEDEX_ORIGIN_LINE2;else process.env.FEDEX_ORIGIN_LINE2=specific;
+ }
+});
 test('sandbox mocked end-to-end: rate → create label → pickup → tracking; duplicate blocked',async()=>{
  const previous=globalThis.fetch;
  const path=await mkdtemp(join(tmpdir(),'sh-fedex-test-'));

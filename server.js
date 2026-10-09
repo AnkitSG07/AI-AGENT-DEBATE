@@ -1150,7 +1150,7 @@ async function odooGetPaymentStatus(uid, invoiceIds) {
   };
 }
 
-async function odooGetSaleOrderByRef(ref) {
+async function odooGetSaleOrderByRef(ref, options = {}) {
   const uid = await odooLogin();
 
   const records = await odooExecute(
@@ -1174,13 +1174,45 @@ async function odooGetSaleOrderByRef(ref) {
   const shipPartner = await odooFetchPartner(uid, shipPartnerId);
   const billPartner = await odooFetchPartner(uid, billPartnerId);
 
+  // Request FedEx-specific product metadata only for the FedEx workspace.
+  // Other consumers (label drafts, order dashboard) retain the original
+  // sale-order shape and are not affected by this shipping-only filtering.
   const lines = await odooExecute(
     uid,
     "sale.order.line",
     "search_read",
-    [[ ["order_id", "=", so.id] ], ["name", "product_uom_qty", "product_id"]],
+    [[ ["order_id", "=", so.id] ], options.forFedex
+      ? ["name", "product_uom_qty", "product_id", "is_delivery", "display_type"]
+      : ["name", "product_uom_qty", "product_id"]],
     { limit: 200 }
   );
+
+  const shipTo = mapPartnerToAddress(shipPartner);
+  const serviceProductIds = new Set();
+  if (options.forFedex) {
+    // Odoo's display country ("Czech Republic") is NOT a valid FedEx code.
+    // Read the canonical ISO-3166 code from res.country instead of guessing.
+    if (shipPartner.country_id?.[0]) {
+      const countries = await odooExecute(uid, "res.country", "read", [
+        [shipPartner.country_id[0]], ["code"]
+      ]);
+      shipTo.countryCode = countries?.[0]?.code || "";
+    }
+    if (shipPartner.state_id?.[0]) {
+      const states = await odooExecute(uid, "res.country.state", "read", [
+        [shipPartner.state_id[0]], ["code"]
+      ]);
+      shipTo.stateCode = states?.[0]?.code || "";
+    }
+
+    // Delivery products, convenience fees and other services must not be
+    // declared as physical commodities on a FedEx commercial invoice.
+    const productIds = [...new Set((lines || []).map(l => l.product_id?.[0]).filter(Boolean))];
+    if (productIds.length) {
+      const products = await odooExecute(uid, "product.product", "read", [productIds, ["id", "type"]]);
+      for (const p of products || []) if (p.type === "service") serviceProductIds.add(p.id);
+    }
+  }
 
   const paymentInfo = await odooGetPaymentStatus(uid, so.invoice_ids || []);
 
@@ -1197,13 +1229,18 @@ async function odooGetSaleOrderByRef(ref) {
     payment_status: paymentInfo.payment_status,
     invoices: paymentInfo.invoices,
     picking_ids: so.picking_ids || [],
-    ship_to: mapPartnerToAddress(shipPartner),
+    ship_to: shipTo,
     bill_to: mapPartnerToAddress(billPartner),
     items: (lines || []).map(l => ({
       name: l.name,
       qty: l.product_uom_qty,
       product_id: l.product_id?.[0] || null,
-      product_name: l.product_id?.[1] || ""
+      product_name: l.product_id?.[1] || "",
+      ...(options.forFedex ? {
+        is_delivery: l.is_delivery === true,
+        is_service: serviceProductIds.has(l.product_id?.[0]),
+        display_type: l.display_type || ""
+      } : {})
     }))
   };
 }
@@ -24031,7 +24068,10 @@ app.post("/api/whatsapp-calls/test", async (req, res) => {
 
 
 // FedEx has a separate protected route family; no existing order or label routes are replaced.
-registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderByRef });
+registerFedexRoutes(app, {
+  readProfileSession,
+  odooGetSaleOrderByRef: ref => odooGetSaleOrderByRef(ref, { forFedex: true })
+});
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured, googleContactsConfigured }));
 // ===================== RENDER 30-SECOND KEEP ALIVE =====================

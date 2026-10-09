@@ -16,7 +16,15 @@ You already configured the first six below. Please add the session secret before
 | `FEDEX_SANDBOX_ACCOUNT` | **India** sandbox shipping account, not the real business account |
 | `PROFILE_SESSION_SECRET` | **Required:** a fresh, randomly generated string of at least 32 characters. Keep this private. Changing it signs everyone out. |
 
-Recommended real sender information (optional but useful): `FEDEX_ORIGIN_CONTACT`, `FEDEX_ORIGIN_COMPANY`, `FEDEX_ORIGIN_PHONE`, `FEDEX_ORIGIN_EMAIL`, `FEDEX_ORIGIN_LINE1`, `FEDEX_ORIGIN_LINE2`, `FEDEX_ORIGIN_CITY`, `FEDEX_ORIGIN_STATE_CODE` (typically `DL` for Delhi), `FEDEX_ORIGIN_POSTAL`, `FEDEX_ORIGIN_COUNTRY=IN`. The form can also be edited manually, e.g., pickup from the actual warehouse rather than the FedEx billing address. Any preexisting `SHIP_FROM_*` settings are reused when appropriate.
+Recommended real sender information: `FEDEX_ORIGIN_CONTACT`, `FEDEX_ORIGIN_COMPANY`, `FEDEX_ORIGIN_PHONE`, `FEDEX_ORIGIN_EMAIL`, `FEDEX_ORIGIN_LINE1`, `FEDEX_ORIGIN_LINE2`, `FEDEX_ORIGIN_CITY`, `FEDEX_ORIGIN_STATE_CODE` (typically `DL` for Delhi), `FEDEX_ORIGIN_POSTAL`, `FEDEX_ORIGIN_COUNTRY=IN`. Use the **actual warehouse pickup address**, not the FedEx account billing address unless they are identical. The form can also be edited manually.
+
+### Address + delivery-line importer correction
+
+The FedEx import route now reads ISO country and state codes directly from Odoo `res.country` / `res.country.state` instead of treating display names as valid codes. Czech partner addresses stored entirely in Street (e.g. `Hrobce 142, 411 83 Hrobce`) are separated into Street, City, and ZIP **only if the pattern is unambiguous**. Other incomplete addresses remain for review; the app never writes the normalized fields back to Odoo.
+
+The importer excludes Odoo `is_delivery` order lines, service-type products, section/note lines, and obvious delivery/fee fallback lines from FedEx customs commodities. The original Odoo order and all existing dashboard / label-maker data remain unchanged.
+
+**FedEx origin fix:** older `SHIP_FROM_LINE2` may contain a different location (e.g. Mayapuri) than `SHIP_FROM_LINE1` (e.g. Okhla). To avoid silently merging these locations, the FedEx workspace now uses **only `FEDEX_ORIGIN_LINE2`** for its second street line (blank unless explicitly set). Configure the verified pickup address in Render using the `FEDEX_ORIGIN_*` variables above. This does **not** change the default-from address in the existing Label Maker.
 
 For production **later**, after FedEx approval: set `FEDEX_MODE=production`; configure the separate production shipping/tracking IDs and secrets, real `FEDEX_ACCOUNT_NUMBER`, and finally `FEDEX_ENABLE_LIVE_ACTIONS=true` when authorized. Until that switch is enabled, the server blocks live label and pickup actions.
 
