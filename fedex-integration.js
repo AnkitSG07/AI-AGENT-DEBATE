@@ -155,7 +155,11 @@ export function registerFedexRoutes(app, { readProfileSession, odooGetSaleOrderB
   app.post('/api/fedex/rates',withError(async(req,res)=>{
     fxModeAssert(false);
     const data=shipment(req.body);
-    const rateRequest={accountNumber:{value:account()},rateRequestControlParameters:{returnTransitTimes:true},requestedShipment:{shipper:{address:data.from.address},recipient:{address:data.to.address},pickupType:'CONTACT_FEDEX_TO_SCHEDULE',packagingType:'YOUR_PACKAGING',rateRequestType:['ACCOUNT','LIST'],requestedPackageLineItems:[{groupPackageCount:1,...data.pkg}],totalPackageCount:1}};
+    // International merchandise quotes require a customs-clearance declaration.
+    // Use the *same validated* commodity values at rating and label creation.
+    // Never silently invent customs values from the sales-order total.
+    const declared=commodities(req.body.commodities);
+    const rateRequest={accountNumber:{value:account()},rateRequestControlParameters:{returnTransitTimes:true},requestedShipment:{shipper:{address:data.from.address},recipient:{address:data.to.address},pickupType:'CONTACT_FEDEX_TO_SCHEDULE',packagingType:'YOUR_PACKAGING',rateRequestType:['ACCOUNT','LIST'],requestedPackageLineItems:[{groupPackageCount:1,...data.pkg}],totalPackageCount:1,customsClearanceDetail:{commodities:declared.normalized,customsValue:declared.value,commercialInvoice:{shipmentPurpose:'SOLD'}}}};
     const raw=await sendFedex('/rate/v1/rates/quotes',rateRequest);
     res.json({ok:true,mode:isProduction()?'production':'sandbox',rates:rateNormalize(raw),warnings:raw.output?.alerts||[]});
   }));

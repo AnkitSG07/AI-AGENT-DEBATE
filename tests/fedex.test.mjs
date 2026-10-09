@@ -11,6 +11,7 @@ const sample = () => ({
  to:{name:'Test Recipient',company:'Client Co',phone:'1111111111',line1:'Main Street',city:'New York',state:'NY',pin:'10001',country:'US'},
  package:{weight:1,length:20,width:15,height:10},battery:'none'
 });
+const sampleCommodities = () => [{description:'LED controller',quantity:1,unitPrice:12.5,currency:'USD',hsCode:'854370',weightKg:0.3,countryOfManufacture:'IN'}];
 test('validates shipment and battery safety on server',()=>{
  const ok=__fedexTest.shipment(sample());assert.equal(ok.from.address.countryCode,'IN');
  for(const mode of ['contained','packed','standalone','unknown']) assert.throws(()=>__fedexTest.shipment({...sample(),battery:mode}),/blocked/);
@@ -46,9 +47,18 @@ test('sandbox mocked end-to-end: rate → create label → pickup → tracking; 
   return {status:statusCode,data:output};
  }
  try{
-  const {data:q}=await run('POST','/api/fedex/rates',sample());assert.equal(q.rates[0].amount,51.44);
-  assert.ok(requests.some(x=>x.endpoint.endsWith('/rate/v1/rates/quotes')));
-  const payload={...sample(),commodities:[{description:'LED controller',quantity:1,unitPrice:12.5,currency:'USD',hsCode:'854370',weightKg:0.3,countryOfManufacture:'IN'}],service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',confirm:true,operationId:randomUUID()};
+  const noCustoms=await run('POST','/api/fedex/rates',sample());
+  assert.equal(noCustoms.status,400);
+  assert.match(noCustoms.data.error,/customs commodities/);
+  assert.equal(requests.filter(x=>x.endpoint.endsWith('/rate/v1/rates/quotes')).length,0);
+  const {data:q}=await run('POST','/api/fedex/rates',{...sample(),commodities:sampleCommodities()});assert.equal(q.rates[0].amount,51.44);
+  const rateCall=requests.find(x=>x.endpoint.endsWith('/rate/v1/rates/quotes'));
+  assert.ok(rateCall);
+  const rateRequest=JSON.parse(rateCall.body);
+  assert.deepEqual(rateRequest.requestedShipment.customsClearanceDetail.customsValue,{amount:12.5,currency:'USD'});
+  assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].harmonizedCode,'854370');
+  assert.equal(rateRequest.requestedShipment.customsClearanceDetail.commodities[0].weight.value,0.3);
+  const payload={...sample(),commodities:sampleCommodities(),service:'INTERNATIONAL_PRIORITY',orderRef:'S0001',confirm:true,operationId:randomUUID()};
   const shipment=await run('POST','/api/fedex/shipments',payload);
   assert.equal(shipment.status,200,JSON.stringify(shipment.data));
   assert.equal(shipment.data.record.trackingNumber,'123456789012');assert.equal(shipment.data.record.labelAvailable,true);

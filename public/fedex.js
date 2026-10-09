@@ -83,19 +83,21 @@
   }
   async function getRates(){
     if (!currentOrder) throw new Error('Load the Odoo sales order first.');
-    const payload=basePayload();
+    // Customs detail is mandatory for our India-origin international rate
+    // request, not just for generating the final AWB/label.
+    const payload={...basePayload(),commodities:readCommodities()};
     if(payload.battery!=='none')throw new Error('Battery-containing or unverified shipments are blocked in this version. Review transport compliance first.');
     clearQuote();text('fxRateStatus','Requesting FedEx prices…');
     const response=await api('/rates',{method:'POST',body:JSON.stringify(payload)});
     rates=response.rates||[];ratedPayload=JSON.stringify(payload);
     text('fxRateStatus',rates.length?`${rates.length} FedEx service(s) returned. Rates may differ from actual invoice.`:'No rates returned. Review route and sandbox test account.');renderRates();
-    notify(rates.length?'Select the desired FedEx service. Verify declared commodities before creating a label.':'FedEx returned no rates for these details.',rates.length?'success':'error');
+    notify(rates.length?'Select the desired FedEx service. The quote uses the declared customs commodities shown above.':'FedEx returned no rates for these details.',rates.length?'success':'error');
   }
   async function createShipment(){
     if(!currentOrder)throw new Error('Load the order first.');
     if(!selectedService)throw new Error('Select a FedEx service quote.');
-    const payload=basePayload();if(JSON.stringify(payload)!==ratedPayload)throw new Error('Shipping details changed since the quote. Request a new quote.');
-    const items=readCommodities();if(!items.length)throw new Error('Add at least one customs commodity.');
+    const payload={...basePayload(),commodities:readCommodities()};if(JSON.stringify(payload)!==ratedPayload)throw new Error('Shipping or customs details changed since the quote. Request a new quote.');
+    const items=payload.commodities;if(!items.length)throw new Error('Add at least one customs commodity.');
     const actionText=mode==='sandbox'?'TEST label':'LIVE billable FedEx label';
     if(!window.confirm(`Create ${actionText} for order ${currentOrder.ref}?\n\nService: ${selectedService}\nShipment origin: ${payload.from.city}, ${payload.from.country}\nDestination: ${payload.to.city}, ${payload.to.country}\n\nThis does not request courier pickup.`))return;
     const operationId=crypto.randomUUID();
