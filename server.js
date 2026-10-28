@@ -1,4 +1,5 @@
 import express from "express";
+import { createAndroidPushBridge } from "./operator-android-push.js";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
@@ -9,7 +10,7 @@ import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPla
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-10-28-operator-hub-call-lifecycle-r7";
+const SERVER_PATCH_VERSION = "2026-10-28-operator-hub-android-r8";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -16488,7 +16489,13 @@ async function sendWhatsappCallPushNotification(call = {}) {
   return { ok: sent > 0, sent, failed, subscribers: remaining.length, targets: targetEndpoints.size, last_error: webPushState.last_error || "" };
 }
 
-async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "" } = {}) {
+async function sendOperatorPushNotification({ channel = {}, message = {}, messageText = "", nativeIncomingVerified = false } = {}) {
+  // Only genuine incoming Odoo worker messages set this flag; public test routes
+  // cannot opt in. Native delivery is independent of Web Push configuration.
+  if (nativeIncomingVerified === true) {
+    androidPushBridge.publishMessage({ channel, message, verifiedIncoming: true })
+      .catch(() => console.warn("Android message alert processing failed"));
+  }
   const debugBase = { odooMessageId: message?.id || null, odooChannelId: channel?.id || null };
   if (!WEB_PUSH_ENABLED) {
     console.warn("Operator push skipped:", { ...debugBase, reason: "disabled" });
@@ -16732,7 +16739,8 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
       pushNotifyResult = await sendOperatorPushNotification({
         channel,
         message,
-        messageText: cleanMessageText
+        messageText: cleanMessageText,
+        nativeIncomingVerified: true
       });
       console.log("Operator push notification after Zapier forward:", {
         odooMessageId: message?.id,
@@ -20302,6 +20310,10 @@ function aiModeStripHtml(value) {
   return text.replace(/\s+\n/g, "\n").replace(/\n\s+/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
 }
 
+function aiModeHasWorkerAttachments(message = {}) {
+  return Array.isArray(message.attachment_ids) && message.attachment_ids.some(id => Number.isSafeInteger(Number(id)) && Number(id) > 0);
+}
+
 function aiModeMessagePlainText(message = {}) {
   return (
     aiModeStripHtml(message.body) ||
@@ -20492,7 +20504,8 @@ async function aiModeFetchRecentWorkerMessages(uid) {
     "message_type",
     "model",
     "res_id",
-    "create_uid"
+    "create_uid",
+    "attachment_ids"
   ];
   return await odooExecute(uid, "mail.message", "search_read", [[
     ["model", "=", "discuss.channel"]
@@ -20516,7 +20529,8 @@ async function aiModeFetchWorkerMessages(uid, channelId) {
     "message_type",
     "model",
     "res_id",
-    "create_uid"
+    "create_uid",
+    "attachment_ids"
   ]], {
     limit: AI_MODE_BACKGROUND_MESSAGE_LIMIT,
     order: "id desc"
@@ -20747,7 +20761,8 @@ async function aiModeCallLocalDecisionEngine(payload) {
 
 async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages, latestCustomerMessage }) {
   const messageText = aiModeMessagePlainText(latestCustomerMessage);
-  if (!messageText) return { ok: false, skipped: "empty_message" };
+  const attachmentOnly = !messageText && aiModeHasWorkerAttachments(latestCustomerMessage);
+  if (!messageText && !attachmentOnly) return { ok: false, skipped: "empty_message" };
 
   const messageTime = aiModeParseOdooDateMs(latestCustomerMessage.date);
   if (messageTime && messageTime < (Number(aiModeGlobalState.enabled_since_ms || 0) - AI_MODE_BACKGROUND_START_GRACE_MS)) {
@@ -20767,7 +20782,8 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   const pushNotifyResult = await sendOperatorPushNotification({
     channel,
     message: latestCustomerMessage,
-    messageText
+    messageText,
+    nativeIncomingVerified: true
   });
   console.log("Operator push notification after inbound customer message:", {
     odooMessageId: latestCustomerMessage?.id || null,
@@ -20775,6 +20791,13 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     aiMode: aiModeGlobalState.mode,
     result: pushNotifyResult
   });
+
+  if (attachmentOnly) {
+    aiModeBackgroundState.processed_count += 1;
+    await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
+    return { ok: true, notification_only: true, attachment_only: true,
+      skipped_zapier: true, skipped_gemini: true, pushNotifyResult };
+  }
 
   // Only forward to Zapier when SH AI toggle is ON.
   // When SH AI is OFF/manual, do NOT send customer text to Zapier; only notify operators.
@@ -20997,7 +21020,7 @@ async function aiModeBackgroundTick() {
         if (recentSkipDebug.length < 8) recentSkipDebug.push({ ...debugBase, reason: "smart_handicrafts_outbound" });
         continue;
       }
-      if (!text) {
+      if (!text && !aiModeHasWorkerAttachments(message)) {
         recentSkipEmpty += 1;
         continue;
       }
@@ -21080,7 +21103,7 @@ async function aiModeBackgroundTick() {
         if (!aiModeBackgroundCanAttempt(message.id)) return false;
         if (aiModeIsOwnOdooMessageForWorker(message, userContext)) return false;
         if (aiModeIsLikelySmartHandicraftsOutbound(message)) return false;
-        if (!aiModeMessagePlainText(message)) return false;
+        if (!aiModeMessagePlainText(message) && !aiModeHasWorkerAttachments(message)) return false;
         return true;
       });
 
@@ -21094,7 +21117,7 @@ async function aiModeBackgroundTick() {
         .filter((message) => !aiModeBackgroundHasProcessed(message.id))
         .filter((message) => !aiModeIsOwnOdooMessageForWorker(message, userContext))
         .filter((message) => !aiModeIsLikelySmartHandicraftsOutbound(message))
-        .filter((message) => !!aiModeMessagePlainText(message))
+        .filter((message) => !!aiModeMessagePlainText(message) || aiModeHasWorkerAttachments(message))
         .map((message) => message.id);
       if (olderPendingCustomerIds.length) {
         await aiModeBackgroundRememberProcessedIds(olderPendingCustomerIds);
@@ -21679,6 +21702,8 @@ async function storeWhatsappCallEvents(events = []) {
   for (const row of added) whatsappCallSeenIds.add(aiModeSafeString(row.id || row.call_id, 500));
   settleWhatsappCallOwnership(events);
   publishWhatsappCallHints(added);
+  // Native alerts are separate from signaling/Odoo; provider ACK never waits on FCM.
+  androidPushBridge.publishCallEvents(events).catch(() => console.warn("Android call alert processing failed"));
   return { added: added.length, calls: added };
 }
 
@@ -23590,6 +23615,7 @@ async function appendSyntheticWhatsappCallEvent({ callId, action, base = {}, ext
   await mutateWhatsappCallLogs((existing) => [row, ...existing]);
   settleWhatsappCallOwnership([row]);
   publishWhatsappCallHints([row]);
+  androidPushBridge.publishCallEvents([row]).catch(() => console.warn("Android call alert processing failed"));
   queueWhatsappCallHistorySync([row]).catch((error) => console.warn("WhatsApp call history sync failed:", error?.message || error));
   return row;
 }
@@ -24876,6 +24902,17 @@ process.on("uncaughtException", (error) => {
 process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED REJECTION:", reason?.stack || reason?.message || reason);
 });
+
+// Native enrollment is explicit and server authenticated. Device tokens never
+// enter the Odoo embed, and this adapter never exposes SDP through native push.
+const androidPushBridge = createAndroidPushBridge({
+  readCall: async (callId) => {
+    const rows = (await readWhatsappCallLogs()).filter((row) => whatsappCallMatchesId(row, callId));
+    const call = whatsappCallLifecycleFromRows(rows);
+    return call ? { ...call, handling: !!getOperatorCallLock(callId) } : null;
+  }
+});
+androidPushBridge.registerRoutes(app);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
