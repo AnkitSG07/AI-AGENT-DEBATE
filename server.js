@@ -2,14 +2,14 @@ import express from "express";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename, unlink } from "node:fs/promises";
 import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
 import { registerFedexRoutes } from "./fedex-integration.js";
 import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-05-30-call-engine-phase4-1-operator-lock";
+const SERVER_PATCH_VERSION = "2026-10-28-operator-hub-call-routing-r3";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -15723,10 +15723,8 @@ const whatsappCallSeenIds = new Set();
 const WHATSAPP_CALL_PENDING_CANCEL_TTL_MS = Math.max(15000, Number(process.env.WHATSAPP_CALL_PENDING_CANCEL_TTL_MS || 120000));
 const whatsappCallPendingOutgoingCancels = new Map();
 
-function whatsappCallPendingCancelKey(phone = "", deviceId = "") {
-  const clean = whatsappCallCleanPhone(phone);
-  const dev = aiModeSafeString(deviceId || "", 120);
-  return `${clean.slice(-12) || clean}|${dev || "any"}`;
+function whatsappCallPendingCancelKey(phone = "", deviceId = "", clientRequestId = "") {
+  return JSON.stringify([whatsappCallCleanPhone(phone), aiModeSafeString(deviceId || "", 160), String(clientRequestId || "")]);
 }
 
 function whatsappCallPrunePendingOutgoingCancels() {
@@ -15738,33 +15736,34 @@ function whatsappCallPrunePendingOutgoingCancels() {
   }
 }
 
-function whatsappCallMarkPendingOutgoingCancel({ phone = "", deviceId = "", reason = "operator_cancelled_before_call_id" } = {}) {
+function whatsappCallMarkPendingOutgoingCancel({ phone = "", deviceId = "", clientRequestId = "", reason = "operator_cancelled_before_call_id" } = {}) {
   whatsappCallPrunePendingOutgoingCancels();
   const clean = whatsappCallCleanPhone(phone);
   if (!clean) return null;
-  const row = {
-    phone: clean,
-    device_id: aiModeSafeString(deviceId || "", 120),
-    reason: aiModeSafeString(reason || "operator_cancelled_before_call_id", 200),
-    created_at_ms: Date.now()
-  };
-  whatsappCallPendingOutgoingCancels.set(whatsappCallPendingCancelKey(clean, row.device_id), row);
-  whatsappCallPendingOutgoingCancels.set(whatsappCallPendingCancelKey(clean, ""), row);
+  const row = { phone: clean, device_id: aiModeSafeString(deviceId || "", 160), client_request_id: String(clientRequestId || ""), reason: aiModeSafeString(reason, 200), created_at_ms: Date.now() };
+  whatsappCallPendingOutgoingCancels.set(whatsappCallPendingCancelKey(clean, row.device_id, row.client_request_id), row);
   return row;
 }
 
-function whatsappCallGetPendingOutgoingCancel({ phone = "", deviceId = "" } = {}) {
+function whatsappCallGetPendingOutgoingCancel({ phone = "", deviceId = "", clientRequestId = "" } = {}) {
   whatsappCallPrunePendingOutgoingCancels();
-  const clean = whatsappCallCleanPhone(phone);
-  if (!clean) return null;
-  return whatsappCallPendingOutgoingCancels.get(whatsappCallPendingCancelKey(clean, deviceId)) || whatsappCallPendingOutgoingCancels.get(whatsappCallPendingCancelKey(clean, "")) || null;
+  return whatsappCallPendingOutgoingCancels.get(whatsappCallPendingCancelKey(phone, deviceId, clientRequestId)) || null;
 }
 
-function whatsappCallClearPendingOutgoingCancel({ phone = "", deviceId = "" } = {}) {
-  const clean = whatsappCallCleanPhone(phone);
-  if (!clean) return;
-  whatsappCallPendingOutgoingCancels.delete(whatsappCallPendingCancelKey(clean, deviceId));
-  whatsappCallPendingOutgoingCancels.delete(whatsappCallPendingCancelKey(clean, ""));
+function whatsappCallClearPendingOutgoingCancel({ phone = "", deviceId = "", clientRequestId = "" } = {}) {
+  whatsappCallPendingOutgoingCancels.delete(whatsappCallPendingCancelKey(phone, deviceId, clientRequestId));
+}
+
+function whatsappCallOutgoingRequestScope(body = {}) {
+  let deviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
+  if (body.client_source === "odoo_operator_hub") deviceId = normalizeOperatorHubIdentity(body).lockId;
+  const raw = body.client_request_id ?? body.clientRequestId ?? "";
+  if (typeof raw !== "string" || raw.length > 120 || /[\s\u0000-\u001f\u007f]/u.test(raw) || (raw && !deviceId) || (body.client_source === "odoo_operator_hub" && !raw)) {
+    const error = new Error("client_request_id must be an opaque ID of at most 120 characters tied to an operator session.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { deviceId, clientRequestId: raw };
 }
 
 // Meta Calling API configuration for direct incoming-call answer/reject/end from Operator Hub.
@@ -16043,12 +16042,45 @@ async function writePushSubscriptions(subscriptions = []) {
       audience: row?.audience || WEB_PUSH_OPERATOR_AUDIENCE
     });
   }
-  await aiModeWriteJsonFile(WEB_PUSH_SUBSCRIPTIONS_PATH, {
-    updated_at: now(),
-    count: unique.length,
-    subscriptions: unique.slice(-500)
-  });
+  const temporaryPath = `${WEB_PUSH_SUBSCRIPTIONS_PATH}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ updated_at: now(), count: unique.length, subscriptions: unique.slice(-500) }, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, WEB_PUSH_SUBSCRIPTIONS_PATH);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
   return unique;
+}
+
+let pushSubscriptionMutation = Promise.resolve();
+
+function mutatePushSubscriptions(update) {
+  const operation = pushSubscriptionMutation.then(async () => {
+    const current = await readPushSubscriptions();
+    return writePushSubscriptions(update(current));
+  });
+  pushSubscriptionMutation = operation.catch(() => {});
+  return operation;
+}
+
+function commitPushDeliveryResults(snapshot = [], remaining = []) {
+  const endpoint = (row) => String(row?.subscription?.endpoint || row?.endpoint || "").trim();
+  const before = new Map(snapshot.map((row) => [endpoint(row), row]));
+  const after = new Map(remaining.map((row) => [endpoint(row), row]));
+  const fields = ["last_call_push_at", "last_sent_at", "last_error", "last_failed_at"];
+  return mutatePushSubscriptions((current) => current.flatMap((row) => {
+    const key = endpoint(row);
+    if (!before.has(key)) return [row];
+    if (!after.has(key)) return [];
+    const result = after.get(key);
+    const previous = before.get(key);
+    const patch = {};
+    for (const field of fields) {
+      if (result[field] !== previous[field]) patch[field] = result[field];
+    }
+    return [Object.keys(patch).length ? { ...row, ...patch } : row];
+  }));
 }
 
 function normalizeOperatorDeviceStatus(value = "online") {
@@ -16089,11 +16121,80 @@ function normalizePushSubscriptionPayload(body = {}) {
   };
 }
 
+// Open Odoo Hub sessions are transient presence, not fabricated push subscriptions.
+const OPERATOR_HUB_PRESENCE_TTL_MS = 90000;
+const operatorHubDevicePresence = new Map();
+
+function normalizeOperatorHubIdentity(body = {}) {
+  const baseId = String(body.deviceId || body.base_device_id || body.device_id || "");
+  const sessionId = String(body.operatorSessionId || body.operator_session_id || "");
+  const lockId = String(body.lockDeviceId || body.lock_device_id || body.operator_device_id || "");
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(baseId) || !/^[A-Za-z0-9_-]{1,120}$/.test(sessionId) ||
+      lockId !== `${baseId}::${sessionId}` || lockId.length > 160) {
+    const error = new Error("A matching Hub device ID, tab session and lock identity are required.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { baseId, sessionId, lockId };
+}
+
+function cleanOperatorHubPresence() {
+  const nowMs = Date.now();
+  for (const [id, row] of operatorHubDevicePresence) {
+    if (!row?.expires_at_ms || row.expires_at_ms <= nowMs) operatorHubDevicePresence.delete(id);
+  }
+}
+
+function operatorHubBaseInCall(baseId = "") {
+  cleanOperatorHubPresence();
+  if ([...operatorHubDevicePresence.values()].some((row) => row.device_id === baseId && row.in_call === true)) return true;
+  cleanOperatorCallLocks();
+  return [...operatorCallLocks.values()].some((row) => String(row.operator_device_id || "").startsWith(`${baseId}::`));
+}
+
+function operatorHubPresenceRows() {
+  cleanOperatorHubPresence();
+  return [...operatorHubDevicePresence.values()].map((row) => ({ ...row, in_call: operatorHubBaseInCall(row.device_id) }));
+}
+
+function saveOperatorHubPresence(body = {}) {
+  cleanOperatorHubPresence();
+  const { baseId, sessionId, lockId } = normalizeOperatorHubIdentity(body);
+  const previous = operatorHubDevicePresence.get(lockId) || {};
+  const nowMs = Date.now();
+  const status = normalizeOperatorDeviceStatus(body.status || previous.status || "online");
+  const row = {
+    device_id: baseId, deviceId: baseId, lock_device_id: lockId, operator_session_id: sessionId,
+    client_source: "odoo_operator_hub",
+    operator_name: aiModeSafeString(body.operatorName || body.operator_name || previous.operator_name || "Operator", 120),
+    device_label: aiModeSafeString(body.deviceLabel || body.device_label || previous.device_label || "Odoo Operator Hub", 120),
+    status, operator_status: status,
+    receive_calls: body.receiveCalls === undefined && body.receive_calls === undefined ? previous.receive_calls !== false : !(body.receiveCalls === false || body.receive_calls === false),
+    receive_chats: body.receiveChats === undefined && body.receive_chats === undefined ? previous.receive_chats !== false : !(body.receiveChats === false || body.receive_chats === false),
+    in_call: body.inCall === undefined && body.in_call === undefined ? previous.in_call === true : body.inCall === true || body.in_call === true,
+    last_seen_at: new Date(nowMs).toISOString(), updated_at: new Date(nowMs).toISOString(),
+    expires_at_ms: nowMs + OPERATOR_HUB_PRESENCE_TTL_MS,
+    expires_at: new Date(nowMs + OPERATOR_HUB_PRESENCE_TTL_MS).toISOString()
+  };
+  operatorHubDevicePresence.delete(lockId);
+  operatorHubDevicePresence.set(lockId, row);
+  while (operatorHubDevicePresence.size > 500) operatorHubDevicePresence.delete(operatorHubDevicePresence.keys().next().value);
+  return { ...row, in_call: operatorHubBaseInCall(baseId) };
+}
+
+function mergeOperatorDevices(subscriptions = []) {
+  const presence = operatorHubPresenceRows();
+  const liveBaseIds = new Set(presence.map((row) => row.device_id));
+  return [...presence, ...subscriptions.filter((row) => !liveBaseIds.has(String(row.device_id || row.deviceId || "")))];
+}
+
 function operatorDeviceSummary(row = {}) {
   return {
     device_id: row?.device_id || row?.deviceId || "",
     lock_device_id: row?.lock_device_id || row?.lockDeviceId || row?.operator_lock_device_id || row?.device_id || row?.deviceId || "",
     operator_session_id: row?.operator_session_id || row?.operatorSessionId || "",
+    client_source: row?.client_source || "push_subscription",
+    presence_expires_at: row?.expires_at || "",
     operator_name: row?.operator_name || row?.operatorName || "Operator",
     device_label: row?.device_label || row?.deviceLabel || "Operator device",
     status: normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online"),
@@ -16112,6 +16213,9 @@ function operatorDeviceReceivesCall(row = {}) {
   const status = normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
   if (row?.receive_calls === false) return false;
   if (row?.in_call === true || row?.inCall === true) return false;
+  const baseId = String(row?.device_id || row?.deviceId || "");
+  // Read-time exclusion only: expiring Hub presence must not persist a busy flag.
+  if (baseId && operatorHubBaseInCall(baseId)) return false;
   return status === "online";
 }
 
@@ -16136,29 +16240,20 @@ function choosePushTargets(subscriptions = [], type = "chat") {
 }
 
 function buildOperatorHubUrlForPush(channel = {}) {
-  // OPERATOR_HUB_URL should be the real Operator Hub page, usually on Odoo:
-  // https://www.smarthandicrafts.com/your-operator-hub-page
-  // Do NOT append /operator-hub again when OPERATOR_HUB_URL is already a full page URL.
-  const configuredUrl = String(process.env.OPERATOR_HUB_URL || "").trim();
-  const fallbackBase = String(process.env.APP_URL || "").replace(/\/$/, "");
-  const channelId = channel?.id ? String(channel.id) : "";
-
-  const appendChannel = (url) => {
-    if (!channelId) return url;
-    try {
-      const u = new URL(url, fallbackBase || "https://ai-agent-debate.onrender.com");
-      u.searchParams.set("channel_id", channelId);
-      u.searchParams.set("channel", channelId);
-      return u.toString();
-    } catch {
-      const sep = String(url).includes("?") ? "&" : "?";
-      return `${url}${sep}channel_id=${encodeURIComponent(channelId)}&channel=${encodeURIComponent(channelId)}`;
-    }
-  };
-
-  if (configuredUrl) return appendChannel(configuredUrl);
-  const localUrl = fallbackBase ? `${fallbackBase}/operator-notifications` : "/operator-notifications";
-  return appendChannel(localUrl);
+  const fallback = "https://www.smarthandicrafts.com/livechat-api-test";
+  let target;
+  try {
+    target = new URL(String(process.env.OPERATOR_HUB_URL || fallback).trim());
+    if (target.protocol !== "https:") target = new URL(fallback);
+  } catch {
+    target = new URL(fallback);
+  }
+  const channelId = Number(channel?.id || 0);
+  if (Number.isSafeInteger(channelId) && channelId > 0) {
+    target.searchParams.set("channel_id", String(channelId));
+    target.searchParams.set("channel", String(channelId));
+  }
+  return target.toString();
 }
 
 function getPushTemplate(channel = {}, customer = "Customer", bodyText = "") {
@@ -16255,22 +16350,55 @@ function buildPushPayload({ channel = {}, message = {}, messageText = "" } = {})
 }
 
 
+function whatsappCallPushId(call = {}) {
+  // Provider IDs are opaque: preserve them exactly and reject conflicting aliases.
+  // A generated event-row id must never become the notification's call target.
+  const candidates = [call?.call_id, call?.callId, call?.raw?.call?.id, call?.call?.id]
+    .filter((value) => value !== undefined && value !== null && value !== "");
+  let wanted = "";
+  for (const value of candidates) {
+    const id = typeof value === "string" ? value : Number.isSafeInteger(value) && value > 0 ? String(value) : "";
+    if (!id || id.length > 220 || /[\s\u0000-\u001f\u007f]/u.test(id) || /^(?:undefined|null|false|true)$/i.test(id)) return "";
+    for (const char of id) {
+      const point = char.codePointAt(0);
+      if (point >= 0xd800 && point <= 0xdfff) return "";
+    }
+    if (wanted && wanted !== id) return "";
+    wanted = id;
+  }
+  return wanted;
+}
+
 function buildOperatorCallUrlForPush(call = {}) {
-  // IMPORTANT: the installed PWA is the existing notification page.
-  // Do not send users to /operator-call or require query params.
-  // The /operator-notifications page polls /api/whatsapp-calls/incoming and
-  // automatically switches to the call screen when a call is active.
-  const base = String(process.env.APP_URL || "https://ai-agent-debate.onrender.com").replace(/\/$/, "");
-  return `${base}/operator-notifications`;
+  // GitHub/Render owns push delivery; the operator answers inside the Odoo Hub.
+  const fallback = "https://www.smarthandicrafts.com/livechat-api-test";
+  let target;
+  try {
+    target = new URL(String(process.env.OPERATOR_HUB_URL || fallback).trim());
+    if (target.protocol !== "https:") target = new URL(fallback);
+  } catch {
+    target = new URL(fallback);
+  }
+  target.hash = "";
+  for (const key of ["mode", "callId", "call_id", "phone", "channel_id", "channelId"]) target.searchParams.delete(key);
+  const callId = whatsappCallPushId(call);
+  if (!callId) return target.toString();
+  target.searchParams.set("mode", "call");
+  target.searchParams.set("call_id", callId);
+  const phone = whatsappCallCleanPhone(call?.customer_phone || call?.wa_id || call?.from || "");
+  if (phone) target.searchParams.set("phone", phone);
+  const channelId = Number(call?.odoo_channel_id || call?.channel_id || call?.channelId || 0);
+  if (Number.isSafeInteger(channelId) && channelId > 0) target.searchParams.set("channel_id", String(channelId));
+  return target.toString();
 }
 
 function buildWhatsappCallPushPayload(call = {}) {
   const phone = whatsappCallCleanPhone(call?.customer_phone || call?.wa_id || call?.from || "");
   const customer = aiModeSafeString(call?.customer_name || (phone ? `+${phone}` : "WhatsApp customer"), 90);
-  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  const callId = whatsappCallPushId(call);
   return {
     title: "Incoming WhatsApp Call",
-    body: `${customer}\nTap to answer in Operator Call`,
+    body: `${customer}\nTap to open the call in Operator Hub`,
     channelLabel: "WhatsApp Call",
     template: "whatsapp_call",
     icon: process.env.PWA_CALL_ICON_URL || process.env.PWA_WHATSAPP_ICON_URL || process.env.PWA_ICON_URL || "/icons/icon-192.png",
@@ -16288,11 +16416,11 @@ function buildWhatsappCallPushPayload(call = {}) {
       channelLabel: "WhatsApp Call",
       template: "whatsapp_call",
       notificationTemplate: "whatsapp_call",
-      actionTitle: "Answer Call",
+      actionTitle: "Open call",
       receivedAt: now()
     },
     actions: [
-      { action: "open", title: "Answer Call" }
+      { action: "open", title: "Open call" }
     ]
   };
 }
@@ -16300,7 +16428,7 @@ function buildWhatsappCallPushPayload(call = {}) {
 async function sendWhatsappCallPushNotification(call = {}) {
   if (!WEB_PUSH_ENABLED) return { ok: false, skipped: "disabled" };
   if (!webPushConfigured()) return { ok: false, skipped: "not_configured" };
-  const callId = aiModeSafeString(call?.call_id || call?.id || "", 220);
+  const callId = whatsappCallPushId(call);
   if (!callId) return { ok: false, skipped: "missing_call_id" };
   const pushKey = `call:${callId}`;
   if (webPushState.sent_message_ids.has(pushKey)) return { ok: false, skipped: "duplicate_call_push" };
@@ -16347,7 +16475,7 @@ async function sendWhatsappCallPushNotification(call = {}) {
     }
   }
 
-  await writePushSubscriptions(remaining);
+  await commitPushDeliveryResults(subscriptions, remaining);
   if (sent > 0) webPushState.sent_message_ids.add(pushKey);
   webPushState.sent_count += sent;
   webPushState.failed_count += failed;
@@ -16420,7 +16548,7 @@ async function sendOperatorPushNotification({ channel = {}, message = {}, messag
     }
   }
 
-  await writePushSubscriptions(remaining);
+  await commitPushDeliveryResults(subscriptions, remaining);
   webPushState.sent_message_ids.add(pushKey);
   if (webPushState.sent_message_ids.size > 2000) {
     webPushState.sent_message_ids = new Set(Array.from(webPushState.sent_message_ids).slice(-1500));
@@ -21060,9 +21188,20 @@ app.post("/api/push/subscribe", async (req, res) => {
   try {
     const row = normalizePushSubscriptionPayload(req.body || {});
     if (!row) return res.status(400).json({ ok: false, error: "Invalid push subscription payload." });
-    const existing = await readPushSubscriptions();
-    const filtered = existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== row.endpoint);
-    const saved = await writePushSubscriptions([...filtered, row]);
+    const saved = await mutatePushSubscriptions((existing) => {
+      const sameDevice = existing.find((item) => String(item?.subscription?.endpoint || item?.endpoint || "") === row.endpoint && String(item?.device_id || item?.deviceId || "") === row.device_id);
+      if (sameDevice) {
+        const omitted = (...keys) => keys.every((key) => req.body?.[key] === undefined);
+        if (omitted("lockDeviceId", "lock_device_id", "operatorLockDeviceId", "operator_lock_device_id")) row.lock_device_id = sameDevice.lock_device_id || sameDevice.lockDeviceId || row.lock_device_id;
+        if (omitted("operatorSessionId", "operator_session_id")) row.operator_session_id = sameDevice.operator_session_id || sameDevice.operatorSessionId || "";
+        if (omitted("inCall", "in_call", "callModeActive")) row.in_call = sameDevice.in_call === true || sameDevice.inCall === true;
+        if (omitted("status", "operatorStatus", "operator_status")) row.status = row.operator_status = normalizeOperatorDeviceStatus(sameDevice.status || sameDevice.operator_status || "online");
+        if (omitted("receiveCalls", "receive_calls")) row.receive_calls = sameDevice.receive_calls !== false;
+        if (omitted("receiveChats", "receive_chats")) row.receive_chats = sameDevice.receive_chats !== false;
+      }
+      const filtered = existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== row.endpoint);
+      return [...filtered, row];
+    });
     res.json({ ok: true, subscribed: true, count: saved.length, configured: webPushConfigured() });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) });
@@ -21073,8 +21212,7 @@ app.post("/api/push/unsubscribe", async (req, res) => {
   try {
     const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
     if (!endpoint) return res.status(400).json({ ok: false, error: "endpoint is required." });
-    const existing = await readPushSubscriptions();
-    const saved = await writePushSubscriptions(existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== endpoint));
+    const saved = await mutatePushSubscriptions((existing) => existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== endpoint));
     res.json({ ok: true, unsubscribed: true, count: saved.length });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) });
@@ -21099,7 +21237,7 @@ app.get("/api/push/status", async (req, res) => {
 app.get("/api/operator-devices", async (req, res) => {
   try {
     const subscriptions = await readPushSubscriptions();
-    const devices = subscriptions.map(operatorDeviceSummary);
+    const devices = mergeOperatorDevices(subscriptions).map(operatorDeviceSummary);
     const counts = devices.reduce((acc, d) => {
       acc.total += 1;
       acc[d.status] = (acc[d.status] || 0) + 1;
@@ -21115,14 +21253,14 @@ app.get("/api/operator-devices", async (req, res) => {
 
 app.post("/api/operator-devices/status", async (req, res) => {
   try {
-    const deviceId = normalizeOperatorDeviceId(req.body?.deviceId || req.body?.device_id || "");
+    const suppliedDeviceId = req.body?.deviceId || req.body?.device_id || "";
+    const deviceId = suppliedDeviceId ? normalizeOperatorDeviceId(suppliedDeviceId) : "";
     const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
-    const subscriptions = await readPushSubscriptions();
     let updated = false;
-    const next = subscriptions.map((row) => {
+    const saved = await mutatePushSubscriptions((subscriptions) => subscriptions.map((row) => {
       const rowEndpoint = String(row?.subscription?.endpoint || row?.endpoint || "").trim();
       const rowDeviceId = String(row?.device_id || row?.deviceId || "").trim();
-      const matches = (deviceId && rowDeviceId === deviceId) || (endpoint && rowEndpoint === endpoint);
+      const matches = deviceId ? rowDeviceId === deviceId && (!endpoint || rowEndpoint === endpoint) : !!endpoint && rowEndpoint === endpoint;
       if (!matches) return row;
       updated = true;
       const status = normalizeOperatorDeviceStatus(req.body?.status || row?.status || "online");
@@ -21142,8 +21280,7 @@ app.post("/api/operator-devices/status", async (req, res) => {
         updated_at: now(),
         last_seen_at: now()
       };
-    });
-    const saved = await writePushSubscriptions(next);
+    }));
     res.json({ ok: true, updated, count: saved.length, device: saved.map(operatorDeviceSummary).find((d) => d.device_id === deviceId) || null });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) });
@@ -21152,14 +21289,18 @@ app.post("/api/operator-devices/status", async (req, res) => {
 
 app.post("/api/operator-devices/heartbeat", async (req, res) => {
   try {
-    const deviceId = normalizeOperatorDeviceId(req.body?.deviceId || req.body?.device_id || "");
+    if (req.body?.client_source === "odoo_operator_hub") {
+      const presence = saveOperatorHubPresence(req.body);
+      return res.json({ ok: true, updated: true, registered: true, presence: true, device: operatorDeviceSummary(presence), expires_at: presence.expires_at });
+    }
+    const suppliedDeviceId = req.body?.deviceId || req.body?.device_id || "";
+    const deviceId = suppliedDeviceId ? normalizeOperatorDeviceId(suppliedDeviceId) : "";
     const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
-    const subscriptions = await readPushSubscriptions();
     let updated = false;
-    const next = subscriptions.map((row) => {
+    const saved = await mutatePushSubscriptions((subscriptions) => subscriptions.map((row) => {
       const rowEndpoint = String(row?.subscription?.endpoint || row?.endpoint || "").trim();
       const rowDeviceId = String(row?.device_id || row?.deviceId || "").trim();
-      const matches = (deviceId && rowDeviceId === deviceId) || (endpoint && rowEndpoint === endpoint);
+      const matches = deviceId ? rowDeviceId === deviceId && (!endpoint || rowEndpoint === endpoint) : !!endpoint && rowEndpoint === endpoint;
       if (!matches) return row;
       updated = true;
       const status = req.body?.status ? normalizeOperatorDeviceStatus(req.body.status || row?.status || "online") : normalizeOperatorDeviceStatus(row?.status || row?.operator_status || "online");
@@ -21175,11 +21316,10 @@ app.post("/api/operator-devices/heartbeat", async (req, res) => {
         last_seen_at: now(),
         updated_at: now()
       };
-    });
-    const saved = await writePushSubscriptions(next);
+    }));
     res.json({ ok: true, updated, count: saved.length });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) });
+    res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
@@ -21492,29 +21632,61 @@ async function writeWhatsappCallLogs(calls = []) {
     .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))
     .slice(0, WHATSAPP_CALL_LOG_MAX);
 
-  await aiModeWriteJsonFile(WHATSAPP_CALL_LOGS_PATH, {
-    updated_at: now(),
-    count: trimmed.length,
-    calls: trimmed
-  });
+  // Polling must see the previous or next complete JSON document, never a
+  // truncated in-progress write. The temporary file stays on the same filesystem.
+  const temporaryPath = `${WHATSAPP_CALL_LOGS_PATH}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify({ updated_at: now(), count: trimmed.length, calls: trimmed }, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, WHATSAPP_CALL_LOGS_PATH);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => {});
+    throw error;
+  }
   return trimmed;
+}
+
+let whatsappCallLogMutation = Promise.resolve();
+
+function mutateWhatsappCallLogs(update) {
+  const operation = whatsappCallLogMutation.then(async () => {
+    const existing = await readWhatsappCallLogs();
+    const next = update(existing);
+    if (next !== existing) await writeWhatsappCallLogs(next);
+    return next;
+  });
+  whatsappCallLogMutation = operation.catch(() => {});
+  return operation;
+}
+
+async function enrichStoredWhatsappCallEvents(events = []) {
+  const byId = new Map(events.filter((row) => row?.id && row?.odoo_channel_id).map((row) => [String(row.id), row]));
+  if (!byId.size) return;
+  await mutateWhatsappCallLogs((rows) => {
+    let changed = false;
+    const next = rows.map((row) => {
+      const patch = byId.get(String(row?.id || ""));
+      if (!patch || (row.odoo_channel_id === patch.odoo_channel_id && row.odoo_channel_name === patch.odoo_channel_name)) return row;
+      changed = true;
+      return { ...row, odoo_channel_id: patch.odoo_channel_id, odoo_channel_name: patch.odoo_channel_name || "" };
+    });
+    return changed ? next : rows;
+  });
 }
 
 async function storeWhatsappCallEvents(events = []) {
   if (!events.length) return { added: 0, calls: [] };
-  const existing = await readWhatsappCallLogs();
-  const existingKeys = new Set(existing.map((row) => aiModeSafeString(row?.id || row?.call_id || "", 180)).filter(Boolean));
   const added = [];
-
-  for (const event of events) {
-    const key = aiModeSafeString(event?.id || event?.call_id || "", 180);
-    if (!key || existingKeys.has(key) || whatsappCallSeenIds.has(key)) continue;
-    whatsappCallSeenIds.add(key);
-    existingKeys.add(key);
-    added.push({ ...event, received_at: now() });
-  }
-
-  if (added.length) await writeWhatsappCallLogs([...added, ...existing]);
+  await mutateWhatsappCallLogs((existing) => {
+    const existingKeys = new Set(existing.map((row) => aiModeSafeString(row?.id || row?.call_id || "", 180)).filter(Boolean));
+    for (const event of events) {
+      const key = aiModeSafeString(event?.id || event?.call_id || "", 180);
+      if (!key || existingKeys.has(key) || whatsappCallSeenIds.has(key)) continue;
+      existingKeys.add(key);
+      added.push({ ...event, received_at: now() });
+    }
+    return added.length ? [...added, ...existing] : existing;
+  });
+  for (const row of added) whatsappCallSeenIds.add(aiModeSafeString(row.id || row.call_id, 180));
   return { added: added.length, calls: added };
 }
 
@@ -21647,18 +21819,12 @@ async function processWhatsappCallWebhook(body = {}) {
   for (const value of values) {
     const calls = Array.isArray(value?.calls) ? value.calls : [];
     for (const call of calls) {
-      const event = normalizeWhatsappCallEvent(call, value);
-      const channel = await findOdooWhatsappChannelForCall(event);
-      if (channel?.id) {
-        event.odoo_channel_id = channel.id;
-        event.odoo_channel_name = channel.display_name || channel.name || "";
-      }
-      events.push(event);
+      events.push(normalizeWhatsappCallEvent(call, value));
     }
   }
 
+  // Make the provider offer visible to Hub polling before any Odoo RPC.
   const stored = await storeWhatsappCallEvents(events);
-  const odooSaveResults = await saveWhatsappCallEventsToOdoo(events);
 
   const pushResults = [];
   const pushCandidatesById = new Map();
@@ -21700,6 +21866,21 @@ async function processWhatsappCallWebhook(body = {}) {
     });
   }
 
+  // Odoo enrichment follows alert dispatch; only channel metadata is merged back.
+  for (const event of events) {
+    const channel = await findOdooWhatsappChannelForCall(event);
+    if (channel?.id) {
+      event.odoo_channel_id = channel.id;
+      event.odoo_channel_name = channel.display_name || channel.name || "";
+    }
+  }
+  await enrichStoredWhatsappCallEvents(events);
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  stored.calls = stored.calls.map((row) => {
+    const event = eventById.get(row.id);
+    return event?.odoo_channel_id ? { ...row, odoo_channel_id: event.odoo_channel_id, odoo_channel_name: event.odoo_channel_name } : row;
+  });
+  const odooSaveResults = await saveWhatsappCallEventsToOdoo(events);
   return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults, odoo_save_results: odooSaveResults };
 }
 
@@ -22072,11 +22253,37 @@ function whatsappCallRowHasRemoteAnswerSdp(row = {}) {
   return direction === "outgoing" && source.includes("whatsapp_calls_webhook") && !event.includes("outgoing");
 }
 
+function whatsappCallProviderId(row = {}) {
+  const explicit = row?.call_id || row?.callId || row?.raw?.call?.id || row?.call?.id;
+  if (explicit) return aiModeSafeString(explicit, 220);
+  const id = aiModeSafeString(row?.id || "", 220);
+  const event = aiModeSafeString(row?.event || "", 80);
+  const stamp = String(row?.timestamp || "");
+  // Older event rows can omit call_id. Match only the exact generated suffix,
+  // not another provider ID which happens to start with the same characters.
+  const suffix = event && /^\d+$/.test(stamp) ? `-${event}-${stamp}` : "";
+  return suffix && id.endsWith(suffix) ? id.slice(0, -suffix.length) : id;
+}
+
+function whatsappCallMatchesId(row = {}, callId = "") {
+  const wanted = aiModeSafeString(callId, 220);
+  return !!wanted && whatsappCallProviderId(row) === wanted;
+}
+
+function whatsappCallHasAudioSdp(sdp = "") {
+  return typeof sdp === "string" && /^v=0(?:\r?\n|$)/.test(sdp.trim()) && /^m=audio\s+\d+\s+/m.test(sdp);
+}
+
+function whatsappCallHasStoredAudioOffer(call = {}) {
+  const type = String(call?.sdp_type || whatsappCallExtractSdpType(call) || "offer").toLowerCase();
+  return type === "offer" && whatsappCallHasAudioSdp(call?.sdp || whatsappCallExtractSdp(call));
+}
+
 function whatsappCallFindByCallId(calls = [], callId = "") {
   const wanted = aiModeSafeString(callId || "", 220);
   if (!wanted) return null;
   const rows = (calls || [])
-    .filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(wanted))
+    .filter((row) => whatsappCallMatchesId(row, wanted))
     .sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
   // Prefer latest row with SDP for active WebRTC screens; otherwise latest row.
   return rows.find(whatsappCallHasSdp) || rows[0] || null;
@@ -22095,7 +22302,7 @@ function whatsappCallIsClosedEvent(event = "") {
 function whatsappCallEventRank(row = {}) {
   const e = String(row?.event || row?.status || "").toLowerCase();
   if (["terminated", "terminate", "ended", "end", "rejected", "reject", "missed", "timeout", "failed", "busy", "no_answer"].some((x) => e.includes(x))) return 50;
-  if (["accepted", "accept", "connected"].some((x) => e.includes(x))) return 40;
+  if (["accepted", "accept", "connected", "answered"].includes(e)) return 40;
   if (["pre_accept", "ringing", "connect", "incoming", "outgoing", "dialing"].some((x) => e.includes(x))) return 30;
   return 10;
 }
@@ -22156,11 +22363,7 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
   if (explicitStatuses.includes("no_answer")) return direction === "outgoing" ? "no_answer" : "missed";
   if (explicitStatuses.includes("ended")) return "ended";
 
-  const anyAccepted = ordered.some((r) => {
-    const text = String(`${r?.event || ""} ${r?.status || ""} ${r?.latest_event || ""}`).toLowerCase();
-    const duration = Number(r?.duration_seconds || r?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0);
-    return /accepted|accept|connected|answered/.test(text) || duration > 0;
-  });
+  const anyAccepted = ordered.some(whatsappCallRowMarksConnected);
   const anyOutgoing = ordered.some(whatsappCallRowLooksOutgoing) || direction === "outgoing";
   const anyOutgoingRemoteAnswer = direction === "outgoing" && ordered.some(whatsappCallRowHasRemoteAnswerSdp);
   const wasConnected = anyAccepted || anyOutgoingRemoteAnswer;
@@ -22182,10 +22385,11 @@ function whatsappCallStatusFromRows(rows = [], direction = "incoming") {
 }
 
 function whatsappCallRowMarksConnected(row = {}) {
-  const text = String(`${row?.event || ""} ${row?.status || ""} ${row?.latest_event || ""} ${row?.raw?.odoo_call_log?.x_studio_x_status || ""}`).toLowerCase();
+  const markers = [row?.event, row?.status, row?.latest_event, row?.raw?.odoo_call_log?.x_studio_x_status]
+    .map((value) => String(value || "").trim().toLowerCase());
   const duration = Number(row?.duration_seconds || row?.raw?.odoo_call_log?.x_studio_x_duration_seconds || 0);
   return (
-    /accepted|accept|connected|answered/.test(text) ||
+    markers.some((value) => ["accepted", "accept", "connected", "answered"].includes(value)) ||
     whatsappCallRowHasRemoteAnswerSdp(row) ||
     duration > 0
   );
@@ -22268,7 +22472,7 @@ function whatsappCallRingingDurationSeconds(rows = []) {
 function whatsappCallLifecycleFromRows(rows = []) {
   const validRows = (rows || []).filter(Boolean).sort((a, b) => whatsappCallTimestampMs(b) - whatsappCallTimestampMs(a));
   if (!validRows.length) return null;
-  const callId = aiModeSafeString(validRows[0]?.call_id || validRows[0]?.id || "", 220);
+  const callId = whatsappCallProviderId(validRows[0]);
   if (!callId) return null;
 
   const direction = validRows.some(whatsappCallRowLooksOutgoing) ? "outgoing" : "incoming";
@@ -22341,7 +22545,7 @@ function collapseWhatsappCallLifecycles(calls = []) {
   const bestNameByPhone = whatsappCallNameMapFromRows(rows);
   const grouped = new Map();
   for (const row of rows) {
-    const callId = aiModeSafeString(row?.call_id || row?.id || "", 220);
+    const callId = whatsappCallProviderId(row);
     if (!callId) continue;
     if (!grouped.has(callId)) grouped.set(callId, []);
     grouped.get(callId).push(row);
@@ -23088,16 +23292,13 @@ async function updateOdooCallLogNote({ callId = "", odooId = 0, note = "", follo
 
 async function saveWhatsappCallEventToOdoo(row = {}) {
   if (!odooConfigured) return { ok: false, skipped: true, reason: "odoo_not_configured" };
-  const callId = aiModeSafeString(row?.call_id || row?.callId || row?.id || "", 220);
+  const callId = whatsappCallProviderId(row);
   if (!callId) return { ok: false, skipped: true, reason: "missing_call_id" };
 
   try {
     const uid = await odooLoginCached();
     const allRows = await readWhatsappCallLogs().catch(() => []);
-    const localRowsForCall = allRows.filter((item) => {
-      const itemId = aiModeSafeString(item?.call_id || item?.id || "", 220);
-      return itemId && (itemId === callId || itemId.startsWith(callId) || callId.startsWith(itemId));
-    });
+    const localRowsForCall = allRows.filter((item) => whatsappCallMatchesId(item, callId));
     const lifecycle = whatsappCallLifecycleFromRows([row, ...localRowsForCall]);
     const direction = String(row?.direction || lifecycle?.direction || "incoming").toLowerCase() === "outgoing" ? "outgoing" : "incoming";
     const selectionEvent = odooCallSelectionEvent(row?.event || lifecycle?.event || lifecycle?.status || "connect");
@@ -23199,8 +23400,7 @@ async function appendSyntheticWhatsappCallEvent({ callId, action, base = {}, ext
     source: "operator_hub_call_action",
     received_at: now()
   };
-  const existing = await readWhatsappCallLogs();
-  await writeWhatsappCallLogs([row, ...existing]);
+  await mutateWhatsappCallLogs((existing) => [row, ...existing]);
   await saveWhatsappCallEventToOdoo(row);
   return row;
 }
@@ -23267,40 +23467,54 @@ function whatsappCallSamePhone(a = "", b = "") {
   return lx === ly || x.endsWith(ly) || y.endsWith(lx);
 }
 
-async function whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone = "", deviceId = "", reason = "operator_cancelled_before_call_id" } = {}) {
-  if (!lifecycle?.call_id) return null;
+async function whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone = "", deviceId = "", clientRequestId = "", reason = "operator_cancelled_before_call_id" } = {}) {
+  if (!lifecycle?.call_id || !whatsappCallOutgoingMatchesRequest(lifecycle, { phone, deviceId, clientRequestId })) return null;
+  const lock = getOperatorCallLock(lifecycle.call_id);
+  if (lock?.operator_device_id && lock.operator_device_id !== deviceId) {
+    const error = new Error("Only the current operator can cancel this outgoing call.");
+    error.statusCode = 409;
+    throw error;
+  }
   const phoneNumberId = whatsappCallResolvePhoneNumberId({ body: {}, call: lifecycle });
   const graph = await whatsappCallGraphAction({ phoneNumberId, callId: lifecycle.call_id, action: "terminate" });
   const actionEvent = await appendSyntheticWhatsappCallEvent({
-    callId: lifecycle.call_id,
-    action: "terminated",
-    base: lifecycle,
-    extra: {
-      phone_number_id: phoneNumberId,
-      direction: "outgoing",
-      customer_phone: lifecycle.customer_phone || phone,
-      cancel_reason: reason,
-      operator_device_id: aiModeSafeString(deviceId || "", 120),
-      graph
-    }
+    callId: lifecycle.call_id, action: "terminated", base: lifecycle,
+    extra: { phone_number_id: phoneNumberId, direction: "outgoing", customer_phone: lifecycle.customer_phone || phone,
+      cancel_reason: reason, operator_device_id: deviceId, client_request_id: clientRequestId, graph }
   });
-  whatsappCallClearPendingOutgoingCancel({ phone: lifecycle.customer_phone || phone, deviceId });
+  whatsappCallClearPendingOutgoingCancel({ phone: phone || lifecycle.customer_phone, deviceId, clientRequestId });
+  releaseOperatorCallLock({ call_id: lifecycle.call_id, operator_device_id: deviceId });
   return { ok: true, call_id: lifecycle.call_id, graph, event: actionEvent, call: whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle.events || [])]) };
 }
 
-async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "") {
+function whatsappCallOutgoingMatchesRequest(lifecycle = {}, { phone = "", deviceId = "", clientRequestId = "" } = {}) {
+  if (lifecycle.direction !== "outgoing") return false;
+  const phoneMatches = deviceId || clientRequestId
+    ? whatsappCallCleanPhone(lifecycle.customer_phone || lifecycle.phone) === whatsappCallCleanPhone(phone)
+    : whatsappCallSamePhone(lifecycle.customer_phone || lifecycle.phone, phone);
+  if (!phoneMatches) return false;
+  const rows = [lifecycle, ...(lifecycle.events || [])];
+  const identities = rows.map((row) => aiModeSafeString(row?.operator_device_id || "", 160)).filter(Boolean);
+  const lock = getOperatorCallLock(lifecycle.call_id);
+  if (lock?.operator_device_id && lock.operator_device_id !== deviceId) return false;
+  if (clientRequestId) return rows.some((row) => row?.client_request_id === clientRequestId && row?.operator_device_id === deviceId);
+  if (deviceId) return identities.includes(deviceId) || lock?.operator_device_id === deviceId;
+  return !identities.length && !lock?.operator_device_id;
+}
+
+async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "", scope = {}) {
   const clean = whatsappCallCleanPhone(phone);
   if (!clean) return null;
-  const lifecycles = collapseWhatsappCallLifecycles(await readWhatsappCallLogs());
   const nowMs = Date.now();
-  return lifecycles.find((call) => {
-    if (call.direction !== "outgoing") return false;
-    if (!whatsappCallSamePhone(call.customer_phone || call.phone || "", clean)) return false;
+  const matches = collapseWhatsappCallLifecycles(await readWhatsappCallLogs()).filter((call) => {
+    if (!whatsappCallOutgoingMatchesRequest(call, { phone: clean, ...scope })) return false;
     const ts = Date.parse(call.updated_at || call.date || call.received_at || "") || Number(call.timestamp || 0) * 1000 || 0;
     if (ts && nowMs - ts > WHATSAPP_CALL_PENDING_CANCEL_TTL_MS) return false;
-    const status = String(call.status || "").toLowerCase();
-    return !["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"].includes(status);
-  }) || null;
+    return !["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"].includes(String(call.status || "").toLowerCase());
+  });
+  // An uncorrelated legacy request may only act on one unambiguous unowned call.
+  if (!scope.clientRequestId && matches.length !== 1) return null;
+  return matches[0] || null;
 }
 
 app.get("/api/whatsapp-calls/config", async (req, res) => {
@@ -23431,6 +23645,8 @@ function cleanOperatorCallLocks() {
 async function findOperatorDeviceByLockId(operatorDeviceId = "") {
   const target = aiModeSafeString(operatorDeviceId || "", 160);
   if (!target) return null;
+  const hub = operatorHubPresenceRows().find((row) => row.lock_device_id === target);
+  if (hub) return hub;
   const rows = await readPushSubscriptions();
   return (rows || []).find((row) => {
     const rowId = aiModeSafeString(row?.device_id || row?.deviceId || "", 160);
@@ -23496,7 +23712,7 @@ function releaseOperatorCallLock(body = {}) {
   if (!callId) return { ok: true, released: false, reason: "missing_call_id" };
   const existing = operatorCallLocks.get(callId);
   if (!existing) return { ok: true, released: false, reason: "not_locked" };
-  if (payload.operator_device_id && existing.operator_device_id && payload.operator_device_id !== existing.operator_device_id) {
+  if (existing.operator_device_id && payload.operator_device_id !== existing.operator_device_id) {
     return { ok: false, released: false, error: "Call lock belongs to another operator.", lock: existing };
   }
   operatorCallLocks.delete(callId);
@@ -23620,7 +23836,9 @@ app.post("/api/operator-call-locks/claim", async (req, res) => {
   try {
     const payload = normalizeOperatorLockPayload(req.body || {});
     const deviceRow = await findOperatorDeviceByLockId(payload.operator_device_id);
-    if (deviceRow && !operatorDeviceReceivesCall(deviceRow)) {
+    const existingLock = getOperatorCallLock(payload.call_id);
+    const renewingOwnLock = existingLock?.operator_device_id === payload.operator_device_id;
+    if (!renewingOwnLock && deviceRow && !operatorDeviceReceivesCall(deviceRow)) {
       return res.status(409).json({
         ok: false,
         locked: false,
@@ -23661,12 +23879,15 @@ app.post("/api/operator-call-transfer/request", async (req, res) => {
     }
 
     const targetDevice = await findOperatorDeviceByLockId(payload.to_device_id);
+    if (req.body?.client_source === "odoo_operator_hub" && (!targetDevice || targetDevice.client_source !== "odoo_operator_hub" || targetDevice.lock_device_id !== payload.to_device_id)) {
+      return res.status(409).json({ ok: false, error: "The target Hub session is no longer available. Refresh the operator list." });
+    }
     if (targetDevice && !operatorDeviceReceivesCall(targetDevice)) {
       return res.status(409).json({ ok: false, error: "Target operator is not available for calls.", device: operatorDeviceSummary(targetDevice) });
     }
 
     const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(payload.call_id)));
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, payload.call_id)));
     const nowMs = Date.now();
     const transfer = {
       transfer_id: operatorTransferId(),
@@ -23700,7 +23921,7 @@ app.get("/api/operator-call-transfer/pending", async (req, res) => {
     const transfer = findPendingTransferForDevice(deviceId);
     if (!transfer) return res.json({ ok: true, pending: false, transfer: null, call: null });
     const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(transfer.call_id)));
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, transfer.call_id)));
     return res.json({ ok: true, pending: true, transfer: publicOperatorTransfer(transfer), call: attachOperatorLockToCall(lifecycle || {}, deviceId) });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
@@ -23719,7 +23940,7 @@ app.post("/api/operator-call-transfer/accept", async (req, res) => {
     transfer.keep_until_ms = nowMs + OPERATOR_CALL_TRANSFER_TTL_MS;
     operatorCallTransfers.set(transfer.transfer_id, transfer);
     const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(transfer.call_id)));
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, transfer.call_id)));
     return res.json({ ok: true, transfer: publicOperatorTransfer(transfer), call: lifecycle || null });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
@@ -23777,7 +23998,7 @@ app.get("/api/whatsapp-calls/:callId", async (req, res, next) => {
     }
     const calls = await readWhatsappCallLogs();
     const safeCallId = aiModeSafeString(callId, 220);
-    const rows = calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(safeCallId));
+    const rows = calls.filter((row) => whatsappCallMatchesId(row, safeCallId));
     const call = whatsappCallLifecycleFromRows(rows);
     if (!call) return res.status(404).json({ ok: false, error: "Call not found." });
     const requesterDeviceId = aiModeSafeString(req.query.operator_device_id || req.query.device_id || req.query.deviceId || "", 160);
@@ -23791,17 +24012,17 @@ app.post("/api/whatsapp-calls/cancel-pending-outgoing", async (req, res) => {
   try {
     const body = req.body || {};
     const phone = whatsappCallCleanPhone(body.to || body.phone || body.customer_phone || "");
-    const deviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 120);
+    const { deviceId, clientRequestId } = whatsappCallOutgoingRequestScope(body);
     const reason = aiModeSafeString(body.reason || "operator_cancelled_before_call_id", 200);
     if (!phone) throw new Error("Customer phone number is required to cancel pending outgoing call.");
 
-    const pending = whatsappCallMarkPendingOutgoingCancel({ phone, deviceId, reason });
+    const pending = whatsappCallMarkPendingOutgoingCancel({ phone, deviceId, clientRequestId, reason });
     let terminated = null;
     let terminateError = "";
     try {
-      const lifecycle = await whatsappCallFindRecentOutgoingLifecycleByPhone(phone);
+      const lifecycle = await whatsappCallFindRecentOutgoingLifecycleByPhone(phone, { deviceId, clientRequestId });
       if (lifecycle?.call_id) {
-        terminated = await whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone, deviceId, reason });
+        terminated = await whatsappCallTerminateLifecycleForPendingCancel(lifecycle, { phone, deviceId, clientRequestId, reason });
       }
     } catch (error) {
       terminateError = error?.message || String(error);
@@ -23812,17 +24033,20 @@ app.post("/api/whatsapp-calls/cancel-pending-outgoing", async (req, res) => {
       pending: !terminated,
       terminated: !!terminated,
       call_id: terminated?.call_id || "",
+      client_request_id: clientRequestId,
       pending_cancel: pending,
       terminate_error: terminateError
     });
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+    return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
 app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
+  let outgoingScope = null;
   try {
     const body = req.body || {};
+    outgoingScope = whatsappCallOutgoingRequestScope(body);
     const to = whatsappCallCleanPhone(body.to || body.phone || body.customer_phone || "");
     const customerName = aiModeSafeString(
       body.customer_name || body.customerName || body.name || to || "WhatsApp caller",
@@ -23845,6 +24069,9 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       throw new Error("WhatsApp phone_number_id is missing. Add WHATSAPP_PHONE_NUMBER_ID / META_WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_CALL_PHONE_NUMBER_ID.");
     }
 
+    if (whatsappCallGetPendingOutgoingCancel({ phone: to, ...outgoingScope })) {
+      return res.json({ ok: true, cancelled: true, call_id: "", client_request_id: outgoingScope.clientRequestId, customer_phone: to });
+    }
     const payload = {
       messaging_product: "whatsapp",
       to,
@@ -23872,10 +24099,12 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       throw new Error(`Outgoing WhatsApp call failed: ${message}`);
     }
 
-    const callId = aiModeSafeString(
-      graph.call_id || graph.id || graph.calls?.[0]?.id || `outgoing-${to}-${Date.now()}`,
-      220
-    );
+    const callId = whatsappCallPushId({ call_id: graph.call_id || graph.id || graph.calls?.[0]?.id || "" });
+    if (!callId) {
+      const error = new Error("WhatsApp returned no usable provider call ID. Check the call status before trying again.");
+      error.statusCode = 502;
+      throw error;
+    }
 
     const actionEvent = await appendSyntheticWhatsappCallEvent({
       callId,
@@ -23884,6 +24113,9 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       extra: {
         direction: "outgoing",
         is_business_outgoing: true,
+        operator_device_id: outgoingScope.deviceId,
+        client_request_id: outgoingScope.clientRequestId,
+        client_source: body.client_source || "",
         customer_phone: to,
         customer_name: customerName,
         phone_number_id: phoneNumberId,
@@ -23891,20 +24123,22 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       }
     });
 
-    const pendingCancel = whatsappCallGetPendingOutgoingCancel({ phone: to, deviceId: body.operator_device_id || body.device_id || body.deviceId || "" });
+    const pendingCancel = whatsappCallGetPendingOutgoingCancel({ phone: to, ...outgoingScope });
     if (pendingCancel) {
       try {
         const cancelLifecycle = whatsappCallLifecycleFromRows([actionEvent]);
         const terminated = await whatsappCallTerminateLifecycleForPendingCancel(cancelLifecycle, {
           phone: to,
-          deviceId: body.operator_device_id || body.device_id || body.deviceId || "",
+          ...outgoingScope,
           reason: pendingCancel.reason || "operator_cancelled_before_call_id"
         });
+        if (!terminated) throw new Error("The pending cancellation could not verify the current outgoing call owner.");
         return res.json({
           ok: true,
           cancelled: true,
           call_id: callId,
           id: callId,
+          client_request_id: outgoingScope.clientRequestId,
           call: terminated?.call || cancelLifecycle,
           event: "terminated",
           direction: "outgoing",
@@ -23922,6 +24156,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
           cancel_error: cancelError?.message || String(cancelError),
           call_id: callId,
           id: callId,
+          client_request_id: outgoingScope.clientRequestId,
           call: whatsappCallLifecycleFromRows([actionEvent]),
           event: "outgoing",
           direction: "outgoing",
@@ -23939,6 +24174,7 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       ok: true,
       call_id: callId,
       id: callId,
+      client_request_id: outgoingScope.clientRequestId,
       call: lifecycle,
       event: "outgoing",
       direction: "outgoing",
@@ -23949,30 +24185,52 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
       log_event: actionEvent
     });
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+    return res.status(error?.statusCode || 500).json({ ok: false, client_request_id: outgoingScope?.clientRequestId || "", error: error?.message || String(error) });
   }
 });
 
 app.post("/api/whatsapp-calls/accept", async (req, res) => {
   let claimedLock = null;
+  let previousTransferLock = null;
   try {
     const body = req.body || {};
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220))));
-    if (lifecycle?.direction === "outgoing") throw new Error("Cannot accept an outgoing call as incoming.");
-    const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
+    const callId = aiModeSafeString(body.call_id || body.callId || whatsappCallProviderId(base || {}), 220);
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, callId)));
+    if (!callId || !lifecycle || lifecycle.call_id !== callId) {
+      return res.status(404).json({ ok: false, error: "The requested incoming call was not found." });
+    }
+    if (lifecycle.direction !== "incoming") {
+      return res.status(409).json({ ok: false, error: "Cannot accept an outgoing call as incoming." });
+    }
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const sdp = String(body.sdp || body.answer_sdp || body.localDescription?.sdp || "");
     const sdpType = aiModeSafeString(body.sdp_type || body.sdpType || body.localDescription?.type || "answer", 40);
-    if (!sdp) throw new Error("Browser WebRTC answer SDP is required to accept the WhatsApp call.");
+    if (sdpType !== "answer" || !whatsappCallHasAudioSdp(sdp)) {
+      return res.status(400).json({ ok: false, error: "A valid browser WebRTC audio answer SDP is required to accept the WhatsApp call." });
+    }
 
     const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
-    let previousTransferLock = null;
     const transferId = aiModeSafeString(body.transfer_id || body.transferId || "", 120);
-    const transferForAccept = transferId ? findTransferForAccept({ transferId, callId, toDeviceId: operatorDeviceId }) : null;
+    const transferForAccept = transferId && operatorDeviceId ? findTransferForAccept({ transferId, callId, toDeviceId: operatorDeviceId }) : null;
+    if (transferId && !transferForAccept) {
+      return res.status(409).json({ ok: false, error: "This call transfer is unavailable for this operator session." });
+    }
+    const terminal = ["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"].includes(lifecycle.status);
+    const normalAnswer = lifecycle.active && lifecycle.answerable && lifecycle.status === "incoming_ringing";
+    const transferAnswer = !!transferForAccept && !terminal && ["incoming_ringing", "connected"].includes(lifecycle.status);
+    if ((!normalAnswer && !transferAnswer) || !whatsappCallHasStoredAudioOffer(lifecycle)) {
+      return res.status(409).json({ ok: false, error: "This call is no longer available with an incoming audio offer." });
+    }
+    const existingLock = getOperatorCallLock(callId);
+    if (transferForAccept && existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId && existingLock.operator_device_id !== transferForAccept.from_device_id) {
+      return res.status(409).json({ ok: false, locked: true, error: "The transfer source no longer owns this call.", lock: existingLock });
+    }
+    if (existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId && !transferForAccept) {
+      return res.status(409).json({ ok: false, locked: true, error: "Call is already being handled by another operator.", lock: existingLock });
+    }
     if (operatorDeviceId) {
-      const existingLock = getOperatorCallLock(callId);
       if (transferForAccept && existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId) {
         previousTransferLock = existingLock;
         const nowMs = Date.now();
@@ -24006,14 +24264,31 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
           });
         }
         claimedLock = claim.lock;
+        if (transferForAccept) claimedLock.transfer_id = transferForAccept.transfer_id;
       }
     }
 
+    const assertCurrentAcceptance = () => {
+      const currentLock = getOperatorCallLock(callId);
+      if ((claimedLock && currentLock?.operator_device_id !== operatorDeviceId) ||
+          (currentLock?.operator_device_id && currentLock.operator_device_id !== operatorDeviceId)) {
+        const error = new Error("Call ownership changed while acceptance was pending. Check the current call status.");
+        error.statusCode = 409;
+        throw error;
+      }
+      if (transferForAccept && findTransferForAccept({ transferId, callId, toDeviceId: operatorDeviceId }) !== transferForAccept) {
+        const error = new Error("The call transfer changed while acceptance was pending.");
+        error.statusCode = 409;
+        throw error;
+      }
+    };
     let preAccept = null;
     if (WHATSAPP_CALL_PRE_ACCEPT_ENABLED) {
       preAccept = await whatsappCallGraphAction({ phoneNumberId, callId, action: "pre_accept", sdp, sdpType });
     }
+    assertCurrentAcceptance();
     const accepted = await whatsappCallGraphAction({ phoneNumberId, callId, action: "accept", sdp, sdpType });
+    assertCurrentAcceptance();
     const actionEvent = await appendSyntheticWhatsappCallEvent({
       callId,
       action: "accepted",
@@ -24028,22 +24303,29 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
         transfer_takeover: !!transferForAccept
       }
     });
+    assertCurrentAcceptance();
     if (transferForAccept) {
       transferForAccept.status = "completed";
       transferForAccept.completed_at = new Date().toISOString();
       transferForAccept.keep_until_ms = Date.now() + 15000;
       operatorCallTransfers.set(transferForAccept.transfer_id, transferForAccept);
     }
+    // Source media stays alive during a validated provisional transfer. Mark only
+    // this still-current claim final after successful provider/local persistence.
+    if (claimedLock && getOperatorCallLock(callId) === claimedLock) {
+      claimedLock.action = "accepted";
+      claimedLock.accepted_at = new Date().toISOString();
+    }
     return res.json({ ok: true, call_id: callId, lock: claimedLock, transfer: transferForAccept ? publicOperatorTransfer(transferForAccept) : null, pre_accept: preAccept, accept: accepted, event: actionEvent, call: attachOperatorLockToCall(whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]), operatorDeviceId) });
   } catch (error) {
-    if (claimedLock?.call_id) {
-      if (typeof previousTransferLock !== "undefined" && previousTransferLock?.call_id) {
+    if (claimedLock?.call_id && getOperatorCallLock(claimedLock.call_id) === claimedLock) {
+      if (previousTransferLock?.call_id && previousTransferLock.expires_at_ms > Date.now()) {
         operatorCallLocks.set(previousTransferLock.call_id, previousTransferLock);
       } else {
         releaseOperatorCallLock({ call_id: claimedLock.call_id, operator_device_id: claimedLock.operator_device_id });
       }
     }
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+    return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
@@ -24053,7 +24335,12 @@ app.post("/api/whatsapp-calls/reject", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, callId)));
+    const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
+    const ownerLock = getOperatorCallLock(callId);
+    if (ownerLock?.operator_device_id && ownerLock.operator_device_id !== operatorDeviceId) {
+      return res.status(409).json({ ok: false, locked: true, error: "Only the current operator can change this call.", lock: ownerLock });
+    }
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const rejected = await whatsappCallGraphAction({ phoneNumberId, callId, action: "reject" });
     const actionEvent = await appendSyntheticWhatsappCallEvent({ callId, action: "rejected", base, extra: { phone_number_id: phoneNumberId, direction: lifecycle?.direction || "incoming", customer_phone: lifecycle?.customer_phone || base?.customer_phone || "", operator_device_id: body.operator_device_id || body.device_id || body.deviceId || "", operator_name: body.operator_name || body.operatorName || "", device_label: body.device_label || body.deviceLabel || "" } });
@@ -24070,7 +24357,12 @@ app.post("/api/whatsapp-calls/terminate", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => aiModeSafeString(row?.call_id || row?.id || "", 220).startsWith(callId)));
+    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, callId)));
+    const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
+    const ownerLock = getOperatorCallLock(callId);
+    if (ownerLock?.operator_device_id && ownerLock.operator_device_id !== operatorDeviceId) {
+      return res.status(409).json({ ok: false, locked: true, error: "Only the current operator can change this call.", lock: ownerLock });
+    }
     const phoneNumberId = whatsappCallResolvePhoneNumberId({ body, call: base });
     const terminated = await whatsappCallGraphAction({ phoneNumberId, callId, action: "terminate" });
     const clientDurationSeconds = Math.max(0, Math.floor(Number(body.duration_seconds || body.client_duration_seconds || 0)));
