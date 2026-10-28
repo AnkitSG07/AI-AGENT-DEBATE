@@ -7,11 +7,24 @@
   <title>Open call in Smart Handicrafts Operator Hub</title>
   <style>
     *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f0f2f5;color:#111b21;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}.card{width:min(440px,100%);padding:30px;border:1px solid #e1e7e4;border-radius:20px;background:#fff}h1{font-size:24px;line-height:1.25;margin:0 0 12px}p{color:#667781;margin:0 0 20px}a{display:inline-flex;min-height:44px;align-items:center;padding:10px 18px;border-radius:999px;background:#008069;color:#fff;font-weight:600;text-decoration:none}a:focus-visible{outline:3px solid #80cab2;outline-offset:4px}.brand{display:block;color:#008069;font-size:13px;font-weight:700;margin-bottom:18px}
-  </style>
+  
+/* R5 fallback only: ordinary call links still redirect directly into the Hub. */
+html { color-scheme: light; }
+body { min-height: 100dvh; padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); background: #f3f5f4; }
+.card { padding: 28px; border-radius: 12px; border-color: #e2e9e5; box-shadow: none; }
+.brand { font-size: 16px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 28px; }
+.call-handoff-icon { display: flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 50%; background: #d9f8df; color: #087447; margin-bottom: 22px; }
+.call-handoff-icon svg { width: 28px; height: 28px; }
+h1 { font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+p { font-size: 15px; line-height: 1.6; }
+#openHubBtn { min-height: 48px; font-size: 15px; font-weight: 600; }
+@media (max-width: 600px) { body { background: #fff; } .card { padding: 12px 0; border: 0; border-radius: 0; } #openHubBtn { width: 100%; justify-content: center; } }
+
+</style>
 </head>
 <body>
   <main class="card">
-    <span class="brand">Smart Handicrafts®</span>
+    <span class="brand">Smart Handicrafts®</span><span class="call-handoff-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2c0 9 7 16 16 16a2 2 0 0 0 2-2v-3l-5-2-2 2a12 12 0 0 1-6-6l2-2-2-5Z"/></svg></span>
     <h1 id="callHeading">Opening your call in Operator Hub</h1>
     <p id="callExplanation">Continue in Operator Hub. Starting or answering a call requires your choice there.</p>
     <a id="openHubBtn" href="https://www.smarthandicrafts.com/livechat-api-test">Open Operator Hub</a>
