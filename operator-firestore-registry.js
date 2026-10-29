@@ -421,16 +421,22 @@ export function createFirestoreDeviceRegistry({
       const now = nowMs();
       if (input.expiresAtMs <= now) return { claimed: false, reason: 'expired', deliveryId };
       if (input.expiresAtMs > now + 5 * 60000) throw badInput('Notification lifetime exceeds five minutes.');
-      const row = deviceRow(await tx.get(collections.devices.doc(identity.deviceId)));
+      const opposite = identity.callId ? { ...identity, event: identity.event === 'incoming' ? 'ended' : 'incoming' } : null;
+      // These exact documents do not depend on one another. Read them together
+      // in the same transaction, retaining the atomic terminal/lease checks.
+      const [deviceSnapshot, previousSnapshot, oppositeSnapshot] = await Promise.all([
+        tx.get(collections.devices.doc(identity.deviceId)),
+        tx.get(reference),
+        opposite ? tx.get(collections.deliveries.doc(deliveryIdFor(opposite))) : Promise.resolve(null)
+      ]);
+      const row = deviceRow(deviceSnapshot);
       if (!isActive(row, now) || !row.fcmToken) return { claimed: false, reason: 'device_unavailable', deliveryId };
       if ((identity.event === 'incoming' && !row.receiveCalls) || (identity.event === 'message' && !row.receiveChats)) return { claimed: false, reason: 'opted_out', deliveryId };
-      const previousSnapshot = await tx.get(reference), previous = previousSnapshot.exists ? previousSnapshot.data() : null;
+      const previous = previousSnapshot.exists ? previousSnapshot.data() : null;
       if (previous && (previous.schema !== 1 || previous.deviceId !== identity.deviceId || previous.event !== identity.event)) throw unavailable();
       if (previous?.state === 'sent' || previous?.sentAt > 0 || previous?.state === 'cancelled') return { claimed: false, reason: 'already_finished', deliveryId };
       if (previous?.state === 'claimed' && previous.claimUntilMs > now) return { claimed: false, reason: 'in_progress', deliveryId };
       if (identity.callId) {
-        const opposite = { ...identity, event: identity.event === 'incoming' ? 'ended' : 'incoming' };
-        const oppositeSnapshot = await tx.get(collections.deliveries.doc(deliveryIdFor(opposite)));
         if (identity.event === 'incoming' && oppositeSnapshot.exists) return { claimed: false, reason: 'call_ended', deliveryId };
         if (identity.event === 'ended' && !oppositeSnapshot.exists) return { claimed: false, reason: 'not_previously_alerted', deliveryId };
       }
