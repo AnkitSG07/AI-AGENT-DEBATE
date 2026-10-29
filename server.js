@@ -10,7 +10,7 @@ import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPla
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-10-28-operator-hub-android-r8";
+const SERVER_PATCH_VERSION = "2026-10-29-operator-hub-r9";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -23517,6 +23517,7 @@ function settleWhatsappCallOwnership(rows = []) {
     if (!callId) continue;
     whatsappCallTerminalOwnership.set(callId, nowMs);
     operatorCallLocks.delete(callId);
+    finishOperatorTransfersForCall(callId, "call_ended");
     // A different active call in another tab/operator must keep its ownership.
     for (const presence of operatorHubDevicePresence.values()) {
       if (presence.active_call_id !== callId) continue;
@@ -23764,6 +23765,7 @@ app.get("/api/whatsapp-calls/config", async (req, res) => {
     ok: true,
     version: "phase3-20-manual-quotation-handoff-2026-05-29",
     server_patch_version: SERVER_PATCH_VERSION,
+    transfer: operatorTransferMediaCapabilities(),
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
     access_token_configured: !!WHATSAPP_CALL_ACCESS_TOKEN,
     own_numbers_last10: whatsappCallOwnNumbers().map(whatsappCallLast10).filter(Boolean),
@@ -23966,35 +23968,94 @@ function releaseOperatorCallLock(body = {}) {
 
 
 
-// ===================== PHASE 4.3 TRANSFER POPUP / TAKEOVER TEST =====================
+// ===================== OPERATOR CALL TRANSFER LIFECYCLE =====================
 const OPERATOR_CALL_TRANSFER_TTL_MS = Math.max(30000, Number(process.env.OPERATOR_CALL_TRANSFER_TTL_MS || 90000));
+const OPERATOR_CALL_TRANSFER_RETENTION_MS = 5 * 60 * 1000;
 const operatorCallTransfers = new Map(); // transfer_id -> transfer
+const operatorCallTransferMutations = new Map(); // serialize each call's invitation mutations
+
+function operatorTransferMediaCapabilities() {
+  // This deployment has no provider-supported media handoff or server media
+  // bridge. No environment flag can turn the old second-accept path back on.
+  return { available: false, enabled: false, mode: "not_configured", code: "TRANSFER_MEDIA_NOT_CONFIGURED",
+    reason: "Call transfer is not set up on this calling connection. Your current call will stay on this device." };
+}
+
+function operatorTransferMediaError() {
+  const capability = operatorTransferMediaCapabilities();
+  return Object.assign(new Error(capability.reason), { statusCode: 501, code: "TRANSFER_MEDIA_NOT_CONFIGURED" });
+}
+
+function requireOperatorTransferMedia() {
+  throw operatorTransferMediaError();
+}
+
+function operatorTransferError(message, statusCode = 409) {
+  return Object.assign(new Error(message), { statusCode });
+}
+
+function operatorTransferIsActive(row) {
+  return !!row && ["pending", "accepted", "connecting"].includes(String(row.status || ""));
+}
+
+function operatorTransferChanged(row) {
+  if (row?.call_id) publishWhatsappCallHints([{ call_id: row.call_id }]);
+}
+
+function finishOperatorTransfer(row, status, reason = "") {
+  if (!row || !operatorTransferIsActive(row)) return row;
+  const nowMs = Date.now();
+  row.status = status;
+  row.reason = reason;
+  row.updated_at = new Date(nowMs).toISOString();
+  row[`${status}_at`] = row.updated_at;
+  row.keep_until_ms = nowMs + OPERATOR_CALL_TRANSFER_RETENTION_MS;
+  operatorTransferChanged(row);
+  return row;
+}
+
+function finishOperatorTransfersForCall(callId, reason = "call_ended") {
+  for (const row of operatorCallTransfers.values()) {
+    if (row.call_id === callId) finishOperatorTransfer(row, "cancelled", reason);
+  }
+}
 
 function cleanOperatorCallTransfers() {
   const nowMs = Date.now();
   for (const [id, row] of operatorCallTransfers.entries()) {
-    if (!row?.expires_at_ms || row.expires_at_ms <= nowMs || ["completed", "declined", "failed", "cancelled"].includes(String(row.status || ""))) {
-      if (!row?.expires_at_ms || row.expires_at_ms <= nowMs || Number(row.keep_until_ms || 0) <= nowMs) {
-        operatorCallTransfers.delete(id);
-      }
-    }
+    if (!row?.expires_at_ms) { operatorCallTransfers.delete(id); continue; }
+    if (operatorTransferIsActive(row) && row.expires_at_ms <= nowMs) finishOperatorTransfer(row, "expired", "no_answer");
+    if (!operatorTransferIsActive(row) && Number(row.keep_until_ms || 0) <= nowMs) operatorCallTransfers.delete(id);
   }
 }
 
+function queueOperatorTransferMutation(callId, operation) {
+  const key = String(callId || "");
+  const previous = operatorCallTransferMutations.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  operatorCallTransferMutations.set(key, current);
+  current.finally(() => {
+    if (operatorCallTransferMutations.get(key) === current) operatorCallTransferMutations.delete(key);
+  }).catch(() => {});
+  return current;
+}
+
 function operatorTransferId() {
-  return `tr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `tr_${randomUUID().replace(/-/g, "")}`;
 }
 
 function normalizeTransferPayload(body = {}) {
   return {
     transfer_id: aiModeSafeString(body.transfer_id || body.transferId || "", 120),
     call_id: aiModeSafeString(body.call_id || body.callId || "", 220),
-    from_device_id: aiModeSafeString(body.from_operator_device_id || body.from_device_id || body.operator_device_id || body.device_id || body.deviceId || "", 180),
+    actor_device_id: aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160),
+    from_device_id: aiModeSafeString(body.from_operator_device_id || body.from_device_id || body.operator_device_id || body.device_id || body.deviceId || "", 160),
     from_operator: aiModeSafeString(body.from_operator || body.operator_name || body.operatorName || "Operator", 140),
     from_device_label: aiModeSafeString(body.from_device_label || body.device_label || body.deviceLabel || "", 140),
-    to_device_id: aiModeSafeString(body.to_operator_device_id || body.to_device_id || body.target_device_id || body.targetDeviceId || "", 180),
+    to_device_id: aiModeSafeString(body.to_operator_device_id || body.to_device_id || body.target_device_id || body.targetDeviceId || "", 160),
     to_operator: aiModeSafeString(body.to_operator || body.target_operator || body.targetOperator || "", 140),
     to_device_label: aiModeSafeString(body.to_device_label || body.target_device_label || body.targetDeviceLabel || "", 140),
+    client_request_id: aiModeSafeString(body.client_request_id || body.clientRequestId || "", 120),
     customer_phone: whatsappCallCleanPhone(body.customer_phone || body.phone || ""),
     customer_name: aiModeSafeString(body.customer_name || body.customerName || body.name || "WhatsApp caller", 160),
     note: aiModeSafeString(body.note || "", 1000)
@@ -24007,6 +24068,7 @@ function publicOperatorTransfer(row = {}) {
     transfer_id: row.transfer_id,
     call_id: row.call_id,
     status: row.status,
+    reason: row.reason || "",
     from_device_id: row.from_device_id,
     from_operator: row.from_operator,
     from_device_label: row.from_device_label,
@@ -24017,19 +24079,24 @@ function publicOperatorTransfer(row = {}) {
     customer_name: row.customer_name,
     note: row.note || "",
     created_at: row.created_at,
+    updated_at: row.updated_at || row.created_at,
     expires_at: row.expires_at,
     accepted_at: row.accepted_at || "",
-    declined_at: row.declined_at || ""
+    completed_at: row.completed_at || "",
+    declined_at: row.declined_at || "",
+    cancelled_at: row.cancelled_at || "",
+    expired_at: row.expired_at || "",
+    failed_at: row.failed_at || ""
   };
 }
 
 function findPendingTransferForDevice(deviceId = "") {
   cleanOperatorCallTransfers();
-  const safeDevice = aiModeSafeString(deviceId || "", 180);
+  const safeDevice = aiModeSafeString(deviceId || "", 160);
   if (!safeDevice) return null;
   return [...operatorCallTransfers.values()]
-    .filter((row) => row.to_device_id === safeDevice && String(row.status || "") === "pending")
-    .sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0))[0] || null;
+    .filter((row) => row.to_device_id === safeDevice && operatorTransferIsActive(row))
+    .sort((a, b) => Number(a.created_at_ms || 0) - Number(b.created_at_ms || 0))[0] || null;
 }
 
 function findTransferForAccept({ transferId = "", callId = "", toDeviceId = "" } = {}) {
@@ -24037,10 +24104,66 @@ function findTransferForAccept({ transferId = "", callId = "", toDeviceId = "" }
   const transfer = operatorCallTransfers.get(aiModeSafeString(transferId || "", 120));
   if (!transfer) return null;
   if (callId && transfer.call_id !== aiModeSafeString(callId || "", 220)) return null;
-  if (toDeviceId && transfer.to_device_id !== aiModeSafeString(toDeviceId || "", 180)) return null;
-  if (!["pending", "accepted"].includes(String(transfer.status || ""))) return null;
+  if (toDeviceId && transfer.to_device_id !== aiModeSafeString(toDeviceId || "", 160)) return null;
+  if (!operatorTransferIsActive(transfer)) return null;
   return transfer;
 }
+
+function operatorTransferActor(payload, role = "participant") {
+  const actor = payload.actor_device_id;
+  if (!actor || !/^[A-Za-z0-9_-]{1,120}::[A-Za-z0-9_-]{1,120}$/.test(actor)) throw operatorTransferError("A current Hub session identity is required.", 400);
+  if (role === "source" && payload.from_device_id !== actor) throw operatorTransferError("The transfer source must match this Hub session.", 403);
+  if (role === "target" && payload.to_device_id && payload.to_device_id !== actor) throw operatorTransferError("The transfer recipient must match this Hub session.", 403);
+  return actor;
+}
+
+function exactOperatorTransfer(payload, actor, role = "participant") {
+  cleanOperatorCallTransfers();
+  if (!payload.transfer_id || !payload.call_id) throw operatorTransferError("An exact transfer ID and call ID are required.", 400);
+  const row = operatorCallTransfers.get(payload.transfer_id);
+  if (!row || row.call_id !== payload.call_id) throw operatorTransferError("Transfer request not found or no longer retained.", 404);
+  if ((role === "source" && row.from_device_id !== actor) || (role === "target" && row.to_device_id !== actor) ||
+      (role === "participant" && row.from_device_id !== actor && row.to_device_id !== actor)) {
+    throw operatorTransferError("This transfer belongs to another operator session.", 403);
+  }
+  return row;
+}
+
+function operatorTransferTargetReady(target, targetId, transferId = "") {
+  if (!target || target.client_source !== "odoo_operator_hub" || target.lock_device_id !== targetId ||
+      !(Number(target.expires_at_ms) > Date.now()) || !operatorDeviceReceivesCall(target)) return false;
+  return ![...operatorCallTransfers.values()].some(row => row.transfer_id !== transferId && row.to_device_id === targetId && operatorTransferIsActive(row));
+}
+
+async function readOperatorTransferCall(callId) {
+  const rows = await readWhatsappCallLogs();
+  return whatsappCallLifecycleFromRows(rows.filter(row => whatsappCallMatchesId(row, callId)));
+}
+
+function operatorTransferCallEligible(call) {
+  return !!call && call.direction === "incoming" && call.active === true && call.status === "connected" &&
+    !whatsappCallRowMarksTerminal(call) && whatsappCallHasStoredAudioOffer(call);
+}
+
+async function reconcileOperatorTransfer(row) {
+  const call = await readOperatorTransferCall(row.call_id);
+  cleanOperatorCallTransfers();
+  if (operatorTransferIsActive(row)) {
+    if (!operatorTransferCallEligible(call)) finishOperatorTransfer(row, "cancelled", "call_ended");
+    else {
+      const lock = getOperatorCallLock(row.call_id);
+      const expectedProvisional = lock?.operator_device_id === row.to_device_id && lock?.transfer_id === row.transfer_id && lock?.action === "transfer_accepting";
+      if (lock?.operator_device_id !== row.from_device_id && !expectedProvisional) finishOperatorTransfer(row, "failed", "source_unavailable");
+    }
+  }
+  return call;
+}
+
+function operatorTransferResponse(row, call, actor) {
+  return { ok: true, pending: operatorTransferIsActive(row), transfer: publicOperatorTransfer(row),
+    call: call ? attachOperatorLockToCall(call, actor) : null };
+}
+
 
 function attachOperatorLockToCall(call = {}, requesterDeviceId = "") {
   if (!call || typeof call !== "object") return call;
@@ -24120,101 +24243,145 @@ app.post("/api/operator-call-locks/release", async (req, res) => {
 
 app.post("/api/operator-call-transfer/request", async (req, res) => {
   try {
-    cleanOperatorCallTransfers();
+    requireOperatorTransferMedia();
     const payload = normalizeTransferPayload(req.body || {});
-    if (!payload.call_id) throw new Error("call_id is required for transfer.");
-    if (!payload.from_device_id) throw new Error("from operator device is required for transfer.");
-    if (!payload.to_device_id) throw new Error("target operator device is required for transfer.");
-    if (payload.from_device_id === payload.to_device_id) throw new Error("Cannot transfer a call to the same operator device.");
-
-    const lock = getOperatorCallLock(payload.call_id);
-    if (lock?.operator_device_id && lock.operator_device_id !== payload.from_device_id) {
-      return res.status(409).json({ ok: false, error: "Only the current call owner can transfer this call.", lock });
-    }
-
-    const targetDevice = await findOperatorDeviceByLockId(payload.to_device_id);
-    if (req.body?.client_source === "odoo_operator_hub" && (!targetDevice || targetDevice.client_source !== "odoo_operator_hub" || targetDevice.lock_device_id !== payload.to_device_id)) {
-      return res.status(409).json({ ok: false, error: "The target Hub session is no longer available. Refresh the operator list." });
-    }
-    if (targetDevice && !operatorDeviceReceivesCall(targetDevice)) {
-      return res.status(409).json({ ok: false, error: "Target operator is not available for calls.", device: operatorDeviceSummary(targetDevice) });
-    }
-
-    const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, payload.call_id)));
-    const nowMs = Date.now();
-    const transfer = {
-      transfer_id: operatorTransferId(),
-      call_id: payload.call_id,
-      status: "pending",
-      from_device_id: payload.from_device_id,
-      from_operator: payload.from_operator || lock?.operator_name || "Operator",
-      from_device_label: payload.from_device_label || lock?.device_label || "",
-      to_device_id: payload.to_device_id,
-      to_operator: payload.to_operator,
-      to_device_label: payload.to_device_label,
-      customer_phone: payload.customer_phone || lifecycle?.customer_phone || "",
-      customer_name: payload.customer_name || lifecycle?.customer_name || "WhatsApp caller",
-      note: payload.note || "",
-      created_at: new Date(nowMs).toISOString(),
-      created_at_ms: nowMs,
-      expires_at: new Date(nowMs + OPERATOR_CALL_TRANSFER_TTL_MS).toISOString(),
-      expires_at_ms: nowMs + OPERATOR_CALL_TRANSFER_TTL_MS,
-      keep_until_ms: nowMs + OPERATOR_CALL_TRANSFER_TTL_MS
-    };
-    operatorCallTransfers.set(transfer.transfer_id, transfer);
-    return res.json({ ok: true, transfer: publicOperatorTransfer(transfer), call: lifecycle || null });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
-  }
+    const actor = operatorTransferActor(payload, "source");
+    if (!payload.call_id || !payload.to_device_id) throw operatorTransferError("A call ID and destination Hub session are required.", 400);
+    if (actor === payload.to_device_id) throw operatorTransferError("Choose a different operator device.", 400);
+    if (payload.client_request_id && !/^[A-Za-z0-9_-]{8,120}$/.test(payload.client_request_id)) throw operatorTransferError("Invalid transfer request identity.", 400);
+    const result = await queueOperatorTransferMutation(payload.call_id, async () => {
+      cleanOperatorCallTransfers();
+      const call = await readOperatorTransferCall(payload.call_id);
+      if (!operatorTransferCallEligible(call)) throw operatorTransferError("Only an active answered incoming call can be transferred.");
+      const target = await findOperatorDeviceByLockId(payload.to_device_id);
+      const lock = getOperatorCallLock(payload.call_id);
+      if (!lock || lock.operator_device_id !== actor) throw operatorTransferError("Only the current call owner can transfer this call.");
+      cleanOperatorCallTransfers();
+      // All checks after the final await form one synchronous commit. Two calls
+      // racing for one idle target cannot reserve it at the same time.
+      if (payload.client_request_id) {
+        const retry = [...operatorCallTransfers.values()].find(row => row.call_id === payload.call_id && row.from_device_id === actor && row.client_request_id === payload.client_request_id);
+        if (retry) {
+          if (retry.to_device_id !== payload.to_device_id) throw operatorTransferError("This request identity was already used for another destination.");
+          return { ...operatorTransferResponse(retry, call, actor), replayed: true };
+        }
+      }
+      const existing = [...operatorCallTransfers.values()].find(row => row.call_id === payload.call_id && operatorTransferIsActive(row));
+      if (existing) {
+        if (existing.from_device_id === actor && existing.to_device_id === payload.to_device_id) return { ...operatorTransferResponse(existing, call, actor), replayed: true };
+        throw operatorTransferError("A transfer is already pending for this call. Cancel it before choosing another device.");
+      }
+      if (!operatorTransferTargetReady(target, payload.to_device_id)) throw operatorTransferError("The destination is offline, busy or already has a transfer invitation. Refresh the operator list.");
+      const nowMs = Date.now();
+      const row = {
+        transfer_id: operatorTransferId(), call_id: payload.call_id, status: "pending", reason: "",
+        from_device_id: actor, from_operator: lock.operator_name || payload.from_operator || "Operator",
+        from_device_label: lock.device_label || payload.from_device_label || "",
+        to_device_id: payload.to_device_id, to_operator: target.operator_name || payload.to_operator || "Operator",
+        to_device_label: target.device_label || payload.to_device_label || "",
+        customer_phone: call.customer_phone || payload.customer_phone || "",
+        customer_name: call.customer_name || payload.customer_name || "WhatsApp caller", note: payload.note || "",
+        client_request_id: payload.client_request_id,
+        created_at: new Date(nowMs).toISOString(), created_at_ms: nowMs, updated_at: new Date(nowMs).toISOString(),
+        expires_at: new Date(nowMs + OPERATOR_CALL_TRANSFER_TTL_MS).toISOString(), expires_at_ms: nowMs + OPERATOR_CALL_TRANSFER_TTL_MS,
+        keep_until_ms: nowMs + OPERATOR_CALL_TRANSFER_TTL_MS + OPERATOR_CALL_TRANSFER_RETENTION_MS
+      };
+      operatorCallTransfers.set(row.transfer_id, row);
+      operatorTransferChanged(row);
+      return operatorTransferResponse(row, call, actor);
+    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, ...(error?.code ? { code: error.code } : {}), error: error?.message || String(error) }); }
 });
 
 app.get("/api/operator-call-transfer/pending", async (req, res) => {
   try {
-    const deviceId = aiModeSafeString(req.query.operator_device_id || req.query.device_id || req.query.deviceId || "", 180);
-    const transfer = findPendingTransferForDevice(deviceId);
-    if (!transfer) return res.json({ ok: true, pending: false, transfer: null, call: null });
-    const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, transfer.call_id)));
-    return res.json({ ok: true, pending: true, transfer: publicOperatorTransfer(transfer), call: attachOperatorLockToCall(lifecycle || {}, deviceId) });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
-  }
+    const payload = normalizeTransferPayload(req.query || {});
+    const actor = operatorTransferActor(payload);
+    const row = findPendingTransferForDevice(actor);
+    res.setHeader("Cache-Control", "no-store");
+    if (!row) return res.json({ ok: true, pending: false, transfer: null, call: null });
+    const result = await queueOperatorTransferMutation(row.call_id, async () => {
+      const call = await reconcileOperatorTransfer(row);
+      return operatorTransferResponse(row, call, actor);
+    });
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) }); }
+});
+
+app.get("/api/operator-call-transfer/status", async (req, res) => {
+  try {
+    const payload = normalizeTransferPayload(req.query || {});
+    const actor = operatorTransferActor(payload);
+    const result = await queueOperatorTransferMutation(payload.call_id, async () => {
+      const row = exactOperatorTransfer(payload, actor);
+      const call = await reconcileOperatorTransfer(row);
+      return operatorTransferResponse(row, call, actor);
+    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) }); }
 });
 
 app.post("/api/operator-call-transfer/accept", async (req, res) => {
   try {
+    requireOperatorTransferMedia();
     const payload = normalizeTransferPayload(req.body || {});
-    const transfer = findTransferForAccept({ transferId: payload.transfer_id, callId: payload.call_id, toDeviceId: payload.to_device_id || payload.from_device_id });
-    if (!transfer) return res.status(404).json({ ok: false, error: "Transfer request not found or expired." });
-    const nowMs = Date.now();
-    transfer.status = "accepted";
-    transfer.accepted_at = new Date(nowMs).toISOString();
-    transfer.accepted_at_ms = nowMs;
-    transfer.keep_until_ms = nowMs + OPERATOR_CALL_TRANSFER_TTL_MS;
-    operatorCallTransfers.set(transfer.transfer_id, transfer);
-    const calls = await readWhatsappCallLogs();
-    const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, transfer.call_id)));
-    return res.json({ ok: true, transfer: publicOperatorTransfer(transfer), call: lifecycle || null });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
-  }
+    const actor = operatorTransferActor(payload, "target");
+    const result = await queueOperatorTransferMutation(payload.call_id, async () => {
+      const row = exactOperatorTransfer(payload, actor, "target");
+      const call = await reconcileOperatorTransfer(row);
+      if (!operatorTransferIsActive(row)) throw operatorTransferError("This transfer is no longer available.");
+      const target = await findOperatorDeviceByLockId(actor);
+      cleanOperatorCallTransfers();
+      const lock = getOperatorCallLock(row.call_id);
+      if (!operatorTransferIsActive(row) || lock?.operator_device_id !== row.from_device_id) throw operatorTransferError("The original operator no longer owns this call.");
+      if (!operatorTransferTargetReady(target, actor, row.transfer_id)) {
+        finishOperatorTransfer(row, "failed", "target_unavailable");
+        throw operatorTransferError("This operator device is no longer available for the transfer.");
+      }
+      if (row.status === "pending") {
+        row.status = "accepted"; row.accepted_at_ms = Date.now(); row.accepted_at = new Date(row.accepted_at_ms).toISOString(); row.updated_at = row.accepted_at;
+        operatorTransferChanged(row);
+      }
+      return operatorTransferResponse(row, call, actor);
+    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, ...(error?.code ? { code: error.code } : {}), error: error?.message || String(error) }); }
 });
 
 app.post("/api/operator-call-transfer/decline", async (req, res) => {
   try {
     const payload = normalizeTransferPayload(req.body || {});
-    const transfer = findTransferForAccept({ transferId: payload.transfer_id, callId: payload.call_id, toDeviceId: payload.to_device_id || payload.from_device_id });
-    if (!transfer) return res.json({ ok: true, declined: false, reason: "not_found" });
-    const nowMs = Date.now();
-    transfer.status = "declined";
-    transfer.declined_at = new Date(nowMs).toISOString();
-    transfer.keep_until_ms = nowMs + 15000;
-    operatorCallTransfers.set(transfer.transfer_id, transfer);
-    return res.json({ ok: true, declined: true, transfer: publicOperatorTransfer(transfer) });
-  } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
-  }
+    const actor = operatorTransferActor(payload, "target");
+    const result = await queueOperatorTransferMutation(payload.call_id, async () => {
+      const row = exactOperatorTransfer(payload, actor, "target");
+      const call = await reconcileOperatorTransfer(row);
+      const changed = operatorTransferIsActive(row);
+      if (changed) finishOperatorTransfer(row, "declined", "target_declined");
+      return { ...operatorTransferResponse(row, call, actor), declined: changed || row.status === "declined" };
+    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) }); }
+});
+
+app.post("/api/operator-call-transfer/cancel", async (req, res) => {
+  try {
+    const payload = normalizeTransferPayload(req.body || {});
+    const actor = operatorTransferActor(payload, "source");
+    const result = await queueOperatorTransferMutation(payload.call_id, async () => {
+      const row = exactOperatorTransfer(payload, actor, "source");
+      const call = await reconcileOperatorTransfer(row);
+      const changed = operatorTransferIsActive(row);
+      if (changed) finishOperatorTransfer(row, "cancelled", "source_cancelled");
+      return { ...operatorTransferResponse(row, call, actor), cancelled: changed || row.status === "cancelled" };
+    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(result);
+  } catch (error) { return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) }); }
 });
 
 
@@ -24506,9 +24673,12 @@ app.post("/api/whatsapp-calls/outgoing", async (req, res) => {
 
 app.post("/api/whatsapp-calls/accept", async (req, res) => {
   let claimedLock = null;
-  let previousTransferLock = null;
   try {
     const body = req.body || {};
+    // A second Meta accept of the original SDP is not an established media
+    // transfer protocol. Reject every legacy takeover before ownership or
+    // provider signaling changes, even if a stale client still exposes Transfer.
+    if (body.transfer_id || body.transferId) throw operatorTransferMediaError();
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || whatsappCallProviderId(base || {}), 220);
@@ -24527,60 +24697,31 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
     }
 
     const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
-    const transferId = aiModeSafeString(body.transfer_id || body.transferId || "", 120);
-    const transferForAccept = transferId && operatorDeviceId ? findTransferForAccept({ transferId, callId, toDeviceId: operatorDeviceId }) : null;
-    if (transferId && !transferForAccept) {
-      return res.status(409).json({ ok: false, error: "This call transfer is unavailable for this operator session." });
-    }
-    const terminal = ["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"].includes(lifecycle.status);
     const normalAnswer = lifecycle.active && lifecycle.answerable && lifecycle.status === "incoming_ringing";
-    const transferAnswer = !!transferForAccept && !terminal && ["incoming_ringing", "connected"].includes(lifecycle.status);
-    if ((!normalAnswer && !transferAnswer) || !whatsappCallHasStoredAudioOffer(lifecycle)) {
+    if (!normalAnswer || !whatsappCallHasStoredAudioOffer(lifecycle)) {
       return res.status(409).json({ ok: false, error: "This call is no longer available with an incoming audio offer." });
     }
     const existingLock = getOperatorCallLock(callId);
-    if (transferForAccept && existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId && existingLock.operator_device_id !== transferForAccept.from_device_id) {
-      return res.status(409).json({ ok: false, locked: true, error: "The transfer source no longer owns this call.", lock: existingLock });
-    }
-    if (existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId && !transferForAccept) {
+    if (existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId) {
       return res.status(409).json({ ok: false, locked: true, error: "Call is already being handled by another operator.", lock: existingLock });
     }
     if (operatorDeviceId) {
-      if (transferForAccept && existingLock?.operator_device_id && existingLock.operator_device_id !== operatorDeviceId) {
-        previousTransferLock = existingLock;
-        const nowMs = Date.now();
-        claimedLock = {
-          call_id: callId,
-          operator_device_id: operatorDeviceId,
-          operator_name: aiModeSafeString(body.operator_name || body.operatorName || transferForAccept.to_operator || "Operator", 140),
-          device_label: aiModeSafeString(body.device_label || body.deviceLabel || transferForAccept.to_device_label || "", 140),
-          action: "transfer_accepting",
-          transfer_id: transferForAccept.transfer_id,
-          claimed_at: new Date(nowMs).toISOString(),
-          claimed_at_ms: nowMs,
-          expires_at: new Date(nowMs + OPERATOR_CALL_LOCK_TTL_MS).toISOString(),
-          expires_at_ms: nowMs + OPERATOR_CALL_LOCK_TTL_MS
-        };
-        operatorCallLocks.set(callId, claimedLock);
-      } else {
-        const claim = claimOperatorCallLock({
-          call_id: callId,
-          operator_device_id: operatorDeviceId,
-          operator_name: body.operator_name || body.operatorName || "",
-          device_label: body.device_label || body.deviceLabel || "",
-          action: transferForAccept ? "transfer_accepting" : "accepting"
+      const claim = claimOperatorCallLock({
+        call_id: callId,
+        operator_device_id: operatorDeviceId,
+        operator_name: body.operator_name || body.operatorName || "",
+        device_label: body.device_label || body.deviceLabel || "",
+        action: "accepting"
+      });
+      if (!claim.ok) {
+        return res.status(409).json({
+          ok: false,
+          locked: true,
+          error: claim.error || "Call is already being handled by another operator.",
+          lock: claim.lock
         });
-        if (!claim.ok) {
-          return res.status(409).json({
-            ok: false,
-            locked: true,
-            error: claim.error || "Call is already being handled by another operator.",
-            lock: claim.lock
-          });
-        }
-        claimedLock = claim.lock;
-        if (transferForAccept) claimedLock.transfer_id = transferForAccept.transfer_id;
       }
+      claimedLock = claim.lock;
     }
 
     const assertCurrentAcceptance = () => {
@@ -24588,11 +24729,6 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
       if ((claimedLock && currentLock?.operator_device_id !== operatorDeviceId) ||
           (currentLock?.operator_device_id && currentLock.operator_device_id !== operatorDeviceId)) {
         const error = new Error("Call ownership changed while acceptance was pending. Check the current call status.");
-        error.statusCode = 409;
-        throw error;
-      }
-      if (transferForAccept && findTransferForAccept({ transferId, callId, toDeviceId: operatorDeviceId }) !== transferForAccept) {
-        const error = new Error("The call transfer changed while acceptance was pending.");
         error.statusCode = 409;
         throw error;
       }
@@ -24614,33 +24750,22 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
         operator_device_id: operatorDeviceId,
         operator_name: body.operator_name || body.operatorName || "",
         device_label: body.device_label || body.deviceLabel || "",
-        transfer_id: transferId || "",
-        transfer_takeover: !!transferForAccept
+        transfer_id: "",
+        transfer_takeover: false
       }
     });
     assertCurrentAcceptance();
-    if (transferForAccept) {
-      transferForAccept.status = "completed";
-      transferForAccept.completed_at = new Date().toISOString();
-      transferForAccept.keep_until_ms = Date.now() + 15000;
-      operatorCallTransfers.set(transferForAccept.transfer_id, transferForAccept);
-    }
-    // Source media stays alive during a validated provisional transfer. Mark only
-    // this still-current claim final after successful provider/local persistence.
+    // Finalize this exact ordinary incoming-call claim after provider success.
     if (claimedLock && getOperatorCallLock(callId) === claimedLock) {
       claimedLock.action = "accepted";
       claimedLock.accepted_at = new Date().toISOString();
     }
-    return res.json({ ok: true, call_id: callId, lock: claimedLock, transfer: transferForAccept ? publicOperatorTransfer(transferForAccept) : null, pre_accept: preAccept, accept: accepted, event: actionEvent, call: attachOperatorLockToCall(whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]), operatorDeviceId) });
+    return res.json({ ok: true, call_id: callId, lock: claimedLock, transfer: null, pre_accept: preAccept, accept: accepted, event: actionEvent, call: attachOperatorLockToCall(whatsappCallLifecycleFromRows([actionEvent, ...(lifecycle?.events || [])]), operatorDeviceId) });
   } catch (error) {
     if (claimedLock?.call_id && getOperatorCallLock(claimedLock.call_id) === claimedLock) {
-      if (previousTransferLock?.call_id && previousTransferLock.expires_at_ms > Date.now()) {
-        operatorCallLocks.set(previousTransferLock.call_id, previousTransferLock);
-      } else {
-        releaseOperatorCallLock({ call_id: claimedLock.call_id, operator_device_id: claimedLock.operator_device_id });
-      }
+      releaseOperatorCallLock({ call_id: claimedLock.call_id, operator_device_id: claimedLock.operator_device_id });
     }
-    return res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
+    return res.status(error?.statusCode || 500).json({ ok: false, ...(error?.code ? { code: error.code } : {}), error: error?.message || String(error) });
   }
 });
 
