@@ -371,8 +371,8 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     const { response, body } = await http(`https://fcm.googleapis.com/v1/projects/${config.firebase.projectId}/messages:send`, {
       method: 'POST', headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { token: device.fcmToken, data,
-        android: { priority: 'HIGH', ttl: data.type !== 'sh_operator_call' ? `${Math.max(1, Math.min(300, Math.ceil((Number(data.expires_at_ms) - clock()) / 1000)))}s` : '30s',
-          collapse_key: data.type === 'sh_operator_test' ? `sh-test-${device.id}` : data.type === 'sh_operator_message' ? `sh-chat-${data.channel_id}` : `sh-call-${HASH(data.call_id).slice(0, 32)}`,
+        android: { priority: 'HIGH', ttl: ['sh_operator_call', 'sh_operator_transfer'].includes(data.type) ? '30s' : `${Math.max(1, Math.min(300, Math.ceil((Number(data.expires_at_ms) - clock()) / 1000)))}s`,
+          collapse_key: data.type === 'sh_operator_test' ? `sh-test-${device.id}` : data.type === 'sh_operator_message' ? `sh-chat-${data.channel_id}` : `sh-call-${HASH(data.call_id + (data.transfer_id || '')).slice(0, 32)}`,
           restricted_package_name: config.packageName } } })
     });
     if (response.status === 401) { accessToken = ''; accessExpiresAt = 0; }
@@ -386,7 +386,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     let claim = null, accepted = false, attemptedDevice = null;
     try {
       claim = await claimDelivery({ ...descriptor, expiresAtMs: Number(data.expires_at_ms) });
-      if (!claim?.claimed) return 'skipped';
+      if (!claim?.claimed) {
+        // A different worker may still own the lease. Its network response is
+        // not proof of delivery, so native outbox jobs must retry this case.
+        const rows = await getDeliveries(descriptor.callId ? { callId: descriptor.callId } : { messageId: descriptor.messageId });
+        const current = rows.find(row => sameDelivery(row, descriptor));
+        return current?.state === 'claimed' && !deliverySent(current) ? 'pending' : 'skipped';
+      }
       const validDevice = async () => {
         const device = await getDevice(descriptor.deviceId);
         if (!eligibleDevice(device, descriptor.event) || clock() >= Number(data.expires_at_ms)) return null;
@@ -471,6 +477,34 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       return operation;
     }));
   }
+  // Called only by the authenticated, durable room-call coordinator. FCM wakes
+  // an enrolled client; the client rechecks server state before any call action.
+  async function publishRoomEvent({ session, event, transferId = '', toDeviceId = '', stillCurrent = async () => true } = {}) {
+    configured();
+    const id = callIdValue(session?.id), isTransfer = event === 'transfer-incoming' || event === 'transfer-ended';
+    if (!id || !['incoming', 'ended', 'transfer-incoming', 'transfer-ended'].includes(event) ||
+        (isTransfer && (!callIdValue(transferId) || !toDeviceId))) throw fail(400, 'A valid exact room-call event is required.');
+    const deliveryEvent = event.endsWith('incoming') ? 'incoming' : 'ended';
+    // Transfers use a separate bounded deduplication key; the real call and
+    // transfer IDs stay in the signed-in client payload, never in credentials.
+    const scopeId = isTransfer ? `transfer_${HASH(JSON.stringify([id, transferId]))}` : id;
+    const rows = await listDevices();
+    const targets = rows.filter(row => eligibleDevice(row, deliveryEvent) &&
+      row.mediaProtocol === 'sh-room-audio-v1' && row.nativeBuild >= 10 &&
+      (!toDeviceId || row.id === toDeviceId));
+    let sent = 0, failed = 0;
+    await Promise.all(targets.map(async device => {
+      const data = { type: isTransfer ? 'sh_operator_transfer' : 'sh_operator_call', engine: 'livekit',
+        event: deliveryEvent, call_id: id, issued_at_ms: String(clock()),
+        expires_at_ms: String(clock() + ALERT_TTL_MS), hub_url: fixedHubUrl(id) };
+      if (isTransfer) data.transfer_id = transferId;
+      const outcome = await deliverNotification({ descriptor: { callId: scopeId, deviceId: device.id, event: deliveryEvent }, data, stillCurrent });
+      if (outcome === 'sent') sent++;
+      if (outcome === 'failed' || outcome === 'pending') failed++;
+    }));
+    if (failed) throw fail(503, 'Native call alerts will retry after notification delivery recovers.');
+    return { ok: true, sent, failed };
+  }
   function publishMessage({ channel = {}, message = {}, verifiedIncoming = false } = {}) {
     if (!config.enabled) return Promise.resolve({ ok: false, skipped: 'not_configured' });
     const channelId = positiveId(channel.id), messageId = positiveId(message.id);
@@ -503,5 +537,5 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     operation.finally(() => { if (messageQueues.get(messageId) === operation) messageQueues.delete(messageId); }).catch(() => {});
     return operation;
   }
-  return { registerRoutes, publishCallEvents, publishMessage, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
+  return { registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
 }
