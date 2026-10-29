@@ -193,6 +193,7 @@ function validateSession(value, key, before) {
   if (session.owner !== undefined && session.owner !== null) requireInput(isObject(session.owner) &&
     ['deviceId', 'userId', 'legId', 'identity'].every(field => identifier(session.owner[field])), 'Invalid session owner binding.');
   if (session.nextActionAtMs !== undefined && session.nextActionAtMs !== null) requireInput(validTime(session.nextActionAtMs), 'Invalid session recovery deadline.');
+  if (session.customerAcceptedAt !== undefined && session.customerAcceptedAt !== null) requireInput(validTime(session.customerAcceptedAt), 'Invalid provider acceptance timestamp.');
   if (session.routeChoice !== undefined) requireInput(['native', 'legacy'].includes(session.routeChoice), 'Invalid immutable call route selection.');
   if (session.legacyClaim !== undefined) requireInput(isObject(session.legacyClaim) && identifier(session.legacyClaim.operationId) &&
     validTime(session.legacyClaim.claimedAt) && session.routeChoice === 'legacy', 'A legacy route claim needs an exact operation and timestamp.');
@@ -209,7 +210,7 @@ function validateSession(value, key, before) {
   for (const field of ['id', 'tenantId', 'provider', 'direction', 'createdAt']) if (session[field] !== before[field]) {
     fail('SESSION_IDENTITY_IMMUTABLE', 'The persisted media session routing cannot change.');
   }
-  for (const field of ['providerCallId', 'roomName', 'customerIdentity', 'phoneNumberId', 'requestId']) {
+  for (const field of ['providerCallId', 'roomName', 'customerIdentity', 'phoneNumberId', 'requestId', 'customerAcceptedAt']) {
     if (before[field] !== undefined && before[field] !== null && before[field] !== '' && session[field] !== before[field]) {
       fail('SESSION_IDENTITY_IMMUTABLE', 'An assigned media routing identity cannot change.');
     }
@@ -250,7 +251,8 @@ function validateSession(value, key, before) {
   }
   if (session.version === before.version) {
     const semantic = row => ({ phase: row.phase, providerCallId: row.providerCallId || null, owner: row.owner || null,
-      terminal: row.terminal || null, roomName: row.roomName || null, customerIdentity: row.customerIdentity || null });
+      terminal: row.terminal || null, roomName: row.roomName || null, customerIdentity: row.customerIdentity || null,
+      customerAcceptedAt: row.customerAcceptedAt ?? null });
     if (canonical(semantic(session)) !== canonical(semantic(before))) fail('STALE_SESSION_VERSION', 'A semantic session update needs a newer version.');
   }
   return session;
