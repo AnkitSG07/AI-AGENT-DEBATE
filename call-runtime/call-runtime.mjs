@@ -282,10 +282,10 @@ export class CallRuntime {
     if (event.type === 'incoming') requireValue(typeof event.offerSdp === 'string' && event.offerSdp.length < 200000 &&
       /^v=0\r?\n/.test(event.offerSdp) && /(?:^|\r?\n)m=audio\s/.test(event.offerSdp), 'INVALID_SDP', 'An actual incoming audio offer is required.', 400);
     const result = await this.store.transaction(async tx => {
-      const existingMarker = await tx.get(eventKey(marker));
-      const route = await tx.get(eventKey(routeId(event.callId)));
-      const terminal = await tx.get(eventKey(terminalId(event.callId)));
-      const accepted = await tx.get(eventKey(acceptedId(event.callId)));
+      const [existingMarker, route, terminal, accepted] = await Promise.all([
+        tx.get(eventKey(marker)), tx.get(eventKey(routeId(event.callId))),
+        tx.get(eventKey(terminalId(event.callId))), tx.get(eventKey(acceptedId(event.callId)))
+      ]);
       const resolvedSessionId = sessionId || route?.sessionId;
       const session = resolvedSessionId ? await tx.get(sessionKey(resolvedSessionId)) : undefined;
       if (existingMarker) return { handled: !!session, sessionId: session?.id, replayed: true };
@@ -850,30 +850,26 @@ export class CallRuntime {
     if (missing) await this.terminateForPolicy(session.id, 'OPERATOR_DISCONNECTED', { expectedOwnerIdentity: snapshot.owner.identity });
   }
 
-  /** Idempotent, bounded recovery entry point called by the persisted due index. */
-  async recoverSession(id, { limit = 4 } = {}) {
+  /** Send only the existing incoming-alert job before slower reconciliation.
+   * No provider action or new alert is created here. The ordinary recovery path
+   * shares its lease, fresh-state check, retry and settlement implementation. */
+  async dispatchIncomingAlert(id) {
+    const effects = await this.drainSessionOutbox(id, { limit: 1, incomingOnly: true });
+    return { dispatched: effects.some(item => item.succeeded), effects };
+  }
+
+  async drainSessionOutbox(id, { limit, incomingOnly = false }) {
     requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
-    let session = await this.store.get(sessionKey(id)); if (!session) return { recovered: false };
-    await this.reconcileEligibility(session);
-    if (session.providerCallId && this.transferController) await this.transferController.expire(session.providerCallId);
-    await this.syncTransferNotifications(id);
-    await this.store.transaction(async tx => {
-      const current = await tx.get(sessionKey(id));
-      const now = this.now();
-      for (const op of Object.values(current.operations)) if (op.status === 'issued' && op.leaseUntil <= now) {
-        op.status = 'uncertain'; if (!current.terminal) current.phase = 'uncertain'; current.version++;
-      }
-      if (!current.terminal && current.phase !== 'connected' && current.deadlineAt <= now) {
-        terminalize(current, 'TIMED_OUT', now);
-      }
-      current.updatedAt = now; schedule(current, now); tx.set(sessionKey(id), current);
-    });
     const effects = [];
     for (let index = 0; index < limit; index++) {
       const leaseId = randomUUID();
       const claimed = await this.store.transaction(async tx => {
         const current = await tx.get(sessionKey(id));
-        const selected = current.outbox.find(item => ['terminate', 'reject'].includes(item.kind) && isDue(item, this.now())) ||
+        if (!current) return null;
+        if (incomingOnly && (current.direction !== 'incoming' || current.terminal || current.owner ||
+            current.phase !== 'ringing' || current.deadlineAt <= this.now())) return null;
+        const selected = incomingOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())) :
+          current.outbox.find(item => ['terminate', 'reject'].includes(item.kind) && isDue(item, this.now())) ||
           current.outbox.find(item => isDue(item, this.now()));
         if (!selected) return null;
         Object.assign(selected, { status: 'running', leaseId, leaseUntil: this.now() + 45000, attempts: selected.attempts + 1 });
@@ -893,7 +889,7 @@ export class CallRuntime {
           requireValue(typeof this.rejectIncoming === 'function', 'REJECT_PROVIDER_UNAVAILABLE', 'The server reject adapter is unavailable.', 503);
           await this.rejectIncoming({ callId: item.callId, phoneNumberId: this.phoneNumberId });
         } else if (item.kind === 'notify') {
-          let eligible = ['ended', 'transfer-ended'].includes(item.event) || item.event === 'incoming' && !current.terminal && !current.owner && current.phase === 'ringing';
+          let eligible = ['ended', 'transfer-ended'].includes(item.event) || item.event === 'incoming' && !current.terminal && !current.owner && current.phase === 'ringing' && current.deadlineAt > this.now();
           if (item.event === 'transfer-incoming' && !current.terminal) {
             const active = await this.store.get(callStoreKey(current.providerCallId));
             eligible = active?.active && active.transfer?.id === item.transferId && active.transfer.status === 'invited';
@@ -917,6 +913,28 @@ export class CallRuntime {
       });
       effects.push({ kind: claimed.job.kind, succeeded });
     }
+    return effects;
+  }
+
+  /** Idempotent, bounded recovery entry point called by the persisted due index. */
+  async recoverSession(id, { limit = 4 } = {}) {
+    requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
+    let session = await this.store.get(sessionKey(id)); if (!session) return { recovered: false };
+    await this.reconcileEligibility(session);
+    if (session.providerCallId && this.transferController) await this.transferController.expire(session.providerCallId);
+    await this.syncTransferNotifications(id);
+    await this.store.transaction(async tx => {
+      const current = await tx.get(sessionKey(id));
+      const now = this.now();
+      for (const op of Object.values(current.operations)) if (op.status === 'issued' && op.leaseUntil <= now) {
+        op.status = 'uncertain'; if (!current.terminal) current.phase = 'uncertain'; current.version++;
+      }
+      if (!current.terminal && current.phase !== 'connected' && current.deadlineAt <= now) {
+        terminalize(current, 'TIMED_OUT', now);
+      }
+      current.updatedAt = now; schedule(current, now); tx.set(sessionKey(id), current);
+    });
+    const effects = await this.drainSessionOutbox(id, { limit });
     session = await this.store.get(sessionKey(id));
     if (session.providerCallId && this.transferController) await this.transferController.drainOutbox(session.providerCallId, { limit: 2 });
     await this.releasePreMediaReservation(id);
