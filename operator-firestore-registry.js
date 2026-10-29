@@ -242,8 +242,11 @@ export function createFirestoreDeviceRegistry({
       const expiresAt = now + tokenTtlMs;
       const response = { deviceId, deviceToken: token, expiresAt };
       const binding = JSON.stringify({ operation: 'enrollment', codeHash, fingerprint, deviceId, generation });
+      // The administrator names invited phones. Keep the client label in the
+      // request fingerprint above so exact retries retain their original binding.
+      const deviceLabel = cleanText(invitation?.label, 120) || label;
       const row = { schema: 1, id: deviceId, installationId, tokenHash: digest, credentialGeneration: generation,
-        fcmToken: registrationFcm, deviceLabel: label, createdAt: now, firstCreatedAt: existing?.firstCreatedAt || existing?.createdAt || now,
+        fcmToken: registrationFcm, deviceLabel, createdAt: now, firstCreatedAt: existing?.firstCreatedAt || existing?.createdAt || now,
         updatedAt: now, tokenExpiresAt: expiresAt, revokedAt: 0, receiveCalls: true, receiveChats: true };
 
       if (existing) tx.set(collections.credentials.doc(existing.tokenHash), { deviceId, generation: existing.credentialGeneration, active: false, updatedAt: now });
