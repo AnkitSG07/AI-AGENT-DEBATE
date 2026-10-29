@@ -4,7 +4,7 @@ import { createHash, createPrivateKey, createSign, randomBytes, randomUUID, timi
 import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
-export const ANDROID_PUSH_VERSION = '2026-10-28-android-push-r1';
+export const ANDROID_PUSH_VERSION = '2026-10-29-android-push-r10';
 const PREFIX = '/api/operator-android';
 const HUB = 'https://www.smarthandicrafts.com/livechat-api-test';
 const OAUTH = 'https://oauth2.googleapis.com/token';
@@ -13,6 +13,7 @@ const ALERT_TTL_MS = 30000;
 const MAX_RING_AGE_MS = 90000;
 const MESSAGE_TTL_MS = 5 * 60000;
 const TOKEN_TTL_MS = 30 * 86400000;
+const DELIVERY_LEASE_MS = 60000;
 const HASH = value => createHash('sha256').update(String(value)).digest('hex');
 const equal = (a, b) => {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
@@ -27,6 +28,9 @@ const fixedHubUrl = id => { const url = new URL(HUB); url.searchParams.set('mode
 const positiveId = value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? String(Number(value)) : '';
 const messageHubUrl = id => { const url = new URL(HUB); url.searchParams.set('channel_id', id); url.searchParams.set('channel', id); return url.href; };
 const odooDateMs = value => typeof value === 'string' ? Date.parse(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(value) ? value.replace(' ', 'T') + 'Z' : value) : 0;
+const deliverySent = row => row?.state === 'sent' || (!row?.state && Number(row?.sentAt) > 0);
+const sameDelivery = (row, value) => row.deviceId === value.deviceId && row.event === value.event &&
+  (value.callId ? row.callId === value.callId : row.messageId === value.messageId);
 
 function configuration(env) {
   const firebase = {
@@ -54,18 +58,38 @@ function configuration(env) {
 /** readCall must return the latest exact durable lifecycle, not a webhook row.
  *  Optional handling:true prevents offering a call currently claimed in the Hub.
  *  delivery is an async DI hook only for tests; production always uses FCM HTTPv1.
+ *  deviceRegistry is the server-only registry domain adapter. Firestore mode
+ *  requires it; a missing/unavailable adapter never falls back to a local file.
  */
 export function createAndroidPushBridge({ env = process.env, fetchImpl = globalThis.fetch, readCall,
-  clock = Date.now, logger = console, devicesPath, delivery, retryDelay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  clock = Date.now, logger = console, devicesPath, deviceRegistry, delivery, retryDelay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   if (typeof readCall !== 'function') throw new TypeError('readCall callback is required');
   const config = configuration(env);
+  const storageMode = String(env.SH_ANDROID_REGISTRY_BACKEND || (deviceRegistry ? 'firestore' : 'file')).trim().toLowerCase();
+  const useExternalRegistry = storageMode !== 'file' || !!deviceRegistry;
   const path = resolve(devicesPath || env.SH_ANDROID_DEVICES_PATH || './android-operator-devices.json');
   let registry = null, loading = null, serial = Promise.resolve();
   let accessToken = '', accessExpiresAt = 0, accessPromise = null;
   const rates = new Map(), callQueues = new Map(), messageQueues = new Map();
   let sentCount = 0, failedCount = 0;
 
+  async function registryCall(method, ...args) {
+    if (!deviceRegistry || !['file', 'firestore'].includes(storageMode) || typeof deviceRegistry[method] !== 'function') {
+      throw fail(503, 'Android device storage is temporarily unavailable.');
+    }
+    try { return await deviceRegistry[method](...args); }
+    catch (error) {
+      // A Firestore IAM/auth error describes SERVER storage, not a revoked phone.
+      // Never expose SDK text or convert a transient failure into device 401.
+      if (error?.registryError === true && [400, 401, 403, 409, 429].includes(Number(error.status))) {
+        throw fail(Number(error.status), error.message);
+      }
+      throw fail(503, 'Android device storage is temporarily unavailable.');
+    }
+  }
+
   async function load() {
+    if (useExternalRegistry) throw fail(503, 'Local Android storage is disabled.');
     if (registry) return registry;
     if (!loading) loading = (async () => {
       try {
@@ -77,7 +101,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         registry = { schema: 1, devices: [], usedEnrollmentHashes: [], deliveries: [] };
       }
       return registry;
-    })();
+    })().finally(() => { loading = null; });
     return loading;
   }
   async function persist(next) {
@@ -100,6 +124,49 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     serial = operation.catch(() => {});
     return operation;
   }
+  const listDevices = async () => useExternalRegistry ? registryCall('listDevices') : (await load()).devices;
+  const getDevice = async id => useExternalRegistry ? registryCall('getDevice', id) : (await load()).devices.find(row => row.id === id);
+  const getDeliveries = async scope => useExternalRegistry ? registryCall('getDeliveries', scope) :
+    (await load()).deliveries.filter(row => scope.callId ? row.callId === scope.callId : row.messageId === scope.messageId);
+  function eligibleDevice(row, event) {
+    return !!row && !row.revokedAt && !config.revokedIds.has(row.id) && row.tokenExpiresAt > clock() && !!row.fcmToken &&
+      (event === 'incoming' ? row.receiveCalls !== false : event === 'message' ? row.receiveChats !== false : true);
+  }
+  async function claimDelivery(value) {
+    if (useExternalRegistry) return registryCall('claimDelivery', value);
+    const claimId = randomUUID();
+    return mutate(store => {
+      const device = store.devices.find(row => row.id === value.deviceId);
+      if (!eligibleDevice(device, value.event) || value.expiresAtMs <= clock()) return { claimed: false };
+      const current = store.deliveries.find(row => sameDelivery(row, value));
+      if (current && (deliverySent(current) || (current.state === 'claimed' && current.claimUntilMs > clock()))) return { claimed: false };
+      const deliveryId = HASH(JSON.stringify([value.deviceId, value.callId || '', value.messageId || '', value.event]));
+      const next = { ...value, deliveryId, claimId, state: 'claimed', createdAt: current?.createdAt || clock(),
+        updatedAt: clock(), claimUntilMs: clock() + DELIVERY_LEASE_MS };
+      store.deliveries = store.deliveries.filter(row => !sameDelivery(row, value) &&
+        Math.max(Number(row.sentAt) || 0, Number(row.updatedAt) || 0, Number(row.createdAt) || 0) > clock() - 86400000);
+      if (store.deliveries.length >= 10000) throw fail(503, 'Android notification storage requires maintenance.');
+      store.deliveries.push(next);
+      return { claimed: true, claimId, deliveryId, claimUntilMs: next.claimUntilMs, device: { ...device } };
+    });
+  }
+  async function finishDelivery(value) {
+    if (useExternalRegistry) return registryCall('finishDelivery', value);
+    return mutate(store => {
+      const row = store.deliveries.find(item => item.deliveryId === value.deliveryId && item.claimId === value.claimId);
+      if (!row || row.state !== 'claimed') return { finished: false };
+      row.state = value.outcome; row.updatedAt = clock();
+      if (value.outcome === 'sent') row.sentAt = clock();
+      return { finished: true };
+    });
+  }
+  async function clearFcmToken(id, expectedFcmToken) {
+    if (useExternalRegistry) return registryCall('clearFcmToken', id, expectedFcmToken);
+    return mutate(store => {
+      const row = store.devices.find(item => item.id === id && item.fcmToken === expectedFcmToken);
+      if (row) { row.fcmToken = ''; row.updatedAt = clock(); }
+    });
+  }
   function configured() { if (!config.enabled) throw fail(503, 'Native Android notifications are not configured on the server.'); }
   function limited(key, max, windowMs = 60000) {
     const now = clock();
@@ -114,8 +181,8 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     const raw = String(req.headers?.authorization || '');
     if (!/^Bearer [A-Za-z0-9_.-]{45,240}$/.test(raw)) throw fail(401, 'Device enrollment is required.');
     const digest = HASH(raw.slice(7));
-    const store = await load();
-    const device = store.devices.find(row => equal(row.tokenHash, digest));
+    const device = useExternalRegistry ? await registryCall('authenticate', raw.slice(7)) :
+      (await load()).devices.find(row => equal(row.tokenHash, digest));
     if (!device || device.revokedAt || config.revokedIds.has(device.id) || device.tokenExpiresAt <= clock()) throw fail(401, 'Device enrollment expired or was revoked.');
     limited(`device:${device.id}`, 120);
     return device;
@@ -127,6 +194,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       catch (error) {
         const status = Number(error.status) || 503;
         if (status >= 500) logger.warn?.('Android push route unavailable', { status });
+        if (status >= 500) res.setHeader('Retry-After', '5');
         res.status(status).json({ ok: false, error: status >= 500 && !error.status ? 'Android notification service is temporarily unavailable.' : error.message });
       }
     };
@@ -140,6 +208,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     const id = installation(body.installationId), token = fcmTokenValue(body.fcmToken);
     const code = text(body.enrollmentCode, 256);
     if (!id || !token) throw fail(400, 'A valid installation ID and Firebase token are required.');
+    if (useExternalRegistry) {
+      const requestId = body.requestId === undefined ? '' : installation(body.requestId);
+      if (body.requestId !== undefined && !requestId) throw fail(400, 'A valid enrollment request ID is required.');
+      const result = await registryCall('enroll', { installationId: id, fcmToken: token, enrollmentCode: code,
+        requestId, deviceLabel: text(body.deviceLabel, 120) || 'Android operator device' });
+      return { ok: true, ...result, version: ANDROID_PUSH_VERSION };
+    }
     if (!config.enrollmentCode || !equal(HASH(code), HASH(config.enrollmentCode))) throw fail(403, 'The enrollment code is invalid or unavailable.');
     return mutate(store => {
       const codeHash = HASH(config.enrollmentCode);
@@ -170,20 +245,41 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       issuedAtMs: updatedAt || clock(), expiresAtMs: Math.min(clock() + ALERT_TTL_MS, startedAt + MAX_RING_AGE_MS),
       hubUrl: fixedHubUrl(id), callerName: text(value.customer_name, 120) || 'WhatsApp customer' };
   }
-  async function liveCall(id) { return exactMinimalCall(id, await readCall(id)); }
+  async function liveCall(id) {
+    try { return exactMinimalCall(id, await readCall(id)); }
+    catch { throw fail(503, 'Call status is temporarily unavailable. Device enrollment is unchanged.'); }
+  }
   function registerRoutes(app) {
     app.get(`${PREFIX}/config`, route(async () => {
-      let enrollmentEnabled = false;
+      let enrollmentEnabled = false, storageAvailable = !useExternalRegistry;
       if (config.enabled && config.enrollmentCode) {
-        try { enrollmentEnabled = !(await load()).usedEnrollmentHashes.includes(HASH(config.enrollmentCode)); } catch {}
+        try {
+          enrollmentEnabled = useExternalRegistry ? await registryCall('isEnrollmentAvailable', config.enrollmentCode) :
+            !(await load()).usedEnrollmentHashes.includes(HASH(config.enrollmentCode));
+          storageAvailable = true;
+        } catch { storageAvailable = false; }
+      }
+      if (config.enabled && useExternalRegistry && typeof deviceRegistry?.checkAvailability === 'function') {
+        try { storageAvailable = await registryCall('checkAvailability') === true; }
+        catch { storageAvailable = false; }
       }
       return { ok: true, enabled: config.enabled, enrollmentEnabled, version: ANDROID_PUSH_VERSION,
-        packageName: config.packageName, firebase: config.enabled ? config.firebase : null };
+        packageName: config.packageName, firebase: config.enabled ? config.firebase : null, storageAvailable,
+        capabilities: { enrollmentInvitations: useExternalRegistry && storageMode === 'firestore' &&
+          typeof deviceRegistry?.issueEnrollment === 'function', deviceLeaseRenewal: !useExternalRegistry ||
+          (['file', 'firestore'].includes(storageMode) && typeof deviceRegistry?.renewLease === 'function') },
+        deviceLeaseTtlMs: TOKEN_TTL_MS };
     }));
     app.post(`${PREFIX}/devices/register`, route(registration));
     app.post(`${PREFIX}/devices/token`, route(async req => {
       const device = await authenticated(req), token = fcmTokenValue(req.body?.fcmToken);
       if (!token) throw fail(400, 'A valid Firebase token is required.');
+      if (useExternalRegistry) {
+        const value = { fcmToken: token };
+        if (typeof req.body?.receiveCalls === 'boolean') value.receiveCalls = req.body.receiveCalls;
+        if (typeof req.body?.receiveChats === 'boolean') value.receiveChats = req.body.receiveChats;
+        return { ok: true, ...await registryCall('updateToken', String(req.headers.authorization).slice(7), value) };
+      }
       return mutate(store => {
         const row = store.devices.find(item => item.id === device.id && !item.revokedAt);
         if (!row || row.tokenExpiresAt <= clock()) throw fail(401, 'Device enrollment expired or was revoked.');
@@ -193,8 +289,21 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         return { ok: true, deviceId: row.id, receiveCalls: row.receiveCalls, receiveChats: row.receiveChats !== false, expiresAt: row.tokenExpiresAt };
       });
     }));
+    app.post(`${PREFIX}/devices/renew`, route(async req => {
+      const device = await authenticated(req);
+      // Reusing the same valid bearer makes a lost-response retry safe. This does
+      // not revive expired/revoked devices or change a concurrently refreshed FCM token.
+      if (useExternalRegistry) return { ok: true, ...await registryCall('renewLease', String(req.headers.authorization).slice(7)) };
+      return mutate(store => {
+        const row = store.devices.find(item => item.id === device.id && !item.revokedAt);
+        if (!row || config.revokedIds.has(row.id) || row.tokenExpiresAt <= clock()) throw fail(401, 'Device enrollment expired or was revoked.');
+        row.tokenExpiresAt = Math.max(row.tokenExpiresAt, clock() + TOKEN_TTL_MS); row.updatedAt = clock();
+        return { ok: true, deviceId: row.id, expiresAt: row.tokenExpiresAt };
+      });
+    }));
     app.post(`${PREFIX}/devices/unregister`, route(async req => {
       const device = await authenticated(req);
+      if (useExternalRegistry) return { ok: true, ...await registryCall('revoke', String(req.headers.authorization).slice(7)) };
       return mutate(store => {
         const row = store.devices.find(item => item.id === device.id);
         if (row) { row.revokedAt = clock(); row.fcmToken = ''; row.updatedAt = clock(); }
@@ -206,8 +315,12 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       limited(`test:${device.id}`, 3);
       if (!device.fcmToken) throw fail(409, 'Refresh this device Firebase token before testing.');
       const testId = randomUUID();
-      await send(device, { type: 'sh_operator_test', test_id: testId,
-        issued_at_ms: String(clock()), expires_at_ms: String(clock() + MESSAGE_TTL_MS) });
+      try {
+        await send(device, { type: 'sh_operator_test', test_id: testId,
+          issued_at_ms: String(clock()), expires_at_ms: String(clock() + MESSAGE_TTL_MS) });
+      } catch {
+        throw fail(503, 'Firebase delivery is temporarily unavailable. Device enrollment is unchanged.');
+      }
       // FCM acceptance is not device receipt; the app confirms the matching ID
       // only after FirebaseMessagingService actually receives this data message.
       return { ok: true, accepted: true, testId, version: ANDROID_PUSH_VERSION };
@@ -254,11 +367,12 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   async function send(device, data) {
     if (delivery) return delivery(device, data);
     const bearer = await oauthToken();
+    if (Number(data.expires_at_ms) <= clock()) throw Object.assign(new Error('Notification expired before delivery'), { status: 410 });
     const { response, body } = await http(`https://fcm.googleapis.com/v1/projects/${config.firebase.projectId}/messages:send`, {
       method: 'POST', headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { token: device.fcmToken, data,
-        android: { priority: 'HIGH', ttl: data.type !== 'sh_operator_call' ? `${Math.max(1, Math.min(300, Math.ceil((Number(data.expires_at_ms) - clock()) / 1000)))}s` : '30s',
-          collapse_key: data.type === 'sh_operator_test' ? `sh-test-${device.id}` : data.type === 'sh_operator_message' ? `sh-chat-${data.channel_id}` : `sh-call-${HASH(data.call_id).slice(0, 32)}`,
+        android: { priority: 'HIGH', ttl: ['sh_operator_call', 'sh_operator_transfer'].includes(data.type) ? '30s' : `${Math.max(1, Math.min(300, Math.ceil((Number(data.expires_at_ms) - clock()) / 1000)))}s`,
+          collapse_key: data.type === 'sh_operator_test' ? `sh-test-${device.id}` : data.type === 'sh_operator_message' ? `sh-chat-${data.channel_id}` : `sh-call-${HASH(data.call_id + (data.transfer_id || '')).slice(0, 32)}`,
           restricted_package_name: config.packageName } } })
     });
     if (response.status === 401) { accessToken = ''; accessExpiresAt = 0; }
@@ -268,59 +382,88 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     }
     return { ok: true };
   }
+  async function deliverNotification({ descriptor, data, stillCurrent = async () => true }) {
+    let claim = null, accepted = false, attemptedDevice = null;
+    try {
+      claim = await claimDelivery({ ...descriptor, expiresAtMs: Number(data.expires_at_ms) });
+      if (!claim?.claimed) {
+        // A different worker may still own the lease. Its network response is
+        // not proof of delivery, so native outbox jobs must retry this case.
+        const rows = await getDeliveries(descriptor.callId ? { callId: descriptor.callId } : { messageId: descriptor.messageId });
+        const current = rows.find(row => sameDelivery(row, descriptor));
+        return current?.state === 'claimed' && !deliverySent(current) ? 'pending' : 'skipped';
+      }
+      const validDevice = async () => {
+        const device = await getDevice(descriptor.deviceId);
+        if (!eligibleDevice(device, descriptor.event) || clock() >= Number(data.expires_at_ms)) return null;
+        if (!await stillCurrent() || clock() >= Number(data.expires_at_ms) ||
+            (claim.claimUntilMs && clock() >= claim.claimUntilMs)) return null;
+        return device;
+      };
+      const cancel = async () => {
+        await finishDelivery({ deliveryId: claim.deliveryId, claimId: claim.claimId, outcome: 'cancelled' });
+        return 'skipped';
+      };
+      attemptedDevice = await validDevice();
+      if (!attemptedDevice) return await cancel();
+      try { await send(attemptedDevice, data); }
+      catch (firstError) {
+        if (firstError.unregistered || (firstError.status >= 400 && firstError.status < 500 && ![401, 429].includes(firstError.status))) throw firstError;
+        await retryDelay(750);
+        attemptedDevice = await validDevice();
+        if (!attemptedDevice) return await cancel();
+        await send(attemptedDevice, data);
+      }
+      accepted = true;
+      const receipt = await finishDelivery({ deliveryId: claim.deliveryId, claimId: claim.claimId, outcome: 'sent' });
+      if (receipt?.finished !== true) throw fail(503, 'Notification delivery could not be confirmed in storage.');
+      sentCount++;
+      return 'sent';
+    } catch (error) {
+      failedCount++;
+      // If FCM accepted but receipt persistence failed, keep the claim until its
+      // lease expires. Retrying immediately could duplicate a delivered alert.
+      // FCM acceptance + registry commit are not an exactly-once transaction;
+      // Android still deduplicates the exact call/message event on receipt.
+      if (claim?.claimed && !accepted) {
+        await finishDelivery({ deliveryId: claim.deliveryId, claimId: claim.claimId, outcome: 'failed' }).catch(() => {});
+      }
+      if (error.unregistered && attemptedDevice) {
+        await clearFcmToken(attemptedDevice.id, attemptedDevice.fcmToken).catch(() => {});
+      }
+      logger.warn?.('Android notification delivery unavailable', { status: Number(error.status) || 0, unregistered: !!error.unregistered });
+      return 'failed';
+    }
+  }
   async function publishOne(id) {
     if (!config.enabled) return { ok: false, skipped: 'not_configured' };
-    let current = await liveCall(id);
+    const current = await liveCall(id);
     if (!current) return { ok: false, skipped: 'not_incoming' };
-    const store = await load();
-    const previous = store.deliveries.filter(row => row.callId === id);
+    const [devices, previous] = await Promise.all([listDevices(), getDeliveries({ callId: id })]);
     const event = current.answerable ? 'incoming' : 'ended';
-    if (event === 'ended' && !previous.some(row => row.event === 'incoming')) return { ok: true, skipped: 'not_previously_alerted' };
-    // Persisted delivery dedupe also stops a stale delayed webhook re-ringing a
-    // terminal call after a server restart. Lifecycle is always re-read above.
-    const sentTo = new Set(previous.filter(row => row.event === event).map(row => row.deviceId));
+    // A claimed/failed send may have reached FCM despite a lost acknowledgement.
+    // Terminal cancellation therefore also covers those exact incoming attempts.
     const incomingTargets = new Set(previous.filter(row => row.event === 'incoming').map(row => row.deviceId));
-    const targets = store.devices.filter(row => !row.revokedAt && !config.revokedIds.has(row.id) && row.tokenExpiresAt > clock() && row.fcmToken &&
-      (event === 'ended' ? incomingTargets.has(row.id) : row.receiveCalls !== false) && !sentTo.has(row.id));
+    if (event === 'ended' && !incomingTargets.size) return { ok: true, skipped: 'not_previously_alerted' };
+    const sentTo = new Set(previous.filter(row => row.event === event && deliverySent(row)).map(row => row.deviceId));
+    const targets = devices.filter(row => eligibleDevice(row, event) &&
+      (event !== 'ended' || incomingTargets.has(row.id)) && !sentTo.has(row.id));
     let sent = 0, failed = 0, nextTarget = 0;
     async function deliverNext() {
-    while (nextTarget < targets.length) {
-      const snapshot = targets[nextTarget++];
-      // Device revocation and a newly terminal lifecycle must win over queued
-      // delivery. Never send an old incoming payload merely because it was queued.
-      const device = (await load()).devices.find(row => row.id === snapshot.id && !row.revokedAt && !config.revokedIds.has(row.id) && row.tokenExpiresAt > clock());
-      if (!device || !device.fcmToken || (event === 'incoming' && !device.receiveCalls)) continue;
-      const currentCall = await liveCall(id);
-      if (!currentCall || (event === 'incoming' && !currentCall.answerable)) break;
-      const data = { type: 'sh_operator_call', event, call_id: id, state: currentCall.state,
-        issued_at_ms: String(clock()), expires_at_ms: String(clock() + ALERT_TTL_MS), hub_url: fixedHubUrl(id) };
-      try {
-        try { await send(device, data); }
-        catch (firstError) {
-          if (firstError.unregistered || (firstError.status >= 400 && firstError.status < 500 && ![401, 429].includes(firstError.status))) throw firstError;
-          await retryDelay(750);
-          const newestDevice = (await load()).devices.find(row => row.id === device.id && !row.revokedAt && row.tokenExpiresAt > clock());
-          const newestCall = await liveCall(id);
-          if (!newestDevice || !newestDevice.fcmToken || config.revokedIds.has(device.id) ||
-              !newestCall || (event === 'incoming' && (!newestCall.answerable || !newestDevice.receiveCalls))) continue;
-          if (clock() >= Number(data.expires_at_ms)) continue;
-          await send(newestDevice, data);
-        }
-        await mutate(next => {
-          next.deliveries = next.deliveries.filter(row => row.sentAt > clock() - 86400000);
-          next.deliveries.push({ callId: id, deviceId: device.id, event, sentAt: clock() });
-          if (next.deliveries.length > 10000) next.deliveries = next.deliveries.slice(-10000);
-        });
-        sent++; sentCount++;
-      } catch (error) {
-        failed++; failedCount++;
-        if (error.unregistered) await mutate(next => {
-          const row = next.devices.find(item => item.id === device.id && item.fcmToken === device.fcmToken);
-          if (row) { row.fcmToken = ''; row.updatedAt = clock(); }
-        });
-        logger.warn?.('Android call alert delivery failed', { status: Number(error.status) || 0, unregistered: !!error.unregistered });
+      while (nextTarget < targets.length) {
+        const snapshot = targets[nextTarget++];
+        const latest = await liveCall(id);
+        if (!latest || (event === 'incoming' && !latest.answerable)) break;
+        const data = { type: 'sh_operator_call', event, call_id: id, state: latest.state,
+          issued_at_ms: String(clock()), expires_at_ms: String(clock() + ALERT_TTL_MS), hub_url: fixedHubUrl(id) };
+        const outcome = await deliverNotification({ descriptor: { callId: id, deviceId: snapshot.id, event }, data,
+          stillCurrent: async () => {
+            const call = await liveCall(id);
+            return !!call && (event !== 'incoming' || call.answerable);
+          } });
+        if (outcome === 'sent') sent++;
+        if (outcome === 'failed') failed++;
       }
-    }
     }
     await Promise.all(Array.from({ length: Math.min(4, targets.length) }, deliverNext));
     return { ok: failed === 0, sent, failed };
@@ -334,6 +477,34 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       return operation;
     }));
   }
+  // Called only by the authenticated, durable room-call coordinator. FCM wakes
+  // an enrolled client; the client rechecks server state before any call action.
+  async function publishRoomEvent({ session, event, transferId = '', toDeviceId = '', stillCurrent = async () => true } = {}) {
+    configured();
+    const id = callIdValue(session?.id), isTransfer = event === 'transfer-incoming' || event === 'transfer-ended';
+    if (!id || !['incoming', 'ended', 'transfer-incoming', 'transfer-ended'].includes(event) ||
+        (isTransfer && (!callIdValue(transferId) || !toDeviceId))) throw fail(400, 'A valid exact room-call event is required.');
+    const deliveryEvent = event.endsWith('incoming') ? 'incoming' : 'ended';
+    // Transfers use a separate bounded deduplication key; the real call and
+    // transfer IDs stay in the signed-in client payload, never in credentials.
+    const scopeId = isTransfer ? `transfer_${HASH(JSON.stringify([id, transferId]))}` : id;
+    const rows = await listDevices();
+    const targets = rows.filter(row => eligibleDevice(row, deliveryEvent) &&
+      row.mediaProtocol === 'sh-room-audio-v1' && row.nativeBuild >= 10 &&
+      (!toDeviceId || row.id === toDeviceId));
+    let sent = 0, failed = 0;
+    await Promise.all(targets.map(async device => {
+      const data = { type: isTransfer ? 'sh_operator_transfer' : 'sh_operator_call', engine: 'livekit',
+        event: deliveryEvent, call_id: id, issued_at_ms: String(clock()),
+        expires_at_ms: String(clock() + ALERT_TTL_MS), hub_url: fixedHubUrl(id) };
+      if (isTransfer) data.transfer_id = transferId;
+      const outcome = await deliverNotification({ descriptor: { callId: scopeId, deviceId: device.id, event: deliveryEvent }, data, stillCurrent });
+      if (outcome === 'sent') sent++;
+      if (outcome === 'failed' || outcome === 'pending') failed++;
+    }));
+    if (failed) throw fail(503, 'Native call alerts will retry after notification delivery recovers.');
+    return { ok: true, sent, failed };
+  }
   function publishMessage({ channel = {}, message = {}, verifiedIncoming = false } = {}) {
     if (!config.enabled) return Promise.resolve({ ok: false, skipped: 'not_configured' });
     const channelId = positiveId(channel.id), messageId = positiveId(message.id);
@@ -344,41 +515,19 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       return Promise.resolve({ ok: false, skipped: 'not_a_recent_verified_incoming_message' });
     }
     const operation = (messageQueues.get(messageId) || Promise.resolve()).catch(() => {}).then(async () => {
-      const store = await load();
-      const delivered = new Set(store.deliveries.filter(row => row.messageId === messageId).map(row => row.deviceId));
-      const targets = store.devices.filter(row => !row.revokedAt && !config.revokedIds.has(row.id) && row.tokenExpiresAt > clock() && row.fcmToken &&
-        row.receiveChats !== false && messageAt >= row.createdAt - 5000 && !delivered.has(row.id));
+      const [devices, previous] = await Promise.all([listDevices(), getDeliveries({ messageId })]);
+      const delivered = new Set(previous.filter(deliverySent).map(row => row.deviceId));
+      const targets = devices.filter(row => eligibleDevice(row, 'message') && messageAt >= row.createdAt - 5000 && !delivered.has(row.id));
       let sent = 0, failed = 0, nextTarget = 0;
       async function deliverNextMessage() {
         while (nextTarget < targets.length) {
           const snapshot = targets[nextTarget++];
-          const device = (await load()).devices.find(row => row.id === snapshot.id && !row.revokedAt && row.tokenExpiresAt > clock() && row.receiveChats !== false);
-          if (!device?.fcmToken || config.revokedIds.has(device.id) || clock() >= messageAt + MESSAGE_TTL_MS) continue;
+          if (clock() >= messageAt + MESSAGE_TTL_MS) break;
           const data = { type: 'sh_operator_message', channel_id: channelId, message_id: messageId,
             issued_at_ms: String(clock()), expires_at_ms: String(messageAt + MESSAGE_TTL_MS), hub_url: messageHubUrl(channelId) };
-          try {
-            try { await send(device, data); }
-            catch (firstError) {
-              if (firstError.unregistered || (firstError.status >= 400 && firstError.status < 500 && ![401, 429].includes(firstError.status))) throw firstError;
-              await retryDelay(750);
-              const newest = (await load()).devices.find(row => row.id === device.id && !row.revokedAt && row.tokenExpiresAt > clock() && row.receiveChats !== false);
-              if (!newest?.fcmToken || config.revokedIds.has(device.id) || clock() >= Number(data.expires_at_ms)) continue;
-              await send(newest, data);
-            }
-            await mutate(next => {
-              next.deliveries = next.deliveries.filter(row => row.sentAt > clock() - 86400000);
-              next.deliveries.push({ messageId, channelId, deviceId: device.id, event: 'message', sentAt: clock() });
-              if (next.deliveries.length > 10000) next.deliveries = next.deliveries.slice(-10000);
-            });
-            sent++; sentCount++;
-          } catch (error) {
-            failed++; failedCount++;
-            if (error.unregistered) await mutate(next => {
-              const row = next.devices.find(item => item.id === device.id && item.fcmToken === device.fcmToken);
-              if (row) { row.fcmToken = ''; row.updatedAt = clock(); }
-            });
-            logger.warn?.('Android message alert delivery failed', { status: Number(error.status) || 0, unregistered: !!error.unregistered });
-          }
+          const outcome = await deliverNotification({ descriptor: { messageId, channelId, deviceId: snapshot.id, event: 'message' }, data });
+          if (outcome === 'sent') sent++;
+          if (outcome === 'failed') failed++;
         }
       }
       await Promise.all(Array.from({ length: Math.min(4, targets.length) }, deliverNextMessage));
@@ -388,5 +537,5 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     operation.finally(() => { if (messageQueues.get(messageId) === operation) messageQueues.delete(messageId); }).catch(() => {});
     return operation;
   }
-  return { registerRoutes, publishCallEvents, publishMessage, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, sentCount, failedCount }) };
+  return { registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
 }
