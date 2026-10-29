@@ -1,5 +1,9 @@
 import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
+import { createOperatorFirestoreRuntime } from "./operator-firestore-runtime.js";
+import { createOperatorMediaGateway, nativeCallHistoryEvent } from "./operator-media-gateway.js";
+import { registerOperatorAdminRoutes } from "./operator-admin.js";
+import { createOperatorReportingRuntime } from "./operator-reporting-runtime.js";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
@@ -10,7 +14,7 @@ import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPla
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-10-29-operator-hub-r9";
+const SERVER_PATCH_VERSION = "2026-10-29-operator-hub-r10-native-audio";
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -49,6 +53,7 @@ app.use(express.json({
     // Odoo may validate x-hub-signature-256 against the raw request body.
     if (req.originalUrl && String(req.originalUrl).includes("webhook")) {
       req.rawBody = buf?.toString("utf8") || "";
+      req.rawBodyBuffer = Buffer.from(buf || []);
     }
   }
 }));
@@ -115,7 +120,8 @@ const profilePasswords = {
 };
 // Signed profile sessions are required for privileged FedEx operations.
 // Existing unsigned sessions must sign in once after deployment.
-const PROFILE_SIGNING_KEY = process.env.PROFILE_SESSION_SECRET || Object.values(profilePasswords).join(":");
+const PROFILE_SIGNING_KEY = process.env.PROFILE_SESSION_SECRET ||
+  (Object.values(profilePasswords).some(Boolean) ? Object.values(profilePasswords).join(":") : "");
 const PROFILE_SESSION_COOKIE = "profile_session";
 function profileSignature(payload) {
   return createHmac("sha256", PROFILE_SIGNING_KEY).update(payload).digest("base64url");
@@ -21684,6 +21690,8 @@ async function enrichStoredWhatsappCallEvents(events = []) {
     });
     return changed ? next : rows;
   });
+  await Promise.allSettled([...byId.values()].map(row =>
+    operatorMediaGateway.attachVerifiedChannel(row.call_id, Number(row.odoo_channel_id))));
 }
 
 async function storeWhatsappCallEvents(events = []) {
@@ -21829,7 +21837,7 @@ function whatsappCallShouldTriggerPush(call = {}) {
   return true;
 }
 
-async function processWhatsappCallWebhook(body = {}, { deferSideEffects = false } = {}) {
+async function processWhatsappCallWebhook(body = {}, { deferSideEffects = false, verifiedMeta = false } = {}) {
   const values = whatsappCallValueFromPayload(body);
   const events = [];
 
@@ -21838,10 +21846,13 @@ async function processWhatsappCallWebhook(body = {}, { deferSideEffects = false 
     const statuses = Array.isArray(value?.statuses) ? value.statuses.filter((status) => status?.type === "call") : [];
     for (const call of [...calls, ...statuses]) {
       const event = normalizeWhatsappCallEvent(call, value);
-      if (event) events.push(event);
+      if (event) events.push({ ...event, meta_verified: verifiedMeta === true });
     }
   }
 
+  // Persist the genuine offer/answer before acknowledgement. Native ownership
+  // and its recovery jobs survive a Render restart independently of Odoo RPC.
+  if (verifiedMeta) await operatorMediaGateway.ingestVerifiedEvents(events);
   // Make the provider offer visible to Hub polling before any Odoo RPC.
   const stored = await storeWhatsappCallEvents(events);
 
@@ -22008,7 +22019,10 @@ async function forwardWhatsappWebhookToOdoo(req, body = {}) {
 async function handleWhatsappWebhookPost(req, res) {
   try {
     const body = req.body || {};
-    const callResult = await processWhatsappCallWebhook(body, { deferSideEffects: true });
+    const verifiedMeta = operatorMediaGateway.verifyWebhook(req);
+    if (operatorMediaGateway.appSecretConfigured && !verifiedMeta)
+      return res.status(401).json({ ok: false, error: "Invalid webhook signature." });
+    const callResult = await processWhatsappCallWebhook(body, { deferSideEffects: true, verifiedMeta });
     const fields = whatsappWebhookPayloadFields(body);
     if (callResult.received > 0 && (!fields.length || fields.every((field) => field === "calls"))) {
       queueWhatsappWebhookFollowup(req, body, callResult);
@@ -22031,7 +22045,9 @@ async function handleWhatsappWebhookPost(req, res) {
   } catch (error) {
     console.error("WhatsApp webhook processing failed:", error?.message || error);
     await recordWebhookDebugEvent(req, req.body || {}, { ok: false, error: error?.message || String(error) }).catch(() => null);
-    return res.status(200).json({ ok: false, error: error?.message || String(error), router_mode: true });
+    // A durable call commit failure must be retried by the provider. A success
+    // ACK here would permanently lose the real SDP or terminal event.
+    return res.status(503).json({ ok: false, error: "Webhook processing is temporarily unavailable. Retry this delivery.", router_mode: true });
   }
 }
 
@@ -22526,6 +22542,12 @@ function whatsappCallLifecycleFromRows(rows = []) {
   const terminalStatuses = new Set(["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"]);
   const active = !terminalStatuses.has(status) && (nowMs - latestMs) <= WHATSAPP_CALL_ACTIVE_WINDOW_MS;
   const answerable = direction === "incoming" && active && !!sdpRow && status === "incoming_ringing";
+  const nativeRow = validRows.filter(row => row.source === "operator_native_media" && row.native_projection)
+    .sort((a, b) => Number(b.native_version || 0) - Number(a.native_version || 0))[0];
+  const realProviderEnded = validRows.some(row => row.meta_verified === true &&
+    String(row.source || "").startsWith("whatsapp_calls_webhook") && whatsappCallRowMarksTerminal(row));
+  const nativeProjection = nativeRow ? { ...nativeRow.native_projection,
+    ...(realProviderEnded ? { status: terminalStatuses.has(status) ? status : "ended", active: false, answerable: false, end_confirmed: true } : {}) } : {};
 
   return {
     id: callId,
@@ -22575,7 +22597,8 @@ function whatsappCallLifecycleFromRows(rows = []) {
     ),
     source: "whatsapp_call_lifecycle",
     latest_row: latest,
-    events: validRows.slice(0, 20)
+    events: validRows.slice(0, 20),
+    ...nativeProjection
   };
 }
 
@@ -24735,8 +24758,11 @@ app.post("/api/whatsapp-calls/accept", async (req, res) => {
     };
     let preAccept = null;
     if (WHATSAPP_CALL_PRE_ACCEPT_ENABLED) {
+      await operatorMediaGateway.claimLegacyIncoming(callId, `legacy_accept_${operatorDeviceId || "browser"}`);
       preAccept = await whatsappCallGraphAction({ phoneNumberId, callId, action: "pre_accept", sdp, sdpType });
     }
+    if (!WHATSAPP_CALL_PRE_ACCEPT_ENABLED)
+      await operatorMediaGateway.claimLegacyIncoming(callId, `legacy_accept_${operatorDeviceId || "browser"}`);
     assertCurrentAcceptance();
     const accepted = await whatsappCallGraphAction({ phoneNumberId, callId, action: "accept", sdp, sdpType });
     assertCurrentAcceptance();
@@ -24775,6 +24801,7 @@ app.post("/api/whatsapp-calls/reject", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
+    if (callId) await operatorMediaGateway.claimLegacyIncoming(callId, `legacy_reject_${aiModeSafeString(body.operator_device_id || "browser", 160)}`);
     const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, callId)));
     const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
     const ownerLock = getOperatorCallLock(callId);
@@ -24809,6 +24836,7 @@ app.post("/api/whatsapp-calls/terminate", async (req, res) => {
     const calls = await readWhatsappCallLogs();
     const base = whatsappCallFindByCallId(calls, body.call_id || body.callId || "");
     const callId = aiModeSafeString(body.call_id || body.callId || base?.call_id || "", 220);
+    if (callId) await operatorMediaGateway.assertLegacyControl(callId);
     const lifecycle = whatsappCallLifecycleFromRows(calls.filter((row) => whatsappCallMatchesId(row, callId)));
     const operatorDeviceId = aiModeSafeString(body.operator_device_id || body.device_id || body.deviceId || "", 160);
     const ownerLock = getOperatorCallLock(callId);
@@ -24970,6 +24998,7 @@ app.get("/api/whatsapp-calls/recent", async (req, res) => {
 
 app.post("/api/whatsapp-calls/test", async (req, res) => {
   try {
+    if (readProfileSession(req)?.profile !== "SUDO") return res.status(401).json({ ok: false, error: "Administrator sign in is required for synthetic call testing." });
     const result = await processWhatsappCallWebhook(req.body || {});
     return res.json(result);
   } catch (error) {
@@ -25030,17 +25059,64 @@ process.on("unhandledRejection", (reason) => {
 
 // Native enrollment is explicit and server authenticated. Device tokens never
 // enter the Odoo embed, and this adapter never exposes SDP through native push.
+const operatorFirestoreRuntime = createOperatorFirestoreRuntime();
+const authorizeOperatorAdmin = req => readProfileSession(req)?.profile === "SUDO";
+const operatorReportingRuntime = createOperatorReportingRuntime({
+  firestoreRuntime: operatorFirestoreRuntime,
+  authorize: authorizeOperatorAdmin,
+  executeOdoo: async (model, method, params = [], kw = {}) =>
+    odooExecute(await odooLoginCached(), model, method, params, kw),
+  getArchiveCompanyId: async () => {
+    const uid = await odooLoginCached();
+    if (!Number.isSafeInteger(uid) || uid <= 0) throw new Error("The backend Odoo account is not verified.");
+    const users = await odooExecute(uid, "res.users", "read", [[uid], ["id", "company_id"]]);
+    const companyId = users?.[0]?.id === uid && Array.isArray(users[0].company_id) ? users[0].company_id[0] : null;
+    if (!Number.isSafeInteger(companyId) || companyId <= 0) throw new Error("The backend Odoo company is not verified.");
+    return companyId;
+  }
+});
 const androidPushBridge = createAndroidPushBridge({
+  deviceRegistry: operatorFirestoreRuntime.deviceRegistry,
   readCall: async (callId) => {
+    if (await operatorMediaGateway.hasNativeCall(callId)) return null;
     const rows = (await readWhatsappCallLogs()).filter((row) => whatsappCallMatchesId(row, callId));
     const call = whatsappCallLifecycleFromRows(rows);
     return call ? { ...call, handling: !!getOperatorCallLock(callId) } : null;
   }
 });
+const operatorMediaGateway = createOperatorMediaGateway({
+  firestoreRuntime: operatorFirestoreRuntime,
+  pushBridge: androidPushBridge,
+  rejectIncoming: ({ callId, phoneNumberId }) => whatsappCallGraphAction({ callId, phoneNumberId, action: "reject" }),
+  onCallState: async state => {
+    const row = nativeCallHistoryEvent(state);
+    if (!row) return;
+    // Reporting reads committed durable state independently of call control.
+    // A pending cleanup snapshot is deferred to the bounded collector sweep.
+    const sessionId = state.session?.id;
+    if (sessionId && state.view?.terminal && state.view.endConfirmed) setImmediate(() => {
+      void operatorReportingRuntime.collectSession(sessionId)
+        .catch(() => console.warn("Operator report collection will retry."));
+    });
+    await mutateWhatsappCallLogs(rows => rows.some(old => old.id === row.id) ? rows : [row, ...rows]);
+    publishWhatsappCallHints([row]);
+    queueWhatsappCallHistorySync([row]).catch(() => console.warn("Native call history will retry Odoo sync."));
+  }
+});
+operatorMediaGateway.mount(app);
 androidPushBridge.registerRoutes(app);
+operatorReportingRuntime.mount(app);
+registerOperatorAdminRoutes(app, {
+  firestoreRuntime: operatorFirestoreRuntime,
+  mediaGateway: operatorMediaGateway,
+  authorize: authorizeOperatorAdmin
+});
 
-app.listen(PORT, () => {
+const operatorHttpServer = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  operatorFirestoreRuntime.startMaintenance?.();
+  operatorMediaGateway.start();
+  operatorReportingRuntime.start();
 
   // Start the heavy Odoo/AI background worker after the web port is already open.
   // This prevents Render deploy health checks from failing if the worker has a
@@ -25056,3 +25132,29 @@ app.listen(PORT, () => {
     }
   }, 1000);
 });
+
+let operatorShutdown = null;
+function closeOperatorServices() {
+  if (operatorShutdown) return operatorShutdown;
+  operatorShutdown = (async () => {
+    // Stop new HTTP work and drain worker transactions before closing their
+    // shared client. Independent media rooms are not ended by a Render restart.
+    const forceExit = setTimeout(() => process.exit(0), 20000);
+    forceExit.unref?.();
+    const httpClosed = new Promise(resolve => operatorHttpServer.close(resolve));
+    operatorHttpServer.closeIdleConnections?.();
+    let drainTimeout;
+    await Promise.race([
+      Promise.allSettled([httpClosed, operatorReportingRuntime.close(), operatorMediaGateway.close()]),
+      new Promise(resolve => { drainTimeout = setTimeout(resolve, 15000); })
+    ]);
+    clearTimeout(drainTimeout);
+    operatorHttpServer.closeAllConnections?.();
+    await operatorFirestoreRuntime.close();
+    clearTimeout(forceExit);
+  })().catch(() => console.warn("Operator shutdown left durable work for the next server instance."));
+  return operatorShutdown;
+}
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, () => { void closeOperatorServices().finally(() => process.exit(0)); });
+}
