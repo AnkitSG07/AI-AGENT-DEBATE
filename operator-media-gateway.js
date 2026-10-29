@@ -58,6 +58,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const workerId = `render_${randomUUID()}`;
   const publishedStates = new Map();
   const blocked = new Set(String(env.SH_ANDROID_REVOKED_DEVICE_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
+  const roomCallingRequested = () => env.SH_NATIVE_CALLS_ENABLED === 'true' && !!appSecret;
   const normalize = row => row ? { deviceId: row.id, userId: `native:${row.id}`, tenantId: 'smart-handicrafts',
     credentialGeneration: row.credentialGeneration, credentialExpiresAt: row.tokenExpiresAt,
     nativeBuild: Number.isSafeInteger(row.nativeBuild) ? row.nativeBuild : 0,
@@ -104,7 +105,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
       ids = rows.filter(row => !row.revoked && row.nativeBuild >= 10 && row.mediaProtocol === 'sh-room-audio-v1' &&
         row.receiveCalls !== false && row.credentialExpiresAt > now()).map(row => row.deviceId);
     }
-    return { roomCalling: env.SH_NATIVE_CALLS_ENABLED === 'true' && !!appSecret,
+    return { roomCalling: roomCallingRequested(),
       transferEnabled: env.SH_NATIVE_TRANSFER_PILOT_ENABLED === 'true', mode: 'pilot',
       pilotEnabled: env.SH_NATIVE_TRANSFER_PILOT_ENABLED === 'true', pilotDeviceIds: ids,
       reason: !appSecret ? 'The Meta webhook signing secret is required.' : env.SH_NATIVE_CALLS_ENABLED !== 'true' ?
@@ -122,7 +123,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
           const current = await bundle.runtime.locate(event.session.id);
           if (!current) return false;
           if (event.event.endsWith('ended')) return true;
-          if (event.event === 'incoming') return !current.terminal && !current.owner && current.phase === 'ringing';
+          if (event.event === 'incoming') return !current.terminal && !current.owner && current.phase === 'ringing' && current.deadlineAt > now();
           const view = await bundle.runtime.view(current);
           return view.transfer?.id === event.transferId && view.transfer?.status === 'invited';
         } }) });
@@ -144,6 +145,11 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     }
   }
   async function recoverSession(id) {
+    // A committed, still-ringing incoming alert must not wait for compatibility
+    // history I/O or active-call/transfer housekeeping. The runtime claims the
+    // same durable outbox job; fresh state and per-device delivery claims still
+    // suppress stale, answered and duplicate alerts across workers.
+    await bundle.runtime.dispatchIncomingAlert(id);
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.
     await publishCurrentState(id).catch(() => logger.warn?.('Native call history projection will retry.'));
@@ -235,7 +241,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
           ['accept', 'accepted'].includes(String(raw.event || '').toLowerCase());
         if (!terminal && !offer && !answer && !accepted) continue;
         // New native calls stop when disabled; old bound calls still reconcile.
-        if (offer && !(await policy()).roomCalling && !await bundle.runtime.locate(row.call_id)) continue;
+        if (offer && !roomCallingRequested() && !await bundle.runtime.locate(row.call_id)) continue;
         const types = terminal ? ['terminate'] : [...(offer ? ['incoming'] : []), ...(answer ? ['connect'] : []), ...(accepted ? ['accepted'] : [])];
         for (const type of types) {
         const result = await bundle.runtime.ingestVerifiedMetaEvent({ verified: true,
