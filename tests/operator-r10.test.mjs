@@ -1,5 +1,5 @@
 /**
- * SH Chat R10: 238 unit tests against the repository's actual production modules.
+ * SH Chat R10/R11: 245 unit tests against the repository's actual production modules.
  * Generated with esbuild 0.28.2; Node 18 ESM; no minification.
  * Run from the repository: node --test tests/operator-r10.test.mjs
  * Only test registrations and local fixtures are bundled. Production modules,
@@ -12,7 +12,7 @@
  * call-runtime/test/helpers.mjs | d5c8b843dd69e03b5a7035e480f0180a90c06d3d2f41fcf72559f004ba021d67
  * call-runtime/test/readiness.test.mjs | 0615d5bc3492d570bc7a85474401e7cbbc245f337249e2519305cd72b6678d21
  * call-runtime/test/routes.test.mjs | b3f98ff37197db89e13cf4c20f7245e68f543cb675a0f11635a105d3c638491d
- * call-runtime/test/runtime.test.mjs | 10d82c9cee41a9d5396faef0df731f05912e7c4de51497b998cda7c79c3e6316
+ * call-runtime/test/runtime.test.mjs | 7c78db590b734b1fbdd070f40cc825cd5984df021692f6d2da80b72e2f7b860a
  * call-runtime/test/startup.test.mjs | 5222775402617a250d6c11ff7815720e48d5c23c350a4ddb4b6eb038487d8237
  * media-store/test/firestore-fake.mjs | 567af2e7a81bef4c5bc094b0497770e477c71d8aebcf93eff8878528ed73085f
  * media-store/test/firestore-media-store.test.mjs | ef0a7cb596c65ec58ba76747d8b6c2d783a3271d66ed36311df188199c600a73
@@ -20,13 +20,13 @@
  * media/test/provider.test.mjs | 99e5a76057b9dc2aef4096fca3839fa7b419d5c70f03f294e57bc30d156b2b69
  * media/test/transfer.test.mjs | 2adb5f6a4961a3a395d4d8a941cb4cddda2cba0743c011b6789364545c98f2d1
  * tests/operator-firestore-runtime.test.mjs | a7e8e8afcf81633d0283f30830d0abab43604b1a225852f42510563182a3c8f4
- * tests/operator-gateway.test.mjs | c115ed78a95b69304871b38f1bfec9dbd092be7284664813d456827b2b0cab14
+ * tests/operator-gateway.test.mjs | 72c5f1204477cb7af0ae946019d2c01980ec3b8dd5af86b7bcacef0442a091ad
  * tests/operator-storage/bridge-test-helpers.js | 3d11f441adce0dc11aefb78b36c032f720541586b7d494416d2df6b5b26c8ae5
  * tests/operator-storage/firestore-fake.js | 70952d42298a1f802c8eb9551ada07af8f849cb135fd955f8a879c89b6971d81
  * tests/operator-storage/firestore-integration.test.js | 5c40b65f58f289825aa665193ada8b1e36c9da9e30332867919e80201ee7ec10
  * tests/operator-storage/notification-registry.test.js | d695c71eea2c6ec5273c295d33fffe32b26ad32f1ae50bdbd702c2756141e447
  * tests/operator-storage/operator-android-push.test.js | f2312ab7a834bf1d30dc308dde77dc667fbb52289dbc0a06e59550ae549f953e
- * tests/operator-storage/operator-firestore-registry.test.js | bb8536949d30c804f1b86a5e517c48f5419fe0c609ffafb438e50cb0f0fd93b5
+ * tests/operator-storage/operator-firestore-registry.test.js | 38538c9925d1d18f343a9fc3781a9dfe026271923991c48df096214fbc597f78
  */
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
@@ -467,7 +467,7 @@ var FirestoreFake = class {
 };
 
 // tests/operator-storage/operator-firestore-registry.test.js
-/*! SOURCE tests/operator-storage/operator-firestore-registry.test.js | SHA-256 bb8536949d30c804f1b86a5e517c48f5419fe0c609ffafb438e50cb0f0fd93b5 */
+/*! SOURCE tests/operator-storage/operator-firestore-registry.test.js | SHA-256 38538c9925d1d18f343a9fc3781a9dfe026271923991c48df096214fbc597f78 */
 import test2 from "node:test";
 import assert3 from "node:assert/strict";
 import { createHash as createHash2 } from "node:crypto";
@@ -886,6 +886,32 @@ test2("pending incoming can be cancelled and ended claim blocks a late incoming 
   assert3.equal((await h.registry.claimDelivery(event)).reason, "call_ended");
   const deliveries = await h.registry.getDeliveries({ callId: "call_1" });
   assert3.equal(deliveries.length, 2);
+});
+test2("call delivery reads independent guard documents concurrently within one atomic claim", async () => {
+  const h = setup(), enrolled = await h.enroll();
+  const transaction = h.db.runTransaction.bind(h.db);
+  let reading = 0, peak = 0, reads = 0;
+  h.db.runTransaction = (callback) => transaction((tx) => callback({ ...tx, get: /* @__PURE__ */ __name(async (reference) => {
+    reads++;
+    reading++;
+    peak = Math.max(peak, reading);
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      return await tx.get(reference);
+    } finally {
+      reading--;
+    }
+  }, "get") }));
+  const event = { deviceId: enrolled.deviceId, callId: "parallel-claim", event: "incoming", expiresAtMs: NOW2 + 3e4 };
+  const claim = await h.registry.claimDelivery(event);
+  assert3.equal(claim.claimed, true);
+  assert3.equal(reads, 3);
+  assert3.equal(peak, 3);
+  assert3.equal((await h.registry.claimDelivery(event)).reason, "in_progress");
+  const end = await h.registry.claimDelivery({ ...event, event: "ended" });
+  assert3.equal(end.claimed, true);
+  await h.registry.finishDelivery({ ...claim, outcome: "failed" });
+  assert3.equal((await h.registry.claimDelivery(event)).reason, "call_ended");
 });
 test2("claims revalidate preferences and device revocation transactionally", async () => {
   const h = setup(), registered = await h.enroll();
@@ -1771,1006 +1797,6 @@ test5("initialization error is sanitized and never exposes a credential", () => 
   assert6.ok(!logs.join("\n").includes(key));
 });
 
-// tests/operator-gateway.test.mjs
-/*! SOURCE tests/operator-gateway.test.mjs | SHA-256 c115ed78a95b69304871b38f1bfec9dbd092be7284664813d456827b2b0cab14 */
-import test6 from "node:test";
-import assert7 from "node:assert/strict";
-import { createHmac } from "node:crypto";
-import { createOperatorMediaGateway, nativeCallHistoryEvent, verifyMetaWebhook } from "../operator-media-gateway.js";
-import { sessionKey } from "../call-runtime/call-runtime.mjs";
-import { registerOperatorAdminRoutes } from "../operator-admin.js";
-var secret = "test-only-meta-signing-secret-not-a-real-key";
-var signed = /* @__PURE__ */ __name((bytes) => ({ rawBodyBuffer: bytes, headers: {
-  "x-hub-signature-256": "sha256=" + createHmac("sha256", secret).update(bytes).digest("hex")
-} }), "signed");
-test6("webhook authentication uses exact received bytes and rejects changed/missing/malformed signatures", () => {
-  const req = signed(Buffer.from('{"name":"Customer ✓","calls":[]}'));
-  assert7.equal(verifyMetaWebhook(req, secret), true);
-  assert7.equal(verifyMetaWebhook({ ...req, rawBodyBuffer: Buffer.from('{"calls":[]}') }, secret), false);
-  for (const header of ["", "sha256=ab", "sha1=" + "a".repeat(64), "sha256=" + "z".repeat(64)])
-    assert7.equal(verifyMetaWebhook({ ...req, headers: { "x-hub-signature-256": header } }, secret), false);
-  assert7.equal(verifyMetaWebhook(req, ""), false);
-  assert7.equal(verifyMetaWebhook({ headers: req.headers }, secret), false);
-});
-test6("history distinguishes signaling, actual audio, and unconfirmed end intent", () => {
-  const at = 17931888e5, session2 = { id: "call", providerCallId: "call", direction: "incoming", version: 3, phoneNumberId: "12345" };
-  const view = { version: 3, phase: "connecting", ownerDeviceId: "phone-a", roomReady: false };
-  assert7.equal(nativeCallHistoryEvent({ session: session2, view }, at).native_projection.connected, false);
-  assert7.equal(nativeCallHistoryEvent({ session: session2, view }, at).status, "connecting");
-  const joined = { ...session2, mediaReadyAt: at - 5e3 };
-  assert7.equal(nativeCallHistoryEvent({ session: joined, view: { ...view, phase: "connected", roomReady: true } }, at).status, "connected");
-  const ending = nativeCallHistoryEvent({ session: joined, view: { ...view, terminal: { reason: "OPERATOR_ENDED", endedAt: at }, endConfirmed: false } }, at);
-  assert7.equal(ending.status, "ending");
-  assert7.equal(ending.native_projection.active, false);
-  assert7.equal(ending.native_projection.end_confirmed, false);
-  assert7.equal(ending.native_projection.duration_seconds, 5);
-  assert7.equal(nativeCallHistoryEvent({ session: { ...session2, routeChoice: "legacy" }, view }, at), null);
-});
-function gateway(options = {}) {
-  const records = /* @__PURE__ */ new Map(), events = [];
-  let factoryArgs;
-  const store = { durable: true, get: /* @__PURE__ */ __name(async (key2) => records.get(key2), "get") };
-  const runtime = {
-    locate: /* @__PURE__ */ __name(async (id) => records.get(sessionKey(id)), "locate"),
-    isMediaAnchored: /* @__PURE__ */ __name(async (id) => !!records.get(sessionKey(id)), "isMediaAnchored"),
-    ingestVerifiedMetaEvent: /* @__PURE__ */ __name(async (event) => {
-      events.push(event);
-      return { handled: true };
-    }, "ingestVerifiedMetaEvent"),
-    recoverSession: /* @__PURE__ */ __name(async () => {
-    }, "recoverSession"),
-    claimLegacyIncoming: /* @__PURE__ */ __name(async () => ({ allowed: true }), "claimLegacyIncoming")
-  };
-  const instance = createOperatorMediaGateway({
-    env: {
-      SH_ANDROID_REGISTRY_BACKEND: "firestore",
-      WHATSAPP_PHONE_NUMBER_ID: "12345",
-      META_WHATSAPP_APP_SECRET: secret,
-      SH_NATIVE_CALLS_ENABLED: "true"
-    },
-    firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: {} },
-    storeFactory: /* @__PURE__ */ __name(() => store, "storeFactory"),
-    runtimeFactory: /* @__PURE__ */ __name((args) => {
-      factoryArgs = args;
-      return {
-        runtime,
-        controller: {},
-        verifyConfiguration: /* @__PURE__ */ __name(async () => ({ controlApiReachable: true }), "verifyConfiguration")
-      };
-    }, "runtimeFactory"),
-    logger: { warn() {
-    } },
-    ...options
-  });
-  return { instance, records, events, store, args: /* @__PURE__ */ __name(() => factoryArgs, "args") };
-}
-__name(gateway, "gateway");
-test6("incomplete provider configuration never exposes a persisted native call to legacy controls", async () => {
-  const h = gateway({ runtimeFactory: /* @__PURE__ */ __name(() => {
-    throw Error("bad provider config");
-  }, "runtimeFactory") });
-  h.records.set(sessionKey("native-call"), { id: "native-call", routeChoice: "native" });
-  assert7.equal(await h.instance.hasNativeCall("native-call"), true);
-  await assert7.rejects(() => h.instance.assertLegacyControl("native-call"), (error) => error.statusCode === 409);
-  await assert7.rejects(() => h.instance.claimLegacyIncoming("native-call", "legacy_attempt"), (error) => error.statusCode === 503);
-  assert7.equal((await h.instance.claimLegacyIncoming("untracked-call", "legacy_attempt")).allowed, true);
-});
-test6("unavailable persistent storage does not fall through to a local legacy answer", async () => {
-  const h = gateway({ firestoreRuntime: { configured: false } });
-  await assert7.rejects(() => h.instance.hasNativeCall("native-call"), (error) => error.statusCode === 503);
-});
-test6("verified event correlation has stable distinct fallbacks when normalized IDs are missing", async () => {
-  const h = gateway();
-  const row = {
-    call_id: "provider-call",
-    phone_number_id: "12345",
-    direction: "incoming",
-    event: "connect",
-    timestamp: 123,
-    session: { sdp_type: "offer", sdp: "v=0\r\nm=audio 9 RTP/SAVPF 111\r\n" }
-  };
-  await h.instance.ingestVerifiedEvents([row, row, { ...row, timestamp: 124 }, { ...row, phone_number_id: "different" }]);
-  assert7.equal(h.events.length, 3);
-  assert7.equal(h.events[0].eventId, h.events[1].eventId);
-  assert7.notEqual(h.events[0].eventId, h.events[2].eventId);
-  assert7.equal(h.events[0].offerSdp, row.session.sdp);
-});
-test6("a verified combined SDP and ACCEPTED webhook preserves both events with independent stable IDs", async () => {
-  const h = gateway();
-  const row = {
-    id: "combined-provider-event",
-    call_id: "outgoing-call",
-    phone_number_id: "12345",
-    direction: "outgoing",
-    event: "connect",
-    provider_status: "ACCEPTED",
-    timestamp: 123,
-    session: { sdp_type: "answer", sdp: "v=0\r\nm=audio 9 RTP/SAVPF 111\r\n" },
-    raw: { call: { biz_opaque_callback_data: "out_durable_attempt" } }
-  };
-  const first = await h.instance.ingestVerifiedEvents([row]);
-  assert7.equal(first.handled, 2);
-  assert7.deepEqual(h.events.map((event) => event.type), ["connect", "accepted"]);
-  assert7.notEqual(h.events[0].eventId, h.events[1].eventId);
-  assert7.equal(h.events[0].answerSdp, row.session.sdp);
-  assert7.equal(h.events[1].opaqueSessionId, "out_durable_attempt");
-  await h.instance.ingestVerifiedEvents([row]);
-  assert7.equal(h.events[0].eventId, h.events[2].eventId);
-  assert7.equal(h.events[1].eventId, h.events[3].eventId);
-  await h.instance.ingestVerifiedEvents([{ ...row, event: "terminate" }]);
-  assert7.equal(h.events.length, 5);
-  assert7.equal(h.events[4].type, "terminate");
-  assert7.notEqual(h.events[4].eventId, h.events[1].eventId);
-});
-test6("automatic pilot membership requires explicit server policy and fresh supported enrolled devices", async () => {
-  const at = 18e11;
-  const valid = /* @__PURE__ */ __name((id) => ({ id, credentialGeneration: 1, tokenExpiresAt: at + 6e4, nativeBuild: 10, mediaProtocol: "sh-room-audio-v1", receiveCalls: true }), "valid");
-  const rows2 = [
-    valid("phone-a"),
-    valid("phone-b"),
-    { ...valid("old-build"), nativeBuild: 9 },
-    { ...valid("expired"), tokenExpiresAt: at },
-    { ...valid("revoked"), revokedAt: at - 1 },
-    { ...valid("wrong-protocol"), mediaProtocol: "legacy" },
-    { ...valid("notifications-disabled"), receiveCalls: false },
-    valid("blocked")
-  ];
-  const registry = { listDevices: /* @__PURE__ */ __name(async () => rows2, "listDevices") };
-  const env3 = {
-    SH_ANDROID_REGISTRY_BACKEND: "firestore",
-    WHATSAPP_PHONE_NUMBER_ID: "12345",
-    META_WHATSAPP_APP_SECRET: secret,
-    SH_NATIVE_CALLS_ENABLED: "true",
-    SH_NATIVE_TRANSFER_PILOT_ENABLED: "true",
-    SH_NATIVE_PILOT_USE_ENROLLED_DEVICES: "true",
-    SH_ANDROID_REVOKED_DEVICE_IDS: "blocked"
-  };
-  const make = /* @__PURE__ */ __name((envValue) => gateway({
-    env: envValue,
-    now: /* @__PURE__ */ __name(() => at, "now"),
-    firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: registry }
-  }), "make");
-  assert7.deepEqual((await make(env3).args().capabilities()).pilotDeviceIds, ["phone-a", "phone-b"]);
-  assert7.deepEqual((await make({ ...env3, SH_NATIVE_PILOT_USE_ENROLLED_DEVICES: "false" }).args().capabilities()).pilotDeviceIds, []);
-  assert7.deepEqual(
-    (await make({ ...env3, SH_NATIVE_PILOT_DEVICE_IDS: "explicit-a, explicit-b" }).args().capabilities()).pilotDeviceIds,
-    ["explicit-a", "explicit-b"]
-  );
-  assert7.equal((await make({ ...env3, SH_NATIVE_TRANSFER_PILOT_ENABLED: "false" }).args().capabilities()).pilotEnabled, false);
-});
-test6("native device identity is derived from the current registry and metadata is authenticated", async () => {
-  let updated = 0;
-  const row = { id: "android_test_1234567890", credentialGeneration: 2, tokenExpiresAt: Date.now() + 1e5, nativeBuild: 9 };
-  const registry = { authenticate: /* @__PURE__ */ __name(async () => row, "authenticate"), updateNativeClient: /* @__PURE__ */ __name(async (_token, patch) => {
-    updated++;
-    return { ...row, ...patch };
-  }, "updateNativeClient") };
-  const h = gateway({ firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: registry } });
-  const context = { headers: { authorization: "Bearer " + "a".repeat(60), "x-sh-native-build": "10", "x-sh-media-protocol": "sh-room-audio-v1" }, body: { userId: "SUDO" } };
-  const actor = await h.args().authenticate(context);
-  assert7.equal(actor.userId, "native:" + row.id);
-  assert7.equal(actor.nativeBuild, 10);
-  assert7.equal(updated, 1);
-  await assert7.rejects(() => h.args().authenticate({ headers: { ...context.headers, authorization: "" } }), (e) => e.statusCode === 401);
-  await assert7.rejects(() => h.args().authenticate({ headers: { ...context.headers, "x-sh-native-build": "-1" } }), (e) => e.statusCode === 400);
-});
-function adminHarness(envPatch = {}) {
-  const routes = /* @__PURE__ */ new Map();
-  let issued = 0;
-  registerOperatorAdminRoutes(
-    { get: /* @__PURE__ */ __name((path, fn) => routes.set("GET " + path, fn), "get"), post: /* @__PURE__ */ __name((path, fn) => routes.set("POST " + path, fn), "post") },
-    {
-      authorize: /* @__PURE__ */ __name((req) => req.admin === true, "authorize"),
-      env: {
-        APP_URL: "https://ai-agent-debate.onrender.com",
-        PROFILE_SESSION_SECRET: "test-signing-secret-with-at-least-32-chars",
-        PROFILE_PASS_SUDO: "test-only",
-        ...envPatch
-      },
-      firestoreRuntime: { configured: true, deviceRegistry: { issueEnrollment: /* @__PURE__ */ __name(async () => {
-        issued++;
-        return { enrollmentCode: "test-code" };
-      }, "issueEnrollment") } },
-      mediaGateway: {}
-    }
-  );
-  return { issued: /* @__PURE__ */ __name(() => issued, "issued"), async request({ admin = false, origin = "https://ai-agent-debate.onrender.com", header = "1", label = "Phone" } = {}) {
-    const result = {};
-    const res = { set() {
-      return this;
-    }, status(value) {
-      result.status = value;
-      return this;
-    }, json(value) {
-      result.body = value;
-    } };
-    await routes.get("POST /api/operator-android/admin/enrollment")({ admin, method: "POST", headers: { origin, "x-sh-admin-action": header }, body: { label } }, res);
-    return result;
-  } };
-}
-__name(adminHarness, "adminHarness");
-test6("enrollment issuance needs existing SUDO authorization, exact origin and admin action header", async () => {
-  const h = adminHarness();
-  assert7.equal((await h.request()).status, 401);
-  assert7.equal((await h.request({ admin: true, origin: "https://evil.example" })).status, 403);
-  assert7.equal((await h.request({ admin: true, header: "" })).status, 403);
-  assert7.equal((await h.request({ admin: true, label: "" })).status, 400);
-  assert7.equal(h.issued(), 0);
-  assert7.equal((await h.request({ admin: true })).body.ok, true);
-  assert7.equal(h.issued(), 1);
-});
-test6("predictable fallback sessions cannot administer enrollment with blank profile configuration", async () => {
-  const h = adminHarness({ PROFILE_SESSION_SECRET: "", PROFILE_PASS_SUDO: "" });
-  assert7.equal((await h.request({ admin: true })).status, 503);
-  assert7.equal(h.issued(), 0);
-});
-
-// media/test/provider.test.mjs
-/*! SOURCE media/test/provider.test.mjs | SHA-256 99e5a76057b9dc2aef4096fca3839fa7b419d5c70f03f294e57bc30d156b2b69 */
-import test7 from "node:test";
-import assert8 from "node:assert/strict";
-import {
-  LiveKitWhatsAppProvider,
-  readLiveKitConfig,
-  operatorIdentity,
-  customerIdentity,
-  mediaReleaseCapabilities
-} from "../media/livekit-provider.mjs";
-var fakeEnv = Object.freeze({
-  LIVEKIT_URL: "wss://sh-unit-test.livekit.cloud",
-  LIVEKIT_API_KEY: "unit-test-key",
-  LIVEKIT_API_SECRET: "unit-test-only-secret-never-a-real-provider-credential",
-  WHATSAPP_CALL_ACCESS_TOKEN: "unit-test-meta-token",
-  WHATSAPP_GRAPH_API_VERSION: "v23.0"
-});
-var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=unit-test\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
-var claims = /* @__PURE__ */ __name((token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()), "claims");
-async function withSdkTransport(operation, responder) {
-  const previous = globalThis.fetch;
-  const calls = [];
-  globalThis.fetch = async (url, options) => {
-    const path = new URL(url).pathname;
-    const body = JSON.parse(options.body);
-    const call = { path, body, options };
-    calls.push(call);
-    const result = responder ? await responder(call) : {};
-    return result instanceof Response ? result : new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  };
-  try {
-    await operation(new LiveKitWhatsAppProvider(readLiveKitConfig(fakeEnv)), calls);
-  } finally {
-    globalThis.fetch = previous;
-  }
-}
-__name(withSdkTransport, "withSdkTransport");
-test7("configuration fails closed; old transfer flags cannot enable media release", () => {
-  assert8.throws(() => readLiveKitConfig({}), { code: "MEDIA_CONFIG_MISSING" });
-  for (const origin of [
-    "http://sh.livekit.cloud",
-    "https://sh.livekit.cloud.evil.example",
-    "https://localhost",
-    "https://user:pass@sh.livekit.cloud",
-    "https://sh.livekit.cloud/path"
-  ]) {
-    assert8.throws(() => readLiveKitConfig({ ...fakeEnv, LIVEKIT_URL: origin }), { code: "MEDIA_CONFIG_INVALID" });
-  }
-  assert8.equal(mediaReleaseCapabilities({ WHATSAPP_CALL_TRANSFER_ENABLED: "true" }).enabled, false);
-});
-test7("official SDK serializes incoming real SDP offer and does not claim connected audio", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    const result = await provider.acceptIncoming({ callId: "provider-call-1", phoneNumberId: "123456", offerSdp: sdp });
-    assert8.equal(calls.length, 1);
-    assert8.equal(calls[0].path, "/twirp/livekit.Connector/AcceptWhatsAppCall");
-    assert8.equal(calls[0].body.sdp.type, "offer");
-    assert8.equal(calls[0].body.sdp.sdp, sdp);
-    assert8.equal(calls[0].body.whatsappCallId, "provider-call-1");
-    assert8.equal(result.audioConnected, false);
-    assert8.equal(result.signalingAccepted, true);
-    assert8.equal(result.customerIdentity, customerIdentity("provider-call-1"));
-  }, () => ({ roomName: "returned-room" }));
-});
-test7("official SDK outgoing dial and answer use separate operations and stable request correlation", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    const result = await provider.dialOutgoing({ phoneNumberId: "123456", to: "919000000000", requestId: "outgoing-unit-1" });
-    await provider.connectOutgoing({ callId: result.callId, answerSdp: sdp });
-    assert8.deepEqual(calls.map((x) => x.path.split("/").at(-1)), ["DialWhatsAppCall", "ConnectWhatsAppCall"]);
-    assert8.equal(calls[0].body.whatsappBizOpaqueCallbackData, "outgoing-unit-1");
-    assert8.equal(calls[0].body.ringingTimeout, "45s");
-    assert8.equal(calls[1].body.sdp.type, "answer");
-    assert8.equal(result.audioConnected, false);
-  }, (call) => call.path.endsWith("DialWhatsAppCall") ? { whatsappCallId: "meta-outgoing-1", roomName: "outgoing-room" } : {});
-});
-test7("invalid/absent audio offer cannot signal a provider call", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    await assert8.rejects(provider.acceptIncoming({ callId: "c", phoneNumberId: "p", offerSdp: "" }), { code: "INVALID_SDP" });
-    assert8.equal(calls.length, 0);
-  });
-});
-test7("ambiguous outgoing failure is not retried by SDK failover and error does not expose secrets", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    await assert8.rejects(provider.dialOutgoing({ phoneNumberId: "123456", to: "919000000000", requestId: "outgoing-unit-1" }), (error) => {
-      assert8.equal(error.outcomeUnknown, true);
-      assert8.equal(error.code, "MEDIA_REQUEST_UNCERTAIN");
-      assert8.equal(String(error).includes(fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN), false);
-      return true;
-    });
-    assert8.equal(calls.length, 1);
-  }, () => new Response(
-    JSON.stringify({ code: "internal", msg: fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN }),
-    { status: 500, headers: { "Content-Type": "application/json" } }
-  ));
-});
-test7("customer-end cleanup uses USER_INITIATED and omits unnecessary Meta token", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    await provider.terminateCustomer({ callId: "meta-call", reason: "USER_INITIATED" });
-    assert8.equal(calls[0].body.disconnectReason, "USER_INITIATED");
-    assert8.ok(!calls[0].body.whatsappApiKey);
-    await provider.terminateCustomer({ callId: "meta-call", reason: "BUSINESS_INITIATED" });
-    assert8.equal(calls[1].body.whatsappApiKey, fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN);
-  });
-});
-test7("join tokens use official SDK, exact room, microphone-only publishing and unique device legs", async () => {
-  const provider = new LiveKitWhatsAppProvider(readLiveKitConfig(fakeEnv));
-  const a = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-a", legId: "leg-1" });
-  const b = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-b", legId: "leg-1" });
-  const c = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-a", legId: "leg-2" });
-  assert8.notEqual(a.identity, b.identity);
-  assert8.notEqual(a.identity, c.identity);
-  const token = claims(a.token);
-  assert8.equal(token.sub, a.identity);
-  assert8.equal(token.video.room, "room-1");
-  assert8.equal(token.video.roomJoin, true);
-  assert8.equal(token.video.canPublishData, false);
-  assert8.deepEqual(token.video.canPublishSources, ["microphone"]);
-  assert8.ok(!token.video.roomAdmin && !token.video.roomCreate && !token.video.roomList && !token.sip);
-  assert8.ok(token.exp - token.nbf <= 120);
-});
-test7("source detach revokes only that operator and never invokes customer disconnect", async () => {
-  await withSdkTransport(async (provider, calls) => {
-    const identity = operatorIdentity("device-a", "leg-a");
-    await provider.detachOperator({ roomName: "room-1", identity, revokeBeforeMs: 18e11 });
-    assert8.equal(calls.length, 1);
-    assert8.equal(calls[0].path, "/twirp/livekit.RoomService/RemoveParticipant");
-    assert8.equal(calls[0].body.identity, identity);
-    assert8.equal(calls[0].body.revokeTokenTs, "1800000060");
-    await assert8.rejects(provider.detachOperator({ roomName: "room-1", identity: customerIdentity("call-1") }), { code: "INVALID_OPERATOR_LEG" });
-    assert8.equal(calls.length, 1);
-  });
-});
-test7("control API success and participant tracks explicitly do not establish live audio", async () => {
-  await withSdkTransport(async (provider) => {
-    const result = await provider.probeControlApi();
-    assert8.equal(result.controlApiReachable, true);
-    assert8.equal(result.audioVerified, false);
-    assert8.equal(result.transferEnabled, false);
-    const observed = await provider.inspectParticipants({ roomName: "r", customerIdentity: "customer", operatorIdentity: "target", sourceIdentity: "source" });
-    assert8.equal(observed.operatorAudioPublished, true);
-    assert8.equal(observed.customerAudioPublished, true);
-    assert8.equal(observed.bidirectionalAudioVerified, false);
-  }, (call) => call.path.endsWith("ListParticipants") ? {
-    participants: ["customer", "target", "source"].map((identity) => ({ identity, state: "ACTIVE", tracks: [{ sid: identity, type: "AUDIO" }] }))
-  } : { rooms: [] });
-});
-
-// media/test/helpers.mjs
-/*! SOURCE media/test/helpers.mjs | SHA-256 4ae7d800a1303020e0a01a8d4ff42a6f0a247edd05a2445701d4de8e9a7c7a24 */
-import { newBridgedCall, TransferController, callStoreKey, deviceReservationKey } from "../media/transfer-controller.mjs";
-import { operatorIdentity as operatorIdentity2 } from "../media/livekit-provider.mjs";
-var TestStore = class {
-  static {
-    __name(this, "TestStore");
-  }
-  constructor({ replayTransaction = false } = {}) {
-    this.durable = true;
-    this.rows = /* @__PURE__ */ new Map();
-    this.tail = Promise.resolve();
-    this.replayTransaction = replayTransaction;
-  }
-  async get(key2) {
-    return structuredClone(this.rows.get(key2));
-  }
-  async transaction(operation) {
-    const run = this.tail.catch(() => {
-    }).then(async () => {
-      for (let attempt = 0; attempt < (this.replayTransaction ? 2 : 1); attempt++) {
-        const staged = structuredClone(this.rows);
-        let wrote = false;
-        const value = await operation({
-          get: /* @__PURE__ */ __name(async (key2) => {
-            if (wrote) throw new Error("Firestore transactions require all reads before writes");
-            return structuredClone(staged.get(key2));
-          }, "get"),
-          set: /* @__PURE__ */ __name((key2, row) => {
-            wrote = true;
-            staged.set(key2, structuredClone(row));
-          }, "set"),
-          delete: /* @__PURE__ */ __name((key2) => {
-            wrote = true;
-            staged.delete(key2);
-          }, "delete")
-        });
-        if (!this.replayTransaction || attempt === 1) {
-          this.rows = staged;
-          return value;
-        }
-      }
-    });
-    this.tail = run;
-    return run;
-  }
-};
-function deferred2() {
-  let resolve, reject;
-  const promise = new Promise((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
-__name(deferred2, "deferred");
-function fixture(options = {}) {
-  const store = options.store || new TestStore();
-  let now = 18e11;
-  const effects = [];
-  const devices = new Map(["a", "b", "c", "d"].map((deviceId) => [deviceId, {
-    deviceId,
-    userId: deviceId === "b" ? "user-a" : `user-${deviceId}`,
-    tenantId: "smart",
-    mediaProtocol: "sh-room-audio-v1",
-    revoked: false,
-    receiveCalls: true
-  }]));
-  const provider = {
-    kind: "livekit-whatsapp",
-    issueOperatorJoin: /* @__PURE__ */ __name(async ({ roomName, deviceId, legId }) => ({ roomName, identity: operatorIdentity2(deviceId, legId), token: "unit-test-only" }), "issueOperatorJoin"),
-    inspectParticipants: /* @__PURE__ */ __name(async () => ({
-      observedAt: now,
-      customerActive: true,
-      customerAudioPublished: true,
-      operatorActive: true,
-      operatorAudioPublished: true,
-      sourceActive: true,
-      bidirectionalAudioVerified: false
-    }), "inspectParticipants"),
-    detachOperator: /* @__PURE__ */ __name(async (data) => {
-      effects.push({ kind: "detach", ...data });
-    }, "detachOperator"),
-    terminateCustomer: /* @__PURE__ */ __name(async (data) => {
-      effects.push({ kind: "terminate", ...data });
-    }, "terminateCustomer"),
-    ...options.provider
-  };
-  const validProof = /* @__PURE__ */ __name(({ actor, call, transfer }) => ({
-    verified: true,
-    bidirectionalAudio: true,
-    callId: call.id,
-    transferId: transfer.id,
-    attemptId: transfer.attemptId,
-    deviceId: actor.deviceId,
-    identity: transfer.targetIdentity,
-    readinessNonce: transfer.readinessNonce,
-    observedAt: now
-  }), "validProof");
-  const authenticate = /* @__PURE__ */ __name(async (context) => {
-    const row = devices.get(context);
-    return row ? { ...row, authenticated: true, canCall: true } : null;
-  }, "authenticate");
-  const controller = new TransferController({
-    store,
-    provider,
-    authenticate,
-    resolveDevice: /* @__PURE__ */ __name(async (device) => devices.get(device), "resolveDevice"),
-    now: /* @__PURE__ */ __name(() => now, "now"),
-    rolloutGuard: /* @__PURE__ */ __name(async () => ({ enabled: true, provider: provider.kind, clientProtocol: "sh-room-audio-v1", liveTwoDeviceEvidenceId: "UNIT-TEST-ONLY-NOT-LIVE" }), "rolloutGuard"),
-    verifyReadiness: /* @__PURE__ */ __name(async (data) => validProof(data), "verifyReadiness"),
-    verifyProviderEvent: /* @__PURE__ */ __name(async (event) => event === "verified-terminate" ? { verified: true, type: "terminated", callId: "call-1" } : null, "verifyProviderEvent"),
-    ...options.controller
-  });
-  const seed = /* @__PURE__ */ __name(async (callId = "call-1", ownerDevice = "a") => {
-    const owner = devices.get(ownerDevice);
-    const call = newBridgedCall({
-      callId,
-      roomName: `room-${callId}`,
-      customerIdentity: `customer-${callId}`,
-      tenantId: "smart",
-      owner: { deviceId: ownerDevice, userId: owner.userId, legId: `initial-${callId}` },
-      now
-    });
-    await store.transaction(async (tx) => {
-      if (await tx.get(callStoreKey(callId))) throw new Error("Refuse to overwrite an existing call");
-      tx.set(callStoreKey(callId), call);
-      tx.set(deviceReservationKey(ownerDevice), { callId, kind: "owner" });
-    });
-    return call;
-  }, "seed");
-  const invite = /* @__PURE__ */ __name(async (owner = "a", toDeviceId = "b", callId = "call-1", requestId = "request-0001") => {
-    const current = await store.get(callStoreKey(callId));
-    return controller.invite(owner, { callId, toDeviceId, expectedVersion: current.version, requestId });
-  }, "invite");
-  const accept = /* @__PURE__ */ __name(async (invitation) => controller.accept(invitation.transfer.toDeviceId, {
-    callId: invitation.callId,
-    transferId: invitation.transfer.id,
-    expectedVersion: invitation.version
-  }), "accept");
-  const ready = /* @__PURE__ */ __name(async (accepted) => controller.confirmReady(accepted.transfer.toDeviceId, {
-    callId: accepted.callId,
-    transferId: accepted.transfer.id,
-    expectedVersion: accepted.version,
-    readinessNonce: accepted.readinessNonce,
-    evidence: { unitTest: true }
-  }), "ready");
-  return {
-    store,
-    controller,
-    provider,
-    effects,
-    devices,
-    seed,
-    invite,
-    accept,
-    ready,
-    validProof,
-    now: /* @__PURE__ */ __name(() => now, "now"),
-    advance: /* @__PURE__ */ __name((ms) => {
-      now += ms;
-    }, "advance")
-  };
-}
-__name(fixture, "fixture");
-
-// media/test/transfer.test.mjs
-/*! SOURCE media/test/transfer.test.mjs | SHA-256 2adb5f6a4961a3a395d4d8a941cb4cddda2cba0743c011b6789364545c98f2d1 */
-import test8 from "node:test";
-import assert9 from "node:assert/strict";
-import { TransferController as TransferController2, callStoreKey as callStoreKey2, deviceReservationKey as deviceReservationKey2, MAX_TRANSFERS_PER_CALL } from "../media/transfer-controller.mjs";
-test8("rollout fails closed even when someone sets an enabled boolean", async () => {
-  const f = fixture({ controller: { rolloutGuard: /* @__PURE__ */ __name(async () => true, "rolloutGuard") } });
-  await f.seed();
-  await assert9.rejects(f.invite(), { code: "TRANSFER_MEDIA_NOT_VALIDATED" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-});
-test8("missing durable transaction store is rejected", () => {
-  assert9.throws(() => new TransferController2({ store: { durable: false } }), { code: "DURABLE_STORE_REQUIRED" });
-});
-test8("request body identity does not authenticate a device", async () => {
-  const f = fixture();
-  await f.seed();
-  await assert9.rejects(f.controller.invite({ operator_device_id: "a" }, {
-    callId: "call-1",
-    toDeviceId: "b",
-    requestId: "forged-0001",
-    expectedVersion: 1
-  }), { code: "UNAUTHENTICATED_DEVICE" });
-  const invitation = await f.invite();
-  await assert9.rejects(f.controller.accept("c", {
-    callId: "call-1",
-    transferId: invitation.transfer.id,
-    expectedVersion: invitation.version
-  }), { code: "TRANSFER_FORBIDDEN" });
-});
-test8("revoked devices and legacy clients cannot receive transfers", async () => {
-  const f = fixture();
-  await f.seed();
-  f.devices.get("b").revoked = true;
-  await assert9.rejects(f.invite(), { code: "TARGET_UNAVAILABLE" });
-  f.devices.get("b").revoked = false;
-  f.devices.get("b").mediaProtocol = "legacy-browser";
-  await assert9.rejects(f.invite(), { code: "TARGET_UNAVAILABLE" });
-});
-test8("same user on two devices has different legs; source kept until ready", async () => {
-  const f = fixture();
-  const original = await f.seed();
-  const accepted = await f.accept(await f.invite());
-  assert9.notEqual(accepted.join.identity, original.owner.identity);
-  assert9.equal(accepted.ownerDeviceId, "a");
-  assert9.equal(accepted.transfer.status, "connecting");
-  assert9.deepEqual(f.effects, []);
-  const committed = await f.ready(accepted);
-  assert9.equal(committed.ownerDeviceId, "b");
-  assert9.equal(committed.transfer.status, "completing");
-  assert9.deepEqual(f.effects, []);
-  await f.controller.drainOutbox("call-1");
-  assert9.equal(f.effects.length, 1);
-  assert9.equal(f.effects[0].kind, "detach");
-  assert9.equal(f.effects[0].identity, original.owner.identity);
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).transfer.status, "completed");
-});
-test8("idempotent invitation and accept do not create new transfer or customer calls", async () => {
-  const f = fixture();
-  await f.seed();
-  const [first, second] = await Promise.all([f.invite(), f.invite()]);
-  assert9.equal(first.transfer.id, second.transfer.id);
-  const [a, b] = await Promise.all([f.accept(first), f.accept(first)]);
-  assert9.equal(a.join.identity, b.join.identity);
-  assert9.equal(a.readinessNonce, b.readinessNonce);
-  assert9.deepEqual(f.effects, []);
-  await assert9.rejects(f.invite("a", "c", "call-1", "request-0001"), { code: "REQUEST_ID_CONFLICT" });
-});
-test8("atomic reservation prevents two different calls from inviting the same target", async () => {
-  const f = fixture();
-  await f.seed();
-  await f.seed("call-2", "c");
-  const results = await Promise.allSettled([f.invite("a", "b"), f.invite("c", "b", "call-2")]);
-  assert9.equal(results.filter((r) => r.status === "fulfilled").length, 1);
-  assert9.equal(results.find((r) => r.status === "rejected").reason.code, "TARGET_BUSY");
-});
-test8("unverified client readiness leaves source owner and microphone untouched", async () => {
-  const f = fixture({ controller: { verifyReadiness: void 0 } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await assert9.rejects(f.ready(accepted), { code: "CLIENT_MEDIA_NOT_INTEGRATED" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-  assert9.deepEqual(f.effects, []);
-});
-test8("published track without received/sent audio evidence cannot commit", async () => {
-  const f = fixture({ controller: { verifyReadiness: /* @__PURE__ */ __name(async () => ({ verified: true }), "verifyReadiness") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_VERIFIED" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-});
-test8("missing customer or target media never releases source", async () => {
-  const f = fixture({ provider: { inspectParticipants: /* @__PURE__ */ __name(async () => ({ customerActive: false }), "inspectParticipants") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_READY" });
-  assert9.deepEqual(f.effects, []);
-});
-test8("stale readiness nonce, version and old telemetry are rejected", async () => {
-  const f = fixture();
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await assert9.rejects(f.ready({ ...accepted, readinessNonce: "old-attempt" }), { code: "READINESS_STALE" });
-  await assert9.rejects(f.ready({ ...accepted, version: accepted.version - 1 }), { code: "STALE_CALL_VERSION" });
-  f.controller.verifyReadiness = async (data) => ({ ...f.validProof(data), observedAt: f.now() - 6e3 });
-  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_VERIFIED" });
-});
-test8("target decline keeps source, detaches only target and frees reservation", async () => {
-  const f = fixture();
-  const original = await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const stopped = await f.controller.stopTransfer("b", {
-    callId: "call-1",
-    transferId: accepted.transfer.id,
-    expectedVersion: accepted.version,
-    action: "decline"
-  });
-  assert9.equal(stopped.ownerDeviceId, "a");
-  assert9.equal((await f.store.get(deviceReservationKey2("b"))).kind, "cleanup");
-  await f.controller.drainOutbox("call-1");
-  assert9.equal(await f.store.get(deviceReservationKey2("b")), void 0);
-  assert9.equal(f.effects.length, 1);
-  assert9.equal(f.effects[0].identity, accepted.join.identity);
-  assert9.notEqual(f.effects[0].identity, original.owner.identity);
-});
-test8("invitation expires during readiness I/O; late proof cannot take ownership", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return f.validProof(data);
-  }, "verifyReadiness") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const confirmation = f.ready(accepted);
-  await entered.promise;
-  f.advance(61e3);
-  wait.resolve();
-  await assert9.rejects(confirmation);
-  await f.controller.expire("call-1");
-  const call = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(call.owner.deviceId, "a");
-  assert9.equal(call.transfer.status, "expired");
-});
-test8("source cancellation wins against delayed readiness verification", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return f.validProof(data);
-  }, "verifyReadiness") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const confirmation = f.ready(accepted);
-  await entered.promise;
-  await f.controller.stopTransfer("a", { callId: "call-1", transferId: accepted.transfer.id, expectedVersion: accepted.version, action: "cancel" });
-  wait.resolve();
-  await assert9.rejects(confirmation, { code: "STALE_CALL_VERSION" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-});
-test8("customer termination wins while readiness is in flight", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return f.validProof(data);
-  }, "verifyReadiness") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const confirmation = f.ready(accepted);
-  await entered.promise;
-  const ended = await f.controller.providerEnded("verified-terminate");
-  assert9.equal(ended.active, false);
-  wait.resolve();
-  await assert9.rejects(confirmation, { code: "CALL_ENDED" });
-  await f.controller.drainOutbox("call-1");
-  const terminal = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(terminal.active, false);
-  assert9.equal(terminal.transfer.status, "cancelled");
-  assert9.equal(f.effects.filter((e) => e.kind === "terminate").length, 1);
-  assert9.equal(f.effects.find((e) => e.kind === "terminate").reason, "USER_INITIATED");
-});
-test8("termination during token issuance prevents returning a join token", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture();
-  await f.seed();
-  const invitation = await f.invite();
-  const original = f.provider.issueOperatorJoin;
-  f.provider.issueOperatorJoin = async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return original(data);
-  };
-  const acceptance = f.accept(invitation);
-  await entered.promise;
-  await f.controller.providerEnded("verified-terminate");
-  wait.resolve();
-  await assert9.rejects(acceptance, { code: "CALL_ENDED" });
-});
-test8("unsigned provider payload cannot terminate a call", async () => {
-  const f = fixture();
-  await f.seed();
-  await assert9.rejects(f.controller.providerEnded({ callId: "call-1", verified: true }), { code: "UNVERIFIED_WEBHOOK" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).active, true);
-});
-test8("failed source cleanup is persisted; a restarted worker retries detach without ending customer", async () => {
-  const f = fixture();
-  const original = await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await f.ready(accepted);
-  f.provider.detachOperator = async () => {
-    throw new Error("transient transport failure");
-  };
-  await f.controller.drainOutbox("call-1");
-  let call = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(call.owner.deviceId, "b");
-  assert9.equal(call.transfer.status, "completing");
-  assert9.equal(call.outbox[0].status, "pending");
-  assert9.equal((await f.store.get(deviceReservationKey2("a"))).kind, "cleanup");
-  f.advance(3e3);
-  f.provider.detachOperator = async (data) => f.effects.push({ kind: "detach", ...data });
-  const restarted = new TransferController2({ ...f.controller, store: f.store, provider: f.provider });
-  await restarted.drainOutbox("call-1");
-  call = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(call.transfer.status, "completed");
-  assert9.equal(await f.store.get(deviceReservationKey2("a")), void 0);
-  assert9.equal(f.effects.length, 1);
-  assert9.equal(f.effects[0].identity, original.owner.identity);
-});
-test8("source cannot end customer after handoff commits; terminal retries are idempotent", async () => {
-  const f = fixture();
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const committed = await f.ready(accepted);
-  await assert9.rejects(f.controller.endByOperator("a", { callId: "call-1", expectedVersion: committed.version }), { code: "NOT_CALL_OWNER" });
-  const ended = await f.controller.endByOperator("b", { callId: "call-1", expectedVersion: committed.version });
-  assert9.equal(ended.active, false);
-  await f.controller.providerEnded("verified-terminate");
-  await f.controller.drainOutbox("call-1");
-  await f.controller.drainOutbox("call-1");
-  assert9.equal(f.effects.filter((e) => e.kind === "terminate").length, 1);
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).transfer.status, "cancelled");
-});
-test8("terminal call never becomes transferable on old idempotent invitation replay", async () => {
-  const f = fixture();
-  await f.seed();
-  const invitation = await f.invite();
-  await f.controller.providerEnded("verified-terminate");
-  const replay = await f.invite();
-  assert9.equal(replay.active, false);
-  assert9.equal(replay.transfer.id, invitation.transfer.id);
-  await assert9.rejects(f.accept(invitation), { code: "CALL_ENDED" });
-  await assert9.rejects(f.invite("a", "b", "call-1", "new-request-0002"), { code: "CALL_ENDED" });
-});
-test8("device revocation while readiness is in flight prevents ownership commit", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return f.validProof(data);
-  }, "verifyReadiness") } });
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  const confirmation = f.ready(accepted);
-  await entered.promise;
-  f.devices.get("b").revoked = true;
-  wait.resolve();
-  await assert9.rejects(confirmation, { code: "DEVICE_BINDING_INVALID" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-});
-test8("re-enrollment to another operator cannot inherit an already accepted target leg", async () => {
-  const f = fixture();
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  f.devices.get("b").userId = "replacement-operator";
-  await assert9.rejects(f.ready(accepted), { code: "DEVICE_BINDING_CHANGED" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-  assert9.deepEqual(f.effects, []);
-});
-test8("cleanup reservations cannot be mistaken for a live invite or source ownership", async () => {
-  const f = fixture();
-  await f.seed();
-  const invitation = await f.invite();
-  const original = await f.store.get(deviceReservationKey2("b"));
-  await f.store.transaction(async (tx) => {
-    tx.set(deviceReservationKey2("b"), { ...original, kind: "cleanup", identity: "stale-target-leg" });
-  });
-  await assert9.rejects(f.accept(invitation), { code: "TRANSFER_CHANGED" });
-  await f.store.transaction(async (tx) => tx.set(deviceReservationKey2("b"), original));
-  const accepted = await f.accept(invitation);
-  await f.store.transaction(async (tx) => {
-    tx.set(deviceReservationKey2("a"), { callId: "call-1", kind: "cleanup", identity: "stale-source-leg" });
-  });
-  await assert9.rejects(f.ready(accepted), { code: "TRANSFER_CHANGED" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-  assert9.deepEqual(f.effects, []);
-});
-test8("an operator end is immediate local intent, not a false provider-end confirmation", async () => {
-  const f = fixture();
-  await f.seed();
-  const ending = await f.controller.endByOperator("a", { callId: "call-1", expectedVersion: 1 });
-  assert9.equal(ending.active, false);
-  assert9.equal(ending.status, "ending");
-  assert9.equal(ending.endConfirmed, false);
-  f.provider.terminateCustomer = async () => {
-    throw new Error("offline");
-  };
-  await f.controller.drainOutbox("call-1");
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).status, "ending");
-  const ended = await f.controller.providerEnded("verified-terminate");
-  assert9.equal(ended.status, "ended");
-  assert9.equal(ended.endConfirmed, true);
-});
-test8("another workspace cannot read or act on a call using a valid enrolled device", async () => {
-  const f = fixture();
-  await f.seed();
-  f.devices.get("c").tenantId = "another-workspace";
-  await assert9.rejects(f.controller.endByOperator("c", { callId: "call-1", expectedVersion: 1 }), { code: "CALL_FORBIDDEN" });
-});
-test8("revocation during token issuance cannot return a usable new join token", async () => {
-  const wait = deferred2();
-  const entered = deferred2();
-  const f = fixture();
-  await f.seed();
-  const invitation = await f.invite();
-  const issue = f.provider.issueOperatorJoin;
-  f.provider.issueOperatorJoin = async (data) => {
-    entered.resolve();
-    await wait.promise;
-    return issue(data);
-  };
-  const acceptance = f.accept(invitation);
-  await entered.promise;
-  f.devices.get("b").revoked = true;
-  wait.resolve();
-  await assert9.rejects(acceptance, { code: "DEVICE_BINDING_INVALID" });
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
-});
-test8("Firestore callback retries do not duplicate tokens, ownership changes or provider cleanup", async () => {
-  const f = fixture({ store: new TestStore({ replayTransaction: true }) });
-  await f.seed();
-  let tokens = 0;
-  const issue = f.provider.issueOperatorJoin;
-  f.provider.issueOperatorJoin = async (data) => {
-    tokens++;
-    return issue(data);
-  };
-  const accepted = await f.accept(await f.invite());
-  await f.ready(accepted);
-  await f.controller.drainOutbox("call-1");
-  const call = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(tokens, 1);
-  assert9.equal(f.effects.length, 1);
-  assert9.equal(call.owner.deviceId, "b");
-  assert9.equal(call.transfer.status, "completed");
-  assert9.equal(call.outbox[0].attempts, 1);
-});
-test8("cleanup success followed by lost database acknowledgement recovers after its execution lease", async () => {
-  const f = fixture();
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await f.ready(accepted);
-  const transaction = f.store.transaction.bind(f.store);
-  let failAcknowledgement = false;
-  f.store.transaction = async (operation) => {
-    if (failAcknowledgement) {
-      failAcknowledgement = false;
-      throw new Error("simulated lost acknowledgement");
-    }
-    return transaction(operation);
-  };
-  f.provider.detachOperator = async (data) => {
-    f.effects.push({ kind: "detach", ...data });
-    failAcknowledgement = true;
-  };
-  await assert9.rejects(f.controller.drainOutbox("call-1"), /simulated lost acknowledgement/);
-  assert9.equal((await f.store.get(callStoreKey2("call-1"))).outbox[0].status, "running");
-  assert9.equal((await f.store.get(deviceReservationKey2("a"))).kind, "cleanup");
-  f.advance(46e3);
-  f.provider.detachOperator = async (data) => {
-    f.effects.push({ kind: "detach-already-absent", ...data });
-  };
-  await f.controller.drainOutbox("call-1");
-  const call = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(call.transfer.status, "completed");
-  assert9.equal(call.outbox[0].attempts, 2);
-  assert9.equal(await f.store.get(deviceReservationKey2("a")), void 0);
-  assert9.ok(f.effects.every((effect) => effect.kind.startsWith("detach")));
-});
-test8("bounded transfer history preserves replay and end-call writes when the cap is reached", async () => {
-  const f = fixture();
-  await f.seed();
-  let first;
-  for (let i = 0; i < MAX_TRANSFERS_PER_CALL; i++) {
-    const invitation = await f.invite("a", "b", "call-1", `request-cap-${i}`);
-    first ||= invitation;
-    await f.controller.stopTransfer("a", {
-      callId: "call-1",
-      transferId: invitation.transfer.id,
-      expectedVersion: invitation.version,
-      action: "cancel"
-    });
-  }
-  await assert9.rejects(f.invite("a", "b", "call-1", "request-beyond-cap"), { code: "TRANSFER_HISTORY_LIMIT" });
-  const replay = await f.invite("a", "b", "call-1", "request-cap-0");
-  assert9.equal(replay.transfer.id, first.transfer.id);
-  assert9.equal(replay.replayed, true);
-  const call = await f.store.get(callStoreKey2("call-1"));
-  assert9.ok(Buffer.byteLength(JSON.stringify(call)) < 256 * 1024);
-  const ended = await f.controller.endByOperator("a", { callId: "call-1", expectedVersion: call.version });
-  assert9.equal(ended.active, false);
-});
-test8("concurrent cleanup workers honor execution leases and ignore an older late acknowledgement", async () => {
-  const f = fixture();
-  await f.seed();
-  const accepted = await f.accept(await f.invite());
-  await f.ready(accepted);
-  const entered = deferred2();
-  const release = deferred2();
-  let removals = 0;
-  f.provider.detachOperator = async (data) => {
-    removals++;
-    if (removals === 1) {
-      entered.resolve();
-      await release.promise;
-    }
-    f.effects.push({ kind: "detach", ...data });
-  };
-  const originalWorker = f.controller.drainOutbox("call-1", { limit: 1 });
-  await entered.promise;
-  assert9.deepEqual(await f.controller.drainOutbox("call-1", { limit: 1 }), []);
-  f.advance(46e3);
-  await f.controller.drainOutbox("call-1", { limit: 1 });
-  const recovered = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(recovered.transfer.status, "completed");
-  assert9.equal(recovered.outbox[0].attempts, 2);
-  release.resolve();
-  await originalWorker;
-  const final = await f.store.get(callStoreKey2("call-1"));
-  assert9.equal(final.version, recovered.version);
-  assert9.equal(final.outbox[0].status, "done");
-  assert9.equal(removals, 2);
-  assert9.equal(new Set(f.effects.map((effect) => effect.identity)).size, 1);
-});
-
 // media-store/test/firestore-fake.mjs
 /*! SOURCE media-store/test/firestore-fake.mjs | SHA-256 567af2e7a81bef4c5bc094b0497770e477c71d8aebcf93eff8878528ed73085f */
 var clone2 = /* @__PURE__ */ __name((value) => structuredClone(value), "clone");
@@ -2952,18 +1978,18 @@ var FirestoreFake2 = class {
 // call-runtime/test/helpers.mjs
 /*! SOURCE call-runtime/test/helpers.mjs | SHA-256 d5c8b843dd69e03b5a7035e480f0180a90c06d3d2f41fcf72559f004ba021d67 */
 import { CallRuntime } from "../call-runtime/call-runtime.mjs";
-import { TransferController as TransferController3 } from "../media/transfer-controller.mjs";
-import { operatorIdentity as operatorIdentity3, customerIdentity as customerIdentity2 } from "../media/livekit-provider.mjs";
+import { TransferController } from "../media/transfer-controller.mjs";
+import { operatorIdentity, customerIdentity } from "../media/livekit-provider.mjs";
 import { createFirestoreMediaStore } from "../media-store/firestore-media-store.mjs";
-function deferred3() {
+function deferred2() {
   let resolve;
   const promise = new Promise((done) => {
     resolve = done;
   });
   return { promise, resolve };
 }
-__name(deferred3, "deferred");
-function fixture2(options = {}) {
+__name(deferred2, "deferred");
+function fixture(options = {}) {
   let time = 18e11;
   const effects = [], db = options.db || new FirestoreFake2();
   const devices = new Map(["a", "b", "c"].map((id) => [id, {
@@ -2994,7 +2020,7 @@ function fixture2(options = {}) {
       return {
         callId: data.callId,
         roomName: data.roomName,
-        customerIdentity: customerIdentity2(data.callId)
+        customerIdentity: customerIdentity(data.callId)
       };
     }, "acceptIncoming"),
     dialOutgoing: /* @__PURE__ */ __name(async (data) => {
@@ -3002,7 +2028,7 @@ function fixture2(options = {}) {
       return {
         callId: "call-out-1",
         roomName: data.roomName,
-        customerIdentity: customerIdentity2(data.requestId)
+        customerIdentity: customerIdentity(data.requestId)
       };
     }, "dialOutgoing"),
     connectOutgoing: /* @__PURE__ */ __name(async (data) => {
@@ -3012,7 +2038,7 @@ function fixture2(options = {}) {
       url: "wss://test.livekit.cloud",
       token: "synthetic-test-token",
       roomName: data.roomName,
-      identity: operatorIdentity3(data.deviceId, data.legId)
+      identity: operatorIdentity(data.deviceId, data.legId)
     }), "issueOperatorJoin"),
     inspectParticipants: /* @__PURE__ */ __name(async () => ({
       observedAt: time,
@@ -3041,7 +2067,7 @@ function fixture2(options = {}) {
     transferId: transfer?.id,
     attemptId: transfer?.attemptId || call.owner.legId
   }), "proof");
-  const controller = new TransferController3({
+  const controller = new TransferController({
     store,
     provider,
     authenticate: actor,
@@ -3119,23 +2145,1075 @@ function fixture2(options = {}) {
     }, "advance")
   };
 }
+__name(fixture, "fixture");
+
+// tests/operator-gateway.test.mjs
+/*! SOURCE tests/operator-gateway.test.mjs | SHA-256 72c5f1204477cb7af0ae946019d2c01980ec3b8dd5af86b7bcacef0442a091ad */
+import test6 from "node:test";
+import assert7 from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { createOperatorMediaGateway, nativeCallHistoryEvent, verifyMetaWebhook } from "../operator-media-gateway.js";
+import { sessionKey } from "../call-runtime/call-runtime.mjs";
+import { registerOperatorAdminRoutes } from "../operator-admin.js";
+var secret = "test-only-meta-signing-secret-not-a-real-key";
+var signed = /* @__PURE__ */ __name((bytes) => ({ rawBodyBuffer: bytes, headers: {
+  "x-hub-signature-256": "sha256=" + createHmac("sha256", secret).update(bytes).digest("hex")
+} }), "signed");
+test6("webhook authentication uses exact received bytes and rejects changed/missing/malformed signatures", () => {
+  const req = signed(Buffer.from('{"name":"Customer ✓","calls":[]}'));
+  assert7.equal(verifyMetaWebhook(req, secret), true);
+  assert7.equal(verifyMetaWebhook({ ...req, rawBodyBuffer: Buffer.from('{"calls":[]}') }, secret), false);
+  for (const header of ["", "sha256=ab", "sha1=" + "a".repeat(64), "sha256=" + "z".repeat(64)])
+    assert7.equal(verifyMetaWebhook({ ...req, headers: { "x-hub-signature-256": header } }, secret), false);
+  assert7.equal(verifyMetaWebhook(req, ""), false);
+  assert7.equal(verifyMetaWebhook({ headers: req.headers }, secret), false);
+});
+test6("history distinguishes signaling, actual audio, and unconfirmed end intent", () => {
+  const at = 17931888e5, session2 = { id: "call", providerCallId: "call", direction: "incoming", version: 3, phoneNumberId: "12345" };
+  const view = { version: 3, phase: "connecting", ownerDeviceId: "phone-a", roomReady: false };
+  assert7.equal(nativeCallHistoryEvent({ session: session2, view }, at).native_projection.connected, false);
+  assert7.equal(nativeCallHistoryEvent({ session: session2, view }, at).status, "connecting");
+  const joined = { ...session2, mediaReadyAt: at - 5e3 };
+  assert7.equal(nativeCallHistoryEvent({ session: joined, view: { ...view, phase: "connected", roomReady: true } }, at).status, "connected");
+  const ending = nativeCallHistoryEvent({ session: joined, view: { ...view, terminal: { reason: "OPERATOR_ENDED", endedAt: at }, endConfirmed: false } }, at);
+  assert7.equal(ending.status, "ending");
+  assert7.equal(ending.native_projection.active, false);
+  assert7.equal(ending.native_projection.end_confirmed, false);
+  assert7.equal(ending.native_projection.duration_seconds, 5);
+  assert7.equal(nativeCallHistoryEvent({ session: { ...session2, routeChoice: "legacy" }, view }, at), null);
+});
+function gateway(options = {}) {
+  const records = /* @__PURE__ */ new Map(), events = [];
+  let factoryArgs;
+  const store = { durable: true, get: /* @__PURE__ */ __name(async (key2) => records.get(key2), "get") };
+  const runtime = {
+    locate: /* @__PURE__ */ __name(async (id) => records.get(sessionKey(id)), "locate"),
+    isMediaAnchored: /* @__PURE__ */ __name(async (id) => !!records.get(sessionKey(id)), "isMediaAnchored"),
+    ingestVerifiedMetaEvent: /* @__PURE__ */ __name(async (event) => {
+      events.push(event);
+      return { handled: true };
+    }, "ingestVerifiedMetaEvent"),
+    dispatchIncomingAlert: /* @__PURE__ */ __name(async () => {
+    }, "dispatchIncomingAlert"),
+    recoverSession: /* @__PURE__ */ __name(async () => {
+    }, "recoverSession"),
+    claimLegacyIncoming: /* @__PURE__ */ __name(async () => ({ allowed: true }), "claimLegacyIncoming")
+  };
+  const instance = createOperatorMediaGateway({
+    env: {
+      SH_ANDROID_REGISTRY_BACKEND: "firestore",
+      WHATSAPP_PHONE_NUMBER_ID: "12345",
+      META_WHATSAPP_APP_SECRET: secret,
+      SH_NATIVE_CALLS_ENABLED: "true"
+    },
+    firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: {} },
+    storeFactory: /* @__PURE__ */ __name(() => store, "storeFactory"),
+    runtimeFactory: /* @__PURE__ */ __name((args) => {
+      factoryArgs = args;
+      return {
+        runtime,
+        controller: {},
+        verifyConfiguration: /* @__PURE__ */ __name(async () => ({ controlApiReachable: true }), "verifyConfiguration")
+      };
+    }, "runtimeFactory"),
+    logger: { warn() {
+    } },
+    ...options
+  });
+  return { instance, records, events, store, args: /* @__PURE__ */ __name(() => factoryArgs, "args") };
+}
+__name(gateway, "gateway");
+test6("incomplete provider configuration never exposes a persisted native call to legacy controls", async () => {
+  const h = gateway({ runtimeFactory: /* @__PURE__ */ __name(() => {
+    throw Error("bad provider config");
+  }, "runtimeFactory") });
+  h.records.set(sessionKey("native-call"), { id: "native-call", routeChoice: "native" });
+  assert7.equal(await h.instance.hasNativeCall("native-call"), true);
+  await assert7.rejects(() => h.instance.assertLegacyControl("native-call"), (error) => error.statusCode === 409);
+  await assert7.rejects(() => h.instance.claimLegacyIncoming("native-call", "legacy_attempt"), (error) => error.statusCode === 503);
+  assert7.equal((await h.instance.claimLegacyIncoming("untracked-call", "legacy_attempt")).allowed, true);
+});
+test6("unavailable persistent storage does not fall through to a local legacy answer", async () => {
+  const h = gateway({ firestoreRuntime: { configured: false } });
+  await assert7.rejects(() => h.instance.hasNativeCall("native-call"), (error) => error.statusCode === 503);
+});
+test6("verified event correlation has stable distinct fallbacks when normalized IDs are missing", async () => {
+  const h = gateway();
+  const row = {
+    call_id: "provider-call",
+    phone_number_id: "12345",
+    direction: "incoming",
+    event: "connect",
+    timestamp: 123,
+    session: { sdp_type: "offer", sdp: "v=0\r\nm=audio 9 RTP/SAVPF 111\r\n" }
+  };
+  await h.instance.ingestVerifiedEvents([row, row, { ...row, timestamp: 124 }, { ...row, phone_number_id: "different" }]);
+  assert7.equal(h.events.length, 3);
+  assert7.equal(h.events[0].eventId, h.events[1].eventId);
+  assert7.notEqual(h.events[0].eventId, h.events[2].eventId);
+  assert7.equal(h.events[0].offerSdp, row.session.sdp);
+});
+test6("a verified combined SDP and ACCEPTED webhook preserves both events with independent stable IDs", async () => {
+  const h = gateway();
+  const row = {
+    id: "combined-provider-event",
+    call_id: "outgoing-call",
+    phone_number_id: "12345",
+    direction: "outgoing",
+    event: "connect",
+    provider_status: "ACCEPTED",
+    timestamp: 123,
+    session: { sdp_type: "answer", sdp: "v=0\r\nm=audio 9 RTP/SAVPF 111\r\n" },
+    raw: { call: { biz_opaque_callback_data: "out_durable_attempt" } }
+  };
+  const first = await h.instance.ingestVerifiedEvents([row]);
+  assert7.equal(first.handled, 2);
+  assert7.deepEqual(h.events.map((event) => event.type), ["connect", "accepted"]);
+  assert7.notEqual(h.events[0].eventId, h.events[1].eventId);
+  assert7.equal(h.events[0].answerSdp, row.session.sdp);
+  assert7.equal(h.events[1].opaqueSessionId, "out_durable_attempt");
+  await h.instance.ingestVerifiedEvents([row]);
+  assert7.equal(h.events[0].eventId, h.events[2].eventId);
+  assert7.equal(h.events[1].eventId, h.events[3].eventId);
+  await h.instance.ingestVerifiedEvents([{ ...row, event: "terminate" }]);
+  assert7.equal(h.events.length, 5);
+  assert7.equal(h.events[4].type, "terminate");
+  assert7.notEqual(h.events[4].eventId, h.events[1].eventId);
+});
+test6("a durable incoming alert is delivered before slow history projection can block recovery", async () => {
+  const f = fixture({ runtime: { phoneNumberId: "12345" } });
+  const historyEntered = deferred2(), historyReleased = deferred2(), recoveryDone = deferred2(), alerts = [];
+  const recover = f.runtime.recoverSession.bind(f.runtime);
+  f.runtime.recoverSession = async (...args) => {
+    try {
+      return await recover(...args);
+    } finally {
+      recoveryDone.resolve();
+    }
+  };
+  const instance = createOperatorMediaGateway({
+    env: { WHATSAPP_PHONE_NUMBER_ID: "12345", META_WHATSAPP_APP_SECRET: secret, SH_NATIVE_CALLS_ENABLED: "true" },
+    firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: {} },
+    storeFactory: /* @__PURE__ */ __name(() => f.store, "storeFactory"),
+    runtimeFactory: /* @__PURE__ */ __name((args) => {
+      f.runtime.notify = args.notify;
+      return { runtime: f.runtime, controller: f.controller, verifyConfiguration: /* @__PURE__ */ __name(async () => ({ controlApiReachable: true }), "verifyConfiguration") };
+    }, "runtimeFactory"),
+    pushBridge: { publishRoomEvent: /* @__PURE__ */ __name(async (event) => {
+      if (await event.stillCurrent()) alerts.push(event.event);
+    }, "publishRoomEvent") },
+    onCallState: /* @__PURE__ */ __name(async () => {
+      historyEntered.resolve();
+      await historyReleased.promise;
+    }, "onCallState"),
+    logger: { warn() {
+    } },
+    now: f.now
+  });
+  await instance.ingestVerifiedEvents([{
+    id: "slow-history-offer",
+    call_id: "slow-history-call",
+    phone_number_id: "12345",
+    direction: "incoming",
+    event: "connect",
+    timestamp: f.now() / 1e3,
+    session: { sdp_type: "offer", sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" }
+  }]);
+  await historyEntered.promise;
+  try {
+    assert7.deepEqual(alerts, ["incoming"]);
+    const session2 = await f.runtime.locate("slow-history-call");
+    assert7.equal(session2.outbox.find((item) => item.event === "incoming").status, "done");
+  } finally {
+    historyReleased.resolve();
+  }
+  await recoveryDone.promise;
+  assert7.deepEqual(alerts, ["incoming"]);
+});
+test6("automatic pilot membership requires explicit server policy and fresh supported enrolled devices", async () => {
+  const at = 18e11;
+  const valid = /* @__PURE__ */ __name((id) => ({ id, credentialGeneration: 1, tokenExpiresAt: at + 6e4, nativeBuild: 10, mediaProtocol: "sh-room-audio-v1", receiveCalls: true }), "valid");
+  const rows2 = [
+    valid("phone-a"),
+    valid("phone-b"),
+    { ...valid("old-build"), nativeBuild: 9 },
+    { ...valid("expired"), tokenExpiresAt: at },
+    { ...valid("revoked"), revokedAt: at - 1 },
+    { ...valid("wrong-protocol"), mediaProtocol: "legacy" },
+    { ...valid("notifications-disabled"), receiveCalls: false },
+    valid("blocked")
+  ];
+  const registry = { listDevices: /* @__PURE__ */ __name(async () => rows2, "listDevices") };
+  const env3 = {
+    SH_ANDROID_REGISTRY_BACKEND: "firestore",
+    WHATSAPP_PHONE_NUMBER_ID: "12345",
+    META_WHATSAPP_APP_SECRET: secret,
+    SH_NATIVE_CALLS_ENABLED: "true",
+    SH_NATIVE_TRANSFER_PILOT_ENABLED: "true",
+    SH_NATIVE_PILOT_USE_ENROLLED_DEVICES: "true",
+    SH_ANDROID_REVOKED_DEVICE_IDS: "blocked"
+  };
+  const make = /* @__PURE__ */ __name((envValue) => gateway({
+    env: envValue,
+    now: /* @__PURE__ */ __name(() => at, "now"),
+    firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: registry }
+  }), "make");
+  assert7.deepEqual((await make(env3).args().capabilities()).pilotDeviceIds, ["phone-a", "phone-b"]);
+  assert7.deepEqual((await make({ ...env3, SH_NATIVE_PILOT_USE_ENROLLED_DEVICES: "false" }).args().capabilities()).pilotDeviceIds, []);
+  assert7.deepEqual(
+    (await make({ ...env3, SH_NATIVE_PILOT_DEVICE_IDS: "explicit-a, explicit-b" }).args().capabilities()).pilotDeviceIds,
+    ["explicit-a", "explicit-b"]
+  );
+  assert7.equal((await make({ ...env3, SH_NATIVE_TRANSFER_PILOT_ENABLED: "false" }).args().capabilities()).pilotEnabled, false);
+});
+test6("native device identity is derived from the current registry and metadata is authenticated", async () => {
+  let updated = 0;
+  const row = { id: "android_test_1234567890", credentialGeneration: 2, tokenExpiresAt: Date.now() + 1e5, nativeBuild: 9 };
+  const registry = { authenticate: /* @__PURE__ */ __name(async () => row, "authenticate"), updateNativeClient: /* @__PURE__ */ __name(async (_token, patch) => {
+    updated++;
+    return { ...row, ...patch };
+  }, "updateNativeClient") };
+  const h = gateway({ firestoreRuntime: { configured: true, firestore: {}, collectionPrefix: "sh_operator", deviceRegistry: registry } });
+  const context = { headers: { authorization: "Bearer " + "a".repeat(60), "x-sh-native-build": "10", "x-sh-media-protocol": "sh-room-audio-v1" }, body: { userId: "SUDO" } };
+  const actor = await h.args().authenticate(context);
+  assert7.equal(actor.userId, "native:" + row.id);
+  assert7.equal(actor.nativeBuild, 10);
+  assert7.equal(updated, 1);
+  await assert7.rejects(() => h.args().authenticate({ headers: { ...context.headers, authorization: "" } }), (e) => e.statusCode === 401);
+  await assert7.rejects(() => h.args().authenticate({ headers: { ...context.headers, "x-sh-native-build": "-1" } }), (e) => e.statusCode === 400);
+});
+function adminHarness(envPatch = {}) {
+  const routes = /* @__PURE__ */ new Map();
+  let issued = 0;
+  registerOperatorAdminRoutes(
+    { get: /* @__PURE__ */ __name((path, fn) => routes.set("GET " + path, fn), "get"), post: /* @__PURE__ */ __name((path, fn) => routes.set("POST " + path, fn), "post") },
+    {
+      authorize: /* @__PURE__ */ __name((req) => req.admin === true, "authorize"),
+      env: {
+        APP_URL: "https://ai-agent-debate.onrender.com",
+        PROFILE_SESSION_SECRET: "test-signing-secret-with-at-least-32-chars",
+        PROFILE_PASS_SUDO: "test-only",
+        ...envPatch
+      },
+      firestoreRuntime: { configured: true, deviceRegistry: { issueEnrollment: /* @__PURE__ */ __name(async () => {
+        issued++;
+        return { enrollmentCode: "test-code" };
+      }, "issueEnrollment") } },
+      mediaGateway: {}
+    }
+  );
+  return { issued: /* @__PURE__ */ __name(() => issued, "issued"), async request({ admin = false, origin = "https://ai-agent-debate.onrender.com", header = "1", label = "Phone" } = {}) {
+    const result = {};
+    const res = { set() {
+      return this;
+    }, status(value) {
+      result.status = value;
+      return this;
+    }, json(value) {
+      result.body = value;
+    } };
+    await routes.get("POST /api/operator-android/admin/enrollment")({ admin, method: "POST", headers: { origin, "x-sh-admin-action": header }, body: { label } }, res);
+    return result;
+  } };
+}
+__name(adminHarness, "adminHarness");
+test6("enrollment issuance needs existing SUDO authorization, exact origin and admin action header", async () => {
+  const h = adminHarness();
+  assert7.equal((await h.request()).status, 401);
+  assert7.equal((await h.request({ admin: true, origin: "https://evil.example" })).status, 403);
+  assert7.equal((await h.request({ admin: true, header: "" })).status, 403);
+  assert7.equal((await h.request({ admin: true, label: "" })).status, 400);
+  assert7.equal(h.issued(), 0);
+  assert7.equal((await h.request({ admin: true })).body.ok, true);
+  assert7.equal(h.issued(), 1);
+});
+test6("predictable fallback sessions cannot administer enrollment with blank profile configuration", async () => {
+  const h = adminHarness({ PROFILE_SESSION_SECRET: "", PROFILE_PASS_SUDO: "" });
+  assert7.equal((await h.request({ admin: true })).status, 503);
+  assert7.equal(h.issued(), 0);
+});
+
+// media/test/provider.test.mjs
+/*! SOURCE media/test/provider.test.mjs | SHA-256 99e5a76057b9dc2aef4096fca3839fa7b419d5c70f03f294e57bc30d156b2b69 */
+import test7 from "node:test";
+import assert8 from "node:assert/strict";
+import {
+  LiveKitWhatsAppProvider,
+  readLiveKitConfig,
+  operatorIdentity as operatorIdentity2,
+  customerIdentity as customerIdentity2,
+  mediaReleaseCapabilities
+} from "../media/livekit-provider.mjs";
+var fakeEnv = Object.freeze({
+  LIVEKIT_URL: "wss://sh-unit-test.livekit.cloud",
+  LIVEKIT_API_KEY: "unit-test-key",
+  LIVEKIT_API_SECRET: "unit-test-only-secret-never-a-real-provider-credential",
+  WHATSAPP_CALL_ACCESS_TOKEN: "unit-test-meta-token",
+  WHATSAPP_GRAPH_API_VERSION: "v23.0"
+});
+var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=unit-test\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+var claims = /* @__PURE__ */ __name((token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()), "claims");
+async function withSdkTransport(operation, responder) {
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url).pathname;
+    const body = JSON.parse(options.body);
+    const call = { path, body, options };
+    calls.push(call);
+    const result = responder ? await responder(call) : {};
+    return result instanceof Response ? result : new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  try {
+    await operation(new LiveKitWhatsAppProvider(readLiveKitConfig(fakeEnv)), calls);
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+__name(withSdkTransport, "withSdkTransport");
+test7("configuration fails closed; old transfer flags cannot enable media release", () => {
+  assert8.throws(() => readLiveKitConfig({}), { code: "MEDIA_CONFIG_MISSING" });
+  for (const origin of [
+    "http://sh.livekit.cloud",
+    "https://sh.livekit.cloud.evil.example",
+    "https://localhost",
+    "https://user:pass@sh.livekit.cloud",
+    "https://sh.livekit.cloud/path"
+  ]) {
+    assert8.throws(() => readLiveKitConfig({ ...fakeEnv, LIVEKIT_URL: origin }), { code: "MEDIA_CONFIG_INVALID" });
+  }
+  assert8.equal(mediaReleaseCapabilities({ WHATSAPP_CALL_TRANSFER_ENABLED: "true" }).enabled, false);
+});
+test7("official SDK serializes incoming real SDP offer and does not claim connected audio", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    const result = await provider.acceptIncoming({ callId: "provider-call-1", phoneNumberId: "123456", offerSdp: sdp });
+    assert8.equal(calls.length, 1);
+    assert8.equal(calls[0].path, "/twirp/livekit.Connector/AcceptWhatsAppCall");
+    assert8.equal(calls[0].body.sdp.type, "offer");
+    assert8.equal(calls[0].body.sdp.sdp, sdp);
+    assert8.equal(calls[0].body.whatsappCallId, "provider-call-1");
+    assert8.equal(result.audioConnected, false);
+    assert8.equal(result.signalingAccepted, true);
+    assert8.equal(result.customerIdentity, customerIdentity2("provider-call-1"));
+  }, () => ({ roomName: "returned-room" }));
+});
+test7("official SDK outgoing dial and answer use separate operations and stable request correlation", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    const result = await provider.dialOutgoing({ phoneNumberId: "123456", to: "919000000000", requestId: "outgoing-unit-1" });
+    await provider.connectOutgoing({ callId: result.callId, answerSdp: sdp });
+    assert8.deepEqual(calls.map((x) => x.path.split("/").at(-1)), ["DialWhatsAppCall", "ConnectWhatsAppCall"]);
+    assert8.equal(calls[0].body.whatsappBizOpaqueCallbackData, "outgoing-unit-1");
+    assert8.equal(calls[0].body.ringingTimeout, "45s");
+    assert8.equal(calls[1].body.sdp.type, "answer");
+    assert8.equal(result.audioConnected, false);
+  }, (call) => call.path.endsWith("DialWhatsAppCall") ? { whatsappCallId: "meta-outgoing-1", roomName: "outgoing-room" } : {});
+});
+test7("invalid/absent audio offer cannot signal a provider call", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    await assert8.rejects(provider.acceptIncoming({ callId: "c", phoneNumberId: "p", offerSdp: "" }), { code: "INVALID_SDP" });
+    assert8.equal(calls.length, 0);
+  });
+});
+test7("ambiguous outgoing failure is not retried by SDK failover and error does not expose secrets", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    await assert8.rejects(provider.dialOutgoing({ phoneNumberId: "123456", to: "919000000000", requestId: "outgoing-unit-1" }), (error) => {
+      assert8.equal(error.outcomeUnknown, true);
+      assert8.equal(error.code, "MEDIA_REQUEST_UNCERTAIN");
+      assert8.equal(String(error).includes(fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN), false);
+      return true;
+    });
+    assert8.equal(calls.length, 1);
+  }, () => new Response(
+    JSON.stringify({ code: "internal", msg: fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN }),
+    { status: 500, headers: { "Content-Type": "application/json" } }
+  ));
+});
+test7("customer-end cleanup uses USER_INITIATED and omits unnecessary Meta token", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    await provider.terminateCustomer({ callId: "meta-call", reason: "USER_INITIATED" });
+    assert8.equal(calls[0].body.disconnectReason, "USER_INITIATED");
+    assert8.ok(!calls[0].body.whatsappApiKey);
+    await provider.terminateCustomer({ callId: "meta-call", reason: "BUSINESS_INITIATED" });
+    assert8.equal(calls[1].body.whatsappApiKey, fakeEnv.WHATSAPP_CALL_ACCESS_TOKEN);
+  });
+});
+test7("join tokens use official SDK, exact room, microphone-only publishing and unique device legs", async () => {
+  const provider = new LiveKitWhatsAppProvider(readLiveKitConfig(fakeEnv));
+  const a = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-a", legId: "leg-1" });
+  const b = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-b", legId: "leg-1" });
+  const c = await provider.issueOperatorJoin({ roomName: "room-1", deviceId: "device-a", legId: "leg-2" });
+  assert8.notEqual(a.identity, b.identity);
+  assert8.notEqual(a.identity, c.identity);
+  const token = claims(a.token);
+  assert8.equal(token.sub, a.identity);
+  assert8.equal(token.video.room, "room-1");
+  assert8.equal(token.video.roomJoin, true);
+  assert8.equal(token.video.canPublishData, false);
+  assert8.deepEqual(token.video.canPublishSources, ["microphone"]);
+  assert8.ok(!token.video.roomAdmin && !token.video.roomCreate && !token.video.roomList && !token.sip);
+  assert8.ok(token.exp - token.nbf <= 120);
+});
+test7("source detach revokes only that operator and never invokes customer disconnect", async () => {
+  await withSdkTransport(async (provider, calls) => {
+    const identity = operatorIdentity2("device-a", "leg-a");
+    await provider.detachOperator({ roomName: "room-1", identity, revokeBeforeMs: 18e11 });
+    assert8.equal(calls.length, 1);
+    assert8.equal(calls[0].path, "/twirp/livekit.RoomService/RemoveParticipant");
+    assert8.equal(calls[0].body.identity, identity);
+    assert8.equal(calls[0].body.revokeTokenTs, "1800000060");
+    await assert8.rejects(provider.detachOperator({ roomName: "room-1", identity: customerIdentity2("call-1") }), { code: "INVALID_OPERATOR_LEG" });
+    assert8.equal(calls.length, 1);
+  });
+});
+test7("control API success and participant tracks explicitly do not establish live audio", async () => {
+  await withSdkTransport(async (provider) => {
+    const result = await provider.probeControlApi();
+    assert8.equal(result.controlApiReachable, true);
+    assert8.equal(result.audioVerified, false);
+    assert8.equal(result.transferEnabled, false);
+    const observed = await provider.inspectParticipants({ roomName: "r", customerIdentity: "customer", operatorIdentity: "target", sourceIdentity: "source" });
+    assert8.equal(observed.operatorAudioPublished, true);
+    assert8.equal(observed.customerAudioPublished, true);
+    assert8.equal(observed.bidirectionalAudioVerified, false);
+  }, (call) => call.path.endsWith("ListParticipants") ? {
+    participants: ["customer", "target", "source"].map((identity) => ({ identity, state: "ACTIVE", tracks: [{ sid: identity, type: "AUDIO" }] }))
+  } : { rooms: [] });
+});
+
+// media/test/helpers.mjs
+/*! SOURCE media/test/helpers.mjs | SHA-256 4ae7d800a1303020e0a01a8d4ff42a6f0a247edd05a2445701d4de8e9a7c7a24 */
+import { newBridgedCall, TransferController as TransferController2, callStoreKey, deviceReservationKey } from "../media/transfer-controller.mjs";
+import { operatorIdentity as operatorIdentity3 } from "../media/livekit-provider.mjs";
+var TestStore = class {
+  static {
+    __name(this, "TestStore");
+  }
+  constructor({ replayTransaction = false } = {}) {
+    this.durable = true;
+    this.rows = /* @__PURE__ */ new Map();
+    this.tail = Promise.resolve();
+    this.replayTransaction = replayTransaction;
+  }
+  async get(key2) {
+    return structuredClone(this.rows.get(key2));
+  }
+  async transaction(operation) {
+    const run = this.tail.catch(() => {
+    }).then(async () => {
+      for (let attempt = 0; attempt < (this.replayTransaction ? 2 : 1); attempt++) {
+        const staged = structuredClone(this.rows);
+        let wrote = false;
+        const value = await operation({
+          get: /* @__PURE__ */ __name(async (key2) => {
+            if (wrote) throw new Error("Firestore transactions require all reads before writes");
+            return structuredClone(staged.get(key2));
+          }, "get"),
+          set: /* @__PURE__ */ __name((key2, row) => {
+            wrote = true;
+            staged.set(key2, structuredClone(row));
+          }, "set"),
+          delete: /* @__PURE__ */ __name((key2) => {
+            wrote = true;
+            staged.delete(key2);
+          }, "delete")
+        });
+        if (!this.replayTransaction || attempt === 1) {
+          this.rows = staged;
+          return value;
+        }
+      }
+    });
+    this.tail = run;
+    return run;
+  }
+};
+function deferred3() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+__name(deferred3, "deferred");
+function fixture2(options = {}) {
+  const store = options.store || new TestStore();
+  let now = 18e11;
+  const effects = [];
+  const devices = new Map(["a", "b", "c", "d"].map((deviceId) => [deviceId, {
+    deviceId,
+    userId: deviceId === "b" ? "user-a" : `user-${deviceId}`,
+    tenantId: "smart",
+    mediaProtocol: "sh-room-audio-v1",
+    revoked: false,
+    receiveCalls: true
+  }]));
+  const provider = {
+    kind: "livekit-whatsapp",
+    issueOperatorJoin: /* @__PURE__ */ __name(async ({ roomName, deviceId, legId }) => ({ roomName, identity: operatorIdentity3(deviceId, legId), token: "unit-test-only" }), "issueOperatorJoin"),
+    inspectParticipants: /* @__PURE__ */ __name(async () => ({
+      observedAt: now,
+      customerActive: true,
+      customerAudioPublished: true,
+      operatorActive: true,
+      operatorAudioPublished: true,
+      sourceActive: true,
+      bidirectionalAudioVerified: false
+    }), "inspectParticipants"),
+    detachOperator: /* @__PURE__ */ __name(async (data) => {
+      effects.push({ kind: "detach", ...data });
+    }, "detachOperator"),
+    terminateCustomer: /* @__PURE__ */ __name(async (data) => {
+      effects.push({ kind: "terminate", ...data });
+    }, "terminateCustomer"),
+    ...options.provider
+  };
+  const validProof = /* @__PURE__ */ __name(({ actor, call, transfer }) => ({
+    verified: true,
+    bidirectionalAudio: true,
+    callId: call.id,
+    transferId: transfer.id,
+    attemptId: transfer.attemptId,
+    deviceId: actor.deviceId,
+    identity: transfer.targetIdentity,
+    readinessNonce: transfer.readinessNonce,
+    observedAt: now
+  }), "validProof");
+  const authenticate = /* @__PURE__ */ __name(async (context) => {
+    const row = devices.get(context);
+    return row ? { ...row, authenticated: true, canCall: true } : null;
+  }, "authenticate");
+  const controller = new TransferController2({
+    store,
+    provider,
+    authenticate,
+    resolveDevice: /* @__PURE__ */ __name(async (device) => devices.get(device), "resolveDevice"),
+    now: /* @__PURE__ */ __name(() => now, "now"),
+    rolloutGuard: /* @__PURE__ */ __name(async () => ({ enabled: true, provider: provider.kind, clientProtocol: "sh-room-audio-v1", liveTwoDeviceEvidenceId: "UNIT-TEST-ONLY-NOT-LIVE" }), "rolloutGuard"),
+    verifyReadiness: /* @__PURE__ */ __name(async (data) => validProof(data), "verifyReadiness"),
+    verifyProviderEvent: /* @__PURE__ */ __name(async (event) => event === "verified-terminate" ? { verified: true, type: "terminated", callId: "call-1" } : null, "verifyProviderEvent"),
+    ...options.controller
+  });
+  const seed = /* @__PURE__ */ __name(async (callId = "call-1", ownerDevice = "a") => {
+    const owner = devices.get(ownerDevice);
+    const call = newBridgedCall({
+      callId,
+      roomName: `room-${callId}`,
+      customerIdentity: `customer-${callId}`,
+      tenantId: "smart",
+      owner: { deviceId: ownerDevice, userId: owner.userId, legId: `initial-${callId}` },
+      now
+    });
+    await store.transaction(async (tx) => {
+      if (await tx.get(callStoreKey(callId))) throw new Error("Refuse to overwrite an existing call");
+      tx.set(callStoreKey(callId), call);
+      tx.set(deviceReservationKey(ownerDevice), { callId, kind: "owner" });
+    });
+    return call;
+  }, "seed");
+  const invite = /* @__PURE__ */ __name(async (owner = "a", toDeviceId = "b", callId = "call-1", requestId = "request-0001") => {
+    const current = await store.get(callStoreKey(callId));
+    return controller.invite(owner, { callId, toDeviceId, expectedVersion: current.version, requestId });
+  }, "invite");
+  const accept = /* @__PURE__ */ __name(async (invitation) => controller.accept(invitation.transfer.toDeviceId, {
+    callId: invitation.callId,
+    transferId: invitation.transfer.id,
+    expectedVersion: invitation.version
+  }), "accept");
+  const ready = /* @__PURE__ */ __name(async (accepted) => controller.confirmReady(accepted.transfer.toDeviceId, {
+    callId: accepted.callId,
+    transferId: accepted.transfer.id,
+    expectedVersion: accepted.version,
+    readinessNonce: accepted.readinessNonce,
+    evidence: { unitTest: true }
+  }), "ready");
+  return {
+    store,
+    controller,
+    provider,
+    effects,
+    devices,
+    seed,
+    invite,
+    accept,
+    ready,
+    validProof,
+    now: /* @__PURE__ */ __name(() => now, "now"),
+    advance: /* @__PURE__ */ __name((ms) => {
+      now += ms;
+    }, "advance")
+  };
+}
 __name(fixture2, "fixture");
 
+// media/test/transfer.test.mjs
+/*! SOURCE media/test/transfer.test.mjs | SHA-256 2adb5f6a4961a3a395d4d8a941cb4cddda2cba0743c011b6789364545c98f2d1 */
+import test8 from "node:test";
+import assert9 from "node:assert/strict";
+import { TransferController as TransferController3, callStoreKey as callStoreKey2, deviceReservationKey as deviceReservationKey2, MAX_TRANSFERS_PER_CALL } from "../media/transfer-controller.mjs";
+test8("rollout fails closed even when someone sets an enabled boolean", async () => {
+  const f = fixture2({ controller: { rolloutGuard: /* @__PURE__ */ __name(async () => true, "rolloutGuard") } });
+  await f.seed();
+  await assert9.rejects(f.invite(), { code: "TRANSFER_MEDIA_NOT_VALIDATED" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+});
+test8("missing durable transaction store is rejected", () => {
+  assert9.throws(() => new TransferController3({ store: { durable: false } }), { code: "DURABLE_STORE_REQUIRED" });
+});
+test8("request body identity does not authenticate a device", async () => {
+  const f = fixture2();
+  await f.seed();
+  await assert9.rejects(f.controller.invite({ operator_device_id: "a" }, {
+    callId: "call-1",
+    toDeviceId: "b",
+    requestId: "forged-0001",
+    expectedVersion: 1
+  }), { code: "UNAUTHENTICATED_DEVICE" });
+  const invitation = await f.invite();
+  await assert9.rejects(f.controller.accept("c", {
+    callId: "call-1",
+    transferId: invitation.transfer.id,
+    expectedVersion: invitation.version
+  }), { code: "TRANSFER_FORBIDDEN" });
+});
+test8("revoked devices and legacy clients cannot receive transfers", async () => {
+  const f = fixture2();
+  await f.seed();
+  f.devices.get("b").revoked = true;
+  await assert9.rejects(f.invite(), { code: "TARGET_UNAVAILABLE" });
+  f.devices.get("b").revoked = false;
+  f.devices.get("b").mediaProtocol = "legacy-browser";
+  await assert9.rejects(f.invite(), { code: "TARGET_UNAVAILABLE" });
+});
+test8("same user on two devices has different legs; source kept until ready", async () => {
+  const f = fixture2();
+  const original = await f.seed();
+  const accepted = await f.accept(await f.invite());
+  assert9.notEqual(accepted.join.identity, original.owner.identity);
+  assert9.equal(accepted.ownerDeviceId, "a");
+  assert9.equal(accepted.transfer.status, "connecting");
+  assert9.deepEqual(f.effects, []);
+  const committed = await f.ready(accepted);
+  assert9.equal(committed.ownerDeviceId, "b");
+  assert9.equal(committed.transfer.status, "completing");
+  assert9.deepEqual(f.effects, []);
+  await f.controller.drainOutbox("call-1");
+  assert9.equal(f.effects.length, 1);
+  assert9.equal(f.effects[0].kind, "detach");
+  assert9.equal(f.effects[0].identity, original.owner.identity);
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).transfer.status, "completed");
+});
+test8("idempotent invitation and accept do not create new transfer or customer calls", async () => {
+  const f = fixture2();
+  await f.seed();
+  const [first, second] = await Promise.all([f.invite(), f.invite()]);
+  assert9.equal(first.transfer.id, second.transfer.id);
+  const [a, b] = await Promise.all([f.accept(first), f.accept(first)]);
+  assert9.equal(a.join.identity, b.join.identity);
+  assert9.equal(a.readinessNonce, b.readinessNonce);
+  assert9.deepEqual(f.effects, []);
+  await assert9.rejects(f.invite("a", "c", "call-1", "request-0001"), { code: "REQUEST_ID_CONFLICT" });
+});
+test8("atomic reservation prevents two different calls from inviting the same target", async () => {
+  const f = fixture2();
+  await f.seed();
+  await f.seed("call-2", "c");
+  const results = await Promise.allSettled([f.invite("a", "b"), f.invite("c", "b", "call-2")]);
+  assert9.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+  assert9.equal(results.find((r) => r.status === "rejected").reason.code, "TARGET_BUSY");
+});
+test8("unverified client readiness leaves source owner and microphone untouched", async () => {
+  const f = fixture2({ controller: { verifyReadiness: void 0 } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await assert9.rejects(f.ready(accepted), { code: "CLIENT_MEDIA_NOT_INTEGRATED" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+  assert9.deepEqual(f.effects, []);
+});
+test8("published track without received/sent audio evidence cannot commit", async () => {
+  const f = fixture2({ controller: { verifyReadiness: /* @__PURE__ */ __name(async () => ({ verified: true }), "verifyReadiness") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_VERIFIED" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+});
+test8("missing customer or target media never releases source", async () => {
+  const f = fixture2({ provider: { inspectParticipants: /* @__PURE__ */ __name(async () => ({ customerActive: false }), "inspectParticipants") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_READY" });
+  assert9.deepEqual(f.effects, []);
+});
+test8("stale readiness nonce, version and old telemetry are rejected", async () => {
+  const f = fixture2();
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await assert9.rejects(f.ready({ ...accepted, readinessNonce: "old-attempt" }), { code: "READINESS_STALE" });
+  await assert9.rejects(f.ready({ ...accepted, version: accepted.version - 1 }), { code: "STALE_CALL_VERSION" });
+  f.controller.verifyReadiness = async (data) => ({ ...f.validProof(data), observedAt: f.now() - 6e3 });
+  await assert9.rejects(f.ready(accepted), { code: "MEDIA_NOT_VERIFIED" });
+});
+test8("target decline keeps source, detaches only target and frees reservation", async () => {
+  const f = fixture2();
+  const original = await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const stopped = await f.controller.stopTransfer("b", {
+    callId: "call-1",
+    transferId: accepted.transfer.id,
+    expectedVersion: accepted.version,
+    action: "decline"
+  });
+  assert9.equal(stopped.ownerDeviceId, "a");
+  assert9.equal((await f.store.get(deviceReservationKey2("b"))).kind, "cleanup");
+  await f.controller.drainOutbox("call-1");
+  assert9.equal(await f.store.get(deviceReservationKey2("b")), void 0);
+  assert9.equal(f.effects.length, 1);
+  assert9.equal(f.effects[0].identity, accepted.join.identity);
+  assert9.notEqual(f.effects[0].identity, original.owner.identity);
+});
+test8("invitation expires during readiness I/O; late proof cannot take ownership", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return f.validProof(data);
+  }, "verifyReadiness") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const confirmation = f.ready(accepted);
+  await entered.promise;
+  f.advance(61e3);
+  wait.resolve();
+  await assert9.rejects(confirmation);
+  await f.controller.expire("call-1");
+  const call = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(call.owner.deviceId, "a");
+  assert9.equal(call.transfer.status, "expired");
+});
+test8("source cancellation wins against delayed readiness verification", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return f.validProof(data);
+  }, "verifyReadiness") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const confirmation = f.ready(accepted);
+  await entered.promise;
+  await f.controller.stopTransfer("a", { callId: "call-1", transferId: accepted.transfer.id, expectedVersion: accepted.version, action: "cancel" });
+  wait.resolve();
+  await assert9.rejects(confirmation, { code: "STALE_CALL_VERSION" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+});
+test8("customer termination wins while readiness is in flight", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return f.validProof(data);
+  }, "verifyReadiness") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const confirmation = f.ready(accepted);
+  await entered.promise;
+  const ended = await f.controller.providerEnded("verified-terminate");
+  assert9.equal(ended.active, false);
+  wait.resolve();
+  await assert9.rejects(confirmation, { code: "CALL_ENDED" });
+  await f.controller.drainOutbox("call-1");
+  const terminal = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(terminal.active, false);
+  assert9.equal(terminal.transfer.status, "cancelled");
+  assert9.equal(f.effects.filter((e) => e.kind === "terminate").length, 1);
+  assert9.equal(f.effects.find((e) => e.kind === "terminate").reason, "USER_INITIATED");
+});
+test8("termination during token issuance prevents returning a join token", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2();
+  await f.seed();
+  const invitation = await f.invite();
+  const original = f.provider.issueOperatorJoin;
+  f.provider.issueOperatorJoin = async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return original(data);
+  };
+  const acceptance = f.accept(invitation);
+  await entered.promise;
+  await f.controller.providerEnded("verified-terminate");
+  wait.resolve();
+  await assert9.rejects(acceptance, { code: "CALL_ENDED" });
+});
+test8("unsigned provider payload cannot terminate a call", async () => {
+  const f = fixture2();
+  await f.seed();
+  await assert9.rejects(f.controller.providerEnded({ callId: "call-1", verified: true }), { code: "UNVERIFIED_WEBHOOK" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).active, true);
+});
+test8("failed source cleanup is persisted; a restarted worker retries detach without ending customer", async () => {
+  const f = fixture2();
+  const original = await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await f.ready(accepted);
+  f.provider.detachOperator = async () => {
+    throw new Error("transient transport failure");
+  };
+  await f.controller.drainOutbox("call-1");
+  let call = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(call.owner.deviceId, "b");
+  assert9.equal(call.transfer.status, "completing");
+  assert9.equal(call.outbox[0].status, "pending");
+  assert9.equal((await f.store.get(deviceReservationKey2("a"))).kind, "cleanup");
+  f.advance(3e3);
+  f.provider.detachOperator = async (data) => f.effects.push({ kind: "detach", ...data });
+  const restarted = new TransferController3({ ...f.controller, store: f.store, provider: f.provider });
+  await restarted.drainOutbox("call-1");
+  call = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(call.transfer.status, "completed");
+  assert9.equal(await f.store.get(deviceReservationKey2("a")), void 0);
+  assert9.equal(f.effects.length, 1);
+  assert9.equal(f.effects[0].identity, original.owner.identity);
+});
+test8("source cannot end customer after handoff commits; terminal retries are idempotent", async () => {
+  const f = fixture2();
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const committed = await f.ready(accepted);
+  await assert9.rejects(f.controller.endByOperator("a", { callId: "call-1", expectedVersion: committed.version }), { code: "NOT_CALL_OWNER" });
+  const ended = await f.controller.endByOperator("b", { callId: "call-1", expectedVersion: committed.version });
+  assert9.equal(ended.active, false);
+  await f.controller.providerEnded("verified-terminate");
+  await f.controller.drainOutbox("call-1");
+  await f.controller.drainOutbox("call-1");
+  assert9.equal(f.effects.filter((e) => e.kind === "terminate").length, 1);
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).transfer.status, "cancelled");
+});
+test8("terminal call never becomes transferable on old idempotent invitation replay", async () => {
+  const f = fixture2();
+  await f.seed();
+  const invitation = await f.invite();
+  await f.controller.providerEnded("verified-terminate");
+  const replay = await f.invite();
+  assert9.equal(replay.active, false);
+  assert9.equal(replay.transfer.id, invitation.transfer.id);
+  await assert9.rejects(f.accept(invitation), { code: "CALL_ENDED" });
+  await assert9.rejects(f.invite("a", "b", "call-1", "new-request-0002"), { code: "CALL_ENDED" });
+});
+test8("device revocation while readiness is in flight prevents ownership commit", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2({ controller: { verifyReadiness: /* @__PURE__ */ __name(async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return f.validProof(data);
+  }, "verifyReadiness") } });
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  const confirmation = f.ready(accepted);
+  await entered.promise;
+  f.devices.get("b").revoked = true;
+  wait.resolve();
+  await assert9.rejects(confirmation, { code: "DEVICE_BINDING_INVALID" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+});
+test8("re-enrollment to another operator cannot inherit an already accepted target leg", async () => {
+  const f = fixture2();
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  f.devices.get("b").userId = "replacement-operator";
+  await assert9.rejects(f.ready(accepted), { code: "DEVICE_BINDING_CHANGED" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+  assert9.deepEqual(f.effects, []);
+});
+test8("cleanup reservations cannot be mistaken for a live invite or source ownership", async () => {
+  const f = fixture2();
+  await f.seed();
+  const invitation = await f.invite();
+  const original = await f.store.get(deviceReservationKey2("b"));
+  await f.store.transaction(async (tx) => {
+    tx.set(deviceReservationKey2("b"), { ...original, kind: "cleanup", identity: "stale-target-leg" });
+  });
+  await assert9.rejects(f.accept(invitation), { code: "TRANSFER_CHANGED" });
+  await f.store.transaction(async (tx) => tx.set(deviceReservationKey2("b"), original));
+  const accepted = await f.accept(invitation);
+  await f.store.transaction(async (tx) => {
+    tx.set(deviceReservationKey2("a"), { callId: "call-1", kind: "cleanup", identity: "stale-source-leg" });
+  });
+  await assert9.rejects(f.ready(accepted), { code: "TRANSFER_CHANGED" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+  assert9.deepEqual(f.effects, []);
+});
+test8("an operator end is immediate local intent, not a false provider-end confirmation", async () => {
+  const f = fixture2();
+  await f.seed();
+  const ending = await f.controller.endByOperator("a", { callId: "call-1", expectedVersion: 1 });
+  assert9.equal(ending.active, false);
+  assert9.equal(ending.status, "ending");
+  assert9.equal(ending.endConfirmed, false);
+  f.provider.terminateCustomer = async () => {
+    throw new Error("offline");
+  };
+  await f.controller.drainOutbox("call-1");
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).status, "ending");
+  const ended = await f.controller.providerEnded("verified-terminate");
+  assert9.equal(ended.status, "ended");
+  assert9.equal(ended.endConfirmed, true);
+});
+test8("another workspace cannot read or act on a call using a valid enrolled device", async () => {
+  const f = fixture2();
+  await f.seed();
+  f.devices.get("c").tenantId = "another-workspace";
+  await assert9.rejects(f.controller.endByOperator("c", { callId: "call-1", expectedVersion: 1 }), { code: "CALL_FORBIDDEN" });
+});
+test8("revocation during token issuance cannot return a usable new join token", async () => {
+  const wait = deferred3();
+  const entered = deferred3();
+  const f = fixture2();
+  await f.seed();
+  const invitation = await f.invite();
+  const issue = f.provider.issueOperatorJoin;
+  f.provider.issueOperatorJoin = async (data) => {
+    entered.resolve();
+    await wait.promise;
+    return issue(data);
+  };
+  const acceptance = f.accept(invitation);
+  await entered.promise;
+  f.devices.get("b").revoked = true;
+  wait.resolve();
+  await assert9.rejects(acceptance, { code: "DEVICE_BINDING_INVALID" });
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).owner.deviceId, "a");
+});
+test8("Firestore callback retries do not duplicate tokens, ownership changes or provider cleanup", async () => {
+  const f = fixture2({ store: new TestStore({ replayTransaction: true }) });
+  await f.seed();
+  let tokens = 0;
+  const issue = f.provider.issueOperatorJoin;
+  f.provider.issueOperatorJoin = async (data) => {
+    tokens++;
+    return issue(data);
+  };
+  const accepted = await f.accept(await f.invite());
+  await f.ready(accepted);
+  await f.controller.drainOutbox("call-1");
+  const call = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(tokens, 1);
+  assert9.equal(f.effects.length, 1);
+  assert9.equal(call.owner.deviceId, "b");
+  assert9.equal(call.transfer.status, "completed");
+  assert9.equal(call.outbox[0].attempts, 1);
+});
+test8("cleanup success followed by lost database acknowledgement recovers after its execution lease", async () => {
+  const f = fixture2();
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await f.ready(accepted);
+  const transaction = f.store.transaction.bind(f.store);
+  let failAcknowledgement = false;
+  f.store.transaction = async (operation) => {
+    if (failAcknowledgement) {
+      failAcknowledgement = false;
+      throw new Error("simulated lost acknowledgement");
+    }
+    return transaction(operation);
+  };
+  f.provider.detachOperator = async (data) => {
+    f.effects.push({ kind: "detach", ...data });
+    failAcknowledgement = true;
+  };
+  await assert9.rejects(f.controller.drainOutbox("call-1"), /simulated lost acknowledgement/);
+  assert9.equal((await f.store.get(callStoreKey2("call-1"))).outbox[0].status, "running");
+  assert9.equal((await f.store.get(deviceReservationKey2("a"))).kind, "cleanup");
+  f.advance(46e3);
+  f.provider.detachOperator = async (data) => {
+    f.effects.push({ kind: "detach-already-absent", ...data });
+  };
+  await f.controller.drainOutbox("call-1");
+  const call = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(call.transfer.status, "completed");
+  assert9.equal(call.outbox[0].attempts, 2);
+  assert9.equal(await f.store.get(deviceReservationKey2("a")), void 0);
+  assert9.ok(f.effects.every((effect) => effect.kind.startsWith("detach")));
+});
+test8("bounded transfer history preserves replay and end-call writes when the cap is reached", async () => {
+  const f = fixture2();
+  await f.seed();
+  let first;
+  for (let i = 0; i < MAX_TRANSFERS_PER_CALL; i++) {
+    const invitation = await f.invite("a", "b", "call-1", `request-cap-${i}`);
+    first ||= invitation;
+    await f.controller.stopTransfer("a", {
+      callId: "call-1",
+      transferId: invitation.transfer.id,
+      expectedVersion: invitation.version,
+      action: "cancel"
+    });
+  }
+  await assert9.rejects(f.invite("a", "b", "call-1", "request-beyond-cap"), { code: "TRANSFER_HISTORY_LIMIT" });
+  const replay = await f.invite("a", "b", "call-1", "request-cap-0");
+  assert9.equal(replay.transfer.id, first.transfer.id);
+  assert9.equal(replay.replayed, true);
+  const call = await f.store.get(callStoreKey2("call-1"));
+  assert9.ok(Buffer.byteLength(JSON.stringify(call)) < 256 * 1024);
+  const ended = await f.controller.endByOperator("a", { callId: "call-1", expectedVersion: call.version });
+  assert9.equal(ended.active, false);
+});
+test8("concurrent cleanup workers honor execution leases and ignore an older late acknowledgement", async () => {
+  const f = fixture2();
+  await f.seed();
+  const accepted = await f.accept(await f.invite());
+  await f.ready(accepted);
+  const entered = deferred3();
+  const release = deferred3();
+  let removals = 0;
+  f.provider.detachOperator = async (data) => {
+    removals++;
+    if (removals === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    f.effects.push({ kind: "detach", ...data });
+  };
+  const originalWorker = f.controller.drainOutbox("call-1", { limit: 1 });
+  await entered.promise;
+  assert9.deepEqual(await f.controller.drainOutbox("call-1", { limit: 1 }), []);
+  f.advance(46e3);
+  await f.controller.drainOutbox("call-1", { limit: 1 });
+  const recovered = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(recovered.transfer.status, "completed");
+  assert9.equal(recovered.outbox[0].attempts, 2);
+  release.resolve();
+  await originalWorker;
+  const final = await f.store.get(callStoreKey2("call-1"));
+  assert9.equal(final.version, recovered.version);
+  assert9.equal(final.outbox[0].status, "done");
+  assert9.equal(removals, 2);
+  assert9.equal(new Set(f.effects.map((effect) => effect.identity)).size, 1);
+});
+
 // call-runtime/test/runtime.test.mjs
-/*! SOURCE call-runtime/test/runtime.test.mjs | SHA-256 10d82c9cee41a9d5396faef0df731f05912e7c4de51497b998cda7c79c3e6316 */
+/*! SOURCE call-runtime/test/runtime.test.mjs | SHA-256 7c78db590b734b1fbdd070f40cc825cd5984df021692f6d2da80b72e2f7b860a */
 import test9 from "node:test";
 import assert10 from "node:assert/strict";
 import { sessionKey as sessionKey2, eventKey } from "../call-runtime/call-runtime.mjs";
 import { callStoreKey as callStoreKey3, deviceReservationKey as deviceReservationKey3 } from "../media/transfer-controller.mjs";
 test9("unconfigured room calling and unverified business events fail closed", async () => {
-  const f = fixture2({ runtime: { capabilities: /* @__PURE__ */ __name(async () => ({ roomCalling: false }), "capabilities") } });
+  const f = fixture({ runtime: { capabilities: /* @__PURE__ */ __name(async () => ({ roomCalling: false }), "capabilities") } });
   await assert10.rejects(f.incoming(), { code: "ROOM_CALLING_NOT_ENABLED" });
   await assert10.rejects(f.runtime.ingestVerifiedMetaEvent({ verified: false }), { code: "UNVERIFIED_WEBHOOK" });
   await assert10.rejects(f.runtime.capabilities("unknown"), { code: "UNAUTHENTICATED_DEVICE" });
   assert10.deepEqual(f.effects, []);
 });
 test9("incoming route is durable and SDK accept is not Connected", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   assert10.equal(await f.runtime.isMediaAnchored("call-in-1"), true);
   const accepted = await f.accept();
@@ -3152,8 +3230,111 @@ test9("incoming route is durable and SDK accept is not Connected", async () => {
   assert10.equal((await f.store.get(deviceReservationKey3("a"))).kind, "owner");
   assert10.equal(f.effects.filter((row) => row.kind === "accept").length, 1);
 });
+test9("priority incoming alert uses the durable job without waiting for media or transfer housekeeping", async () => {
+  const f = fixture();
+  await f.incoming();
+  const before = await f.runtime.locate("call-in-1");
+  const unexpected = /* @__PURE__ */ __name(async () => {
+    throw Error("Housekeeping must follow the incoming notification");
+  }, "unexpected");
+  f.runtime.reconcileEligibility = unexpected;
+  f.runtime.syncTransferNotifications = unexpected;
+  f.controller.expire = unexpected;
+  const result = await f.runtime.dispatchIncomingAlert("call-in-1");
+  assert10.equal(result.dispatched, true);
+  assert10.deepEqual(f.effects, [{ kind: "notify", event: "incoming" }]);
+  const after = await f.runtime.locate("call-in-1");
+  assert10.equal(after.version, before.version);
+  assert10.equal(after.phase, "ringing");
+  const alert = after.outbox.find((item) => item.event === "incoming");
+  assert10.equal(alert.status, "done");
+  assert10.equal(alert.attempts, 1);
+});
+test9("priority incoming alerts skip expired, already answered and browser-claimed calls", async () => {
+  for (const change of ["expired", "answered", "legacy"]) {
+    const f = fixture();
+    await f.incoming();
+    if (change === "expired") f.advance(90001);
+    if (change === "answered") await f.accept();
+    if (change === "legacy") await f.runtime.claimLegacyIncoming("call-in-1", "legacy-alert-check");
+    const result = await f.runtime.dispatchIncomingAlert("call-in-1");
+    assert10.equal(result.dispatched, false, change);
+    assert10.equal(f.effects.filter((item) => item.kind === "notify" && item.event === "incoming").length, 0, change);
+  }
+});
+test9("customer end after an incoming alert lease is claimed prevents the stale send", async () => {
+  const f = fixture();
+  await f.incoming();
+  const read = f.store.get.bind(f.store);
+  let interrupt = true;
+  f.runtime.store = { ...f.store, get: /* @__PURE__ */ __name(async (key2) => {
+    if (interrupt && key2 === sessionKey2("call-in-1")) {
+      interrupt = false;
+      await f.runtime.ingestVerifiedMetaEvent({
+        verified: true,
+        eventId: "end-after-alert-claim",
+        type: "terminate",
+        callId: "call-in-1",
+        phoneNumberId: "business-1"
+      });
+    }
+    return read(key2);
+  }, "get") };
+  await f.runtime.dispatchIncomingAlert("call-in-1");
+  assert10.equal(f.effects.filter((item) => item.kind === "notify" && item.event === "incoming").length, 0);
+  assert10.equal((await f.runtime.locate("call-in-1")).phase, "ended");
+});
+test9("priority and ordinary recovery workers share one lease and never duplicate an incoming alert", async () => {
+  const f = fixture(), entered = deferred2(), released = deferred2();
+  await f.incoming();
+  await f.incoming();
+  let notifications = 0;
+  f.runtime.notify = async (event) => {
+    assert10.equal(event.event, "incoming");
+    notifications++;
+    entered.resolve();
+    await released.promise;
+  };
+  const priority = f.runtime.dispatchIncomingAlert("call-in-1");
+  await entered.promise;
+  try {
+    await Promise.all([f.runtime.dispatchIncomingAlert("call-in-1"), f.runtime.recoverSession("call-in-1")]);
+    assert10.equal(notifications, 1);
+  } finally {
+    released.resolve();
+  }
+  await priority;
+  await f.runtime.recoverSession("call-in-1");
+  assert10.equal(notifications, 1);
+  assert10.equal((await f.runtime.locate("call-in-1")).outbox.find((item) => item.event === "incoming").attempts, 1);
+});
+test9("failed priority notification remains recoverable and a later terminal event suppresses its retry", async () => {
+  const f = fixture();
+  await f.incoming();
+  let attempts = 0;
+  f.runtime.notify = async () => {
+    attempts++;
+    throw Error("Synthetic FCM outage");
+  };
+  const result = await f.runtime.dispatchIncomingAlert("call-in-1");
+  assert10.equal(result.dispatched, false);
+  assert10.equal(attempts, 1);
+  assert10.equal((await f.runtime.locate("call-in-1")).outbox.find((item) => item.event === "incoming").status, "pending");
+  await f.runtime.dispatchIncomingAlert("call-in-1");
+  assert10.equal(attempts, 1);
+  await f.runtime.ingestVerifiedMetaEvent({
+    verified: true,
+    eventId: "end-before-alert-retry",
+    type: "terminate",
+    callId: "call-in-1",
+    phoneNumberId: "business-1"
+  });
+  f.advance(3e3);
+  await f.runtime.dispatchIncomingAlert("call-in-1");
+  assert10.equal(attempts, 1);
+});
 test9("racing answers choose one enrolled device and never issue a second connector accept", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const results = await Promise.allSettled([f.accept("call-in-1", "a"), f.accept("call-in-1", "b")]);
   assert10.equal(results.filter((row) => row.status === "fulfilled").length, 1);
@@ -3161,7 +3342,7 @@ test9("racing answers choose one enrolled device and never issue a second connec
   assert10.equal((await f.store.get(sessionKey2("call-in-1"))).owner.deviceId, "a");
 });
 test9("replayed accept resumes the same leg without accepting Meta again", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const first = await f.accept();
   const second = await f.accept();
@@ -3170,7 +3351,7 @@ test9("replayed accept resumes the same leg without accepting Meta again", async
   assert10.equal(f.effects.filter((row) => row.kind === "accept").length, 1);
 });
 test9("terminate before delayed incoming offer cannot resurrect ringing or issue audio", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.runtime.ingestVerifiedMetaEvent({ verified: true, eventId: "terminal-first", type: "terminate", callId: "call-in-1", phoneNumberId: "business-1" });
   await f.incoming();
   assert10.equal((await f.runtime.status("a", "call-in-1")).call.phase, "ended");
@@ -3178,7 +3359,7 @@ test9("terminate before delayed incoming offer cannot resurrect ringing or issue
   assert10.equal(f.effects.length, 0);
 });
 test9("customer hangup during initial readiness prevents canonical connected call creation", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   await f.incoming();
   const accepted = await f.accept();
   f.runtime.verifyReadiness = async (data) => {
@@ -3194,7 +3375,7 @@ test9("customer hangup during initial readiness prevents canonical connected cal
   assert10.equal(await f.store.get(callStoreKey3("call-in-1")), void 0);
 });
 test9("outgoing idempotency and unknown dial result never redial", async () => {
-  const f = fixture2();
+  const f = fixture();
   f.provider.dialOutgoing = async (data) => {
     f.effects.push({ kind: "dial", ...data });
     throw Error("lost HTTP response");
@@ -3212,7 +3393,7 @@ test9("outgoing idempotency and unknown dial result never redial", async () => {
   assert10.equal((await f.store.get(deviceReservationKey3("a"))).kind, "pending");
 });
 test9("early outgoing answer correlates opaque session and survives lost dial acknowledgement", async () => {
-  const f = fixture2();
+  const f = fixture();
   f.provider.dialOutgoing = async (data) => {
     await f.runtime.ingestVerifiedMetaEvent({
       verified: true,
@@ -3234,7 +3415,7 @@ test9("early outgoing answer correlates opaque session and survives lost dial ac
   assert10.equal(f.effects.filter((row) => row.kind === "connect").length, 1);
 });
 test9("cancel before outgoing provider ID keeps reservation until late call cleanup", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const original = f.provider.dialOutgoing;
   f.provider.dialOutgoing = async (data) => {
     entered.resolve(data.requestId);
@@ -3256,7 +3437,7 @@ test9("cancel before outgoing provider ID keeps reservation until late call clea
   assert10.ok(f.effects.some((row) => row.kind === "terminate" && row.callId === "call-out-1"));
 });
 test9("revocation sweeper ends active media server-side without a cooperative phone", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.connected();
   f.devices.get("a").revoked = true;
   await f.runtime.recoverSession("call-in-1");
@@ -3267,7 +3448,7 @@ test9("revocation sweeper ends active media server-side without a cooperative ph
   await assert10.rejects(f.runtime.status("a", "call-in-1"), { code: "DEVICE_BINDING_INVALID" });
 });
 test9("changed credential generation cannot confirm old initial readiness", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const accepted = await f.accept();
   f.devices.get("a").credentialGeneration++;
@@ -3275,7 +3456,7 @@ test9("changed credential generation cannot confirm old initial readiness", asyn
   assert10.equal(await f.store.get(callStoreKey3("call-in-1")), void 0);
 });
 test9("runtime transfer preserves source until confirmed target evidence and detaches source only", async () => {
-  const f = fixture2();
+  const f = fixture();
   const connected = await f.connected();
   const invitation = await f.runtime.transfer("a", "call-in-1", "invite", { toDeviceId: "b", version: connected.call.version, requestId: "transfer-req-1" });
   const accepted = await f.runtime.transfer("b", "call-in-1", "accept", { transferId: invitation.call.transfer.id, version: invitation.call.version });
@@ -3294,7 +3475,7 @@ test9("runtime transfer preserves source until confirmed target evidence and det
   assert10.equal(f.effects.filter((row) => row.kind === "terminate").length, 0);
 });
 test9("re-enrolled target cannot accept a prior transfer notification", async () => {
-  const f = fixture2();
+  const f = fixture();
   const connected = await f.connected();
   const invitation = await f.runtime.transfer("a", "call-in-1", "invite", { toDeviceId: "b", version: connected.call.version, requestId: "transfer-req-2" });
   f.devices.get("b").credentialGeneration++;
@@ -3307,14 +3488,14 @@ test9("re-enrolled target cannot accept a prior transfer notification", async ()
   assert10.equal(f.effects.filter((row) => row.kind === "terminate").length, 0);
 });
 test9("provider project changes never send an existing call to a new media project", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   f.provider.config.fingerprint = "new-project";
   await assert10.rejects(f.accept(), { code: "MEDIA_PROJECT_CHANGED" });
   assert10.equal(f.effects.length, 0);
 });
 test9("legacy and native first answers arbitrate atomically without tearing down the winner", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const results = await Promise.allSettled([f.runtime.claimLegacyIncoming("call-in-1", "legacy-device-a"), f.accept()]);
   assert10.equal(results.filter((row) => row.status === "fulfilled").length, 1);
@@ -3327,14 +3508,14 @@ test9("legacy and native first answers arbitrate atomically without tearing down
   } else assert10.equal(await f.runtime.isMediaAnchored("call-in-1"), true);
 });
 test9("a native-owned call cannot be claimed or rejected by a browser operation", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   await f.accept();
   await assert10.rejects(f.runtime.claimLegacyIncoming("call-in-1", "legacy-device-b"), { code: "CALL_OWNED_BY_NATIVE" });
   assert10.equal(await f.runtime.isMediaAnchored("call-in-1"), true);
 });
 test9("rejecting an unaccepted incoming call confirms only actual reject acknowledgement", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const status = await f.runtime.status("a", "call-in-1");
   await f.runtime.end("a", "call-in-1", { version: status.call.version, requestId: "reject-req-1", reject: true });
@@ -3350,7 +3531,7 @@ test9("rejecting an unaccepted incoming call confirms only actual reject acknowl
   assert10.equal((await f.runtime.status("a", "call-in-1")).call.endConfirmed, true);
 });
 test9("cancel by request ID before delayed outgoing POST prevents any dial", async () => {
-  const f = fixture2();
+  const f = fixture();
   const cancel = await f.runtime.cancelOutgoing("a", "never-dial-request-1");
   assert10.equal(cancel.cancelled, true);
   assert10.equal(cancel.awaitingOriginalRequest, true);
@@ -3361,7 +3542,7 @@ test9("cancel by request ID before delayed outgoing POST prevents any dial", asy
   assert10.equal(f.effects.length, 0);
 });
 test9("lost answer acknowledgement is not replayed after corroborated media readiness", async () => {
-  const f = fixture2();
+  const f = fixture();
   const dialing = await f.runtime.outgoing("a", { to: "919999999999", requestId: "connect-once-1" });
   await f.runtime.ingestVerifiedMetaEvent({
     verified: true,
@@ -3385,7 +3566,7 @@ test9("lost answer acknowledgement is not replayed after corroborated media read
   assert10.equal(f.effects.filter((row) => row.kind === "connect").length, 1);
 });
 test9("outgoing SDP and ringback evidence cannot become Connected before trusted customer acceptance", async () => {
-  const f = fixture2();
+  const f = fixture();
   const dialing = await f.runtime.outgoing("a", { to: "919999999999", requestId: "answer-gate-request" });
   await f.runtime.ingestVerifiedMetaEvent({
     verified: true,
@@ -3410,7 +3591,7 @@ test9("outgoing SDP and ringback evidence cannot become Connected before trusted
   assert10.equal(connected.call.roomReady, true);
 });
 test9("early ACCEPTED before call-ID correlation is durable and consumed by the eventual SDK result", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const dial = f.provider.dialOutgoing;
   f.provider.dialOutgoing = async (data) => {
     entered.resolve();
@@ -3434,7 +3615,7 @@ test9("early ACCEPTED before call-ID correlation is durable and consumed by the 
   assert10.equal(f.effects.filter((item) => item.kind === "dial").length, 1);
 });
 test9("early ACCEPTED with opaque correlation resolves a lost dial response without redial", async () => {
-  const f = fixture2();
+  const f = fixture();
   f.provider.dialOutgoing = async (data) => {
     f.effects.push({ kind: "dial" });
     await f.runtime.ingestVerifiedMetaEvent({
@@ -3459,7 +3640,7 @@ test9("early ACCEPTED with opaque correlation resolves a lost dial response with
   assert10.equal(f.effects.filter((item) => item.kind === "dial").length, 1);
 });
 test9("terminal before late ACCEPTED wins even when the dial response arrives afterwards", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const dial = f.provider.dialOutgoing;
   f.provider.dialOutgoing = async (data) => {
     entered.resolve();
@@ -3485,7 +3666,7 @@ test9("terminal before late ACCEPTED wins even when the dial response arrives af
   assert10.equal(state.roomReady, false);
 });
 test9("duplicate ACCEPTED cannot change the acceptance time or regress a connected call", async () => {
-  const f = fixture2();
+  const f = fixture();
   const dial = await f.runtime.outgoing("a", { to: "919999999999", requestId: "accepted-replay-request" });
   const event = { verified: true, eventId: "accepted-first-event", type: "accepted", callId: "call-out-1", phoneNumberId: "business-1" };
   await f.runtime.ingestVerifiedMetaEvent(event);
@@ -3504,7 +3685,7 @@ test9("duplicate ACCEPTED cannot change the acceptance time or regress a connect
   assert10.equal((await f.store.get(sessionKey2(dial.call.sessionId))).phase, "connected");
 });
 test9("verified channel linkage is idempotent metadata and does not stale pending readiness", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const accepted = await f.accept();
   assert10.equal(accepted.call.channelId, 0);
@@ -3521,7 +3702,7 @@ test9("verified channel linkage is idempotent metadata and does not stale pendin
   assert10.equal(connected.call.roomReady, true);
 });
 test9("customer terminal event wins atomically against target readiness and preserves ended owner", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const connected = await f.connected();
   const invited = await f.runtime.transfer("a", "call-in-1", "invite", { toDeviceId: "b", version: connected.call.version, requestId: "race-transfer-1" });
   const accepted = await f.runtime.transfer("b", "call-in-1", "accept", { transferId: invited.call.transfer.id, version: invited.call.version });
@@ -3546,7 +3727,7 @@ test9("customer terminal event wins atomically against target readiness and pres
   assert10.equal((await f.store.get(callStoreKey3("call-in-1"))).owner.deviceId, "a");
 });
 test9("decline/expiry transfer notifications are exact and failed FCM remains pending", async () => {
-  const f = fixture2();
+  const f = fixture();
   const connected = await f.connected();
   const invited = await f.runtime.transfer("a", "call-in-1", "invite", { toDeviceId: "b", version: connected.call.version, requestId: "notify-transfer-1" });
   await f.runtime.transfer("b", "call-in-1", "decline", { transferId: invited.call.transfer.id, version: invited.call.version });
@@ -3562,7 +3743,7 @@ test9("decline/expiry transfer notifications are exact and failed FCM remains pe
   assert10.equal((await f.store.get(callStoreKey3("call-in-1"))).owner.deviceId, "a");
 });
 test9("credential generation change during target telemetry cannot commit ownership", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const connected = await f.connected();
   const invited = await f.runtime.transfer("a", "call-in-1", "invite", { toDeviceId: "b", version: connected.call.version, requestId: "credential-race-1" });
   const accepted = await f.runtime.transfer("b", "call-in-1", "accept", { transferId: invited.call.transfer.id, version: invited.call.version });
@@ -3584,7 +3765,7 @@ test9("credential generation change during target telemetry cannot commit owners
   assert10.equal((await f.store.get(callStoreKey3("call-in-1"))).owner.deviceId, "a");
 });
 test9("connected owner can restore its same leg beyond the original joining timeout", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.connected();
   f.advance(18e4);
   const resumed = await f.runtime.accept("a", "call-in-1", { requestId: "resume-after-minutes" });
@@ -3593,7 +3774,7 @@ test9("connected owner can restore its same leg beyond the original joining time
   assert10.equal(f.effects.filter((row) => row.kind === "accept").length, 1);
 });
 test9("cancel after durable attempt but before dispatch does not call the provider", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   let authentications = 0;
   f.runtime.authenticate = async (context) => {
     if (++authentications === 2) {
@@ -3612,7 +3793,7 @@ test9("cancel after durable attempt but before dispatch does not call the provid
   assert10.equal((await f.runtime.status("a", cancel.sessionId)).call.endConfirmed, true);
 });
 test9("a killed operator process is cleaned after confirmed exact-leg absence and reconnect grace", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.connected();
   f.provider.inspectParticipants = async () => ({ observedAt: f.now(), operatorActive: false, customerActive: true });
   await f.runtime.recoverSession("call-in-1");
@@ -3627,7 +3808,7 @@ test9("a killed operator process is cleaned after confirmed exact-leg absence an
   assert10.equal(await f.store.get(deviceReservationKey3("a")), void 0);
 });
 test9("provider API outage never counts as operator disappearance and reappearance clears the grace", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.connected();
   f.provider.inspectParticipants = async () => ({ observedAt: f.now(), operatorActive: false });
   await f.runtime.recoverSession("call-in-1");
@@ -3643,7 +3824,7 @@ test9("provider API outage never counts as operator disappearance and reappearan
   assert10.equal(f.effects.filter((row) => row.kind === "terminate").length, 0);
 });
 test9("official room-not-found observation cannot leave a device permanently reserved", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.connected();
   f.provider.inspectParticipants = async () => {
     throw Object.assign(Error("room absent"), { providerCode: "not_found" });
@@ -3655,7 +3836,7 @@ test9("official room-not-found observation cannot leave a device permanently res
   assert10.equal(await f.store.get(deviceReservationKey3("a")), void 0);
 });
 test9("old source absence result cannot terminate a newly committed target owner", async () => {
-  const f = fixture2(), entered = deferred3(), wait = deferred3();
+  const f = fixture(), entered = deferred2(), wait = deferred2();
   const connected = await f.connected();
   const originalInspect = f.provider.inspectParticipants;
   const originalOwner = (await f.store.get(callStoreKey3("call-in-1"))).owner.identity;
@@ -3803,7 +3984,7 @@ function startup(f, policy) {
 }
 __name(startup, "startup");
 test11("a config flag and successful control probe alone never enable production transfer", async () => {
-  const f = fixture2(), policy = { roomCalling: true, transferEnabled: true, mode: "production" };
+  const f = fixture(), policy = { roomCalling: true, transferEnabled: true, mode: "production" };
   const service = startup(f, policy);
   assert12.equal((await service.runtime.capabilities("a")).roomCalling, false);
   await service.verifyConfiguration();
@@ -3813,7 +3994,7 @@ test11("a config flag and successful control probe alone never enable production
   assert12.equal(capabilities.nativeRoomUrl, "wss://test.livekit.cloud");
 });
 test11("explicit pilot needs at least two exact enrolled IDs and rejects arbitrary targets", async () => {
-  const f = fixture2();
+  const f = fixture();
   const connected = await f.connected();
   const policy = { roomCalling: true, transferEnabled: true, mode: "pilot", pilotEnabled: true, pilotDeviceIds: [] };
   const service = startup(f, policy);
@@ -3833,7 +4014,7 @@ test11("explicit pilot needs at least two exact enrolled IDs and rejects arbitra
   assert12.equal(invited.call.transfer.toDeviceId, "b");
 });
 test11("removing a device from the pilot or revoking it blocks an old invitation", async () => {
-  const f = fixture2();
+  const f = fixture();
   const connected = await f.connected();
   const policy = { roomCalling: true, transferEnabled: true, mode: "pilot", pilotEnabled: true, pilotDeviceIds: ["a", "b"] };
   const service = startup(f, policy);
@@ -3847,7 +4028,7 @@ test11("removing a device from the pilot or revoking it blocks an old invitation
   assert12.equal(f.effects.filter((row) => row.kind === "terminate").length, 0);
 });
 test11("production evidence must bind current project and native build", async () => {
-  const f = fixture2(), policy = { roomCalling: true, transferEnabled: true, mode: "production", transferValidation: {
+  const f = fixture(), policy = { roomCalling: true, transferEnabled: true, mode: "production", transferValidation: {
     enabled: true,
     provider: "livekit-whatsapp",
     providerFingerprint: "another-project",
@@ -3897,7 +4078,7 @@ function router(f) {
 }
 __name(router, "router");
 test12("native route refuses cookie-only or body-provided operator identity", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const r = router(f);
   const response = await r.call("POST", "/calls/:callId/accept", {
@@ -3910,7 +4091,7 @@ test12("native route refuses cookie-only or body-provided operator identity", as
   assert13.equal(f.effects.length, 0);
 });
 test12("status and capability wrappers are private, secret-free and do not schedule mutation recovery", async () => {
-  const f = fixture2();
+  const f = fixture();
   await f.incoming();
   const r = router(f), before = f.db.commits;
   const response = await r.call("GET", "/calls/:callId/status", { device: "a", params: { callId: "call-in-1" } });
@@ -3936,7 +4117,7 @@ function harness4(options = {}) {
   const db = options.firestore || new FirestoreFake2();
   let current = NOW4;
   const make = /* @__PURE__ */ __name(() => createFirestoreMediaStore2({ firestore: db, clock: /* @__PURE__ */ __name(() => current, "clock"), ...options }), "make");
-  const store = make(), f = fixture({ store, ...options.fixture });
+  const store = make(), f = fixture2({ store, ...options.fixture });
   const advance = /* @__PURE__ */ __name((ms) => {
     current += ms;
     f.advance(ms);
@@ -4044,7 +4225,7 @@ test13("two store/controller instances cannot reserve one target for different c
   assert14.ok(h.db.conflicts > 0);
 });
 test13("customer terminal state wins while readiness waits outside transaction", async () => {
-  const h = harness4(), entered = deferred2(), wait = deferred2();
+  const h = harness4(), entered = deferred3(), wait = deferred3();
   await h.seed();
   const accepted = await h.accept(await h.invite());
   h.controller.verifyReadiness = async (data) => {
@@ -4214,7 +4395,7 @@ test13("call changes preserve scanner lease while canonical outbox lease runs in
   const accepted = await h.accept(await h.invite());
   await h.ready(accepted);
   const [claim] = await h.store.claimDueWork({ workerId: "worker-a" });
-  const entered = deferred2(), wait = deferred2();
+  const entered = deferred3(), wait = deferred3();
   h.provider.detachOperator = async () => {
     entered.resolve();
     await wait.promise;
