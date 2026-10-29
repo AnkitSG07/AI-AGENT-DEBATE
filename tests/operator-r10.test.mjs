@@ -1,5 +1,5 @@
 /**
- * SH Chat R10: 233 unit tests against the repository's actual production modules.
+ * SH Chat R10: 238 unit tests against the repository's actual production modules.
  * Generated with esbuild 0.28.2; Node 18 ESM; no minification.
  * Run from the repository: node --test tests/operator-r10.test.mjs
  * Only test registrations and local fixtures are bundled. Production modules,
@@ -26,7 +26,7 @@
  * tests/operator-storage/firestore-integration.test.js | 5c40b65f58f289825aa665193ada8b1e36c9da9e30332867919e80201ee7ec10
  * tests/operator-storage/notification-registry.test.js | d695c71eea2c6ec5273c295d33fffe32b26ad32f1ae50bdbd702c2756141e447
  * tests/operator-storage/operator-android-push.test.js | f2312ab7a834bf1d30dc308dde77dc667fbb52289dbc0a06e59550ae549f953e
- * tests/operator-storage/operator-firestore-registry.test.js | 591ddb32d6275d0ff081d09f6fef653eb46382cba1c81a628d8c123096e5d8c4
+ * tests/operator-storage/operator-firestore-registry.test.js | bb8536949d30c804f1b86a5e517c48f5419fe0c609ffafb438e50cb0f0fd93b5
  */
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
@@ -467,7 +467,7 @@ var FirestoreFake = class {
 };
 
 // tests/operator-storage/operator-firestore-registry.test.js
-/*! SOURCE tests/operator-storage/operator-firestore-registry.test.js | SHA-256 591ddb32d6275d0ff081d09f6fef653eb46382cba1c81a628d8c123096e5d8c4 */
+/*! SOURCE tests/operator-storage/operator-firestore-registry.test.js | SHA-256 bb8536949d30c804f1b86a5e517c48f5419fe0c609ffafb438e50cb0f0fd93b5 */
 import test2 from "node:test";
 import assert3 from "node:assert/strict";
 import { createHash as createHash2 } from "node:crypto";
@@ -571,6 +571,88 @@ test2("invitation issue works without env changes and enforces expiry and instal
   const expires = await h.registry.issueEnrollment();
   h.setNow(expires.expiresAt);
   await rejectsStatus(() => h.enroll({ enrollmentCode: expires.enrollmentCode, installationId: `${INSTALL}_third` }), 403);
+});
+test2("administrator invitation names override handset models without changing request fingerprints", async () => {
+  const h = setup({ bootstrapEnrollmentCode: "" });
+  const names = ["test", "ankit", "kushagra", "vibhu"];
+  for (const [index, name] of names.entries()) {
+    const invitation = await h.registry.issueEnrollment({ label: ` ${name} ` });
+    const input = {
+      ...h.input,
+      installationId: `${INSTALL}_${index}`,
+      enrollmentCode: invitation.enrollmentCode,
+      requestId: `${REQUEST}_${index}`,
+      deviceLabel: "Example Manufacturer Model"
+    };
+    const enrolled = await h.registry.enroll(input);
+    assert3.equal((await h.registry.authenticate(enrolled.deviceToken)).deviceLabel, name);
+    const consumed = h.db.dump()[`sh_operator_enrollments/${hash(invitation.enrollmentCode)}`];
+    assert3.equal(consumed.fingerprint, hash(JSON.stringify({
+      installationId: input.installationId,
+      fcmHash: hash(input.fcmToken),
+      requestHash: hash(input.requestId),
+      label: input.deviceLabel
+    })));
+  }
+  assert3.deepEqual((await h.registry.listDevices()).map((row) => row.deviceLabel).sort(), [...names].sort());
+});
+test2("named invitation lost-ack recovery preserves its name and exact original request binding", async () => {
+  const h = setup({ bootstrapEnrollmentCode: "" });
+  const invitation = await h.registry.issueEnrollment({ label: "Sales phone" });
+  const input = { ...h.input, enrollmentCode: invitation.enrollmentCode, requestId: REQUEST, deviceLabel: "Handset model" };
+  h.db.failAfterCommit = Error("lost enrollment acknowledgement");
+  await rejectsStatus(() => h.registry.enroll(input), 503);
+  const before = h.db.dump(), commits = h.db.commits;
+  const device = (await h.registry.listDevices())[0];
+  assert3.equal(device.deviceLabel, "Sales phone");
+  const replay = await h.create().enroll(input);
+  assert3.equal(replay.replayed, true);
+  assert3.equal(replay.deviceId, device.id);
+  assert3.equal(hash(replay.deviceToken), device.tokenHash);
+  await rejectsStatus(() => h.create().enroll({ ...input, deviceLabel: "Sales phone" }), 409, "ENROLLMENT_CONSUMED");
+  assert3.equal((await h.registry.authenticate(replay.deviceToken)).deviceLabel, "Sales phone");
+  assert3.deepEqual(h.db.dump(), before);
+  assert3.equal(h.db.commits, commits);
+});
+test2("concurrent named invitation retries create one device with the administrator name", async () => {
+  const h = setup({ bootstrapEnrollmentCode: "" });
+  const invitation = await h.registry.issueEnrollment({ label: "Dispatch phone" });
+  const input = { ...h.input, enrollmentCode: invitation.enrollmentCode, deviceLabel: "Handset model" };
+  const results = await Promise.all([h.registry.enroll(input), h.create().enroll(input)]);
+  assert3.equal(results[0].deviceToken, results[1].deviceToken);
+  assert3.equal((await h.registry.listDevices()).length, 1);
+  assert3.equal((await h.registry.authenticate(results[0].deviceToken)).deviceLabel, "Dispatch phone");
+  assert3.ok(h.db.conflicts > 0);
+});
+test2("bootstrap and unlabeled legacy invitations retain handset and default name fallback", async () => {
+  for (const kind of ["bootstrap", "blank-invitation", "legacy-invitation"]) {
+    for (const clientLabel of [" Handset model ", ""]) {
+      const h = setup({ bootstrapEnrollmentCode: kind === "bootstrap" ? CODE2 : "" });
+      let enrollmentCode = CODE2;
+      if (kind !== "bootstrap") {
+        enrollmentCode = (await h.registry.issueEnrollment({ label: " " })).enrollmentCode;
+        if (kind === "legacy-invitation") {
+          const row = h.db.dump()[`sh_operator_enrollments/${hash(enrollmentCode)}`];
+          delete row.label;
+          h.db.seed("sh_operator_enrollments", hash(enrollmentCode), row);
+        }
+      }
+      const enrolled = await h.enroll({ enrollmentCode, deviceLabel: clientLabel });
+      assert3.equal(
+        (await h.registry.authenticate(enrolled.deviceToken)).deviceLabel,
+        clientLabel.trim() || "Android operator device"
+      );
+    }
+  }
+});
+test2("a fresh named invitation cannot rename an already active installation", async () => {
+  const h = setup(), enrolled = await h.enroll({ deviceLabel: "Existing phone" });
+  const invitation = await h.registry.issueEnrollment({ label: "New invitation name" });
+  const before = h.db.dump();
+  await rejectsStatus(() => h.enroll({ enrollmentCode: invitation.enrollmentCode }), 409, "INSTALLATION_ENROLLED");
+  assert3.equal((await h.registry.authenticate(enrolled.deviceToken)).deviceLabel, "Existing phone");
+  assert3.deepEqual(h.db.dump(), before);
+  assert3.equal(await h.registry.isEnrollmentAvailable(invitation.enrollmentCode), true);
 });
 test2("independent invitations cannot bypass concurrent device-cap enforcement", async () => {
   const h = setup({ maxDevices: 1 });
