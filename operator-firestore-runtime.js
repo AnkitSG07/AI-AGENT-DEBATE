@@ -51,7 +51,7 @@ export function createOperatorFirestoreRuntime({
         .finally(() => { maintenanceRun = null; });
       return maintenanceRun;
     };
-    return { backend, configured: true, projectId, databaseId, collectionPrefix, deviceRegistry,
+    return { backend, configured: true, projectId, databaseId, collectionPrefix, firestore, deviceRegistry,
       startMaintenance: () => {
         if (maintenanceTimer) return;
         // Startup catch-up plus bounded cleanup. This removes expired encrypted
@@ -69,7 +69,7 @@ export function createOperatorFirestoreRuntime({
   } catch {
     // Never print the SDK/config exception: it can contain credential material.
     logger.warn?.('Android Firestore configuration is unavailable; native storage will fail closed.');
-    if (firestore) Promise.resolve(firestore.terminate()).catch(() => {});
+    if (firestore) Promise.resolve().then(() => firestore.terminate()).catch(() => {});
     return unavailable();
   }
 }
