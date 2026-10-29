@@ -267,6 +267,23 @@ export function createFirestoreDeviceRegistry({
     }));
   }
 
+  // Capability metadata is reported only by the current enrolled credential.
+  // It never grants enrollment or an Odoo identity, and unchanged requests do
+  // not write Firestore on every status poll.
+  async function updateNativeClient(rawToken, { nativeBuild, mediaProtocol } = {}) {
+    const digest = bearerDigest(rawToken);
+    if (!Number.isSafeInteger(nativeBuild) || nativeBuild < 1 || nativeBuild > 100000 ||
+        mediaProtocol !== 'sh-room-audio-v1') throw badInput('A supported native build and media protocol are required.');
+    return guarded(() => firestore.runTransaction(async tx => {
+      const { row, index, reference } = await readCredential(tx, digest), now = nowMs();
+      validateCurrent(row, index, digest, now);
+      if (row.nativeBuild === nativeBuild && row.mediaProtocol === mediaProtocol) return row;
+      const next = { ...row, nativeBuild, mediaProtocol, clientUpdatedAt: now };
+      tx.set(reference, next);
+      return next;
+    }));
+  }
+
   async function updateToken(rawToken, patch = {}) {
     const digest = bearerDigest(rawToken), nextFcm = fcmToken(patch.fcmToken);
     if (!nextFcm) throw badInput('A valid Firebase token is required.');
@@ -463,7 +480,7 @@ export function createFirestoreDeviceRegistry({
 
   return Object.freeze({
     version: FIRESTORE_REGISTRY_VERSION, collectionPrefix,
-    checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateToken, renewLease,
+    checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateNativeClient, updateToken, renewLease,
     rotateCredential, revoke, revokeDevice, listDevices, getDevice, clearFcmToken,
     getDeliveries, claimDelivery, finishDelivery, pruneExpiredRecoveries
   });
