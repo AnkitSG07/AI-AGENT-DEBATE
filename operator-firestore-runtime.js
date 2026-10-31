@@ -5,7 +5,7 @@ import { createFirestoreDeviceRegistry } from './operator-firestore-registry.js'
 
 export function createOperatorFirestoreRuntime({
   env = process.env, logger = console, FirestoreClass = Firestore,
-  registryFactory = createFirestoreDeviceRegistry
+  registryFactory = createFirestoreDeviceRegistry, FirestoreAdminClass = Firestore.v1.FirestoreAdminClient
 } = {}) {
   const backend = String(env.SH_ANDROID_REGISTRY_BACKEND || 'file').trim().toLowerCase();
   if (backend === 'file') return { backend, configured: false, deviceRegistry: undefined, close: async () => {} };
@@ -44,7 +44,32 @@ export function createOperatorFirestoreRuntime({
       bootstrapEnrollmentCode: env.SH_FIRESTORE_ALLOW_BOOTSTRAP_ENROLLMENT === 'true'
         ? String(env.SH_ANDROID_ENROLLMENT_CODE || '') : ''
     });
-    let maintenanceTimer = null, maintenanceRun = null;
+    let maintenanceTimer = null, maintenanceRun = null, locationWork = null;
+    const readDatabaseLocation = () => {
+      if (locationWork) return locationWork;
+      locationWork = (async () => {
+        let admin, timeout;
+        const report = value => { try { logger.info?.('SH_CALL_DATABASE_LOCATION', JSON.stringify(value)); } catch { /* diagnostics only */ } };
+        try {
+          // Read immutable, non-secret deployment metadata using the existing
+          // server identity. No credential or database record is returned/logged.
+          admin = new FirestoreAdminClass({ projectId,
+            credentials: { client_email: account.client_email, private_key: account.private_key } });
+          const [database] = await Promise.race([
+            admin.getDatabase({ name: `projects/${projectId}/databases/${databaseId}` }, { timeout: 5000, retry: null }),
+            new Promise((_, reject) => { timeout = setTimeout(() => reject(Error('location timeout')), 6000); timeout.unref?.(); })
+          ]);
+          const locationId = database?.locationId;
+          if (typeof locationId !== 'string' || !/^[a-z][a-z0-9-]{1,62}$/.test(locationId)) throw Error('Invalid location');
+          report({ status: 'ok', locationId }); return locationId;
+        } catch { report({ status: 'unavailable' }); return ''; }
+        finally {
+          clearTimeout(timeout);
+          if (admin) { try { await admin.close(); } catch { /* best-effort diagnostic client cleanup */ } }
+        }
+      })();
+      return locationWork;
+    };
     const sweep = () => {
       if (maintenanceRun) return maintenanceRun;
       maintenanceRun = Promise.resolve().then(() => deviceRegistry.pruneExpiredRecoveries({ limit: 100 }))
@@ -52,12 +77,13 @@ export function createOperatorFirestoreRuntime({
         .finally(() => { maintenanceRun = null; });
       return maintenanceRun;
     };
-    return { backend, configured: true, projectId, databaseId, collectionPrefix, firestore, deviceRegistry,
+    return { backend, configured: true, projectId, databaseId, collectionPrefix, firestore, deviceRegistry, readDatabaseLocation,
       startMaintenance: () => {
         if (maintenanceTimer) return;
         // Startup catch-up plus bounded cleanup. This removes expired encrypted
         // response envelopes only; it never deletes device identities/history.
         void sweep();
+        void readDatabaseLocation();
         maintenanceTimer = setInterval(sweep, 5 * 60000);
         maintenanceTimer.unref?.();
       },

@@ -22,6 +22,7 @@ const groups = {
     'tests/operator-call-critical-path.test.mjs',
     'tests/operator-recovery-coalescing.test.mjs',
     'tests/operator-transaction-batching.test.mjs',
+    'tests/operator-database-location.test.mjs',
     'tests/simulator-media-r13/provider-revocation.test.mjs',
     'tests/simulator-media-r13/answer-contention.test.mjs',
     'tests/simulator-media-r13/startup-audio-readiness.test.mjs',
