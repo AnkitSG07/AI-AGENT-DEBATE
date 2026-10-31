@@ -30,6 +30,7 @@ const groups = {
     'tests/hosting-proxy.test.mjs',
     'tests/operator-app-message-state.test.mjs',
     'tests/operator-native-message-worker.test.mjs',
+    'tests/operator-keep-alive.test.mjs',
     'tests/simulator-media-r13/provider-revocation.test.mjs',
     'tests/simulator-media-r13/answer-contention.test.mjs',
     'tests/simulator-media-r13/startup-audio-readiness.test.mjs',

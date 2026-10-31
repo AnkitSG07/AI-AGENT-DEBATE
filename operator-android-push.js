@@ -5,7 +5,7 @@ import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { messageNotificationPreview } from './operator-message-preview.js';
 
-export const ANDROID_PUSH_VERSION = '2026-10-31-android-push-r15-message-previews';
+export const ANDROID_PUSH_VERSION = '2026-10-31-android-push-r19-acceptance-diagnostics';
 const PREFIX = '/api/operator-android';
 const HUB = 'https://www.smarthandicrafts.com/livechat-api-test';
 const OAUTH = 'https://oauth2.googleapis.com/token';
@@ -595,6 +595,12 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       const delivered = new Set(previous.filter(deliverySent).map(row => row.deviceId));
       const eligible = devices.filter(row => eligibleDevice(row, 'message') && messageAt >= row.createdAt - 5000);
       const targets = eligible.filter(row => !delivered.has(row.id));
+      const targetBuilds = {};
+      for (const target of targets) {
+        const build = Number.isSafeInteger(target.nativeBuild) && target.nativeBuild >= 1 && target.nativeBuild <= 100000
+          ? String(target.nativeBuild) : 'unknown';
+        targetBuilds[build] = (targetBuilds[build] || 0) + 1;
+      }
       let sent = 0, failed = 0, pending = 0, skipped = 0, nextTarget = 0;
       async function deliverNextMessage() {
         while (nextTarget < targets.length) {
@@ -614,8 +620,9 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         }
       }
       await Promise.all(Array.from({ length: Math.min(4, targets.length) }, deliverNextMessage));
-      report(!targets.length ? eligible.length ? 'already_delivered' : 'no_eligible_devices' : failed || pending ? 'delivery_incomplete' : 'processed',
-        { devices: devices.length, eligible: eligible.length, targets: targets.length, sent, failed, pending, skipped });
+      report(!targets.length ? eligible.length ? 'already_submitted' : 'no_eligible_devices' : failed || pending ? 'delivery_incomplete' : 'processed',
+        { devices: devices.length, eligible: eligible.length, targets: targets.length, sent, accepted: sent,
+          handsetReceiptConfirmed: false, targetBuilds, failed, pending, skipped });
       return { ok: failed === 0, sent, failed };
     });
     messageQueues.set(messageId, operation);

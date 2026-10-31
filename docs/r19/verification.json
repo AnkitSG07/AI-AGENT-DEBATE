@@ -1,0 +1,48 @@
+{
+  "release": "R19",
+  "package": "com.smarthandicrafts.operatorhub",
+  "versionCode": 19,
+  "versionName": "1.0-r19",
+  "apkSha256": "689937b1fe58badd807a6604a50536e938ab8d9d7e9bc6b64d798c4b90752146",
+  "apkBytes": 60413529,
+  "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+  "signatureVerified": true,
+  "alignment16KiB": true,
+  "suppliedLogoPixelExact": true,
+  "packagedLogo": [
+    "res/N0.png"
+  ],
+  "newStandaloneTrackingPackaged": true,
+  "backend": {
+    "pass": 760,
+    "fail": 0,
+    "changedDuringRun": []
+  },
+  "android": {
+    "tests": 261,
+    "suites": 30,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "lintRelease": "passed",
+    "assembleRelease": "passed",
+    "deviceHarnessCompilation": "passed",
+    "deviceHarnessExecution": "not_run"
+  },
+  "notificationFaultRegression": {
+    "oldR18Failed": 3,
+    "newR19CompatibilityPassed": 5,
+    "physicalPhoneFailureIdentified": false
+  },
+  "hosting": {
+    "plan": "free",
+    "region": "oregon",
+    "heartbeatIntervalMs": 5000,
+    "heartbeatTimeoutMs": 4000,
+    "paidResourcesCreated": false,
+    "regionMigrationActivated": false,
+    "alwaysOnGuarantee": false
+  },
+  "phoneNotificationReceiptConfirmed": false,
+  "customerTestMessagesOrCallsSent": false
+}

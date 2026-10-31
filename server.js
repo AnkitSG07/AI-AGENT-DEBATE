@@ -11,6 +11,7 @@ import { assertPushSubscriptionOwner } from "./operator-push-ownership.js";
 import { createOperatorDocumentLinks, safeDocumentRedirect, documentContentDisposition } from "./operator-document-links.js";
 import { createOperatorAiReplyAuth } from "./operator-ai-reply-auth.js";
 import { createOdooHandoverDispatcher } from "./operator-handover.js";
+import { createOperatorKeepAlive } from "./operator-keep-alive.js";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
@@ -25291,25 +25292,9 @@ registerFedexRoutes(app, {
 });
 
 app.get("/health", (req, res) => res.json({ ok: true, time: now(), odooConfigured, zohoMailConfigured, googleContactsConfigured }));
-// ===================== RENDER 30-SECOND KEEP ALIVE =====================
-// Keeps the free Render server active by self-pinging /health every 30 seconds.
-
-const KEEP_ALIVE_URL = process.env.APP_URL
-  ? `${String(process.env.APP_URL).replace(/\/$/, "")}/health`
-  : "";
-
-if (KEEP_ALIVE_URL) {
-  setInterval(async () => {
-    try {
-      const response = await fetch(KEEP_ALIVE_URL);
-      console.log(`[Keep Alive] ${new Date().toISOString()} → ${response.status}`);
-    } catch (error) {
-      console.warn("[Keep Alive] Ping failed:", error?.message || error);
-    }
-  }, 30 * 1000);
-} else {
-  console.warn("[Keep Alive] APP_URL is missing, self-ping disabled.");
-}
+// Best-effort five-second heartbeat. It cannot override Render Free restarts,
+// idle/suspension policies or quotas, and does not remove database latency.
+const operatorKeepAlive = createOperatorKeepAlive();
 
 
 async function prewarmLiveOdooProducts() {
@@ -25414,6 +25399,7 @@ registerOperatorAdminRoutes(app, {
 
 const operatorHttpServer = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  operatorKeepAlive.start();
   operatorFirestoreRuntime.startMaintenance?.();
   operatorMediaGateway.start();
   operatorReportingRuntime.start();
@@ -25437,6 +25423,7 @@ let operatorShutdown = null;
 function closeOperatorServices() {
   if (operatorShutdown) return operatorShutdown;
   operatorShutdown = (async () => {
+    operatorKeepAlive.close();
     // Stop new HTTP work and drain worker transactions before closing their
     // shared client. Independent media rooms are not ended by a Render restart.
     const forceExit = setTimeout(() => process.exit(0), 20000);

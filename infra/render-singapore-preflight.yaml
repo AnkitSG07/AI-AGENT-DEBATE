@@ -1,4 +1,6 @@
-# Prepared migration only. Creating this resource requires approval for $7/month compute.
+# Free-only measurement draft. Do not keep two Free services permanently awake:
+# they share the workspace's 750 running instance hours per calendar month.
+# Stop the short preflight when measured; direct-origin cutover is a separate step.
 # Start in read-only preflight; do not route call/message traffic here yet.
 # Values resolve inside Render from the existing service; no secret values are stored here.
 services:
@@ -8,7 +10,7 @@ services:
     repo: https://github.com/AnkitSG07/AI-AGENT-DEBATE
     branch: main
     region: singapore
-    plan: 0.5c-512mb
+    plan: free
     numInstances: 1
     buildCommand: npm install
     startCommand: node scripts/hosting-preflight.mjs

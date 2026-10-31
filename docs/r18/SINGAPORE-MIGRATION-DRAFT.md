@@ -1,6 +1,16 @@
-# Singapore migration draft
+# Singapore free-only migration draft
 
 Status: review only. This document and its prepared scripts do not create a service, change a production start command, change Meta routing, or move a database.
+
+The user's latest budget decision is Free hosting only. It replaces the earlier paid-compute proposal. The existing Oregon service stays on Free; no paid resource or billing change is authorized by this draft. `infra/render-singapore-preflight.yaml` now explicitly uses `plan: free` and starts only the isolated read-only check.
+
+## Free budget and heartbeat
+
+Render provides 750 running Free instance hours per workspace per calendar month, shared by all Free web services. One continuously running service uses up to 744 hours in a 31-day month. Two continuously running services require 1,440–1,488 hours, so a permanently awake Oregon proxy plus Singapore backend cannot fit that allowance. Inspect actual workspace usage before even a short additional preflight. Stop that measurement service when finished; do not leave it running alongside the current app.
+
+The existing application's health heartbeat now runs every five seconds, uses a four-second deadline and one outstanding request, drains a bounded response body, and stops during shutdown. It prefers its own validated `RENDER_EXTERNAL_URL` before the public `APP_URL`, so a future copied public origin cannot accidentally ping the wrong service. Normal result logs are limited to one per minute, with transitions reported immediately. No database, provider or credential check runs in the health route.
+
+This is best-effort traffic while the process is running. A stopped process cannot wake itself, and a heartbeat does not override Render's restart, idle, quota or usage policies. It also cannot remove the measured Oregon-to-Mumbai database round trips. Both 30 seconds and five seconds are below the documented 15-minute idle interval; increasing heartbeat frequency does not establish the requested real call latency.
 
 ## Evidence and objective
 
@@ -10,7 +20,9 @@ Place the full application in Singapore while retaining the existing Firestore d
 
 ## Public-origin choice
 
-The compatibility-first option preserves `https://ai-agent-debate.onrender.com` as the public origin, with its Oregon service running a separate, lightweight, fixed-upstream reverse proxy to the Singapore application. The prepared entrypoint is `node scripts/hosting-proxy.mjs`; it imports built-ins only and does not initialize any application runtime. Set its server-owned `SH_HOSTING_PROXY_UPSTREAM` to the approved Singapore HTTPS Render origin while keeping `APP_URL` at the old public origin. It rejects self-routing against `APP_URL` and `RENDER_EXTERNAL_HOSTNAME`. This removes Oregon-to-Firestore operations while adding one Oregon-to-Singapore request hop. No production start command or proxy setting has been changed.
+For a sustainable Free-only regional move, prefer one Singapore full application and a coordinated direct-origin APK/Odoo update, followed by stopping the old full runtime. This is a separate migration from the heartbeat change; it has not been activated. Preserve the shared database and existing enrollment authority, and use one full worker cohort. The short read-only preflight can measure Singapore-to-Mumbai reads before preparing that cutover.
+
+The compatibility option preserves `https://ai-agent-debate.onrender.com` as the public origin, with its Oregon service running a separate, lightweight, fixed-upstream reverse proxy to the Singapore application. It can be considered only for a bounded transition within the remaining shared Free allowance, not as two permanently awake Free services. The prepared entrypoint is `node scripts/hosting-proxy.mjs`; it imports built-ins only and does not initialize any application runtime. Set its server-owned `SH_HOSTING_PROXY_UPSTREAM` to the approved Singapore HTTPS Render origin while keeping `APP_URL` at the old public origin. It rejects self-routing against `APP_URL` and `RENDER_EXTERNAL_HOSTNAME`. This removes Oregon-to-Firestore operations while adding one Oregon-to-Singapore request hop. No production start command or proxy setting has been changed.
 
 A redirect is insufficient. `NativeApi.java` disables redirects, Android trusts the existing host, and browser authentication binds its popup origin and signed issuer to that origin. Moving phones and the embed directly to a new Singapore/custom origin is a separate application update.
 
@@ -59,7 +71,7 @@ Native durable claims and leases arbitrate multiple instances, but that does not
 1. Prepare the same reviewed application version and authority configuration for Singapore. Inventory file-backed state and integration callbacks without printing secrets. Keep automatic deployment and background-worker behavior explicit.
 2. Review `scripts/hosting-proxy.mjs` and its isolated tests in `tests/hosting-proxy.test.mjs`. It streams raw HTTP/SSE, strips hop-by-hop headers, preserves credentials/signatures/status/cookies/timing, and never follows redirects or retries mutations. It is not yet activated.
 3. Review the isolated read-only `scripts/hosting-preflight.mjs` and draft `infra/render-singapore-preflight.yaml`. The draft starts only preflight, keeps automatic deploy off, and contains 92 internal Render references to the existing service's environment values rather than placing secret values in Git. The preflight checks the existing database location and bounded read latency without starting the application, providers, notifications or workers. Separately verify provider-control configuration before full activation. Do not use customer calls or send test notifications as a readiness check.
-4. Choose a quiet cutover interval. Drain and stop Oregon's full application before activating Singapore's full worker cohort, then start Oregon in the standalone proxy role. Existing shutdown drains HTTP/reporting/recovery work with bounded deadlines; unknown provider outcomes must still reconcile durably.
+4. Choose a quiet cutover interval and coordinated direct-origin APK/Odoo deployment. Drain and stop Oregon's full application before activating Singapore's full worker cohort. Use the standalone Oregon proxy only if a short compatibility interval is required and its Free hours are available; do not add a heartbeat to that proxy. Existing shutdown drains HTTP/reporting/recovery work with bounded deadlines; unknown provider outcomes must still reconcile durably. Stop the old service after the transition so only one full Free service remains running.
 5. Check browser authentication, native enrollment continuity, notifications, webhook verification, reporting and SSE. Compare `SH_CALL_STORAGE_TIMING`, `SH_CALL_REGISTRY_TIMING`, `SH_CALL_PROVIDER_TIMING` and request timing. Then perform an authorized real-phone test measuring audio and remote disconnect, not only UI transitions.
 6. Optionally update Meta's callback to the direct Singapore URL after verification and signature checks. This removes the Oregon detour from incoming delivery; retain old aliases for compatibility and delayed deliveries.
 7. Consider a later direct Singapore/custom-origin APK and Odoo embed update to remove the compatibility hop. Update every origin binding in the table together and retain old signed links for their remaining lifetime.

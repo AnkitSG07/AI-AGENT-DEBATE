@@ -92,7 +92,10 @@ test('message delivery diagnostics distinguish sent, deduplicated, opted-out and
     assert.equal(events.length, 1);
     assert.equal(events[0].outcome, scenario === 'sent' ? 'processed' : scenario === 'failed' ? 'delivery_incomplete' : 'no_eligible_devices');
     assert.equal(events[0].sent, scenario === 'sent' ? 1 : 0); assert.equal(events[0].failed, scenario === 'failed' ? 1 : 0);
-    if (scenario === 'sent') { await bridge.publishMessage(value); assert.equal(events[1].outcome, 'already_delivered'); }
+    assert.equal(events[0].accepted, scenario === 'sent' ? 1 : 0);
+    assert.equal(events[0].handsetReceiptConfirmed, false, 'Firebase acceptance is not handset receipt');
+    assert.deepEqual(events[0].targetBuilds, scenario === 'opted-out' ? {} : { 15: 1 });
+    if (scenario === 'sent') { await bridge.publishMessage(value); assert.equal(events[1].outcome, 'already_submitted'); }
     assert.doesNotMatch(JSON.stringify(events), /PRIVATE_|channel|sender|message_id|token|authorization/i);
     assert.ok(events.every(row => Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= 0));
   }

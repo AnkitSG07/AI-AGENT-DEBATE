@@ -93,11 +93,73 @@ public final class NativeStore {
         clearMessageStateLocked();
     }
     private void clearMessageStateLocked() {
+        java.util.HashSet<Integer> known = new java.util.HashSet<>();
+        for (String key : prefs.getAll().keySet()) {
+            String suffix = key.startsWith("message_notification:") ? key.substring(21) : key.startsWith("message:") ? key.substring(8) : "";
+            try { int channel = Integer.parseInt(suffix); if (channel > 0) known.add(channel); } catch (NumberFormatException ignored) { }
+        }
+        // Cancel exact saved tags before deleting the index. This path does not
+        // require Android's optional notification-inventory API.
+        MessageAlerts.clearAll(appContext, known.stream().mapToInt(Integer::intValue).toArray());
         SharedPreferences.Editor edit = prefs.edit();
         for (String key : prefs.getAll().keySet())
-            if (key.startsWith("message:") || key.startsWith("message_time:") || key.startsWith("message_seen:") || key.startsWith("message_floor:")) edit.remove(key);
+            if (key.startsWith("message:") || key.startsWith("message_time:") || key.startsWith("message_seen:") || key.startsWith("message_floor:") ||
+                key.startsWith("message_notification:") || key.startsWith("message_posted:") || key.equals("message_notification_sequence")) edit.remove(key);
         edit.commit();
-        MessageAlerts.clearAll(appContext);
+    }
+    public long postedMessageId(int channel, DeviceLeasePolicy.Credential expected) {
+        synchronized (EVENT_LOCK) { return matchesCredential(expected) ? prefs.getLong("message_posted:" + channel, 0) : Long.MAX_VALUE; }
+    }
+    /** Bounded local cleanup index contains IDs only; save it before notifying Android. */
+    public int[] rememberMessageNotification(int channel, DeviceLeasePolicy.Credential expected) {
+        synchronized (EVENT_LOCK) {
+            if (channel <= 0 || !matchesCredential(expected) || !DeviceLeasePolicy.valid(credential(), System.currentTimeMillis())) throw new IllegalStateException("Device enrollment changed.");
+            long sequence = prefs.getLong("message_notification_sequence", 0) + 1;
+            java.util.ArrayList<Integer> channels = new java.util.ArrayList<>();
+            for (String key : prefs.getAll().keySet()) if (key.startsWith("message_notification:")) {
+                try { int id = Integer.parseInt(key.substring(21)); if (id > 0 && id != channel) channels.add(id); } catch (NumberFormatException ignored) { }
+            }
+            channels.add(channel);
+            channels.sort(java.util.Comparator.comparingLong(id -> id == channel ? sequence : prefs.getLong("message_notification:" + id, 0)));
+            SharedPreferences.Editor edit = prefs.edit().putLong("message_notification_sequence", sequence).putLong("message_notification:" + channel, sequence);
+            int count = Math.max(0, channels.size() - 24); int[] evicted = new int[count];
+            for (int i = 0; i < count; i++) { evicted[i] = channels.get(i); edit.remove("message_notification:" + evicted[i]); }
+            prunePostedMessageFloorsLocked(edit, evicted);
+            if (!edit.commit()) throw new IllegalStateException("Message alert tracking could not be saved.");
+            return evicted;
+        }
+    }
+    public void messageNotificationPosted(int channel, long message, DeviceLeasePolicy.Credential expected) {
+        synchronized (EVENT_LOCK) {
+            if (!matchesCredential(expected)) return;
+            SharedPreferences.Editor edit = prefs.edit().putLong("message_posted:" + channel, Math.max(message, prefs.getLong("message_posted:" + channel, 0)));
+            prunePostedMessageFloorsLocked(edit, new int[0]);
+            if (!edit.commit())
+                throw new IllegalStateException("Message alert tracking could not be saved.");
+        }
+    }
+    public void forgetMessageNotification(int channel, DeviceLeasePolicy.Credential expected) {
+        synchronized (EVENT_LOCK) {
+            // Keep the latest-posted replay floor after tap/dismissal. An unseen
+            // delayed older ID must not recreate a message the user just cleared.
+            if (matchesCredential(expected)) {
+                SharedPreferences.Editor edit = prefs.edit().remove("message_notification:" + channel);
+                prunePostedMessageFloorsLocked(edit, new int[]{ channel }); edit.commit();
+            }
+        }
+    }
+    private void prunePostedMessageFloorsLocked(SharedPreferences.Editor edit, int[] becomingInactive) {
+        java.util.HashSet<Integer> inactive = new java.util.HashSet<>();
+        for (int channel : becomingInactive) inactive.add(channel);
+        java.util.ArrayList<Integer> floors = new java.util.ArrayList<>();
+        for (String key : prefs.getAll().keySet()) if (key.startsWith("message_posted:")) {
+            try {
+                int channel = Integer.parseInt(key.substring(15));
+                if (inactive.contains(channel) || !prefs.contains("message_notification:" + channel)) floors.add(channel);
+            } catch (NumberFormatException ignored) { }
+        }
+        floors.sort(java.util.Comparator.comparingLong(channel -> prefs.getLong("message_posted:" + channel, 0)));
+        for (int i = 0; i < Math.max(0, floors.size() - 128); i++) edit.remove("message_posted:" + floors.get(i));
     }
     public boolean clearEnrollmentIfMatches(DeviceLeasePolicy.Credential expected, String problem) {
         synchronized (EVENT_LOCK) {
@@ -264,6 +326,7 @@ public final class NativeStore {
         keys.sort(java.util.Comparator.comparingLong(k -> prefs.getLong("message_time:" + k.substring(8), 0)));
         for (int i = 0; i < Math.max(0, keys.size() - 127); i++) {
             String old = keys.get(i); edit.remove(old).remove("message_time:" + old.substring(8)).remove("message_seen:" + old.substring(8)).remove("message_floor:" + old.substring(8));
+            if (!prefs.contains("message_notification:" + old.substring(8))) edit.remove("message_posted:" + old.substring(8));
         }
         edit.apply();
         return true;

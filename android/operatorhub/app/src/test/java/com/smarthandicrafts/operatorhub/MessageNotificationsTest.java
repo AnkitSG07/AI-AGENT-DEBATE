@@ -52,70 +52,71 @@ public class MessageNotificationsTest {
     private void post(int channel, long message, String name, String text) { HubMessagingService.dispatchData(app, data(channel, message, name, text)); }
     private Notification notification(int channel) { return Shadows.shadowOf(manager).getNotification(MessageAlerts.tag(channel), 300); }
     private Notification summary() { return Shadows.shadowOf(manager).getNotification(MessageAlerts.SUMMARY, 301); }
-    private NotificationCompat.MessagingStyle style(int channel) { return NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification(channel)); }
+    private String title(int channel) { return notification(channel).extras.getCharSequence(Notification.EXTRA_TITLE).toString(); }
+    private String preview(int channel) { return notification(channel).extras.getCharSequence(Notification.EXTRA_TEXT).toString(); }
 
     @Test public void senderTextPrivacyAndExactChatSurviveAndroidNotificationSerialization() {
         post(73, 801, "Ankit Garia", "Is the 3W kit available? 👋");
         Notification n = notification(73); assertNotNull(n);
         assertTrue(store.lastMessageReceivedAt() > 0); assertEquals("posted", store.lastMessageOutcome());
-        NotificationCompat.MessagingStyle style = style(73); assertNotNull(style);
-        assertFalse(style.isGroupConversation()); assertEquals(1, style.getMessages().size());
-        assertEquals("Ankit Garia", style.getMessages().get(0).getPerson().getName().toString());
-        assertEquals("Is the 3W kit available? 👋", style.getMessages().get(0).getText().toString());
-        assertEquals("Ankit Garia", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
+        assertEquals("Ankit Garia", title(73)); assertEquals("Is the 3W kit available? 👋", preview(73));
+        assertTrue(n.extras.getString(Notification.EXTRA_TEMPLATE).contains("BigTextStyle"));
+        assertNull(n.getGroup()); assertNull(summary()); assertNull(n.fullScreenIntent);
         assertEquals(Notification.VISIBILITY_PRIVATE, n.visibility); assertNotNull(n.publicVersion);
         assertEquals("New message", n.publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
-        assertNull(n.fullScreenIntent); assertNotNull(summary());
-        assertEquals(MessageAlerts.GROUP, n.getGroup()); assertEquals(n.getGroup(), summary().getGroup());
-        assertTrue((summary().flags & Notification.FLAG_GROUP_SUMMARY) != 0);
-        assertEquals(73, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
         Intent tap = Shadows.shadowOf(n.contentIntent).getSavedIntent();
         assertEquals(73, tap.getIntExtra("channel_id", 0)); assertEquals(MainActivity.class.getName(), tap.getComponent().getClassName());
         assertEquals("shoperator://message/" + store.credential().generation + "/73", tap.getDataString());
         assertEquals(801, tap.getLongExtra(MessageAlerts.LATEST_ID, 0));
+        for (Object value : app.getSharedPreferences("native_private", Context.MODE_PRIVATE).getAll().values())
+            assertFalse("Customer message text is not persisted in preferences", String.valueOf(value).contains("3W kit"));
     }
-    @Test public void separateChatsKeepSeparatePendingIntentsAndCreateAnInboxSummary() {
+
+    @Test public void separateChatsKeepSeparatePendingIntentsAndDoNotRequireManualGrouping() {
         post(73, 801, "Ankit", "First order"); post(74, 802, "Vibhu", "Second order");
         Intent first = Shadows.shadowOf(notification(73).contentIntent).getSavedIntent();
         Intent second = Shadows.shadowOf(notification(74).contentIntent).getSavedIntent();
         assertNotEquals(first.getData(), second.getData());
         assertEquals(73, first.getIntExtra("channel_id", 0)); assertEquals(74, second.getIntExtra("channel_id", 0));
-        assertNotNull(summary()); assertTrue((summary().flags & Notification.FLAG_GROUP_SUMMARY) != 0);
-        assertEquals(2, summary().number); assertEquals(3, manager.getActiveNotifications().length);
+        assertNull(notification(73).getGroup()); assertNull(notification(74).getGroup());
+        assertNull(summary()); assertEquals(2, manager.getActiveNotifications().length);
     }
-    @Test public void repeatedDeliveryDoesNotDuplicateAndExpandableHistoryIsBounded() {
+
+    @Test public void repeatedDeliveryDoesNotDuplicateAndEachChatKeepsItsLatestMessage() {
         for (int i = 1; i <= 12; i++) post(73, 800 + i, "Ankit", "Order " + i);
         post(73, 812, "Ankit", "Duplicate callback");
-        List<NotificationCompat.MessagingStyle.Message> messages = style(73).getMessages();
-        assertEquals(8, messages.size()); assertEquals("Order 5", messages.get(0).getText().toString());
-        assertEquals("Order 12", messages.get(7).getText().toString()); assertEquals(12, notification(73).number);
+        assertEquals("Order 12", preview(73)); assertEquals(1, manager.getActiveNotifications().length);
+        assertEquals(812, store.postedMessageId(73, store.credential()));
     }
-    @Test public void freshOutOfOrderMessagesAppearOnceWithoutReplacingLatestText() {
+
+    @Test public void freshOutOfOrderMessagesCannotReplaceLatestTextOrOverwriteItsPendingIntent() {
         Map<String, String> newest = data(73, 1002, "Ankit", "Newer message");
         Map<String, String> older = data(73, 1001, "Ankit", "Earlier message");
-        older.put("message_at_ms", "" + (System.currentTimeMillis() - 1000));
-        HubMessagingService.dispatchData(app, newest); HubMessagingService.dispatchData(app, older); HubMessagingService.dispatchData(app, older);
-        List<NotificationCompat.MessagingStyle.Message> messages = style(73).getMessages();
-        assertEquals(2, messages.size()); assertEquals("Earlier message", messages.get(0).getText().toString());
-        assertEquals("Newer message", messages.get(1).getText().toString()); assertEquals(2, notification(73).number);
+        HubMessagingService.dispatchData(app, newest);
+        android.app.PendingIntent latestTap = notification(73).contentIntent;
+        HubMessagingService.dispatchData(app, older); HubMessagingService.dispatchData(app, older);
+        assertEquals("Newer message", preview(73)); assertEquals(1, manager.getActiveNotifications().length);
+        assertEquals(1002, Shadows.shadowOf(latestTap).getSavedIntent().getLongExtra(MessageAlerts.LATEST_ID, 0));
         assertEquals(1002, notification(73).extras.getLong(MessageAlerts.LATEST_ID));
     }
+
     @Test public void tappingOneConversationKeepsOtherChatsAndAnOlderTapCannotClearANewerMessage() {
         post(73, 801, "Ankit", "First"); post(74, 802, "Vibhu", "Other chat");
         Intent oldTap = new Intent(Shadows.shadowOf(notification(73).contentIntent).getSavedIntent());
         post(73, 803, "Ankit", "New message arrived during tap");
         MessageAlerts.opened(app, oldTap); assertNotNull(notification(73));
         Intent currentTap = Shadows.shadowOf(notification(73).contentIntent).getSavedIntent();
-        MessageAlerts.opened(app, currentTap); assertNull(notification(73)); assertNotNull(notification(74)); assertNotNull(summary());
-        assertEquals(74, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
+        MessageAlerts.opened(app, currentTap); assertNull(notification(73)); assertNotNull(notification(74)); assertNull(summary());
+        post(73, 802, "Ankit", "Delayed older message after opening"); assertNull(notification(73));
     }
-    @Test public void groupNotificationUsesConversationTitleAndPreservesActualSender() {
+
+    @Test public void groupConversationRetainsItsTitleAndActualSenderInAStandalonePreview() {
         Map<String, String> incoming = data(73, 801, "Ankit", "Hello team");
         incoming.put("group_conversation", "true"); incoming.put("conversation_name", "Sales team");
         HubMessagingService.dispatchData(app, incoming);
-        assertTrue(style(73).isGroupConversation()); assertEquals("Sales team", style(73).getConversationTitle().toString());
-        assertEquals("Ankit", style(73).getMessages().get(0).getPerson().getName().toString());
+        assertEquals("Sales team", title(73)); assertEquals("Ankit: Hello team", preview(73)); assertNull(notification(73).getGroup());
     }
+
     @Test public void staleMalformedWrongHubAndUnenrolledEnvelopesCannotDisplayPreviews() {
         Map<String, String> incoming = data(73, 801, "Private sender", "Private message");
         incoming.put("hub_url", "https://untrusted.example/?channel_id=73"); HubMessagingService.dispatchData(app, incoming);
@@ -136,24 +137,24 @@ public class MessageNotificationsTest {
         MessageAlerts.show(app, 73, 803, data(73, 803, "Old account", "Late callback"), old);
         assertNull(notification(73)); assertFalse(store.receiveMessage(73, 803, System.currentTimeMillis(), System.currentTimeMillis() + 60000, old));
         post(73, 801, "New account", "Same channel and ID can be new here"); assertNotNull(notification(73));
-        assertEquals("New account", style(73).getMessages().get(0).getPerson().getName().toString());
+        assertEquals("New account", title(73));
     }
     @Test public void migrationPreservesOldDeduplicationFloorWhileNewChatsAllowReordering() {
         SharedPreferences prefs = app.getSharedPreferences("native_private", Context.MODE_PRIVATE);
         prefs.edit().putLong("message:73", 900).commit();
         post(73, 900, "Ankit", "Already shown by R14"); assertNull(notification(73));
         post(73, 902, "Ankit", "New after upgrade"); post(73, 899, "Ankit", "Old duplicate"); post(73, 901, "Ankit", "Fresh reordered message");
-        assertEquals(2, style(73).getMessages().size()); assertEquals(2, notification(73).number);
+        assertEquals("New after upgrade", preview(73)); assertEquals(902, notification(73).extras.getLong(MessageAlerts.LATEST_ID));
     }
     @Test public void legacyEnvelopeHasSafeFallbackAndDoesNotInventCustomerContent() {
         Map<String, String> incoming = data(73, 801, "Unversioned name", "Unversioned text"); incoming.remove("preview_protocol");
         HubMessagingService.dispatchData(app, incoming);
-        assertEquals("Customer", style(73).getMessages().get(0).getPerson().getName().toString());
-        assertEquals("New message", style(73).getMessages().get(0).getText().toString());
+        assertEquals("Customer", title(73));
+        assertEquals("New message", preview(73));
     }
-    @Test @Config(sdk = 26) public void androidEightRetainsReadableMessagingStyleAndTapRouting() {
+    @Test @Config(sdk = 26) public void androidEightRetainsReadableBigTextAndTapRouting() {
         post(73, 801, "Ankit", "Android 8 message"); assertNotNull(notification(73));
-        assertEquals("Android 8 message", style(73).getMessages().get(0).getText().toString());
+        assertEquals("Android 8 message", preview(73));
         assertEquals(73, Shadows.shadowOf(notification(73).contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
     }
     @Test @Config(sdk = 35) public void androidFifteenRequiresPermissionAndUsesImmutableTapIntents() {
@@ -179,22 +180,17 @@ public class MessageNotificationsTest {
         long count = app.getSharedPreferences("native_private", Context.MODE_PRIVATE).getAll().keySet().stream().filter(key -> key.startsWith("message:")).count();
         assertEquals(128, count);
     }
-    @Test public void dismissalUpdatesSummaryAndConversationLimitKeepsLatestChats() {
-        String sameTimestamp = "" + System.currentTimeMillis();
-        for (int i = 1; i <= 26; i++) {
-            Map<String, String> incoming = data(i, 800 + i, "Customer " + i, "Message " + i);
-            incoming.put("message_at_ms", sameTimestamp); HubMessagingService.dispatchData(app, incoming);
-        }
-        assertEquals(25, manager.getActiveNotifications().length); // 24 chats + one group summary
-        assertNull(notification(1)); assertNotNull(notification(26));
-        for (int i = 3; i < 26; i++) manager.cancel(MessageAlerts.tag(i), 300);
-        new MessageDismissReceiver().onReceive(app, new Intent().putExtra(MessageAlerts.GENERATION, store.credential().generation));
-        assertNotNull(summary()); assertNotNull(notification(26));
-        assertEquals(26, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
+    @Test public void dismissalAndConversationLimitWorkWithoutAnInventoryDerivedSummary() {
+        for (int i = 1; i <= 26; i++) post(i, 800 + i, "Customer " + i, "Message " + i);
+        assertEquals(24, manager.getActiveNotifications().length); assertNull(summary());
+        assertNull(notification(1)); assertNull(notification(2)); assertNotNull(notification(26));
+        Intent dismissed = Shadows.shadowOf(notification(26).deleteIntent).getSavedIntent();
         manager.cancel(MessageAlerts.tag(26), 300);
-        new MessageDismissReceiver().onReceive(app, new Intent().putExtra(MessageAlerts.GENERATION, store.credential().generation));
-        assertNull(summary());
+        new MessageDismissReceiver().onReceive(app, dismissed);
+        post(26, 825, "Customer 26", "Delayed older message after dismissal"); assertNull(notification(26));
+        post(1, 800, "Customer 1", "Delayed older message after eviction"); assertNull(notification(1));
     }
+
 
     @Test @Config(sdk = 35) public void aMessageNotPostedForDeniedPermissionCanBeRetriedAfterPermissionIsGranted() {
         Map<String, String> incoming = data(73, 801, "Ankit", "Please show after permission");
@@ -202,8 +198,8 @@ public class MessageNotificationsTest {
         HubMessagingService.dispatchData(app, incoming); assertNull(notification(73));
         assertEquals("blocked_permission", store.lastMessageOutcome()); assertTrue(store.lastMessageReceivedAt() > 0);
         Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
-        HubMessagingService.dispatchData(app, incoming); assertNotNull(notification(73)); assertNotNull(summary());
-        assertEquals(1, notification(73).number);
+        HubMessagingService.dispatchData(app, incoming); assertNotNull(notification(73)); assertNull(summary());
+        assertEquals(801, notification(73).extras.getLong(MessageAlerts.LATEST_ID));
         assertEquals("posted", store.lastMessageOutcome());
     }
     @Test public void startupKeepsAnInspectableBlockedMessageChannelAndDeliveryDiagnosesTheBlock() {
@@ -232,26 +228,36 @@ public class MessageNotificationsTest {
         assertTrue(store.receiveMessage(73, 33, now, now + 60000));
         assertFalse(store.receiveMessage(73, 32, now, now + 60000));
     }
-    @Test public void simpleFallbackRetainsActualPreviewExactChatAndAValidGroupSummary() {
-        assertTrue(MessageAlerts.fallback(app, 73, 801, data(73, 801, "Ankit", "Readable fallback"), store.credential()));
-        assertEquals("Ankit", notification(73).extras.getCharSequence(Notification.EXTRA_TITLE).toString());
-        assertEquals("Readable fallback", notification(73).extras.getCharSequence(Notification.EXTRA_TEXT).toString());
-        assertNotNull(summary());
-        Intent tap = Shadows.shadowOf(summary().contentIntent).getSavedIntent();
-        assertEquals(73, tap.getIntExtra("channel_id", 0)); MessageAlerts.opened(app, tap);
-        assertNull(notification(73)); assertNull(summary());
+    @Test public void latestPostedFloorsStayBoundedEvenAfterActiveChatsLoseTheirReceiveReplayRecords() {
+        DeviceLeasePolicy.Credential credential = store.credential(); long now = System.currentTimeMillis();
+        for (int channel = 1; channel <= 200; channel++) {
+            store.rememberMessageNotification(channel, credential); store.messageNotificationPosted(channel, 1000 + channel, credential);
+        }
+        // Receiving other envelopes need not successfully post notifications.
+        for (int channel = 300; channel < 450; channel++) assertTrue(store.receiveMessage(channel, channel, now, now + 60000));
+        for (int channel = 1; channel <= 200; channel++) store.forgetMessageNotification(channel, credential);
+        long floors = app.getSharedPreferences("native_private", Context.MODE_PRIVATE).getAll().keySet().stream().filter(key -> key.startsWith("message_posted:")).count();
+        assertTrue(floors <= 128);
     }
-    @Test @Config(shadows = RichStyleFailure.class) public void anActualRichPostFailureFallsBackInsteadOfSilentlyLosingTheMessage() {
+    @Test public void bareFallbackRetainsActualPreviewAndExactChatWithoutAStyleOrGroup() {
+        assertTrue(MessageAlerts.fallback(app, 73, 801, data(73, 801, "Ankit", "Readable fallback"), store.credential()));
+        assertEquals("Ankit", title(73)); assertEquals("Readable fallback", preview(73));
+        assertNull(notification(73).getGroup()); assertNull(notification(73).extras.getString(Notification.EXTRA_TEMPLATE)); assertNull(summary());
+        Intent tap = Shadows.shadowOf(notification(73).contentIntent).getSavedIntent();
+        assertEquals(73, tap.getIntExtra("channel_id", 0)); MessageAlerts.opened(app, tap); assertNull(notification(73));
+    }
+
+    @Test @Config(shadows = BigTextFailure.class) public void aBigTextPostFailureFallsBackToBareSenderAndText() {
         post(73, 801, "Ankit", "Fallback survives a style failure");
-        Notification shown = notification(73); assertNotNull(shown); assertNotNull(summary());
-        assertEquals("Ankit", shown.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
-        assertEquals("Fallback survives a style failure", shown.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
-        assertTrue(shown.extras.getString(Notification.EXTRA_TEMPLATE).contains("BigTextStyle"));
+        Notification shown = notification(73); assertNotNull(shown); assertNull(summary());
+        assertEquals("Ankit", title(73)); assertEquals("Fallback survives a style failure", preview(73));
+        assertNull(shown.extras.getString(Notification.EXTRA_TEMPLATE)); assertNull(shown.getGroup());
         assertFalse(store.receiveMessage(73, 801, System.currentTimeMillis(), System.currentTimeMillis() + 60000));
     }
-    @Implements(NotificationManager.class) public static class RichStyleFailure extends ShadowNotificationManager {
+
+    @Implements(NotificationManager.class) public static class BigTextFailure extends ShadowNotificationManager {
         @Implementation @Override protected void notify(String tag, int id, Notification notification) {
-            if (notification.extras.getString(Notification.EXTRA_TEMPLATE, "").contains("MessagingStyle")) throw new IllegalArgumentException("Synthetic rich-style failure");
+            if (notification.extras.getString(Notification.EXTRA_TEMPLATE, "").contains("BigTextStyle")) throw new IllegalArgumentException("Synthetic rich-style failure");
             super.notify(tag, id, notification);
         }
     }

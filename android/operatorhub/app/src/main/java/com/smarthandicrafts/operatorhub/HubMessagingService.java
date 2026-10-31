@@ -45,8 +45,8 @@ public final class HubMessagingService extends FirebaseMessagingService {
                 if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && store.receiveMessage(channel, id, issued, expiry, credential)) {
                     boolean posted = false;
                     try { posted = MessageAlerts.show(context, (int)channel, id, d, credential); }
-                    catch (RuntimeException richFailure) {
-                        messageStatus(context, "rich_render_failed");
+                    catch (RuntimeException renderFailure) {
+                        messageStatus(context, "render_failed");
                         try { posted = MessageAlerts.fallback(context, (int)channel, id, d, credential); }
                         catch (RuntimeException fallbackFailure) { messageStatus(context, "fallback_render_failed"); }
                     }
