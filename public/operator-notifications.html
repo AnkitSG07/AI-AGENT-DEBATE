@@ -211,6 +211,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 
 </style>
+
+<style>
+.notification-operator-login{margin:0 18px 20px;padding:20px;border:1px solid #dbe7df;border-radius:20px;background:var(--card,#fff);color:var(--ink,#142923);display:grid;gap:10px}
+.notification-operator-login[hidden]{display:none!important}.notification-operator-login h2{margin:0;font-size:20px}.notification-operator-login p{margin:0;font-size:13px;line-height:1.5;color:var(--muted,#61756d)}
+.notification-operator-login label{font-weight:600;font-size:13px}.notification-operator-login input,.notification-operator-login select{font:inherit;min-width:0;width:100%;min-height:44px;padding:10px 12px;border:1px solid #b7c7be;border-radius:12px;background:var(--card,#fff);color:inherit;box-sizing:border-box}
+.notification-operator-login button{font:inherit;min-height:44px;background:#008069;color:#fff;border:0;border-radius:999px;padding:10px 18px;font-weight:600}.notification-operator-login button:disabled{opacity:.6}.notification-operator-login :focus-visible{outline:2px solid #008069;outline-offset:3px}
+@media(prefers-color-scheme:dark){.notification-operator-login{background:#182825;color:#eef4f1;border-color:#3d5048}.notification-operator-login input,.notification-operator-login select{background:#13201b}.notification-operator-login p{color:#bbc9c1}}
+</style>
 </head>
 <body>
 <div class="app">
@@ -278,10 +286,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   </div>
 </div>
 <audio id="remoteAudio" autoplay playsinline></audio>
+<script src="/operator-notifications-auth.js?r12"></script>
 <script>
 
 const $ = (id) => document.getElementById(id);
-const CALL_UI_VERSION = '2026-10-28-hub-notification-setup-r3';
+const CALL_UI_VERSION = '2026-10-29-hub-notification-setup-r12';
 let currentSub = null;
 let device = loadDevice();
 const OPERATOR_SESSION_KEY = 'sh_operator_session_id_v1';
@@ -814,7 +823,7 @@ function last10(v){const p=cleanPhone(v);return p.length>=10?p.slice(-10):p}
 function isOwnNumber(v){const l=last10(v);return !!l && (callConfig.own_numbers_last10||[]).some(x=>last10(x)===l)}
 function shortTime(v){if(!v)return'';try{return new Date(v).toLocaleString()}catch{return v}}
 function formatDuration(seconds){const n=Math.max(0,Math.floor(Number(seconds||0)));if(!n)return'';const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=n%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`}
-function logStatus(m,g){$('status').innerHTML=(g===true?'<span class="ok">OK</span> ':g===false?'<span class="bad">Issue</span> ':'')+String(m||'')}
+function logStatus(m,g){const target=$('status');target.replaceChildren();if(g===true||g===false){const label=document.createElement('span');label.className=g?'ok':'bad';label.textContent=g?'OK':'Issue';target.append(label,document.createTextNode(' '));}target.append(document.createTextNode(String(m||'')));}
 function supported(){return 'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window}
 function urlBase64ToUint8Array(s){const p='='.repeat((4-s.length%4)%4),b=(s+p).replace(/-/g,'+').replace(/_/g,'/'),r=atob(b),o=new Uint8Array(r.length);for(let i=0;i<r.length;++i)o[i]=r.charCodeAt(i);return o}
 async function getRegistration(){
@@ -916,7 +925,7 @@ async function refresh(){
     const permission=Notification.permission;
     if(permission==='granted'&&currentSub){
       if(pendingHubSetup)logStatus('Browser permission is already allowed. Choose Enable notifications for Operator Hub to finish linking this device.');
-      else{logStatus(linkedHubSetup?'Browser alerts are enabled for the saved Hub device.':'Browser notifications are enabled.',true);if(!linkedHubSetup&&!hubSetupFragment.present)await postStatus();}
+      else{logStatus('Browser permission and a local subscription are present. Choose Enable notifications to verify server registration.');if(!linkedHubSetup&&!hubSetupFragment.present)await postStatus();}
     }else if(permission==='denied')logStatus('Notifications are blocked in this browser. Allow them in browser settings, then choose Enable.',false);
     else logStatus('Choose Enable notifications for Operator Hub to allow alerts on this browser.');
   }catch(error){logStatus(error.message||String(error),false);}
@@ -925,6 +934,7 @@ async function enable(){
   if(!supported())return refresh();
   try{
     if(hubSetupFragment.present&&!hubSetupFragment.value)throw new Error('This setup link is invalid. Open Notifications again from Operator Hub.');
+    await window.SHNotificationsAuth.requireSession();
     const candidate=pendingHubSetup||linkedHubSetup;
     const profile=setupNamesFromForm(candidate||device);
     logStatus('Requesting permission…');
@@ -935,31 +945,53 @@ async function enable(){
     const registration=await getRegistration();currentSub=await registration.pushManager.getSubscription();
     if(!currentSub)currentSub=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(key.publicKey)});
     const payload=currentDevicePayload(candidate?profile:null);
-    const saved=await fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const saved=await window.SHNotificationsAuth.fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const result=await saved.json().catch(()=>({}));
-    if(!saved.ok||result.ok===false)throw new Error(result.error||'Could not save subscription.');
+    if(!saved.ok||result.ok!==true)throw new Error(result.error||'Could not save subscription.');
     const persisted=candidate?commitHubSetup(profile):true;
     logStatus(persisted?'Notifications enabled. Return to Operator Hub for chats and calls.':'Notifications enabled for this session. Browser storage is unavailable; open setup from Operator Hub again next time.',true);
-    await loadDevices();return true;
+    return true;
   }catch(error){logStatus(error.message||String(error),false);return false;}
 }
 async function postStatus(){
   if(pendingHubSetup)return;
-  try{if(!currentSub){const registration=await getRegistration();currentSub=await registration.pushManager.getSubscription();}
-    await fetch('/api/operator-devices/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentDevicePayload())});await loadDevices();
-  }catch(error){}
+  try{
+    if(!currentSub){const registration=await getRegistration();currentSub=await registration.pushManager.getSubscription();}
+    if(!currentSub){logStatus('Enable notifications before saving this device.',false);return;}
+    const response=await window.SHNotificationsAuth.fetch('/api/push/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentDevicePayload())});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok||result.ok!==true)throw new Error(result.error||'Could not save notification preferences.');
+    logStatus('Notification preferences saved.',true);
+  }catch(error){logStatus(error.message||String(error),false);}
 }
-async function heartbeat(){
-  if(pendingHubSetup)return;
-  try{if(!currentSub){const registration=await getRegistration();currentSub=await registration.pushManager.getSubscription();}
-    const payload=linkedHubSetup?{deviceId:linkedHubSetup.deviceId,subscription:currentSub}:currentDevicePayload();
-    await fetch('/api/operator-devices/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  }catch(error){}
+async function heartbeat(){ /* Call presence belongs to the authenticated Hub/native app. */ }
+async function reset(){
+  try{
+    await window.SHNotificationsAuth.requireSession();
+    const registration=await getRegistration(),subscription=await registration.pushManager.getSubscription();
+    if(subscription){
+      const response=await window.SHNotificationsAuth.fetch('/api/push/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:subscription.endpoint,subscription:subscription.toJSON()})});
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok||result.ok!==true||result.unsubscribed!==true)throw new Error(result.error||'Could not reset this subscription. It has been kept on this device.');
+      await subscription.unsubscribe();
+    }
+    currentSub=null;logStatus('Subscription reset.',true);
+  }catch(error){logStatus(error.message||String(error),false);}
 }
-async function reset(){try{const r=await getRegistration(),s=await r.pushManager.getSubscription();if(s){await fetch('/api/push/unsubscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:s.endpoint})});await s.unsubscribe()}currentSub=null;logStatus('Subscription reset.',true)}catch(e){logStatus(e.message||e,false)}}
-async function testChat(){await fetch('/api/push/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:'Test notification from SH Operator Call.'})});logStatus('Test chat notification sent.',true)}
-async function testCall(){await fetch('/api/push/test-call',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Test WhatsApp Caller',phone:'919999999999'})});logStatus('Test call alert sent.',true)}
-async function showDiagnostics(){try{const r=await fetch('/api/whatsapp-calls/diagnostics?limit=10',{cache:'no-store'});const j=await r.json().catch(()=>({}));$('status').textContent=JSON.stringify({ok:j.ok,version:j.version,odoo_configured:j.odoo_configured,model:j.odoo_call_log_model,odoo_rows:j.odoo_row_count,local_rows:j.local_row_count,lifecycles:j.lifecycle_count,sample:j.sample||j.sample_lifecycles||[],error:j.odoo_error||j.error||''},null,2)}catch(e){logStatus(e.message||String(e),false)}}
+async function sendNotificationTest(path,payload){
+  try{
+    const response=await window.SHNotificationsAuth.fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok||result.ok!==true)throw new Error(result.error||'The server did not accept the notification test.');
+    logStatus('Test request accepted. Check the receiving device to verify delivery.',true);
+  }catch(error){logStatus(error.message||String(error),false);}
+}
+async function testChat(){return sendNotificationTest('/api/push/test',{message:'Test notification from SH Operator Call.'});}
+async function testCall(){return sendNotificationTest('/api/push/test-call',{name:'Test WhatsApp Caller',phone:'919999999999'});}
+async function showDiagnostics(){
+  try{const response=await window.SHNotificationsAuth.fetch('/api/push/status');const result=await response.json().catch(()=>({}));if(!response.ok||result.ok!==true)throw new Error(result.error||'Could not check notification status.');$('status').textContent=JSON.stringify({ok:result.ok,configured:result.configured,enabled:result.enabled,subscriberCount:result.subscriberCount,lastSentAt:result.lastSentAt,lastError:result.lastError||''},null,2);}
+  catch(error){logStatus(error.message||String(error),false);}
+}
 function clearLocalCallCache(){try{sessionStorage.removeItem('sh_operator_handled_call_ids_v1');localStorage.removeItem('sh_operator_call_history_v2');localStorage.removeItem('sh_operator_call_history_v3');localStorage.removeItem('sh_operator_call_history_v4');handledCallIds.clear();callsCache=[];renderCalls();logStatus('Local browser call cache cleared. Odoo/server call logs were not deleted.',true);loadCalls();}catch(e){logStatus(e.message||String(e),false)}}
 async function updateAppCache(){try{logStatus('Updating app cache and checking latest deployed version…');if('caches' in window){const keys=await caches.keys();await Promise.all(keys.map(k=>caches.delete(k)));}if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.all(regs.map(async(r)=>{try{await r.update()}catch(e){}}));}sessionStorage.setItem('sh_operator_last_manual_update',new Date().toISOString());const url=new URL(location.href);url.searchParams.set('v',Date.now().toString());location.replace(url.toString());}catch(e){logStatus(e.message||String(e),false)}}
 async function loadDevices(){try{const j=await(await fetch('/api/operator-devices',{cache:'no-store'})).json();devicesCache=j.devices||[];$('metricDevices').textContent=devicesCache.length||1;$('deviceList').innerHTML=devicesCache.length?devicesCache.map(d=>`<div class="empty-card"><div class="empty-icon">${esc((d.operator_name||'O')[0])}</div><div><b>${esc(d.operator_name||'Operator')} • ${esc(d.device_label||'Device')}</b><span>${esc(d.status||'')}${d.in_call?' • In call':''} • Calls: ${(d.receive_calls&&!d.in_call&&d.status==='online')?'Ready':'No'} • Chats: ${d.receive_chats?'Yes':'No'}</span></div></div>`).join(''):'<div class="empty-card"><div class="empty-icon">SH</div><div><b>No devices yet</b><span>Enable notifications on this phone.</span></div></div>'}catch(e){$('deviceList').innerHTML='<div class="empty-card"><div class="empty-icon">!</div><div><b>Device API not active</b><span>Check backend route.</span></div></div>'}}
@@ -1326,14 +1358,19 @@ function openCallFromUrl(){
   if(!destination)return false;
   location.replace(destination);return true;
 }
-function showTab(tab){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.dataset.screen===tab));document.querySelectorAll('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));if(tab==='calls'||tab==='home')loadCalls();if(tab==='devices')loadDevices();if(tab==='settings')refresh()}
+function showTab(tab){
+  if(tab!=='settings'){location.assign(OPERATOR_HUB_URL);return;}
+  document.querySelectorAll('.screen').forEach(screen=>screen.classList.toggle('active',screen.dataset.screen==='settings'));
+  document.querySelectorAll('.bottom-nav button').forEach(button=>button.classList.toggle('active',button.dataset.tab==='settings'));
+  refresh();
+}
 window.startOutgoingCall=startOutgoingCall;
 if($('historySearch'))$('historySearch').oninput=(e)=>{historySearch=e.target.value||'';renderCalls()};document.querySelectorAll('.range-btn[data-range]').forEach(b=>b.onclick=()=>{historyRange=b.dataset.range||'7d';document.querySelectorAll('.range-btn[data-range]').forEach(x=>x.classList.toggle('active',x.dataset.range===historyRange));renderCalls()});function bindToggle(id,getterSetter){const btn=$(id);if(!btn)return;btn.onclick=()=>{getterSetter();btn.classList.toggle('active');renderCalls()}}bindToggle('needsCallbackBtn',()=>{callbackFilter=!callbackFilter});bindToggle('followupNeededBtn',()=>{followupNeededFilter=!followupNeededFilter});bindToggle('hasNotesBtn',()=>{notesFilter=!notesFilter});bindToggle('followupDoneBtn',()=>{followupDoneFilter=!followupDoneFilter});bindToggle('quotationPendingBtn',()=>{quotationPendingFilter=!quotationPendingFilter});bindToggle('quotationCreatedBtn',()=>{quotationCreatedFilter=!quotationCreatedFilter});bindToggle('quotationNoRequiredBtn',()=>{quotationNoRequiredFilter=!quotationNoRequiredFilter});if($('outcomeFilter'))$('outcomeFilter').onchange=(e)=>{outcomeFilter=e.target.value||'all';refreshOutcomeQuickButtons();renderCalls()};document.querySelectorAll('[data-outcome-quick]').forEach(b=>b.onclick=()=>{const v=b.dataset.outcomeQuick||'all';outcomeFilter=((outcomeFilter||'all')===v)?'all':v;if($('outcomeFilter'))$('outcomeFilter').value=outcomeFilter;refreshOutcomeQuickButtons();renderCalls()});
-document.querySelectorAll('.bottom-nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');activeFilter=b.dataset.filter||'all';renderCalls()});document.querySelectorAll('.status-btn').forEach(b=>b.onclick=()=>{device.status=b.dataset.status;saveDevice();fillDeviceForm();postStatus();startIncomingCallWatcher()});$('saveDeviceBtn').onclick=async()=>{const b=$('saveDeviceBtn');if(b.disabled)return;setButtonBusy(b,true,'Saving…');try{await saveNotificationProfile()}finally{setButtonBusy(b,false)}};$('receiveCalls').onchange=e=>{device.receiveCalls=e.target.checked;saveDevice();postStatus();fillDeviceForm();startIncomingCallWatcher()};$('receiveChats').onchange=e=>{device.receiveChats=e.target.checked;saveDevice();postStatus();fillDeviceForm()};$('enableBtn').onclick=()=>{if($('enableBtn').disabled)return;setButtonBusy($('enableBtn'),true,'Enabling…');Promise.resolve(enable()).finally(()=>setButtonBusy($('enableBtn'),false))};$('homeEnableBtn').onclick=()=>{if($('homeEnableBtn').disabled)return;setButtonBusy($('homeEnableBtn'),true,'Enabling…');Promise.resolve(enable()).finally(()=>setButtonBusy($('homeEnableBtn'),false))};$('testBtn').onclick=()=>{if($('testBtn').disabled)return;setButtonBusy($('testBtn'),true,'Sending…');Promise.resolve(testChat()).finally(()=>setButtonBusy($('testBtn'),false))};$('testCallBtn').onclick=()=>{if($('testCallBtn').disabled)return;setButtonBusy($('testCallBtn'),true,'Sending…');Promise.resolve(testCall()).finally(()=>setButtonBusy($('testCallBtn'),false))};$('homeTestCallBtn').onclick=()=>{if($('homeTestCallBtn').disabled)return;setButtonBusy($('homeTestCallBtn'),true,'Sending…');Promise.resolve(testCall()).finally(()=>setButtonBusy($('homeTestCallBtn'),false))};$('resetBtn').onclick=()=>{if($('resetBtn').disabled)return;setButtonBusy($('resetBtn'),true,'Resetting…');Promise.resolve(reset()).finally(()=>setButtonBusy($('resetBtn'),false))};$('diagBtn').onclick=showDiagnostics;$('clearCallCacheBtn').onclick=clearLocalCallCache;$('updateAppBtn').onclick=updateAppCache;$('activeNoteBtn').onclick=openActiveNoteModal;$('transferCallBtn').onclick=openTransferModal;$('transferCloseBtn').onclick=closeTransferModal;$('transferModal').addEventListener('click',(e)=>{if(e.target===$('transferModal'))closeTransferModal()});$('noteCloseBtn').onclick=closeNoteModal;$('noteSaveBtn').onclick=saveCurrentNote;$('noteDeleteBtn').onclick=clearCurrentNote;$('noteModal').addEventListener('click',(e)=>{if(e.target===$('noteModal'))closeNoteModal()});$('profileCloseBtn').onclick=closeCustomerProfile;$('profileModal').addEventListener('click',(e)=>{if(e.target===$('profileModal'))closeCustomerProfile()});$('refreshCallsBtn').onclick=loadCalls;$('refreshHomeBtn').onclick=loadCalls;$('refreshDevicesBtn').onclick=loadDevices;$('acceptBtn').onclick=acceptCall;$('rejectBtn').onclick=rejectCall;$('endBtn').onclick=()=>endCall();$('refreshBtn').onclick=fetchCall;$('backBtn').onclick=()=>{cleanupCallUi();refresh();loadCalls();startIncomingCallWatcher()};
+document.querySelectorAll('.bottom-nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');activeFilter=b.dataset.filter||'all';renderCalls()});document.querySelectorAll('.status-btn').forEach(b=>b.onclick=()=>{device.status=b.dataset.status;saveDevice();fillDeviceForm();postStatus()});$('saveDeviceBtn').onclick=async()=>{const b=$('saveDeviceBtn');if(b.disabled)return;setButtonBusy(b,true,'Saving…');try{await saveNotificationProfile()}finally{setButtonBusy(b,false)}};$('receiveCalls').onchange=e=>{device.receiveCalls=e.target.checked;saveDevice();postStatus();fillDeviceForm()};$('receiveChats').onchange=e=>{device.receiveChats=e.target.checked;saveDevice();postStatus();fillDeviceForm()};$('enableBtn').onclick=()=>{if($('enableBtn').disabled)return;setButtonBusy($('enableBtn'),true,'Enabling…');Promise.resolve(enable()).finally(()=>setButtonBusy($('enableBtn'),false))};$('homeEnableBtn').onclick=()=>{if($('homeEnableBtn').disabled)return;setButtonBusy($('homeEnableBtn'),true,'Enabling…');Promise.resolve(enable()).finally(()=>setButtonBusy($('homeEnableBtn'),false))};$('testBtn').onclick=()=>{if($('testBtn').disabled)return;setButtonBusy($('testBtn'),true,'Sending…');Promise.resolve(testChat()).finally(()=>setButtonBusy($('testBtn'),false))};$('testCallBtn').onclick=()=>{if($('testCallBtn').disabled)return;setButtonBusy($('testCallBtn'),true,'Sending…');Promise.resolve(testCall()).finally(()=>setButtonBusy($('testCallBtn'),false))};$('homeTestCallBtn').onclick=()=>{if($('homeTestCallBtn').disabled)return;setButtonBusy($('homeTestCallBtn'),true,'Sending…');Promise.resolve(testCall()).finally(()=>setButtonBusy($('homeTestCallBtn'),false))};$('resetBtn').onclick=()=>{if($('resetBtn').disabled)return;setButtonBusy($('resetBtn'),true,'Resetting…');Promise.resolve(reset()).finally(()=>setButtonBusy($('resetBtn'),false))};$('diagBtn').onclick=showDiagnostics;$('clearCallCacheBtn').onclick=clearLocalCallCache;$('updateAppBtn').onclick=updateAppCache;$('activeNoteBtn').onclick=openActiveNoteModal;$('transferCallBtn').onclick=openTransferModal;$('transferCloseBtn').onclick=closeTransferModal;$('transferModal').addEventListener('click',(e)=>{if(e.target===$('transferModal'))closeTransferModal()});$('noteCloseBtn').onclick=closeNoteModal;$('noteSaveBtn').onclick=saveCurrentNote;$('noteDeleteBtn').onclick=clearCurrentNote;$('noteModal').addEventListener('click',(e)=>{if(e.target===$('noteModal'))closeNoteModal()});$('profileCloseBtn').onclick=closeCustomerProfile;$('profileModal').addEventListener('click',(e)=>{if(e.target===$('profileModal'))closeCustomerProfile()});$('refreshCallsBtn').onclick=loadCalls;$('refreshHomeBtn').onclick=loadCalls;$('refreshDevicesBtn').onclick=loadDevices;$('acceptBtn').onclick=acceptCall;$('rejectBtn').onclick=rejectCall;$('endBtn').onclick=()=>endCall();$('refreshBtn').onclick=fetchCall;$('backBtn').onclick=()=>{cleanupCallUi();refresh();loadCalls();startIncomingCallWatcher()};
 $('hubTransferDismiss').onclick=()=>{$('hubTransferNotice').hidden=true;};
 $('hubIncomingDismiss').onclick=()=>{const id=$('hubIncomingNotice').dataset.callId;if(id)markHandled(id);setHubIncomingNotice(null);};
 $('playCallAudioBtn').onclick=async()=>{try{await $('remoteAudio').play();$('playCallAudioBtn').hidden=true;showErr('');}catch(error){showErr('Call audio is still blocked. Check this browser’s sound permission.');}};
-(async()=>{if(openCallFromUrl())return;document.querySelector('.foot')?.style.setProperty('display','none','important');fillDeviceForm();refresh();loadDevices();loadCallConfig();startIncomingCallWatcher();if(!linkedHubSetup&&!pendingHubSetup)startTransferWatcher();setInterval(heartbeat,30000);setInterval(()=>{if(!callModeActive&&!document.hidden&&document.querySelector('[data-screen="home"].active,[data-screen="calls"].active'))loadCalls()},10000)})();
+(async()=>{if(openCallFromUrl())return;document.querySelector('.foot')?.style.setProperty('display','none','important');fillDeviceForm();refresh();})();
 
 </script>
 </body>

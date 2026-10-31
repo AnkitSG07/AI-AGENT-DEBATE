@@ -172,11 +172,19 @@ export class LiveKitWhatsAppProvider {
       'INVALID_OPERATOR_LEG', 'Only an operator participant may be detached by this method.', 400);
     requireValue(Number.isSafeInteger(revokeBeforeMs) && revokeBeforeMs >= 0,
       'INVALID_INPUT', 'Invalid operator token revocation time.', 400);
+    // Cloud accepts an explicit revocation cutoff only within 60 seconds of
+    // its current time. A persisted job may be retried much later; reusing its
+    // original timestamp (or adding a full minute) can permanently fail cleanup.
+    // This is an exact immutable participant identity, so revoking all its old
+    // and refreshed tokens through this retry is intentional. +1 also includes
+    // a token whose integral nbf was issued in the same second as this request.
+    const attemptAt = this.now();
+    requireValue(Number.isSafeInteger(attemptAt) && attemptAt > 0,
+      'INVALID_PROVIDER_CLOCK', 'A valid current time is required for token revocation.', 503);
+    const revokeTokenTs = BigInt(Math.floor(attemptAt / 1000) + 1);
     try {
-      // The cutoff is strictly "nbf before". Include the documented one-minute
-      // leeway so a token issued in the same second as cancellation is revoked.
       await this.run('RemoveParticipant', () => this.rooms.removeParticipant(roomName, identity,
-        { revokeTokenTs: BigInt(Math.ceil(revokeBeforeMs / 1000) + 60) }));
+        { revokeTokenTs }));
       return { detached: true };
     } catch (error) {
       if (error.providerCode === 'not_found') return { detached: true, alreadyAbsent: true };

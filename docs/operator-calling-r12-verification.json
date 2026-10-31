@@ -1,0 +1,387 @@
+{
+  "schema": 1,
+  "auditDate": "2026-10-29",
+  "recordedAt": "2026-10-29T18:56:51.265324+00:00",
+  "baselineCommit": "8b863b7638acfa8c981c67ca536a0c0c83a46b94",
+  "node": "18.20.8",
+  "firestoreSdk": "8.7.1",
+  "livekitServerSdk": "2.18.0",
+  "localEmulator": {
+    "version": "1.19.8",
+    "host": "127.0.0.1:8089",
+    "project": "demo-sh-operator-r12",
+    "stoppedAfterRun": true,
+    "liveCredentialsUsed": false
+  },
+  "suites": [
+    {
+      "name": "published-backend-baseline",
+      "entry": "tests/operator-r10.test.mjs",
+      "kind": "unit",
+      "tests": 245,
+      "pass": 245,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "tapSha256": "d0db80aa2747c17653b611bb7f2a2f75918dd6e41e16f4a91aebac0c7fb941ae",
+      "productionImportsExternal": true,
+      "effects": "Synthetic provider and FCM effects; actual repository modules. Local-emulator suite also uses the official Firestore SDK."
+    },
+    {
+      "name": "r12-backend-regressions",
+      "entry": "tests/operator-r12.test.mjs",
+      "kind": "unit",
+      "tests": 43,
+      "pass": 43,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "tapSha256": "f1e5cb99c14f78a1f065ddf76f78657259acaf54829be255061b81a8e20d02fd",
+      "productionImportsExternal": true,
+      "effects": "Synthetic provider and FCM effects; actual repository modules. Local-emulator suite also uses the official Firestore SDK."
+    },
+    {
+      "name": "reporting-compatibility",
+      "entry": "reporting/test/operator-reporting.test.mjs",
+      "kind": "unit",
+      "tests": 48,
+      "pass": 48,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "tapSha256": "428aa6c58bb29f3eb6698554636e86094294f3137320b7c884e6444cac4e9fb2",
+      "productionImportsExternal": true,
+      "effects": "Synthetic provider and FCM effects; actual repository modules. Local-emulator suite also uses the official Firestore SDK."
+    },
+    {
+      "name": "firestore-sdk-local-integration",
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "kind": "local-emulator",
+      "tests": 5,
+      "pass": 5,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "tapSha256": "1e45d4103e59bbc50d708741424ed053252cf93e719ee33dbeb62423694b7c07",
+      "productionImportsExternal": true,
+      "effects": "Synthetic provider and FCM effects; actual repository modules. Local-emulator suite also uses the official Firestore SDK."
+    }
+  ],
+  "recordedFailingCasesBeforeFix": [
+    {
+      "case": "lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "an outgoing SDP answer received before the dial response is retained and connected once",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "a delayed verified incoming offer retains its original bounded ringing lifetime",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "claiming an incoming call durably cancels other-device ringing before provider answer completes",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "failed FCM delivery does not keep a settled pre-media call device busy",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "connected customer cleanup starts before a stalled notification delivery",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "an End intent bound to an earlier operator leg cannot terminate the current leg",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "an uncertain outgoing Connect response is not blindly replayed by recovery",
+      "evidenceFile": "r12-reproductions-before.tap",
+      "evidenceSha256": "7a274e3edf19997280d38473dd7d8810443490bc3e4df5b9c1875aa95300070b",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "End during an in-flight Connect preserves its reservation until exact late-response cleanup settles",
+      "evidenceFile": "r12-blocked-connect-before.tap",
+      "evidenceSha256": "e1bf5006823cdb4067e2e2b411a512e33450ff2c8d3637e1177e320127adbc1e",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "a new credential generation on the same device cannot transfer the old enrollment media leg",
+      "evidenceFile": "r12-credential-races-before.tap",
+      "evidenceSha256": "7b56c20be7bcd549a6fdfec7eb69633a9605535ca27b8d5b04d0078b87fc53a1",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "recovery derives a committed return-transfer binding if its redundant session update was lost",
+      "evidenceFile": "r12-credential-races-before.tap",
+      "evidenceSha256": "7b56c20be7bcd549a6fdfec7eb69633a9605535ca27b8d5b04d0078b87fc53a1",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "a recovery sweep cannot cancel a new transfer between invitation commit and its session binding",
+      "evidenceFile": "r12-transfer-initialize-before.tap",
+      "evidenceSha256": "72c1093e6dd23ab11a5578d9517dbb3477ac51125b887921426671f21b55ab03",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "an eligibility sweep with an old session snapshot cannot revoke a newly committed owner",
+      "evidenceFile": "r12-eligibility-snapshot-before.tap",
+      "evidenceSha256": "7ceefe9715ae34407fe743b325a516640cd0f22aa8189e6a41f919c67d575c58",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "a provider ID at the supported220-character limit still fits private route and terminal markers",
+      "evidenceFile": "r12-id-boundary-before.tap",
+      "evidenceSha256": "236569c5046b2d316ee3bea472cb9c8d0c3a6f1de0c2ddc679e738b4f7eca027",
+      "after": "passes in final R12 suite"
+    },
+    {
+      "case": "owned calls still joining retain a periodic eligibility deadline instead of waiting for the full join timeout",
+      "evidenceFile": "r12-joining-eligibility-before.tap",
+      "evidenceSha256": "c7538dede354c5c97a6dc732567b963e3c5424ffb75c142eb2327e2664035a34",
+      "after": "passes in final R12 suite"
+    }
+  ],
+  "testInventory": [
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a lost Accept response can recover immediately without displaying a definite failure"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "lost Accept remains pending when exact customer presence is unavailable or stale"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "customer termination wins while lost-Accept observation is in flight"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an outgoing SDP answer received before the dial response is retained and connected once"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "early SDP survives a lost dial acknowledgement and later trusted opaque correlation"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "early SDP followed by provider termination never connects when the dial response finally arrives"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "early-answer records support real-sized private SDP, reject conflicting answers, and stay immutable"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an early duplicate without a route may acquire trusted opaque correlation without rewriting its immutable marker"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a delayed verified incoming offer retains its original bounded ringing lifetime"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "claiming an incoming call durably cancels other-device ringing before provider answer completes"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "failed FCM delivery does not keep a settled pre-media call device busy"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "connected customer cleanup starts before a stalled notification delivery"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an End intent bound to an earlier operator leg cannot terminate the current leg"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an uncertain outgoing Connect response is not blindly replayed by recovery"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "End during an in-flight Connect preserves its reservation until exact late-response cleanup settles"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "fresh real-leg readiness resolves an uncertain Connect without resending SDP"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a definite Connect rejection ends and cleans the call without retrying the mutation"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "enrollment persists native capability metadata before the first background call"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "enrollment retries preserve the credential and cannot use metadata to mutate consumed invitations"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "FCM token refresh atomically updates supported client metadata with the same valid enrollment"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "invalid enrollment metadata is rejected before consuming its one-use invitation"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "expired incoming/transfer alert deadlines cannot be extended by a fresh FCM send time"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "compatibility history I/O cannot hold customer termination or call recovery open"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "R11 End remains compatible on the original leg but cannot end a transferred-back new leg"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "R11 End without leg metadata remains valid on a first transferred-to device"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an outgoing request cancellation cannot end its original device after transfer back on a new leg"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "ending during an unanswered transfer releases the unjoined target without waiting for its expiry"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a new credential generation on the same device cannot transfer the old enrollment media leg"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "recovery derives a committed return-transfer binding if its redundant session update was lost"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a recovery sweep cannot cancel a new transfer between invitation commit and its session binding"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "two enrolled phones stop ringing at first-answer commit while the provider response is still pending"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "decline and transfer timeout preserve the original operator/customer leg and release only the target"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "operator End wins while initial readiness proof is in flight"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "failed operator detach still keeps the exact pre-media reservation busy"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "verified customer termination settles a queued unanswered Reject without another Graph action"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "bounded native Reject uses one exact Meta request and confirms only explicit success"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "bounded native Reject aborts stalled HTTP and never exposes provider bodies or credentials"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "new calls cannot be enabled by a disabled rollout or unsupported native build"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "an eligibility sweep with an old session snapshot cannot revoke a newly committed owner"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "revoked-owner media cleanup does not wait for a stalled first-answer cancellation notification"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "a provider ID at the supported220-character limit still fits private route and terminal markers"
+    },
+    {
+      "entry": "tests/operator-r12.test.mjs",
+      "name": "owned calls still joining retain a periodic eligibility deadline instead of waiting for the full join timeout"
+    },
+    {
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "name": "official Firestore transactions arbitrate competing answers and preserve the winning media leg"
+    },
+    {
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "name": "official Firestore persists a large early answer across lost dial ACK and later correlation"
+    },
+    {
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "name": "official Firestore cleanup releases a settled pre-media reservation despite FCM outage"
+    },
+    {
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "name": "official Firestore End during blocked Connect retains exact reservation until compensation"
+    },
+    {
+      "entry": "tests/operator-r12-emulator.test.mjs",
+      "name": "official Firestore enrollment metadata is committed before the first native alert"
+    }
+  ],
+  "sourceSha256": {
+    "call-runtime/call-runtime.mjs": "813d22d00713b05afbee82d1c295145b675f1d067e66cf076405f82ad510aa62",
+    "call-runtime/routes.mjs": "5673055de8412d0fce85bc9300cd394596004ccba8b93a97d4c44a290ed86018",
+    "call-runtime/startup.mjs": "1e63ceed0c261b9efa63ff5210bf73a397b8ab82fdfaa26bb1eb4ba0524af9d4",
+    "media-store/firestore-media-store.mjs": "f1a16654b263539fe7b556b4470d477aec950be4e47243e91176f8126708db2a",
+    "operator-android-push.js": "5ea78e091f1bebbe97d4e3f7032324efa70daeb39e0ca7d49cab31d0d4b98837",
+    "operator-firestore-registry.js": "d1e79901e7141f6731dda4c980cdbc2393665037bb84cfba6f71549b5fb3736a",
+    "operator-media-gateway.js": "91974caa509e8650cad66d02f47bc96a5f981c4c1a1de5695f009b182cd047ee",
+    "media/native-meta-reject.mjs": "6cbe2b32386a0bf0949ebd23502739af6eac601733acd81c166caf5e7f2eb253",
+    "tests/operator-r12-helpers.mjs": "3c188692cf03d3505cd210ddd1c6e0dd39c22b374ccde56c658bd9a4533d30d3",
+    "tests/operator-r12.test.mjs": "7d88aa83968e5389b852009c6bf05acc7c344819161e742d50a637d2f514bf4a",
+    "tests/operator-r12-emulator.test.mjs": "e0205bbb7f27ec16b692f4d5fdf2760babd4d349a5c4d064cb404223d5e63b10",
+    "scripts/test-operator.mjs": "54d4be650c3dfb195dc1383573d103d7ce17aabf18134aa044eee0aa887c9b08",
+    "package.json": "63e462448444f730be322dc0c33a561b789e28ee06babc2cd464059d86a8fff7",
+    "docs/operator-calling-r12-audit.md": "ff0004e60d4bd5ee8f254d08008f9115d95ddae9eae99fc9e16128d6ce8264e3",
+    "tests/operator-r10.test.mjs": "4d17759c207d0aae1c775b24dfd778b35239c463fca94c45636fa49fc584f4e7",
+    "reporting/test/operator-reporting.test.mjs": "3475343130179f2475f2c2fc7b2b21da0c87a7b1cf675228849a7997d28e8e08"
+  },
+  "scope": {
+    "remotePublished": false,
+    "productionDeployed": false,
+    "customerCallsMade": false,
+    "livePushSent": false,
+    "realAudioValidated": false,
+    "physicalHandoffValidated": false,
+    "browserAuthPatch": "Separate coordinated R12 integration, not part of this lifecycle commit."
+  }
+}

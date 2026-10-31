@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-10-29T14:05:38" hostname="d990de9d2d6d" time="0.008">
+  <properties/>
+  <testcase name="sevenDayBoundaryRequestsOnlyOneCapabilityCheck" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.003"/>
+  <testcase name="supportedServerRenewsWhileOldServerIsSkippedUntilCapabilityCacheExpires" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.002"/>
+  <testcase name="oldResponseCannotReviveSignoutOrAReenrolledCredential" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="healthyLeaseDoesNotCheckConfigOrRenew" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="concurrentOldTokenRefreshCannotShortenANewerRenewal" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="expiredMissingOrMismatchedCredentialsNeverRenew" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="aBackwardClockChangeDoesNotFreezeCapabilityChecks" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="expiryMustBeBoundedMonotonicAndForTheExactDevice" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="only401ForTheExactCurrentCredentialInvalidatesEnrollment" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="responseReceivedAfterOldExpiryCanSaveTheServerConfirmedFutureLease" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <testcase name="retriesAreThrottledAndShorterOnlyWhenExpiryIsWithinOneHour" classname="com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

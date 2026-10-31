@@ -41,6 +41,12 @@ const badInput = message => new RegistryError(400, message, 'INVALID_ARGUMENT');
 const unauthorized = () => new RegistryError(401, 'Device enrollment expired or was revoked.', 'DEVICE_UNAUTHORIZED');
 const unavailable = () => new RegistryError(503, 'Android device storage is temporarily unavailable. Please retry.', 'REGISTRY_UNAVAILABLE');
 const usedCode = () => new RegistryError(409, 'This one-time enrollment code was already used. Ask the administrator for a new code.', 'ENROLLMENT_CONSUMED');
+function nativeClientMetadata(value = {}) {
+  if (value.nativeBuild === undefined && value.mediaProtocol === undefined) return {};
+  if (!Number.isSafeInteger(value.nativeBuild) || value.nativeBuild < 1 || value.nativeBuild > 100000 ||
+      value.mediaProtocol !== 'sh-room-audio-v1') throw badInput('A supported native build and media protocol are required.');
+  return { nativeBuild: value.nativeBuild, mediaProtocol: value.mediaProtocol };
+}
 
 function bearerDigest(value) {
   if (typeof value !== 'string' || !TOKEN_PATTERN.test(value)) throw unauthorized();
@@ -192,10 +198,14 @@ export function createFirestoreDeviceRegistry({
   async function enroll(input = {}) {
     const { installationId, fcmToken: registrationFcm, enrollmentCode, requestId = '' } = input;
     const label = cleanText(input.deviceLabel, 120) || 'Android operator device';
+    const nativeClient = nativeClientMetadata(input);
     if (!INSTALL_PATTERN.test(installationId || '') || !fcmToken(registrationFcm)) throw badInput('A valid installation ID and Firebase token are required.');
     if (!CODE_PATTERN.test(enrollmentCode || '')) throw new RegistryError(403, 'The enrollment code is invalid or unavailable.', 'INVALID_ENROLLMENT');
     if (requestId && !INSTALL_PATTERN.test(requestId)) throw badInput('A valid enrollment request ID is required.');
     const codeHash = HASH(enrollmentCode), installHash = HASH(installationId);
+    // Keep the original replay binding across backend-first rollout. Capability
+    // metadata cannot mint a credential or mutate an already consumed invite;
+    // an authenticated token update can refresh it after recovery.
     const fingerprint = HASH(JSON.stringify({ installationId, fcmHash: HASH(registrationFcm), requestHash: HASH(requestId), label }));
     // Entropy is generated once, outside a callback that Firestore may retry.
     const candidateId = `android_${randomUUID()}`, tokenSecret = randomBytes(32).toString('base64url'), nonce = randomBytes(12);
@@ -247,7 +257,8 @@ export function createFirestoreDeviceRegistry({
       const deviceLabel = cleanText(invitation?.label, 120) || label;
       const row = { schema: 1, id: deviceId, installationId, tokenHash: digest, credentialGeneration: generation,
         fcmToken: registrationFcm, deviceLabel, createdAt: now, firstCreatedAt: existing?.firstCreatedAt || existing?.createdAt || now,
-        updatedAt: now, tokenExpiresAt: expiresAt, revokedAt: 0, receiveCalls: true, receiveChats: true };
+        updatedAt: now, tokenExpiresAt: expiresAt, revokedAt: 0, receiveCalls: true, receiveChats: true,
+        ...nativeClient };
 
       if (existing) tx.set(collections.credentials.doc(existing.tokenHash), { deviceId, generation: existing.credentialGeneration, active: false, updatedAt: now });
       tx.set(deviceRef, row);
@@ -275,8 +286,8 @@ export function createFirestoreDeviceRegistry({
   // not write Firestore on every status poll.
   async function updateNativeClient(rawToken, { nativeBuild, mediaProtocol } = {}) {
     const digest = bearerDigest(rawToken);
-    if (!Number.isSafeInteger(nativeBuild) || nativeBuild < 1 || nativeBuild > 100000 ||
-        mediaProtocol !== 'sh-room-audio-v1') throw badInput('A supported native build and media protocol are required.');
+    const metadata = nativeClientMetadata({ nativeBuild, mediaProtocol });
+    if (!metadata.nativeBuild) throw badInput('A supported native build and media protocol are required.');
     return guarded(() => firestore.runTransaction(async tx => {
       const { row, index, reference } = await readCredential(tx, digest), now = nowMs();
       validateCurrent(row, index, digest, now);
@@ -289,12 +300,13 @@ export function createFirestoreDeviceRegistry({
 
   async function updateToken(rawToken, patch = {}) {
     const digest = bearerDigest(rawToken), nextFcm = fcmToken(patch.fcmToken);
+    const nativeClient = nativeClientMetadata(patch);
     if (!nextFcm) throw badInput('A valid Firebase token is required.');
     for (const key of ['receiveCalls', 'receiveChats', 'renewLease']) if (patch[key] !== undefined && typeof patch[key] !== 'boolean') throw badInput(`A boolean ${key} value is required.`);
     return guarded(() => firestore.runTransaction(async tx => {
       const { row, index, reference } = await readCredential(tx, digest), now = nowMs();
       validateCurrent(row, index, digest, now);
-      const next = { ...row, fcmToken: nextFcm, updatedAt: now };
+      const next = { ...row, fcmToken: nextFcm, updatedAt: now, ...nativeClient };
       if (patch.receiveCalls !== undefined) next.receiveCalls = patch.receiveCalls;
       if (patch.receiveChats !== undefined) next.receiveChats = patch.receiveChats;
       if (patch.renewLease === true) next.tokenExpiresAt = Math.max(row.tokenExpiresAt, now + tokenTtlMs);

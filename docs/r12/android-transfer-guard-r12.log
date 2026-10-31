@@ -1,0 +1,14 @@
+PASS guard runs only in exact trusted Hub main frame
+PASS exact transfer request and accept routes are blocked for URL, Request and trailing slash forms
+PASS ordinary JSON accept keeps original arguments, headers and body
+PASS nonempty transfer IDs in either JSON alias or query are blocked
+PASS FormData and URLSearchParams preserve ordinary bodies and block all duplicate transfer fields
+PASS Request body is inspected through a clone and never consumed before original fetch
+PASS Request init body overrides are inspected according to the actual supplied body
+PASS Blob and byte bodies are inspected; opaque streams and malformed bodies fail closed at accept only
+PASS ordinary call controls, legacy cleanup and unrelated origins/routes remain untouched
+PASS legacy UI actions are captured without blocking ordinary accept and notes are added once
+PASS guard is idempotent and installs UI after DOM readiness without polling timers
+PASS live R8 target acceptance is stopped before microphone, lock takeover or provider accept
+PASS live R8 source keeps ordinary audio and cannot create a new unsafe invitation
+{"passed":13,"failed":0,"sha256":"5cb927f56621a3fed77bed27005842520912c062417b097194cceb111291da56"}

@@ -1,0 +1,86 @@
+html.sh-native-auth {
+  color-scheme: light dark;
+  --sh-auth-bg: #ffffff; --sh-auth-fg: #15242b; --sh-auth-muted: #65767e;
+  --sh-auth-input: #f3f5f5; --sh-auth-line: #dce4e1; --sh-auth-green: #00876b;
+  background: var(--sh-auth-bg) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  -webkit-text-size-adjust: 100%;
+}
+@media (prefers-color-scheme: dark) {
+  html.sh-native-auth { --sh-auth-bg: #111b21; --sh-auth-fg: #e9edef; --sh-auth-muted: #a7b5bd; --sh-auth-input: #202c33; --sh-auth-line: #35434b; --sh-auth-green: #00a884; }
+}
+html.sh-native-auth body,
+html.sh-native-auth #wrapwrap {
+  margin: 0 !important; padding: 0 !important; min-height: 100vh !important; min-height: 100dvh !important;
+  height: auto !important; background: var(--sh-auth-bg) !important; color: var(--sh-auth-fg) !important;
+  font-family: inherit !important;
+}
+html.sh-native-auth #wrapwrap > header,
+html.sh-native-auth #wrapwrap > footer,
+html.sh-native-auth body > header,
+html.sh-native-auth body > footer,
+html.sh-native-auth #oe_main_menu_navbar,
+html.sh-native-auth .o_main_navbar,
+html.sh-native-auth .o_livechat_button,
+html.sh-native-auth .o-livechat-LivechatButton,
+html.sh-native-auth .o-mail-ChatHub { display: none !important; }
+html.sh-native-auth main {
+  box-sizing: border-box !important; width: 100% !important; max-width: 460px !important;
+  margin: 0 auto !important; padding: max(30px, env(safe-area-inset-top)) 26px max(24px, env(safe-area-inset-bottom)) !important;
+  background: var(--sh-auth-bg) !important; flex: 1 0 auto !important; color: var(--sh-auth-fg) !important;
+}
+html.sh-native-auth main > .container,
+html.sh-native-auth main > .container > .row,
+html.sh-native-auth main .oe_login_form,
+html.sh-native-auth main .oe_signup_form,
+html.sh-native-auth main .oe_reset_password_form,
+html.sh-native-auth main .card,
+html.sh-native-auth main .card-body {
+  width: 100% !important; max-width: none !important; min-width: 0 !important;
+  margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important;
+  box-shadow: none !important; background: transparent !important; color: inherit !important;
+}
+html.sh-native-auth main form { color: var(--sh-auth-fg) !important; }
+/* Odoo's standard card logo is replaced visually by the SH introduction above.
+   Keep its auth form, account switcher and links in their original DOM. */
+html.sh-native-auth main .o_database_list > .card-body > .text-center.border-bottom { display: none !important; }
+html.sh-native-auth main form:not([class]) { width: 100%; max-width: none; margin: 0; }
+#sh-native-auth-intro { text-align: left; margin: 0 0 30px; }
+#sh-native-auth-intro img { display: block; width: 76px; height: 76px; padding: 8px; box-sizing: border-box; border-radius: 23px; background: white; object-fit: contain; margin-bottom: 14px; }
+#sh-native-auth-intro .sh-auth-brand { margin: 0 0 18px; font-size: 14px; line-height: 1.5; font-weight: 600; color: var(--sh-auth-green); letter-spacing: .02em; }
+#sh-native-auth-intro h1 { margin: 0 0 12px; font-size: clamp(28px, 7.5vw, 34px); font-weight: 700; line-height: 1.15; letter-spacing: -.035em; color: var(--sh-auth-fg); }
+#sh-native-auth-intro .sh-auth-caption { margin: 0; color: var(--sh-auth-muted); font-size: 16px; line-height: 1.5; }
+html.sh-native-auth main label { color: var(--sh-auth-fg) !important; font-size: 14px !important; font-weight: 600 !important; margin-bottom: 9px !important; }
+html.sh-native-auth main .mb-3,
+html.sh-native-auth main .mb-2,
+html.sh-native-auth main .field-login,
+html.sh-native-auth main .field-password { margin-bottom: 20px !important; }
+html.sh-native-auth main input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),
+html.sh-native-auth main select {
+  box-sizing: border-box !important; font-family: inherit !important; font-size: 16px !important;
+  color: var(--sh-auth-fg) !important; background-color: var(--sh-auth-input) !important;
+  border: 1px solid var(--sh-auth-line) !important; border-radius: 15px !important; min-height: 54px !important;
+  padding: 13px 16px !important; box-shadow: none !important;
+}
+html.sh-native-auth main input::placeholder { color: var(--sh-auth-muted) !important; opacity: .8; }
+html.sh-native-auth main input:focus { border-color: var(--sh-auth-green) !important; outline: 2px solid color-mix(in srgb, var(--sh-auth-green) 20%, transparent) !important; outline-offset: 1px; }
+html.sh-native-auth main input[type="checkbox"], html.sh-native-auth main input[type="radio"] { accent-color: var(--sh-auth-green); }
+html.sh-native-auth main button,
+html.sh-native-auth main .btn { font-family: inherit !important; font-size: 16px !important; font-weight: 600 !important; min-height: 46px; border-radius: 14px !important; }
+html.sh-native-auth main button[type="submit"],
+html.sh-native-auth main .btn-primary {
+  background: var(--sh-auth-green) !important; border-color: var(--sh-auth-green) !important; color: white !important;
+  min-height: 54px !important; border-radius: 28px !important; box-shadow: none !important;
+}
+html.sh-native-auth main .input-group > button { background: var(--sh-auth-input) !important; border: 1px solid var(--sh-auth-line) !important; color: var(--sh-auth-muted) !important; }
+html.sh-native-auth main .o_caps_lock_warning .input-group input[name="password"] { border-radius: 15px 0 0 15px !important; }
+html.sh-native-auth main .o_caps_lock_warning .input-group > button { border-radius: 0 15px 15px 0 !important; border-left: 0 !important; }
+html.sh-native-auth main a { color: var(--sh-auth-green) !important; text-decoration: none; }
+html.sh-native-auth main a:focus-visible, html.sh-native-auth main button:focus-visible { outline: 2px solid var(--sh-auth-green); outline-offset: 3px; }
+html.sh-native-auth main .o_auth_oauth_providers .btn,
+html.sh-native-auth main .o_login_auth .list-group-item { display: block; background: var(--sh-auth-input) !important; border: 1px solid var(--sh-auth-line) !important; color: var(--sh-auth-fg) !important; margin: 10px 0 !important; padding: 12px !important; border-radius: 14px !important; }
+html.sh-native-auth main .alert { font-size: 14px; line-height: 1.5; border-radius: 14px !important; padding: 14px 16px !important; }
+html.sh-native-auth main .alert-danger { color: #a81e32 !important; background: #fff1f2 !important; border: 1px solid #f2c7cf !important; }
+html.sh-native-auth main .text-muted, html.sh-native-auth main small { color: var(--sh-auth-muted) !important; }
+#sh-native-auth-note { color: var(--sh-auth-muted); text-align: center; font-size: 12px; line-height: 1.55; margin: 34px 8px 0; }
+@media (max-height: 600px) { html.sh-native-auth main { padding-top: 18px !important; } #sh-native-auth-intro { margin-bottom: 22px; } #sh-native-auth-intro img { width: 48px; height: 48px; border-radius: 15px; } #sh-native-auth-intro .sh-auth-brand { margin-bottom: 12px; } }

@@ -1,0 +1,63 @@
+<!doctype html><meta charset="utf-8"><title>SH Chat isolated audio test peer</title>
+<script src="/livekit-client.umd.js"></script>
+<script>
+'use strict';
+const LK = LivekitClient;
+let room, context, oscillator, gain, localTrack, localPublication;
+const tracks = new Map(), events = [];
+const mark = (type, data={}) => events.push({at:performance.now(),type,...data});
+async function attachRemote(track, publication, participant) {
+  if (track.kind !== LK.Track.Kind.Audio) return;
+  const element = track.attach(); element.volume=0; document.body.appendChild(element); await element.play();
+  const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
+  const analyser = context.createAnalyser(); analyser.fftSize = 4096;
+  const processor = context.createScriptProcessor(1024,1,1), quiet = context.createGain(); quiet.gain.value=0;
+  const row = {track, publication, participant, element, source, analyser, processor, quiet, frames:0};
+  processor.onaudioprocess = event => { row.frames += event.inputBuffer.length; };
+  source.connect(analyser); analyser.connect(processor); processor.connect(quiet); quiet.connect(context.destination);
+  tracks.set(participant.identity,row); mark('track-subscribed',{identity:participant.identity,sid:publication.trackSid});
+}
+window.joinPeer = async ({url, token, frequency=440}) => {
+  if(room) await window.leavePeer();
+  context = new AudioContext({sampleRate:48000}); await context.resume();
+  room = new LK.Room({adaptiveStream:false,dynacast:false,disconnectOnPageLeave:true,
+    publishDefaults:{audioBitrate:64000,dtx:false,red:false,stopMicTrackOnMute:false}});
+  room.on(LK.RoomEvent.TrackSubscribed,attachRemote);
+  room.on(LK.RoomEvent.TrackUnsubscribed,(track,pub,part)=>{const row=tracks.get(part.identity);if(row){row.source.disconnect();row.processor.disconnect();row.element.remove();tracks.delete(part.identity);}mark('track-unsubscribed',{identity:part.identity});});
+  room.on(LK.RoomEvent.ParticipantDisconnected,p=>mark('participant-disconnected',{identity:p.identity}));
+  room.on(LK.RoomEvent.ConnectionStateChanged,s=>mark('connection', {state:s}));
+  room.on(LK.RoomEvent.Disconnected,r=>mark('disconnected',{reason:r}));
+  await room.connect(url,token,{autoSubscribe:true,rtcConfig:{iceTransportPolicy:'all',iceServers:[]}});
+  const destination=context.createMediaStreamDestination();
+  oscillator=context.createOscillator();oscillator.frequency.value=frequency;gain=context.createGain();gain.gain.value=.15;
+  oscillator.connect(gain);gain.connect(destination);oscillator.start();
+  localTrack=new LK.LocalAudioTrack(destination.stream.getAudioTracks()[0],undefined,true);
+  localPublication=await room.localParticipant.publishTrack(localTrack,{source:LK.Track.Source.Microphone,name:'isolated-generated-tone'});
+  mark('published',{sid:localPublication.trackSid});
+  return {identity:room.localParticipant.identity,sid:room.localParticipant.sid,trackSid:localPublication.trackSid,state:room.state};
+};
+window.peerSnapshot = async identity => {
+  const row=tracks.get(identity), inbound=[],outbound=[],transport=[],candidate=[];
+  const pick=stats=>{stats?.forEach(s=>{if(s.type==='inbound-rtp'&&s.kind==='audio')inbound.push({id:s.id,packets:s.packetsReceived,bytes:s.bytesReceived,samples:s.totalSamplesReceived,concealed:s.concealedSamples});if(s.type==='outbound-rtp'&&s.kind==='audio')outbound.push({id:s.id,packets:s.packetsSent,bytes:s.bytesSent});if(s.type==='transport')transport.push({dtlsState:s.dtlsState,selectedCandidatePairId:s.selectedCandidatePairId});if(s.type==='candidate-pair'&&s.state==='succeeded')candidate.push({state:s.state,nominated:s.nominated});});};
+  if(localTrack)pick(await localTrack.getRTCStatsReport());if(row)pick(await row.track.getRTCStatsReport());
+  let rms=0,frequency=0,power=-Infinity;
+  if(row){const samples=new Float32Array(row.analyser.fftSize);row.analyser.getFloatTimeDomainData(samples);rms=Math.sqrt(samples.reduce((s,v)=>s+v*v,0)/samples.length);const bins=new Float32Array(row.analyser.frequencyBinCount);row.analyser.getFloatFrequencyData(bins);for(let i=1;i<bins.length;i++){if(bins[i]>power){power=bins[i];frequency=i*context.sampleRate/row.analyser.fftSize;}}}
+  return {at:performance.now(),state:room?.state,identity:room?.localParticipant.identity,participantSid:room?.localParticipant.sid,
+    localAudioTrackSid:localPublication?.trackSid,customerAudioTrackSid:row?.publication.trackSid,frames:row?.frames||0,
+    inbound:inbound[0]||{},outbound:outbound[0]||{},transport,candidate,rms,frequency,power,trackCount:tracks.size,events:events.slice(-20)};
+};
+window.peerEvidence = async (join, sampleMs=700) => {
+  const before=await window.peerSnapshot(join.customerIdentity);await new Promise(resolve=>setTimeout(resolve,sampleMs));const after=await window.peerSnapshot(join.customerIdentity);
+  return {protocol:'sh-room-audio-v1',legId:join.legId,identity:after.identity,roomName:join.roomName,customerIdentity:join.customerIdentity,
+    participantSid:after.participantSid,localAudioTrackSid:after.localAudioTrackSid,customerAudioTrackSid:after.customerAudioTrackSid,
+    sampleDurationMs:after.at-before.at,sampleAgeMs:0,iceState:after.candidate.length?'succeeded':'unknown',dtlsState:after.transport.every(t=>t.dtlsState==='connected')&&after.transport.length?'connected':'unknown',
+    outbound:{packetsDelta:(after.outbound.packets||0)-(before.outbound.packets||0),bytesDelta:(after.outbound.bytes||0)-(before.outbound.bytes||0)},
+    inbound:{packetsDelta:(after.inbound.packets||0)-(before.inbound.packets||0),bytesDelta:(after.inbound.bytes||0)-(before.inbound.bytes||0),decodedFramesDelta:after.frames-before.frames},
+    decodedTone:{rms:after.rms,frequency:after.frequency},after};
+};
+window.hasRemoteTrack = identity=>tracks.has(identity);
+window.setSilence = value=>{gain.gain.value=value?0:.15;};
+window.setMute = async value=>value?localTrack.mute():localTrack.unmute();
+window.faultScenario = (scenario,argument)=>room.simulateScenario(scenario,argument);
+window.leavePeer = async()=>{if(room)await room.disconnect();if(oscillator){try{oscillator.stop();}catch{}}if(context&&context.state!=='closed')await context.close();tracks.clear();room=null;};
+</script>

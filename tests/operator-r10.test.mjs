@@ -1395,6 +1395,7 @@ test3("actual patched worker notifies photo-only messages then stops before AI i
   const source = await readFile2(new URL("../../server.js", new URL("./operator-storage/operator-android-push.test.js", import.meta.url).href), "utf8");
   const code = source.slice(source.indexOf("async function aiModeProcessWorkerMessage("), source.indexOf("async function aiModeBackgroundTick("));
   const helper = source.slice(source.indexOf("function aiModeHasWorkerAttachments("), source.indexOf("function aiModeMessagePlainText("));
+  const leaseHelpers = source.slice(source.indexOf("function aiModeCaptureLease("), source.indexOf("function aiModeSafeString("));
   for (const mode of ["manual", "assist", "chat", "zapier"]) {
     const pushed = [], processed = [];
     const context = {
@@ -1419,7 +1420,7 @@ test3("actual patched worker notifies photo-only messages then stops before AI i
         throw Error("Must not invoke AI for attachment-only messages");
       }, "aiModeCallLocalDecisionEngine")
     };
-    vm.runInNewContext(helper + code + ";this.process=aiModeProcessWorkerMessage;", context);
+    vm.runInNewContext(leaseHelpers + helper + code + ";this.process=aiModeProcessWorkerMessage;", context);
     const result = await context.process({ uid: 1, userContext: {}, channel: { id: 123 }, messages: [], latestCustomerMessage: { id: 456, date: new Date(NOW3).toISOString(), body: "", attachment_ids: [77] } });
     assert4.equal(result.attachment_only, true);
     assert4.equal(pushed.length, 1);
@@ -2559,11 +2560,12 @@ test7("join tokens use official SDK, exact room, microphone-only publishing and 
 test7("source detach revokes only that operator and never invokes customer disconnect", async () => {
   await withSdkTransport(async (provider, calls) => {
     const identity = operatorIdentity2("device-a", "leg-a");
+    provider.now = () => 18e11;
     await provider.detachOperator({ roomName: "room-1", identity, revokeBeforeMs: 18e11 });
     assert8.equal(calls.length, 1);
     assert8.equal(calls[0].path, "/twirp/livekit.RoomService/RemoveParticipant");
     assert8.equal(calls[0].body.identity, identity);
-    assert8.equal(calls[0].body.revokeTokenTs, "1800000060");
+    assert8.equal(calls[0].body.revokeTokenTs, "1800000001");
     await assert8.rejects(provider.detachOperator({ roomName: "room-1", identity: customerIdentity2("call-1") }), { code: "INVALID_OPERATOR_LEG" });
     assert8.equal(calls.length, 1);
   });

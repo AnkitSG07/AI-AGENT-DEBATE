@@ -1,0 +1,110 @@
+TAP version 13
+# Subtest: actual push handlers are never entered for anonymous or native control requests
+ok 1 - actual push handlers are never entered for anonymous or native control requests
+  ---
+  duration_ms: 8.21349
+  ...
+# Subtest: actual subscribe uses the signed actor instead of submitted device and lock identities
+ok 2 - actual subscribe uses the signed actor instead of submitted device and lock identities
+  ---
+  duration_ms: 4.655023
+  ...
+# Subtest: an authenticated current subscription owner can update keys and remove its exact endpoint
+ok 3 - an authenticated current subscription owner can update keys and remove its exact endpoint
+  ---
+  duration_ms: 4.243163
+  ...
+# Subtest: endpoint-only unsubscribe by another authenticated operator is denied without a storage write
+ok 4 - endpoint-only unsubscribe by another authenticated operator is denied without a storage write
+  ---
+  duration_ms: 3.550366
+  ...
+# Subtest: subscribe takeover with endpoint but unrelated valid subscription keys is denied atomically
+ok 5 - subscribe takeover with endpoint but unrelated valid subscription keys is denied atomically
+  ---
+  duration_ms: 3.226445
+  ...
+# Subtest: both subscription auth and public-key proofs are required for subscribe and unsubscribe migration
+ok 6 - both subscription auth and public-key proofs are required for subscribe and unsubscribe migration
+  ---
+  duration_ms: 6.31151
+  ...
+# Subtest: same-browser key possession permits reauthentication migration and then denies the previous actor endpoint-only access
+ok 7 - same-browser key possession permits reauthentication migration and then denies the previous actor endpoint-only access
+  ---
+  duration_ms: 3.427903
+  ...
+# Subtest: an unbound legacy subscription can migrate only with both exact existing keys, including equivalent base64 encodings
+ok 8 - an unbound legacy subscription can migrate only with both exact existing keys, including equivalent base64 encodings
+  ---
+  duration_ms: 3.778083
+  ...
+# Subtest: unsubscribe migration proof is bound to the exact endpoint selected for removal
+ok 9 - unsubscribe migration proof is bound to the exact endpoint selected for removal
+  ---
+  duration_ms: 3.179576
+  ...
+# Subtest: ownership helper rejects native or absent actors even when subscription keys match
+ok 10 - ownership helper rejects native or absent actors even when subscription keys match
+  ---
+  duration_ms: 2.607697
+  ...
+# Subtest: actual SSE handler independently refuses missing, non-browser, expired and invalid authorization
+ok 11 - actual SSE handler independently refuses missing, non-browser, expired and invalid authorization
+  ---
+  duration_ms: 2.912008
+  ...
+# Subtest: SSE uses the signed browser actor and cannot substitute another operator presence via query aliases
+ok 12 - SSE uses the signed browser actor and cannot substitute another operator presence via query aliases
+  ---
+  duration_ms: 3.130322
+  ...
+# Subtest: SSE refuses wrong origin, wrong presence source and HEAD without leaving stream resources
+ok 13 - SSE refuses wrong origin, wrong presence source and HEAD without leaving stream resources
+  ---
+  duration_ms: 3.030314
+  ...
+# Subtest: SSE expires at its exact opening capability deadline and clears heartbeat, timeout and client map
+ok 14 - SSE expires at its exact opening capability deadline and clears heartbeat, timeout and client map
+  ---
+  duration_ms: 2.898769
+  ...
+# Subtest: replaced SSE stream closes once and delayed old cleanup cannot close the newer client
+ok 15 - replaced SSE stream closes once and delayed old cleanup cannot close the newer client
+  ---
+  duration_ms: 3.226696
+  ...
+# Subtest: SSE abort, response close and response error each release every owned resource
+ok 16 - SSE abort, response close and response error each release every owned resource
+  ---
+  duration_ms: 8.180683
+  ...
+# Subtest: SSE heartbeat closes a stream whose canonical browser presence has expired
+ok 17 - SSE heartbeat closes a stream whose canonical browser presence has expired
+  ---
+  duration_ms: 2.357116
+  ...
+# Subtest: SSE backpressure on ready, heartbeat or a hint closes rather than growing a response buffer
+ok 18 - SSE backpressure on ready, heartbeat or a hint closes rather than growing a response buffer
+  ---
+  duration_ms: 7.109023
+  ...
+# Subtest: actual SSE hints deduplicate IDs and never include raw events, SDP, customer details or credentials
+ok 19 - actual SSE hints deduplicate IDs and never include raw events, SDP, customer details or credentials
+  ---
+  duration_ms: 2.882474
+  ...
+# Subtest: authenticated native history is explicitly version-marked and projects out SDP, tokens and raw provider data
+ok 20 - authenticated native history is explicitly version-marked and projects out SDP, tokens and raw provider data
+  ---
+  duration_ms: 2.36643
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 97.431064

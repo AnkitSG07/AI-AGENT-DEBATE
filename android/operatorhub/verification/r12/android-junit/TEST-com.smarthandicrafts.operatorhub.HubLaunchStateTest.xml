@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.HubLaunchStateTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:21" hostname="ca82e965341e" time="0.004">
+  <properties/>
+  <testcase name="earlyHubReadyWaitsForFallbackScriptBeforeRevealingOrDispatching" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.001"/>
+  <testcase name="normalOdooWorkIsPreservedAfterHubReady" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="oldWebviewCanRevealAVisibleHubOnlyAfterPageFinish" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.001"/>
+  <testcase name="visualCallbackForPreviousPageCannotRevealNewPage" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="freshInstallRequiresFinishedAndStyledRealLogin" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="loggedInRedirectWaitsForHubReadyAndPageFinish" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="delayedScriptCallbackCannotPrepareAnotherNavigation" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.001"/>
+  <testcase name="confirmedVisualFallbackEndsLoginRoutingWithoutInventingABridge" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="expiredSuccessfulSessionGetsOneAutomaticRecovery" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="onlyTrustedHubCanCompleteAuthenticationGate" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="hubFinishedBeforeReadyStaysBehindNativeCover" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <testcase name="deniedAccountDoesNotRepeatLoginForever" classname="com.smarthandicrafts.operatorhub.HubLaunchStateTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

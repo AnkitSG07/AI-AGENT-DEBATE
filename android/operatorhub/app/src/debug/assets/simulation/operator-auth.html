@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Connect SH Chat</title>
+<style nonce="__SH_OPERATOR_AUTH_NONCE__">
+:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#14242b;background:#f1f4f2;color-scheme:light dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(100%,430px);background:#fff;border-radius:28px;padding:32px;box-shadow:0 16px 56px #113b2920}.brand{color:#00876b;font-size:14px;font-weight:700;letter-spacing:.03em}h1{font-size:28px;line-height:1.15;margin:18px 0 10px}p{color:#60747f;line-height:1.5;font-size:15px}label{display:block;font-size:14px;font-weight:600;margin:20px 0 8px}select,input,button{font:inherit;width:100%;min-height:48px;border-radius:13px}select,input{padding:10px 12px;background:#f4f7f5;color:inherit;border:1px solid #dce5df}button{border:0;padding:12px 18px;background:#00876b;color:#fff;font-weight:650;cursor:pointer;margin-top:20px}button:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #5cbe9a;outline-offset:3px}.quiet{background:transparent;color:#00876b;border:1px solid #b6d5c8}#status{margin:20px 0 0;white-space:pre-wrap}small{display:block;color:#60747f;line-height:1.5;margin-top:22px}.hidden{display:none!important}@media(prefers-color-scheme:dark){:root{background:#0b141a;color:#e9edef}.card{background:#111b21;box-shadow:0 16px 56px #0005}p,small{color:#a7b5bd}.brand{color:#4bd6ad}select,input{background:#202c33;border-color:#3a4a51}.quiet{color:#4bd6ad;border-color:#3d665b}}
+</style></head><body><main class="card"><div class="brand">SMART HANDICRAFTS® · SH CHAT</div><h1>Connect call controls</h1><p>Sign in with your operator profile to use customer calls in the Hub.</p><p id="status" role="status" aria-live="polite">Checking the Hub connection…</p><form id="form" class="hidden"><label for="profile">Operator profile</label><select id="profile"><option>Smart handicrafts</option><option>SUDO</option></select><label for="password">Profile password</label><input id="password" type="password" autocomplete="current-password" maxlength="1024" required><button id="submit" type="submit">Sign in and connect</button></form><button id="continue" class="quiet hidden" type="button">Continue with this signed-in profile</button><small>Your Odoo login stays in the Hub. This window connects the protected call service. Close it to cancel.</small></main>
+<script id="public-config" type="application/json" nonce="__SH_OPERATOR_AUTH_NONCE__">__SH_OPERATOR_AUTH_PUBLIC_CONFIG__</script>
+<script nonce="__SH_OPERATOR_AUTH_NONCE__">(() => {
+  'use strict';
+  const by = id => document.getElementById(id), status = message => { by('status').textContent = message; };
+  let config, targetOrigin, state, previousToken = '', contextReceived = false, busy = false, delivered = false, startNewSession = false;
+  try {
+    config = JSON.parse(by('public-config').textContent);
+    const query = new URLSearchParams(location.search);
+    targetOrigin = query.get('origin'); state = query.get('state');
+    if (config.backendOrigin !== location.origin || !config.allowedHubOrigins.includes(targetOrigin) ||
+        !/^[A-Za-z0-9_-]{32,128}$/.test(state || '') || [...query.keys()].some(key => !['origin','state'].includes(key)) || !window.opener) throw Error();
+  } catch { status('Open this sign-in window from the Smart Handicrafts Hub.'); return; }
+  async function api(path, body) {
+    const response = await fetch(path, { method:'POST', credentials:'same-origin', cache:'no-store',
+      headers:{'Content-Type':'application/json','X-SH-Operator-Auth':'1'}, body:JSON.stringify(body) });
+    let data; try { data = await response.json(); } catch { throw Object.assign(Error('The sign-in service is unavailable.'),{status:response.status}); }
+    if (!response.ok || data.ok === false) throw Object.assign(Error(typeof data.error === 'string' ? data.error.slice(0,300) : 'Could not connect this operator profile.'),{status:response.status,code:data.code});
+    return data;
+  }
+  function loading(value) { busy = value; by('submit').disabled = value; by('continue').disabled = value; }
+  async function connect() {
+    if (busy || delivered) return;
+    if (!contextReceived) { status('Waiting for the Hub to confirm this window.'); return; }
+    loading(true); status('Connecting secure call controls…');
+    try {
+      const result = await api('/api/operator-browser-auth/token', {origin:targetOrigin,...(previousToken ? {previousToken} : {})});
+      if (typeof result.token !== 'string' || !result.token.startsWith('shb1.') || !Number.isSafeInteger(result.expiresAt) ||
+          result.expiresAt <= Date.now() || !/^web_[a-f0-9]{32}::tab_[a-f0-9]{24}$/.test(result.operatorDeviceId || '')) throw Error('The sign-in response was incomplete.');
+      window.opener.postMessage({type:'sh-operator-browser-auth',state,token:result.token,expiresAt:result.expiresAt,
+        authExpiresAt:result.authExpiresAt,operatorDeviceId:result.operatorDeviceId,baseDeviceId:result.baseDeviceId,operatorSessionId:result.operatorSessionId},targetOrigin);
+      delivered = true; previousToken = ''; by('form').classList.add('hidden'); by('continue').classList.add('hidden');
+      status('Connected. You can return to SH Chat.'); window.close();
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) { by('form').classList.remove('hidden'); by('continue').classList.add('hidden'); }
+      if (previousToken && ['BROWSER_CAPABILITY_EXPIRED','PROFILE_CHANGED'].includes(error.code)) {
+        startNewSession = true; by('continue').textContent = 'Start a new call session'; by('continue').classList.remove('hidden');
+      }
+      status(error.message || 'Could not connect. Please try again.');
+    } finally { loading(false); }
+  }
+  window.addEventListener('message', event => {
+    if (contextReceived || delivered || event.source !== window.opener || event.origin !== targetOrigin ||
+        event.data?.type !== 'sh-operator-auth-context' || event.data.state !== state) return;
+    const supplied = event.data.previousToken;
+    if (supplied !== undefined && (typeof supplied !== 'string' || supplied.length > 4096 || supplied && !supplied.startsWith('shb1.'))) return;
+    previousToken = supplied || ''; contextReceived = true; by('continue').classList.remove('hidden'); void connect();
+  });
+  by('continue').addEventListener('click', () => {
+    if (startNewSession) { previousToken = ''; startNewSession = false; by('continue').textContent = 'Continue with this signed-in profile'; }
+    void connect();
+  });
+  by('form').addEventListener('submit', async event => {
+    event.preventDefault(); if (busy || delivered) return;
+    if (!contextReceived) { status('Waiting for the Hub to confirm this window.'); return; }
+    loading(true); const password = by('password').value; by('password').value = ''; status('Signing in…');
+    try {
+      await api('/api/profile-login', {profile:by('profile').value,password});
+      loading(false); await connect();
+    } catch (error) { status(error.message || 'Sign-in failed. Please try again.'); }
+    finally { loading(false); }
+  });
+  status('Waiting for the Hub to confirm this window.');
+  window.opener.postMessage({type:'sh-operator-auth-ready',state},targetOrigin);
+})();
+</script></body></html>

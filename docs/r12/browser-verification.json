@@ -1,0 +1,106 @@
+{
+  "scope": "Offline Chromium and VM simulations; all network requests mocked; no production or phone test",
+  "embedSha256": "e4a501acae8c119dbe181ee4efc7b4815c9927bda7a567a0e7bce2b4900d2e9f",
+  "suites": [
+    {
+      "log": "ui-r12-tests.tap",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "operator-android/test-native-room-bridge.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 27,
+      "expected": 27,
+      "passed": true
+    },
+    {
+      "log": "embed-r12-tests.tap",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "hub-r12/tests/native-embed-r12.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 11,
+      "expected": 11,
+      "passed": true
+    },
+    {
+      "log": "hub-ui-r12-tests.tap",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "hub-r12/tests/hub-ui-r12.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 16,
+      "expected": 16,
+      "passed": true
+    },
+    {
+      "log": "transport-r12-tests.tap",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "hub-r12/tests/transport-r12.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 18,
+      "expected": 18,
+      "passed": true
+    },
+    {
+      "log": "notification-setup-r12-tests.tap",
+      "command": [
+        "node",
+        "--test",
+        "--test-reporter=tap",
+        "hub-r12/tests/notification-setup-r12.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 10,
+      "expected": 10,
+      "passed": true
+    },
+    {
+      "log": "legacy-hub-r12.log",
+      "command": [
+        "node",
+        "hub-r12/tests/legacy-hub-r12.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 15,
+      "expected": 15,
+      "passed": true
+    },
+    {
+      "log": "frontend-transfer-r12.log",
+      "command": [
+        "node",
+        "hub-r12/tests/frontend-transfer-r9.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 14,
+      "expected": 14,
+      "passed": true
+    },
+    {
+      "log": "android-transfer-guard-r12.log",
+      "command": [
+        "node",
+        "hub-r12/tests/android-transfer-guard.test.cjs"
+      ],
+      "exitCode": 0,
+      "tests": 13,
+      "expected": 13,
+      "passed": true
+    }
+  ],
+  "tests": 124,
+  "passed": true
+}

@@ -1,0 +1,105 @@
+{
+  "release": "1.0-r12",
+  "versionCode": 12,
+  "packageName": "com.smarthandicrafts.operatorhub",
+  "createdAtUtc": "2026-10-29T19:33:56.007820+00:00",
+  "status": "unsigned_candidate_requires_original_signing_key",
+  "apk": {
+    "file": "SH-Chat-1.0-r12-unsigned.apk",
+    "bytes": 59469402,
+    "sha256": "f78e82079781a28d16f125038198b98d0b3d78468dd28c8e94ef6e11a7dab5cd",
+    "signed": false,
+    "installable": false,
+    "zipAlignment16KiBPassed": true,
+    "minSdk": 26,
+    "targetSdk": 35,
+    "compileSdk": 35
+  },
+  "requiredOriginalCertificateSha256": "c1ca4799a7c1ff26ed2e188f3622d6b3b6144450ba656fde6f438629e75c4382",
+  "baselineR11": {
+    "sha256": "30d6eef46dcb4553d9b7f9792af6e8f15c76b3ede8d4e8c1d7841154c3b7f5a4",
+    "signatureVerified": true,
+    "purpose": "Original update identity only; not an R12 signature"
+  },
+  "unitTests": {
+    "tests": 147,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "variant": "release",
+    "suites": 19,
+    "evidence": "verification/r12/android-junit"
+  },
+  "build": {
+    "releaseAssembled": true,
+    "releaseVitalLintPassed": true,
+    "tasks": [
+      ":app:testReleaseUnitTest",
+      ":app:assembleRelease"
+    ],
+    "javaMajor": 17,
+    "gradle": "8.11.1",
+    "androidBuildTools": "35.0.0",
+    "liveKitAndroid": "2.29.2",
+    "workManager": "2.10.1",
+    "robolectric": "4.14.1",
+    "log": "verification/r12/android-release-build.log"
+  },
+  "sourceCodeSha256": "920f67de7291dbce7dc348d97f13f1949c81de67e6716ac278aae0a1a7ed8452",
+  "sourceCodeHashAlgorithm": "SHA256 of sorted compact JSON {relative_path: SHA256(file)} for app/src, tests, Gradle wrapper/build files and bridge test",
+  "sourceCodeFiles": 92,
+  "sourceCodeAllAtOrBeforeApkBuild": true,
+  "uiCheck": {
+    "type": "Robolectric native graphics render",
+    "widthDp": 320,
+    "heightDp": 480,
+    "fontScale": 1.8,
+    "endVisible": true,
+    "visuallyInspected": true,
+    "evidence": "verification/r12/call-320x480-large-font.png"
+  },
+  "physicalVerification": {
+    "whatsAppAudio": "not_tested",
+    "twoPhoneTransfer": "not_tested",
+    "fcmTiming": "not_tested",
+    "lockedBackground": "not_tested",
+    "bluetoothAndNetworkSwitch": "not_tested"
+  },
+  "productionMutationsByAndroidTests": false,
+  "customerCallsOrLivePushTests": false,
+  "currentDeployedOdooEmbedAuthenticated": "not_verified",
+  "backendRequirement": {
+    "protectedHistoryMarker": "X-SH-Call-History: sh-call-history-v1",
+    "mediaProtocol": "sh-room-audio-v1",
+    "rollout": "matching protected R12 backend before updated call-history reads"
+  },
+  "limitations": [
+    "Unsigned until the original signing key is supplied; no new identity was generated.",
+    "CallStyle is implemented; Core-Telecom and headset hardware answer/end are not implemented.",
+    "Local simulations do not establish phone audio quality, notification latency or continuity."
+  ],
+  "historicalEvidence": "verification/baseline-r11",
+  "publicFirebaseClientConfigRetained": true,
+  "exclusions": [
+    "signing keys/passwords",
+    "Firebase Admin service-account private keys",
+    "server secrets",
+    "enrollment codes",
+    "local.properties",
+    "build outputs",
+    "dependency caches",
+    "APK binaries from source archive"
+  ],
+  "sourceArchive": {
+    "file": "SH-Chat-r12-source.zip",
+    "bytes": 386464,
+    "sha256": "0263ec6b12a3cc8800e59b9b9b2094ad03530090cc95eefb93e1a86665af118f",
+    "entries": 144,
+    "manifestSha256": "f0d9014706173fd095e146624b81fe7da822aec1194b0a70a519032b4eeaccca"
+  },
+  "guide": {
+    "file": "SH-Chat-r12-guide.md",
+    "sha256": "7dc91e389316adbd8686b44fae9926e447f908e2f422209998e1ab817610cfc7"
+  },
+  "repositorySourcePath": "android/operatorhub"
+}

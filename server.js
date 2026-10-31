@@ -2,8 +2,15 @@ import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
 import { createOperatorFirestoreRuntime } from "./operator-firestore-runtime.js";
 import { createOperatorMediaGateway, nativeCallHistoryEvent } from "./operator-media-gateway.js";
+import { createNativeCallRuntime } from "./call-runtime/startup.mjs";
+import { createOperatorCallPermission } from "./operator-call-permission.js";
 import { registerOperatorAdminRoutes } from "./operator-admin.js";
 import { createOperatorReportingRuntime } from "./operator-reporting-runtime.js";
+import { createOperatorBrowserAuth, createProfileLoginLimiter, constantTimePasswordEqual } from "./operator-browser-auth.js";
+import { assertPushSubscriptionOwner } from "./operator-push-ownership.js";
+import { createOperatorDocumentLinks, safeDocumentRedirect, documentContentDisposition } from "./operator-document-links.js";
+import { createOperatorAiReplyAuth } from "./operator-ai-reply-auth.js";
+import { createOdooHandoverDispatcher } from "./operator-handover.js";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import PDFDocument from "pdfkit";
@@ -14,7 +21,12 @@ import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPla
 
 dotenv.config();
 
-const SERVER_PATCH_VERSION = "2026-10-29-operator-hub-r10-native-audio";
+const SERVER_PATCH_VERSION = "2026-10-30-operator-hub-r13-private-integrations";
+const EXPECTED_HUB_UI_BUILD = "2026.10.30-ui-r13";
+// Render supplies this non-secret release identity. Omit malformed values;
+// never expose arbitrary environment data through the public version route.
+const SERVER_BUILD_COMMIT = /^[a-f0-9]{40,64}$/i.test(process.env.RENDER_GIT_COMMIT || "")
+  ? process.env.RENDER_GIT_COMMIT.toLowerCase() : null;
 console.log("Server patch version:", SERVER_PATCH_VERSION);
 
 const app = express();
@@ -80,11 +92,48 @@ app.use((req, res, next) => {
   next();
 });
 
+// Register before static files and every legacy call/push handler. The native
+// registry is initialized before listen(); this callback never trusts browser
+// presence, an Odoo user ID or Origin as a device credential.
+const operatorDocumentLinks = createOperatorDocumentLinks({ secret: process.env.PROFILE_SESSION_SECRET || "" });
+const operatorBrowserAuth = createOperatorBrowserAuth({
+  secret: process.env.PROFILE_SESSION_SECRET || "",
+  readProfileSession,
+  allowedHubOrigins: allowedOrigins,
+  authorizeDocumentLink: operatorDocumentLinks.authorize,
+  authenticateNative: async rawBearer => {
+    if (!operatorFirestoreRuntime.deviceRegistry) throw new Error("Device authentication is unavailable.");
+    return operatorFirestoreRuntime.deviceRegistry.authenticate(rawBearer);
+  }
+});
+const profileLoginLimiter = createProfileLoginLimiter();
+operatorBrowserAuth.registerRoutes(app);
+app.use(operatorBrowserAuth.guard);
+
+// Public release identity only. This reports this backend, not which Odoo
+// embed or APK a particular operator is currently running.
+app.get("/api/operator-app/version", (req, res) => {
+  setOperatorNoStoreHeaders(res);
+  res.json({
+    ok: true,
+    version: SERVER_PATCH_VERSION,
+    expected_hub_ui_version: "r13",
+    expected_hub_ui_build: EXPECTED_HUB_UI_BUILD,
+    build_commit: SERVER_BUILD_COMMIT,
+    native_room_protocol: "sh-room-audio-v1",
+    native_history_protocol: "sh-call-history-v1",
+    browser_auth_protocol: "sh-operator-browser-auth-v1",
+    private_integration_protocol: "sh-private-integrations-v1"
+  });
+});
+
 app.use(express.static("public", {
   setHeaders: (res, filePath) => {
     const p = String(filePath || "");
     if (
       p.endsWith("operator-notifications.html") ||
+      p.endsWith("operator-browser-auth.js") ||
+      p.endsWith("operator-notifications-auth.js") ||
       p.endsWith("sh-operator-sw.js") ||
       p.endsWith("manifest.json")
     ) {
@@ -290,7 +339,7 @@ function googleContactsNowMs() {
 function cleanGoogleContactsOAuthStates() {
   const nowMs = googleContactsNowMs();
   for (const [state, expiresAt] of googleContactsOAuthStates.entries()) {
-    if (!expiresAt || expiresAt <= nowMs) googleContactsOAuthStates.delete(state);
+    if (!expiresAt?.expiresAt || expiresAt.expiresAt <= nowMs) googleContactsOAuthStates.delete(state);
   }
 }
 
@@ -676,7 +725,7 @@ function zohoNowMs() {
 function cleanZohoOAuthStates() {
   const nowMs = zohoNowMs();
   for (const [state, expiresAt] of zohoOAuthStates.entries()) {
-    if (!expiresAt || expiresAt <= nowMs) zohoOAuthStates.delete(state);
+    if (!expiresAt?.expiresAt || expiresAt.expiresAt <= nowMs) zohoOAuthStates.delete(state);
   }
 }
 
@@ -730,17 +779,14 @@ async function getZohoAccessToken({ force = false } = {}) {
   }
 
   const resp = await fetch(
-    zohoTokenUrl({
-      refresh_token: ZOHO_MAIL_REFRESH_TOKEN,
-      grant_type: "refresh_token",
-      client_id: ZOHO_MAIL_CLIENT_ID,
-      client_secret: ZOHO_MAIL_CLIENT_SECRET
-    }),
+    zohoTokenUrl(),
     {
       method: "POST",
       headers: {
-        Accept: "application/json"
-      }
+        Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ refresh_token: ZOHO_MAIL_REFRESH_TOKEN,
+        grant_type: "refresh_token", client_id: ZOHO_MAIL_CLIENT_ID, client_secret: ZOHO_MAIL_CLIENT_SECRET })
     }
   );
 
@@ -778,7 +824,7 @@ async function zohoMailRequest(path, {
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
 
-  if (resp.status === 401 && retryOnAuth) {
+  if (resp.status === 401 && retryOnAuth && ['GET', 'HEAD'].includes(String(method).toUpperCase())) {
     zohoAccessTokenCache.token = "";
     zohoAccessTokenCache.expiresAt = 0;
     const refreshedToken = await getZohoAccessToken({ force: true });
@@ -5584,6 +5630,20 @@ function chooseOdooSelectionValue(options = [], desired, fallbackCandidates = []
   return options[0].value;
 }
 
+function chooseOdooTrainingAuthority(options, desired, kind) {
+  const allowed = kind === 'status' ? ['approved', 'pending', 'rejected'] : ['admin', 'public'];
+  const wanted = canonicalTrainingSelection(kind, desired);
+  if (!allowed.includes(wanted) || !Array.isArray(options) || !options.length)
+    throw new Error(`Odoo training ${kind} selection is not configured for ${wanted}.`);
+  const byValue = options.find(option => canonicalTrainingSelection(kind, option.value) === wanted);
+  // A label may describe a custom Odoo selection key, but must never override a
+  // different recognized authority value (for example approved labelled Pending).
+  const match = byValue || options.find(option => !allowed.includes(canonicalTrainingSelection(kind, option.value)) &&
+    canonicalTrainingSelection(kind, option.label) === wanted);
+  if (!match) throw new Error(`Odoo training ${kind} selection is not configured for ${wanted}.`);
+  return match.value;
+}
+
 
 function canonicalAiKnowledgeType(value = "") {
   const normalized = normalizeOdooSelection(value);
@@ -6239,17 +6299,10 @@ async function createOdooAiTrainingRule({
   const uid = await odooLoginCached();
   const selectionValues = await getAiTrainingSelectionValues();
 
-  const safeStatus = chooseOdooSelectionValue(
-    selectionValues.status,
-    status,
-    ["approved", "Approved", "APPROVED"]
-  );
-
-  const safeSource = chooseOdooSelectionValue(
-    selectionValues.source,
-    source,
-    ["admin", "Admin", "ADMIN"]
-  );
+  // Never silently promote public pending feedback into approved admin rules
+  // because a selection value is missing in the current Odoo model.
+  const safeStatus = chooseOdooTrainingAuthority(selectionValues.status, status, 'status');
+  const safeSource = chooseOdooTrainingAuthority(selectionValues.source, source, 'source');
 
   const safeCategory = chooseOdooSelectionValue(
     selectionValues.category,
@@ -13045,8 +13098,19 @@ app.get("/kit-ai-knowledge-status", async (req, res) => {
 
 
 // Auto-approved chat training route. Hidden command route used by /train in the embed.
+function authorizeTrainingApproval(req) {
+  const expected = process.env.TRAINING_ADMIN_KEY || '';
+  if (expected && constantTimePasswordEqual(req.headers?.['x-training-admin-key'] || req.body?.adminKey, expected)) return 'training_administrator';
+  const profile = readProfileSession(req);
+  const configured = String(process.env.PROFILE_SESSION_SECRET || '').replace(/\s/g, '').length >= 32;
+  if (configured && profile?.profile === 'SUDO' && req.headers?.origin === 'https://ai-agent-debate.onrender.com' &&
+      /^application\/json(?:\s*;|$)/i.test(req.headers?.['content-type'] || '')) return 'SUDO';
+  return '';
+}
 app.post("/kit-ai-train", async (req, res) => {
   try {
+    const approvedActor = authorizeTrainingApproval(req);
+    if (!approvedActor) return res.status(401).json({ ok: false, error: 'Administrator authorization is required to approve training.' });
     const {
       ruleText,
       relatedSku = "",
@@ -13064,7 +13128,7 @@ app.post("/kit-ai-train", async (req, res) => {
       relatedSku,
       pageUrl,
       userMessage,
-      approvedBy,
+      approvedBy: approvedActor,
       approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
       active: true
     });
@@ -13123,6 +13187,8 @@ app.post("/kit-ai-feedback", async (req, res) => {
 
 app.post("/kit-ai-admin-train", async (req, res) => {
   try {
+    const approvedActor = authorizeTrainingApproval(req);
+    if (!approvedActor) return res.status(401).json({ ok: false, error: 'Administrator authorization is required to approve training.' });
     const {
       adminKey,
       ruleText,
@@ -13133,14 +13199,6 @@ app.post("/kit-ai-admin-train", async (req, res) => {
       approvedBy = "admin"
     } = req.body || {};
 
-    const expectedKey = process.env.TRAINING_ADMIN_KEY || "";
-    if (!expectedKey || adminKey !== expectedKey) {
-      return res.status(401).json({
-        ok: false,
-        error: "Unauthorized"
-      });
-    }
-
     const result = await createOdooAiTrainingRule({
       ruleText,
       status: "approved",
@@ -13149,7 +13207,7 @@ app.post("/kit-ai-admin-train", async (req, res) => {
       relatedSku,
       pageUrl,
       userMessage,
-      approvedBy,
+      approvedBy: approvedActor,
       approvedDate: new Date().toISOString().slice(0, 19).replace("T", " "),
       active: true
     });
@@ -14350,10 +14408,9 @@ const processedWebhookEvents = new Map();
 async function handleSaleConfirmed(req, res) {
   try {
     const secret = process.env.ODOO_WEBHOOK_SECRET;
-    if (secret) {
-      const got = req.headers["x-odoo-secret"];
-      if (got !== secret) return res.status(401).json({ error: "Unauthorized" });
-    }
+    if (!secret) return res.status(503).json({ ok: false, error: "Odoo webhook authentication is not configured." });
+    if (!constantTimePasswordEqual(req.headers["x-odoo-secret"], secret))
+      return res.status(401).json({ ok: false, error: "Unauthorized" });
 
     const { sale_order_ref, sale_order_id, big_box, event_id } = req.body || {};
     const ref = sale_order_ref ? String(sale_order_ref) : null;
@@ -14679,7 +14736,8 @@ app.get("/google-contacts/auth", (req, res) => {
 
     cleanGoogleContactsOAuthStates();
     const state = randomUUID();
-    googleContactsOAuthStates.set(state, googleContactsNowMs() + 10 * 60 * 1000);
+    googleContactsOAuthStates.set(state, { expiresAt: googleContactsNowMs() + 10 * 60 * 1000,
+      profile: req.operatorAuth.profile, sessionExpiresAt: req.operatorAuth.authExpiresAt });
 
     const authorizeUrl =
       GOOGLE_CONTACTS_AUTH_BASE +
@@ -14715,7 +14773,8 @@ app.get("/google-contacts/callback", async (req, res) => {
     const state = String(req.query.state || "").trim();
 
     if (!code) throw new Error("Missing Google authorization code.");
-    if (!state || !googleContactsOAuthStates.has(state)) {
+    const issued = googleContactsOAuthStates.get(state);
+    if (!state || !issued || issued.profile !== req.operatorAuth?.profile || issued.sessionExpiresAt !== req.operatorAuth?.authExpiresAt) {
       throw new Error("Invalid/expired Google OAuth state. Start again from /google-contacts/auth.");
     }
     googleContactsOAuthStates.delete(state);
@@ -14912,7 +14971,6 @@ function normalizeDocumentRecord(row = {}) {
     file_size: Number(row.file_size || 0) || 0,
     url: safeDocString(row.url || "", 2000),
     access_url: safeDocString(row.access_url || "", 2000),
-    access_token: safeDocString(row.access_token || row.document_token || "", 400),
     access_via_link: safeDocString(row.access_via_link || "", 80),
     access_internal: safeDocString(row.access_internal || "", 80),
     user_permission: safeDocString(row.user_permission || "", 80),
@@ -14933,23 +14991,18 @@ function normalizeDocumentRecord(row = {}) {
 
 function documentPublicUrl(doc, mode = ODOO_DOCUMENT_PUBLIC_LINK_MODE) {
   if (!doc) return "";
-  const appUrl = String(process.env.APP_URL || "").replace(/\/$/, "");
+  if (doc.is_folder) return "";
+  // Always return the exact signed backend route, including URL documents.
+  // Its read handler validates the grant before any safe HTTPS redirect.
+  return doc.id ? operatorDocumentLinks.issue(doc.id, "view").url : "";
+}
 
-  if (doc.is_url && doc.url) return doc.url;
-
-  if (mode === "odoo" && doc.access_url) {
-    if (/^https?:\/\//i.test(doc.access_url)) return doc.access_url;
-    const base = String(ODOO_URL || "").replace(/\/$/, "");
-    if (base) return `${base}${doc.access_url}`;
-  }
-
-  if (appUrl && doc.id) return `${appUrl}/api/odoo-documents/view/${encodeURIComponent(doc.id)}`;
-
-  if (doc.attachment_id && ODOO_URL) {
-    return `${String(ODOO_URL).replace(/\/$/, "")}/web/content/${encodeURIComponent(doc.attachment_id)}?download=false`;
-  }
-
-  return doc.access_url || doc.url || "";
+function documentOperatorDto(row) {
+  const doc = normalizeDocumentRecord(row);
+  if (doc.is_folder) return doc;
+  const download = operatorDocumentLinks.issue(doc.id, "download");
+  return { ...doc, view_url: documentPublicUrl(doc), download_url: download.url,
+    link_expires_at: new Date(download.expiresAt).toISOString() };
 }
 
 async function readOdooDocuments(uid, domain = [], fields = [], kw = {}) {
@@ -14985,7 +15038,7 @@ const ODOO_DOCUMENT_LIST_FIELDS = [
 ];
 
 function buildDocumentTree(records = []) {
-  const docs = records.map(normalizeDocumentRecord);
+  const docs = records.map(documentOperatorDto);
   const byId = new Map(docs.map(doc => [Number(doc.id), { ...doc, children: [] }]));
   const roots = [];
 
@@ -15011,14 +15064,15 @@ function buildDocumentTree(records = []) {
 
 async function getOdooDocumentById(uid, documentId, includeBinary = false) {
   const id = Number(documentId || 0);
-  if (!id) throw new Error("documentId is required.");
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error("A valid documentId is required.");
 
   const fields = includeBinary
     ? [...new Set([...ODOO_DOCUMENT_LIST_FIELDS, "datas", "raw"])]
     : ODOO_DOCUMENT_LIST_FIELDS;
 
   const rows = await odooExecute(uid, "documents.document", "read", [[id], fields]);
-  if (!rows?.[0]) throw new Error("Document not found.");
+  if (!rows?.[0] || !Number.isSafeInteger(rows[0].id) || rows[0].id !== id) throw new Error("Document not found.");
+  if (rows[0].active === false || rows[0].type === 'folder') throw new Error("This document is no longer available.");
   return rows[0];
 }
 
@@ -15038,10 +15092,14 @@ function documentFilename(doc) {
 
 async function readOdooAttachmentBinary(uid, attachmentId) {
   const id = Number(attachmentId || 0);
-  if (!id) return null;
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
   const rows = await odooExecute(uid, "ir.attachment", "read", [[id], ["id", "name", "datas", "mimetype", "file_size"]]);
   const row = rows?.[0];
   if (!row) return null;
+  // A signed document grant covers its exact current attachment. An unexpected
+  // provider record must never supply bytes or trigger a permissive fallback.
+  if (!Number.isSafeInteger(row.id) || row.id !== id)
+    throw Object.assign(new Error("Odoo did not confirm the requested attachment."), { code: 'DOCUMENT_IDENTITY_MISMATCH' });
   const buffer = base64ToBuffer(row.datas || "");
   if (!buffer.length) return null;
   return {
@@ -15057,7 +15115,9 @@ async function readOdooDocumentBinary(uid, documentId) {
   const doc = normalizeDocumentRecord(row);
 
   if (doc.is_url && doc.url) {
-    return { doc, redirect: doc.url };
+    const redirect = safeDocumentRedirect(doc.url);
+    if (!redirect) throw new Error("The document does not have a safe HTTPS link.");
+    return { doc, redirect };
   }
 
   // Best path: Documents app files are backed by ir.attachment. Reading the attachment
@@ -15074,6 +15134,7 @@ async function readOdooDocumentBinary(uid, documentId) {
         };
       }
     } catch (error) {
+      if (error?.code === 'DOCUMENT_IDENTITY_MISMATCH') throw error;
       console.warn("Document attachment binary read failed:", error?.message || error);
     }
   }
@@ -15082,6 +15143,8 @@ async function readOdooDocumentBinary(uid, documentId) {
   try {
     const rows = await odooExecute(uid, "documents.document", "read", [[Number(documentId)], ["id", "datas", "mimetype", "name", "attachment_name", "file_extension"]]);
     const binaryRow = rows?.[0] || {};
+    if (rows?.[0] && (!Number.isSafeInteger(binaryRow.id) || binaryRow.id !== Number(documentId)))
+      throw Object.assign(new Error("Odoo did not confirm the requested document binary."), { code: 'DOCUMENT_IDENTITY_MISMATCH' });
     const buffer = base64ToBuffer(binaryRow.datas || "");
     if (buffer.length) {
       const fallbackDoc = normalizeDocumentRecord({ ...row, ...binaryRow });
@@ -15093,6 +15156,7 @@ async function readOdooDocumentBinary(uid, documentId) {
       };
     }
   } catch (error) {
+    if (error?.code === 'DOCUMENT_IDENTITY_MISMATCH') throw error;
     console.warn("Document direct binary read failed:", error?.message || error);
   }
 
@@ -15124,7 +15188,13 @@ function certificateShareMessage(doc, link) {
 
 async function readOdooChannelForDocumentShare(uid, channelId) {
   const id = Number(channelId || 0);
-  if (!id) throw new Error("channelId is required for chat sharing.");
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error("A valid channelId is required for chat sharing.");
+  const verifiedChannel = rows => {
+    const channel = rows?.[0];
+    if (!channel || !Number.isSafeInteger(channel.id) || channel.id !== id)
+      throw new Error("Odoo did not confirm the requested chat channel.");
+    return channel;
+  };
 
   const richFields = [
     "id",
@@ -15143,15 +15213,13 @@ async function readOdooChannelForDocumentShare(uid, channelId) {
 
   try {
     const rows = await odooExecute(uid, "discuss.channel", "read", [[id], richFields]);
-    if (!rows?.[0]) throw new Error("Chat channel not found.");
-    return rows[0];
+    return verifiedChannel(rows);
   } catch (error) {
     console.warn("Document share channel rich read failed, retrying minimal read:", error?.message || error);
     const rows = await odooExecute(uid, "discuss.channel", "read", [[id], [
       "id", "name", "display_name", "channel_type", "write_date", "last_interest_dt"
     ]]);
-    if (!rows?.[0]) throw new Error("Chat channel not found.");
-    return rows[0];
+    return verifiedChannel(rows);
   }
 }
 
@@ -15231,7 +15299,7 @@ app.get("/api/odoo-documents/tree", async (req, res) => {
       order: "type desc, sequence asc, name asc, id asc"
     });
 
-    const docs = (rows || []).map(normalizeDocumentRecord);
+    const docs = (rows || []).map(documentOperatorDto);
     const tree = buildDocumentTree(rows || []);
 
     return res.json({
@@ -15272,7 +15340,7 @@ app.get("/api/odoo-documents/folder/:folderId", async (req, res) => {
     return res.json({
       ok: true,
       folderId,
-      documents: (rows || []).map(normalizeDocumentRecord)
+      documents: (rows || []).map(documentOperatorDto)
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
@@ -15284,14 +15352,10 @@ app.get("/api/odoo-documents/file/:documentId", async (req, res) => {
     if (!odooConfigured) throw new Error("Odoo not configured.");
     const uid = await odooLoginCached();
     const row = await getOdooDocumentById(uid, req.params?.documentId, false);
-    const doc = normalizeDocumentRecord(row);
+    const doc = documentOperatorDto(row);
     return res.json({
       ok: true,
-      document: {
-        ...doc,
-        view_url: documentPublicUrl(doc),
-        download_url: `${String(process.env.APP_URL || "").replace(/\/$/, "")}/api/odoo-documents/download/${encodeURIComponent(doc.id)}`
-      }
+      document: doc
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: String(error?.message || error || "") });
@@ -15307,11 +15371,13 @@ app.get("/api/odoo-documents/view/:documentId", async (req, res) => {
     if (file.redirect) return res.redirect(file.redirect);
 
     res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${String(file.filename || documentFilename(file.doc)).replace(/"/g, "")}"`);
-    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("Content-Disposition", documentContentDisposition(file.filename || documentFilename(file.doc), 'inline'));
+    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
+    res.setHeader("Cache-Control", "no-store");
     return res.send(file.buffer);
   } catch (error) {
-    return res.status(500).send(`Document preview failed: ${String(error?.message || error || "")}`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.status(502).send('This document preview is unavailable. Ask the sender for a new link.');
   }
 });
 
@@ -15322,16 +15388,18 @@ app.get("/api/odoo-documents/download/:documentId", async (req, res) => {
     const file = await readOdooDocumentBinary(uid, req.params?.documentId);
 
     if (file.redirect) {
-      const sep = file.redirect.includes("?") ? "&" : "?";
-      return res.redirect(`${file.redirect}${sep}download=true`);
+      const target = new URL(file.redirect);
+      target.searchParams.set('download', 'true');
+      return res.redirect(target.href);
     }
 
     res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${String(file.filename || documentFilename(file.doc)).replace(/"/g, "")}"`);
-    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("Content-Disposition", documentContentDisposition(file.filename || documentFilename(file.doc), 'attachment'));
+    res.setHeader("Cache-Control", "no-store");
     return res.send(file.buffer);
   } catch (error) {
-    return res.status(500).send(`Document download failed: ${String(error?.message || error || "")}`);
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.status(502).send('This document download is unavailable. Ask the sender for a new link.');
   }
 });
 
@@ -15345,7 +15413,8 @@ app.post("/api/odoo-documents/share", async (req, res) => {
 
     const row = await getOdooDocumentById(uid, documentId, false);
     const doc = normalizeDocumentRecord(row);
-    const link = safeDocString(req.body?.link || "", 2000) || documentPublicUrl(doc);
+    // A caller-supplied URL cannot replace the exact authorized document link.
+    const link = documentPublicUrl(doc);
     if (!link) throw new Error("Could not create a share link for this document.");
 
     const channel = safeDocString(req.body?.channel || req.body?.mode || "copy", 40).toLowerCase();
@@ -15384,7 +15453,8 @@ app.get("/zoho/auth", (req, res) => {
 
     cleanZohoOAuthStates();
     const state = randomUUID();
-    zohoOAuthStates.set(state, zohoNowMs() + 10 * 60 * 1000);
+    zohoOAuthStates.set(state, { expiresAt: zohoNowMs() + 10 * 60 * 1000,
+      profile: req.operatorAuth.profile, sessionExpiresAt: req.operatorAuth.authExpiresAt });
 
     const authorizeUrl =
       `${ZOHO_MAIL_ACCOUNTS_BASE}/oauth/v2/auth` +
@@ -15419,28 +15489,30 @@ app.get("/zoho/callback", async (req, res) => {
     const accountsServer = safeZohoString(req.query?.["accounts-server"] || "", 500);
 
     if (!code) throw new Error("Zoho did not return an authorization code.");
-    if (!state || !zohoOAuthStates.has(state)) {
+    const issued = zohoOAuthStates.get(state);
+    if (!state || !issued || issued.profile !== req.operatorAuth?.profile || issued.sessionExpiresAt !== req.operatorAuth?.authExpiresAt) {
       throw new Error("Zoho OAuth state check failed or expired. Open /zoho/auth again.");
     }
     zohoOAuthStates.delete(state);
 
-    const tokenBase =
-      /^https:\/\/accounts\.zoho\.[a-z.]+$/i.test(accountsServer)
-        ? accountsServer
-        : ZOHO_MAIL_ACCOUNTS_BASE;
+    // This is a single configured mailbox, not a multi-tenant OAuth client.
+    // An untrusted accounts-server query must never choose where secrets go.
+    const tokenBase = ZOHO_MAIL_ACCOUNTS_BASE;
+    if (accountsServer && accountsServer !== tokenBase) throw new Error("The authorization data center does not match the configured mailbox.");
 
     const tokenResp = await fetch(
-      zohoTokenUrl({
+      `${tokenBase}/oauth/v2/token`,
+      {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
         code,
         grant_type: "authorization_code",
         client_id: ZOHO_MAIL_CLIENT_ID,
         client_secret: ZOHO_MAIL_CLIENT_SECRET,
         redirect_uri: ZOHO_MAIL_REDIRECT_URI,
         scope: ZOHO_MAIL_SCOPES
-      }, tokenBase),
-      {
-        method: "POST",
-        headers: { Accept: "application/json" }
+        })
       }
     );
 
@@ -15653,6 +15725,8 @@ app.post("/api/zoho-mail/reply", async (req, res) => {
 });
 
 app.post("/api/profile-login", (req, res) => {
+  try { profileLoginLimiter.check(req); }
+  catch { return res.status(429).json({ ok: false, error: "Please wait before trying to sign in again." }); }
   const profile = String(req.body?.profile || "").trim();
   const password = String(req.body?.password || "");
   const expected = profilePasswords[profile];
@@ -15665,11 +15739,13 @@ app.post("/api/profile-login", (req, res) => {
     return res.status(503).json({ ok: false, error: `Password is not configured for ${profile}` });
   }
 
-  if (password !== expected) {
+  if (!constantTimePasswordEqual(password, expected)) {
     return res.status(401).json({ ok: false, error: "Invalid password" });
   }
 
   res.setHeader("Set-Cookie", buildSessionCookie(profile));
+  res.setHeader("Cache-Control", "no-store");
+  profileLoginLimiter.success(req);
   res.json({ ok: true, profile, sessionSeconds: PROFILE_SESSION_TTL_SECONDS });
 });
 
@@ -15919,8 +15995,78 @@ function aiModePublicToggleState() {
     hiddenModesAvailable: AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ["chat", "assist"] : [],
     toggleOnMode: AI_MODE_TOGGLE_ON_MODE,
     toggleOffMode: AI_MODE_TOGGLE_OFF_MODE,
+    epoch: aiModeGlobalState.epoch,
+    revision: aiModeGlobalState.revision,
+    updated_at: aiModeGlobalState.updated_at,
     global: aiModeGlobalState
   };
+}
+
+function aiModeZapierConfiguration() {
+  let webhookConfigured = false;
+  try {
+    const endpoint = new URL(ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL);
+    webhookConfigured = endpoint.protocol === 'https:' && !!endpoint.hostname && !endpoint.username && !endpoint.password;
+  } catch {}
+  const forwardingEnabled = ZAPIER_INCOMING_WHATSAPP_ENABLED === true;
+  const replyAuthConfigured = typeof ZAPIER_REPLY_SECRET === 'string' && ZAPIER_REPLY_SECRET.trim().length > 0;
+  const receiptAuthorityConfigured = operatorAiReplyAuth.configured();
+  const issue = !forwardingEnabled
+    ? { code: 'AI_ZAPIER_FORWARDING_DISABLED', error: 'Enable incoming customer-message forwarding before turning on SH AI.' }
+    : !webhookConfigured
+      ? { code: 'AI_ZAPIER_WEBHOOK_REQUIRED', error: 'Configure the current Zapier HTTPS webhook in the server environment before turning on SH AI.' }
+      : !replyAuthConfigured
+        ? { code: 'AI_ZAPIER_REPLY_AUTH_REQUIRED', error: 'Configure the Zapier reply authentication secret and matching Zap reply header before turning on SH AI.' }
+        : !receiptAuthorityConfigured
+          ? { code: 'AI_REPLY_STORAGE_UNAVAILABLE', error: 'Configure persistent automated reply authorization before enabling SH AI.' }
+          : null;
+  // These are configuration checks only. They neither contact Zapier nor prove
+  // that its deployed workflow mapped the source-bound reply grant correctly.
+  return { forwardingEnabled, webhookConfigured, replyAuthConfigured, receiptAuthorityConfigured,
+    ready: issue === null, issue };
+}
+
+function aiModeApplyToggle(req, res, globalOnly = false) {
+  const body = req.body || {};
+  const toggleKeys = ['aiEnabled', 'ai_enabled', 'aiOn', 'ai_on', 'enabled'].filter(key => Object.prototype.hasOwnProperty.call(body, key));
+  const modes = ['aiMode', 'mode'].filter(key => Object.prototype.hasOwnProperty.call(body, key));
+  const validBoolean = value => typeof value === 'boolean' || value === 0 || value === 1 || ['true','false','0','1'].includes(value);
+  const requestedModes = modes.map(key => String(body[key]).toLowerCase());
+  const allowedModes = AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ['manual','zapier','chat','assist'] : ['manual','zapier'];
+  if ((!toggleKeys.length && !modes.length) || toggleKeys.some(key => !validBoolean(body[key])) ||
+      requestedModes.some(mode => !allowedModes.includes(mode)) ||
+      new Set(toggleKeys.map(key => ['true','1'].includes(String(body[key]).toLowerCase()))).size > 1 ||
+      new Set(requestedModes).size > 1 || (toggleKeys.length && modes.length))
+    return res.status(400).json({ ok: false, code: 'INVALID_AI_MODE', error: 'Choose an explicit valid AI mode.' });
+  // Every write must compare the state the operator actually saw. Omitting
+  // both fields must not bypass arbitration and overwrite another phone.
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0 ||
+      typeof body.expectedEpoch !== 'string' || !body.expectedEpoch)
+    return res.status(400).json({ ok: false, code: 'INVALID_AI_REVISION', error: 'Reload the current AI mode before changing it.' });
+  if (body.expectedRevision !== aiModeGlobalState.revision || body.expectedEpoch !== aiModeGlobalState.epoch)
+    return res.status(409).json({ ...aiModePublicToggleState(), ok: false, code: 'AI_MODE_CHANGED', error: 'Another device changed SH AI. Review the current mode and try again.' });
+  const previousMode = aiModeGlobalState.mode, nextMode = aiModeResolveRequestedMode(body);
+  if (nextMode === 'zapier') {
+    const configuration = aiModeZapierConfiguration();
+    if (configuration.issue) return res.status(503).json({ ok: false, ...configuration.issue });
+  }
+  aiModeGlobalState.mode = nextMode;
+  aiModeGlobalState.revision += 1;
+  aiModeGlobalState.updated_at = now();
+  aiModeGlobalState.updated_by = aiModeSafeString(req.operatorAuth?.operatorDeviceId || 'authorized_operator', 160);
+  if (previousMode !== nextMode) aiModeGlobalState.enabled_since_ms = Date.now();
+  return res.json(globalOnly ? { ok: true, previousMode, epoch: aiModeGlobalState.epoch,
+    revision: aiModeGlobalState.revision, global: aiModeGlobalState } : { ...aiModePublicToggleState(), previousMode });
+}
+
+function aiModeCaptureLease() {
+  return { mode: aiModeGlobalState.mode, epoch: aiModeGlobalState.epoch,
+    revision: aiModeGlobalState.revision, enabledSince: aiModeGlobalState.enabled_since_ms };
+}
+
+function aiModeLeaseCurrent(lease) {
+  return !!lease && lease.mode === aiModeGlobalState.mode && lease.epoch === aiModeGlobalState.epoch &&
+    lease.revision === aiModeGlobalState.revision && lease.enabledSince === aiModeGlobalState.enabled_since_ms;
 }
 
 function aiModeSafeString(value, max = 4000) {
@@ -15960,10 +16106,10 @@ async function aiModeWriteJsonFile(path, value) {
 // Sends every new incoming customer chat message detected by the Odoo/AI Mode worker
 // to Zapier. Zapier can then notify the team, update Sheets/CRM, call another AI flow,
 // or trigger actions outside this server.
-const ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL =
+const ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL = String(
   process.env.ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL ||
-  process.env.ZAPIER_WEBHOOK_URL ||
-  "https://hooks.zapier.com/hooks/catch/27703710/4oqoizf/";
+  process.env.ZAPIER_WEBHOOK_URL || ""
+).trim();
 
 const ZAPIER_INCOMING_WHATSAPP_ENABLED =
   String(process.env.ZAPIER_INCOMING_WHATSAPP_ENABLED || "true").toLowerCase() !== "false";
@@ -16671,6 +16817,8 @@ function aiModeZapierChannelLabel(channel = {}) {
 }
 
 async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messageText = "", aiMode = "" } = {}) {
+  const modeLease = aiModeCaptureLease();
+  if (modeLease.mode !== 'zapier') return { ok: false, skipped: 'ai_mode_off' };
   if (!ZAPIER_INCOMING_WHATSAPP_ENABLED) return { ok: false, skipped: "disabled" };
   if (!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL) return { ok: false, skipped: "missing_webhook_url" };
   if (!aiModeLooksLikeExternalCustomerChannel(channel)) return { ok: false, skipped: "not_customer_chat_channel", channel_type: channel?.channel_type || "" };
@@ -16682,6 +16830,7 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
   if (!messageKey) return { ok: false, skipped: "missing_message_id" };
 
   await zapierLoadIncomingWhatsAppSentIds();
+  if (!aiModeLeaseCurrent(modeLease)) return { ok: false, skipped: 'ai_mode_changed_before_forward' };
   if (zapierIncomingWhatsAppState.sent_ids.has(messageKey)) {
     zapierIncomingWhatsAppState.skipped_duplicate_count += 1;
     return { ok: false, skipped: "duplicate_already_sent" };
@@ -16690,6 +16839,10 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
   const payload = {
     source: "smart_handicrafts_operator_hub",
     event: "incoming_customer_chat_message",
+    ai_epoch: modeLease.epoch,
+    ai_revision: modeLease.revision,
+    ai_reply_grant: operatorAiReplyAuth.issue({ channelId: Number(channel.id), sourceMessageId: Number(message.id),
+      sourceTimestamp: aiModeParseOdooDateMs(message.date) }),
     channel: aiModeZapierChannelLabel(channel),
     aiMode: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual"),
     replyController: aiModeNormalizeMode(aiMode || aiModeGlobalState?.mode || "manual") === "zapier" ? "zapier" : "server_copy_only",
@@ -17597,8 +17750,30 @@ function aiModeOdooJson(value, max = 6000) {
 
 function aiModeOdooContextJson(value, max = 50000) {
   try {
-    const source = value && typeof value === "object" ? value : {};
-    return JSON.stringify(source, null, 2).slice(0, max);
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const limit = Number.isFinite(max) ? Math.max(128, Math.min(50000, Math.floor(max))) : 50000;
+    const complete = JSON.stringify(source);
+    if (complete.length <= limit) return complete;
+    // Truncating serialized bytes creates invalid JSON and silently loses all
+    // persistent memory on the next read. Bound values while preserving JSON.
+    const seen = new WeakSet();
+    const compact = (item, depth = 0) => {
+      if (typeof item === 'string') return item.slice(0, 2000);
+      if (!item || typeof item !== 'object') return item;
+      if (seen.has(item) || depth >= 8) return null;
+      seen.add(item);
+      if (Array.isArray(item)) return item.slice(0, 30).map(value => compact(value, depth + 1));
+      return Object.fromEntries(Object.entries(item).filter(([key]) => !['__proto__','prototype','constructor'].includes(key)).slice(0, 60)
+        .map(([key, value]) => [key, compact(value, depth + 1)]));
+    };
+    const reduced = compact(source), output = { _truncated: true };
+    const priority = ['handover_wait','version','schema_version','requirement_profile','legacy_profile','customer','requirements','active_context'];
+    for (const key of [...new Set([...priority, ...Object.keys(reduced)])]) {
+      if (!Object.prototype.hasOwnProperty.call(reduced, key)) continue;
+      const candidate = { ...output, [key]: reduced[key] };
+      if (JSON.stringify(candidate).length <= limit) output[key] = reduced[key];
+    }
+    return JSON.stringify(output);
   } catch {
     return "{}";
   }
@@ -17607,7 +17782,7 @@ function aiModeOdooContextJson(value, max = 50000) {
 function aiModeParseContextJson(value) {
   if (!value || typeof value !== "string") return {};
   try {
-    const parsed = JSON.parse(value);
+    const parsed = JSON.parse(value, (key, item) => ['__proto__','prototype','constructor'].includes(key) ? undefined : item);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
@@ -17774,6 +17949,7 @@ async function aiModeOdooCreateHandoverLog({
   customerPhone,
   aiResult,
   odooChannelId,
+  sourceMessageId,
   kind = "handover"
 } = {}) {
   if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
@@ -17812,7 +17988,9 @@ async function aiModeOdooCreateHandoverLog({
     }
 
     const id = await odooExecute(uid, AI_MODE_HANDOVER_MODEL, "create", [payload]);
-    return { ok: true, action: "created", id, kind };
+    const delivery = await operatorHandoverDispatcher.dispatch({ handoverId: id, sourceMessageId: Number(sourceMessageId || 0),
+      channelId: safeOdooChannelId, assignedTo, summary: title, note: notification || reason });
+    return { ok: true, action: "created", id, kind, delivery, needs_notification: !delivery.activity_created };
   } catch (error) {
     console.warn("AI Mode Odoo handover create failed:", error?.message || error);
     return { ok: false, error: error?.message || String(error) };
@@ -19437,13 +19615,14 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
   };
 }
 
-app.post("/api/ai-mode/chat", async (req, res) => {
+async function handleAiModeChat(req, res) {
   try {
     const aiMode = aiModeNormalizeMode(req.body?.aiMode);
     const source = aiModeSafeString(req.body?.source || "operator_hub", 80);
     const channel = aiModeSafeString(req.body?.channel || "whatsapp", 80);
     const chatId = aiModeSafeString(req.body?.chatId || req.body?.conversationId || "", 160);
     const odooChannelId = Number(req.body?.odooChannelId || req.body?.channelId || req.body?.odoo_channel_id || 0);
+    const sourceMessageId = Number(req.body?.sourceMessageId || req.body?.odooMessageId || 0);
     const customerName = aiModeSafeString(req.body?.customerName || req.body?.name || "", 160);
     const customerPhone = aiModeSafeString(req.body?.customerPhone || req.body?.phone || "", 80);
     const senderPhone = aiModeCleanPhone(req.body?.senderPhone || req.body?.from || customerPhone);
@@ -19945,6 +20124,7 @@ Safe no-reply fallback applied.`.trim()
             customerPhone,
             aiResult: normalized,
             odooChannelId,
+            sourceMessageId,
             kind: normalized.handover_required ? "handover" : "clarification"
           });
         }
@@ -20003,7 +20183,8 @@ Safe no-reply fallback applied.`.trim()
       internal_notification: "AI Mode error. Please handle this chat manually."
     });
   }
-});
+}
+app.post("/api/ai-mode/chat", handleAiModeChat);
 
 
 // ===================== AI MODE: SERVER-SIDE BACKGROUND WORKER =====================
@@ -20036,10 +20217,9 @@ const AI_MODE_BACKGROUND_ACTIVE_MEMORY_LIMIT = Math.max(
   20,
   Math.min(300, Number(process.env.AI_MODE_BACKGROUND_ACTIVE_MEMORY_LIMIT || 120))
 );
-const AI_MODE_BACKGROUND_START_GRACE_MS = Math.max(
-  0,
-  Number(process.env.AI_MODE_BACKGROUND_START_GRACE_MS || 5000)
-);
+// Old grace settings cannot authorize a reply to inbox history. The gate below
+// requires a verified customer timestamp strictly after explicit enablement.
+const AI_MODE_BACKGROUND_START_GRACE_MS = 0;
 // Wait for the customer to pause before AI replies. This prevents multiple replies
 // when the customer sends details in quick consecutive messages like "COB LED" then "3 watt".
 const AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS = Math.max(
@@ -20068,7 +20248,9 @@ const AI_MODE_BACKGROUND_PREBOOT_GRACE_MS = Math.max(
 const aiModeGlobalState = {
   // Hard default is manual. Even if Render still has an old AI_MODE_GLOBAL_DEFAULT=chat,
   // chat is forced back to manual unless AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
-  mode: aiModeNormalizeOperationalMode(process.env.AI_MODE_GLOBAL_DEFAULT || "manual"),
+  mode: "manual",
+  epoch: randomUUID(),
+  revision: 0,
   updated_at: now(),
   updated_by: "server_start",
   enabled_since_ms: Date.now(),
@@ -20385,10 +20567,11 @@ function aiModeChannelPhone(channel = {}) {
 }
 
 function aiModeCanPostToChannel(channel = {}) {
+  if (channel.active === false || !['whatsapp', 'livechat', 'chat', 'channel', 'group'].includes(channel.channel_type)) return false;
   if (channel.channel_type !== "whatsapp") return true;
   if (channel.whatsapp_channel_active === false) return false;
   const validUntil = aiModeParseOdooDateMs(channel.whatsapp_channel_valid_until);
-  if (!validUntil) return !!channel.whatsapp_channel_active;
+  if (!validUntil) return false;
   return validUntil > Date.now();
 }
 
@@ -20578,23 +20761,31 @@ function aiModeShouldBlockDuplicateOutbound(channelId, body = "") {
   return false;
 }
 
-async function aiModePostTextToOdooChannel(uid, channel, text) {
+async function aiModePostTextToOdooChannel(uid, channel, text, canStillSend = null) {
   const body = aiModeSafeString(text, 8000);
   if (!body) return { ok: false, reason: "empty_body" };
   if (!channel?.id) return { ok: false, reason: "missing_channel" };
   if (aiModeLooksLikeUnsafeCustomerReply(body)) return { ok: false, reason: "unsafe_reply_blocked" };
   if (aiModeLooksLikeCustomerEcho(body, "", [])) return { ok: false, reason: "echo_like_reply_blocked" };
-  if (aiModeShouldBlockDuplicateOutbound(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
-  if (!aiModeCanPostToChannel(channel)) {
+  // A cached worker channel may expire while AI or a document is being
+  // prepared. Re-read the exact channel immediately before the send boundary.
+  const current = await readOdooChannelForDocumentShare(uid, channel.id);
+  if (!Number.isSafeInteger(current?.id) || current.id !== Number(channel.id))
+    throw new Error('Odoo did not confirm the requested chat channel.');
+  if (canStillSend && !canStillSend()) return { ok: false, reason: 'ai_mode_changed_before_send' };
+  if (!aiModeCanPostToChannel(current)) {
     return { ok: false, reason: "whatsapp_reply_window_closed" };
   }
+  if (aiModeShouldBlockDuplicateOutbound(channel.id, body)) return { ok: false, reason: "duplicate_outbound_blocked" };
 
-  const kwargs = channel.channel_type === "whatsapp"
+  const kwargs = current.channel_type === "whatsapp"
     ? { body, message_type: "whatsapp_message", subtype_xmlid: "mail.mt_comment" }
     : { body, message_type: "comment", subtype_xmlid: "mail.mt_comment" };
 
-  await odooExecute(uid, "discuss.channel", "message_post", [[Number(channel.id)]], kwargs);
-  return { ok: true };
+  const messageId = await odooExecute(uid, "discuss.channel", "message_post", [[Number(channel.id)]], kwargs);
+  if (!Number.isSafeInteger(messageId) || messageId <= 0)
+    throw new Error('Odoo did not confirm the message ID. Check the conversation before retrying.');
+  return { ok: true, messageId };
 }
 
 
@@ -20606,13 +20797,17 @@ async function aiModePostTextToOdooChannel(uid, channel, text) {
 const ZAPIER_REPLY_SECRET = process.env.ZAPIER_REPLY_SECRET || "";
 
 app.post("/api/zapier/reply", async (req, res) => {
+  let receipt = null;
   try {
-    if (ZAPIER_REPLY_SECRET) {
-      const incomingSecret = String(req.headers["x-zapier-secret"] || req.body?.secret || "");
-      if (incomingSecret !== ZAPIER_REPLY_SECRET) {
-        return res.status(401).json({ ok: false, error: "Invalid Zapier secret" });
-      }
-    }
+    if (!ZAPIER_REPLY_SECRET) return res.status(503).json({ ok: false, error: "Zapier reply authentication is not configured." });
+    const incomingSecret = String(req.headers["x-zapier-secret"] || req.body?.secret || "");
+    if (!constantTimePasswordEqual(incomingSecret, ZAPIER_REPLY_SECRET))
+      return res.status(401).json({ ok: false, error: "Invalid Zapier secret" });
+    const modeLease = aiModeCaptureLease();
+    if (modeLease.mode !== 'zapier') return res.status(409).json({ ok: false, code: 'AI_MODE_OFF', error: 'SH AI is not enabled for Zapier replies.' });
+    if ((req.body?.ai_epoch !== undefined && req.body.ai_epoch !== modeLease.epoch) ||
+        (req.body?.ai_revision !== undefined && req.body.ai_revision !== modeLease.revision))
+      return res.status(409).json({ ok: false, code: 'AI_MODE_CHANGED', error: 'This reply belongs to an earlier AI session.' });
 
     const reply = aiModeSafeString(
       req.body?.reply ||
@@ -20645,6 +20840,9 @@ app.post("/api/zapier/reply", async (req, res) => {
         hint: "In Zapier Step 3 Data, send odoo_channel_id = Step 1 Odoo Channel Id."
       });
     }
+    const grant = operatorAiReplyAuth.verify(req.body?.ai_reply_grant, odooChannelId);
+    const completed = await operatorAiReplyAuth.completed({ token: req.body.ai_reply_grant, channelId: odooChannelId, reply });
+    if (completed) return res.json({ ok: true, posted: true, duplicate: true, odooChannelId, messageId: completed.messageId });
 
     if (!aiModeOdooEnabled()) {
       return res.status(500).json({ ok: false, error: "Odoo is not configured on server" });
@@ -20657,6 +20855,10 @@ app.post("/api/zapier/reply", async (req, res) => {
     if (!channel?.id) {
       return res.status(404).json({ ok: false, error: `Odoo channel not found: ${odooChannelId}` });
     }
+    if (!Number.isSafeInteger(channel.id) || channel.id !== odooChannelId) {
+      return res.status(409).json({ ok: false, code: 'AI_CHANNEL_CHANGED',
+        error: 'Odoo did not confirm the exact conversation authorized by this AI reply.' });
+    }
 
     if (!aiModeCanPostToChannel(channel)) {
       return res.status(409).json({
@@ -20666,11 +20868,28 @@ app.post("/api/zapier/reply", async (req, res) => {
         odooChannelId
       });
     }
-
-    const postResult = await aiModePostTextToOdooChannel(uid, channel, reply);
+    // The grant authorizes one exact incoming message. Newer conversation
+    // activity or human intervention requires a new AI decision, not an old reply.
+    const sourceRows = await odooExecute(uid, 'mail.message', 'read', [[grant.sourceMessageId],
+      ['id','model','res_id','date','body','message_type','author_id','email_from','create_uid','attachment_ids']]);
+    const source = sourceRows?.[0], userContext = await aiModeGetOdooUserContext();
+    if (!source || Number(source.id) !== grant.sourceMessageId || source.model !== 'discuss.channel' ||
+        Number(source.res_id) !== odooChannelId || aiModeParseOdooDateMs(source.date) !== grant.sourceTimestamp ||
+        aiModeIsOwnOdooMessageForWorker(source, userContext) || aiModeIsLikelySmartHandicraftsOutbound(source))
+      return res.status(409).json({ ok: false, code: 'AI_SOURCE_CHANGED', error: 'The original incoming message could not be verified.' });
+    const recentMessages = await aiModeFetchWorkerMessages(uid, odooChannelId);
+    if (recentMessages.some(message => Number(message.id) > grant.sourceMessageId &&
+        (aiModeMessagePlainText(message) || aiModeHasWorkerAttachments(message))))
+      return res.status(409).json({ ok: false, code: 'AI_CONVERSATION_CHANGED', error: 'The conversation changed after this AI request.' });
+    receipt = await operatorAiReplyAuth.claim({ token: req.body.ai_reply_grant, channelId: odooChannelId, reply });
+    if (receipt.replay) return res.json({ ok: true, posted: true, duplicate: true, odooChannelId, messageId: receipt.messageId });
+    const postResult = await aiModePostTextToOdooChannel(uid, channel, reply,
+      () => aiModeLeaseCurrent(modeLease) && operatorAiReplyAuth.current(grant) && Date.now() < grant.expiresAt);
     if (!postResult?.ok) {
-      return res.status(400).json({ ok: false, error: postResult?.reason || "Could not post reply" });
+      await operatorAiReplyAuth.finish(receipt, 'blocked'); receipt = null;
+      return res.status(409).json({ ok: false, error: postResult?.reason || "Could not post reply" });
     }
+    await operatorAiReplyAuth.finish(receipt, 'complete', postResult.messageId); receipt = null;
 
     return res.json({
       ok: true,
@@ -20680,8 +20899,11 @@ app.post("/api/zapier/reply", async (req, res) => {
       replyLength: reply.length
     });
   } catch (error) {
-    console.error("Zapier reply endpoint failed:", error?.message || error);
-    return res.status(500).json({ ok: false, error: error?.message || String(error) });
+    if (receipt && !receipt.replay) await operatorAiReplyAuth.finish(receipt, 'uncertain').catch(() => {});
+    console.warn('Zapier reply did not confirm completion:', error?.operatorAiReplyError ? error.code : 'PROVIDER_OUTCOME_UNCONFIRMED');
+    return res.status(error?.operatorAiReplyError ? error.status : 503).json({ ok: false,
+      code: error?.operatorAiReplyError ? error.code : 'AI_REPLY_OUTCOME_UNCONFIRMED',
+      error: error?.operatorAiReplyError ? error.message : 'The automated reply outcome is unconfirmed. Check the conversation before retrying.' });
   }
 });
 
@@ -20747,21 +20969,13 @@ function aiModeHasOperatorMessageAfter(messages = [], latestCustomerMessage = {}
 }
 
 async function aiModeCallLocalDecisionEngine(payload) {
-  const response = await fetch(`http://127.0.0.1:${PORT}/api/ai-mode/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`AI Mode local decision returned non-JSON (${response.status}): ${text.slice(0, 300)}`);
-  }
-  if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || data?.message || `AI Mode local decision failed (${response.status})`);
-  }
+  // Internal execution is a direct function call. Never exempt loopback HTTP
+  // from authentication or place an administrative bearer into worker payloads.
+  let status = 200, data;
+  const response = { status(value) { status = value; return this; }, json(value) { data = value; return this; } };
+  await handleAiModeChat({ body: payload, operatorAuth: { kind: "internal-worker" } }, response);
+  if (status < 200 || status >= 300 || !data || data.ok === false)
+    throw new Error(data?.error || data?.message || `AI Mode local decision failed (${status})`);
   return data;
 }
 
@@ -20769,9 +20983,10 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   const messageText = aiModeMessagePlainText(latestCustomerMessage);
   const attachmentOnly = !messageText && aiModeHasWorkerAttachments(latestCustomerMessage);
   if (!messageText && !attachmentOnly) return { ok: false, skipped: "empty_message" };
+  const modeLease = aiModeCaptureLease();
 
   const messageTime = aiModeParseOdooDateMs(latestCustomerMessage.date);
-  if (messageTime && messageTime < (Number(aiModeGlobalState.enabled_since_ms || 0) - AI_MODE_BACKGROUND_START_GRACE_MS)) {
+  if (!messageTime || messageTime <= Number(aiModeGlobalState.enabled_since_ms || 0)) {
     await aiModeBackgroundRememberProcessedId(latestCustomerMessage.id);
     return { ok: false, skipped: "older_than_mode_enable_time" };
   }
@@ -20791,6 +21006,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     messageText,
     nativeIncomingVerified: true
   });
+  if (!aiModeLeaseCurrent(modeLease)) return { ok: false, skipped: 'ai_mode_changed_during_processing' };
   console.log("Operator push notification after inbound customer message:", {
     odooMessageId: latestCustomerMessage?.id || null,
     odooChannelId: channel?.id || null,
@@ -20896,10 +21112,13 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
     message: messageText,
     conversationHistory: aiModeBuildWorkerConversationHistory(messages, userContext),
     trigger: "server_background_worker",
-    backgroundWorker: true
+    backgroundWorker: true,
+    sourceMessageId: Number(latestCustomerMessage.id)
   };
 
+  if (!aiModeLeaseCurrent(modeLease)) return { ok: false, skipped: 'ai_mode_changed_during_processing' };
   const decision = await aiModeCallLocalDecisionEngine(payload);
+  if (!aiModeLeaseCurrent(modeLease)) return { ok: false, skipped: 'ai_mode_changed_during_processing' };
   aiModeBackgroundState.processed_count += 1;
 
   if (aiModeGlobalState.mode === "chat") {
@@ -20915,7 +21134,7 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
       } else if (aiModeLooksLikeCustomerEcho(outboundReply, messageText, payload.conversationHistory)) {
         decision.background_post_result = { ok: false, reason: "customer_echo_reply_blocked_before_post" };
       } else {
-        const postResult = await aiModePostTextToOdooChannel(uid, channel, outboundReply);
+        const postResult = await aiModePostTextToOdooChannel(uid, channel, outboundReply, () => aiModeLeaseCurrent(modeLease));
         decision.background_post_result = postResult;
         if (postResult.ok) aiModeBackgroundState.auto_sent_count += 1;
       }
@@ -21221,6 +21440,8 @@ app.post("/api/push/subscribe", async (req, res) => {
     const row = normalizePushSubscriptionPayload(req.body || {});
     if (!row) return res.status(400).json({ ok: false, error: "Invalid push subscription payload." });
     const saved = await mutatePushSubscriptions((existing) => {
+      const currentOwner = existing.find(item => String(item?.subscription?.endpoint || item?.endpoint || "") === row.endpoint);
+      if (currentOwner) assertPushSubscriptionOwner(currentOwner, req.operatorAuth, row.subscription);
       const sameDevice = existing.find((item) => String(item?.subscription?.endpoint || item?.endpoint || "") === row.endpoint && String(item?.device_id || item?.deviceId || "") === row.device_id);
       if (sameDevice) {
         const omitted = (...keys) => keys.every((key) => req.body?.[key] === undefined);
@@ -21234,9 +21455,9 @@ app.post("/api/push/subscribe", async (req, res) => {
       const filtered = existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== row.endpoint);
       return [...filtered, row];
     });
-    res.json({ ok: true, subscribed: true, count: saved.length, configured: webPushConfigured() });
+    res.json({ ok: true, subscribed: true, deviceId: row.device_id, count: saved.length, configured: webPushConfigured() });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) });
+    res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
@@ -21244,10 +21465,14 @@ app.post("/api/push/unsubscribe", async (req, res) => {
   try {
     const endpoint = String(req.body?.endpoint || req.body?.subscription?.endpoint || "").trim();
     if (!endpoint) return res.status(400).json({ ok: false, error: "endpoint is required." });
-    const saved = await mutatePushSubscriptions((existing) => existing.filter((item) => String(item?.subscription?.endpoint || item?.endpoint || "") !== endpoint));
+    const saved = await mutatePushSubscriptions((existing) => {
+      const currentOwner = existing.find(item => String(item?.subscription?.endpoint || item?.endpoint || "") === endpoint);
+      if (currentOwner) assertPushSubscriptionOwner(currentOwner, req.operatorAuth, req.body?.subscription);
+      return existing.filter(item => String(item?.subscription?.endpoint || item?.endpoint || "") !== endpoint);
+    });
     res.json({ ok: true, unsubscribed: true, count: saved.length });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) });
+    res.status(error?.statusCode || 500).json({ ok: false, error: error?.message || String(error) });
   }
 });
 
@@ -21414,20 +21639,7 @@ app.get("/api/ai-mode", (req, res) => {
 });
 
 app.post("/api/ai-mode", (req, res) => {
-  const nextMode = aiModeResolveRequestedMode(req.body || {});
-  const previousMode = aiModeNormalizeMode(aiModeGlobalState.mode);
-  aiModeGlobalState.mode = nextMode;
-  aiModeGlobalState.updated_at = now();
-  aiModeGlobalState.updated_by = aiModeSafeString(req.body?.updatedBy || req.body?.source || "operator_hub_toggle", 120);
-
-  if (previousMode !== nextMode) {
-    aiModeGlobalState.enabled_since_ms = Date.now();
-  }
-
-  res.json({
-    ...aiModePublicToggleState(),
-    previousMode
-  });
+  return aiModeApplyToggle(req, res);
 });
 
 app.get("/api/ai-mode/global", (req, res) => {
@@ -21477,26 +21689,36 @@ app.get("/api/ai-mode/global", (req, res) => {
 });
 
 app.post("/api/ai-mode/global", (req, res) => {
-  const nextMode = aiModeResolveRequestedMode(req.body || {});
-  const previousMode = aiModeGlobalState.mode;
-  aiModeGlobalState.mode = nextMode;
-  aiModeGlobalState.updated_at = now();
-  aiModeGlobalState.updated_by = aiModeSafeString(req.body?.updatedBy || req.body?.source || "operator_hub", 120);
-
-  if (previousMode !== nextMode) {
-    aiModeGlobalState.enabled_since_ms = Date.now();
-  }
-
-  res.json({ ok: true, previousMode, global: aiModeGlobalState });
+  return aiModeApplyToggle(req, res, true);
 });
 
 app.get("/api/ai-mode/status", async (req, res) => {
   const memory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+  const zapierConfiguration = aiModeZapierConfiguration();
   res.json({
     ok: true,
+    server_patch_version: SERVER_PATCH_VERSION,
+    expected_hub_ui_build: EXPECTED_HUB_UI_BUILD,
+    build_commit: SERVER_BUILD_COMMIT,
     modes: ["manual", "zapier"],
     hidden_modes: ["chat", "assist"],
     toggle: aiModePublicToggleState(),
+    operator_services: {
+      browser_auth_configured: operatorBrowserAuth.publicConfig().browserAuthReady,
+      document_sharing_configured: operatorDocumentLinks.configured,
+      automated_reply_grants_configured: operatorAiReplyAuth.configured(),
+      handover_routing: operatorHandoverDispatcher.configuration(),
+      zoho_configured: zohoMailConfigured,
+      google_contacts_configured: googleContactsConfigured,
+      odoo_configured: odooConfigured,
+      meta_signature_configured: operatorMediaGateway.appSecretConfigured,
+      zapier_reply_auth_configured: zapierConfiguration.replyAuthConfigured,
+      zapier_forwarding_enabled: zapierConfiguration.forwardingEnabled,
+      zapier_webhook_configured: zapierConfiguration.webhookConfigured,
+      zapier_enable_ready: zapierConfiguration.ready,
+      zapier_enable_blocker: zapierConfiguration.issue?.code || null,
+      odoo_webhook_auth_configured: !!process.env.ODOO_WEBHOOK_SECRET
+    },
     internal_control_configured: !!INTERNAL_CONTROL_WHATSAPP,
     paths: {
       ai_mode_rules: AI_MODE_RULES_PATH,
@@ -22020,7 +22242,9 @@ async function handleWhatsappWebhookPost(req, res) {
   try {
     const body = req.body || {};
     const verifiedMeta = operatorMediaGateway.verifyWebhook(req);
-    if (operatorMediaGateway.appSecretConfigured && !verifiedMeta)
+    if (!operatorMediaGateway.appSecretConfigured)
+      return res.status(503).json({ ok: false, error: "WhatsApp webhook authentication is not configured." });
+    if (!verifiedMeta)
       return res.status(401).json({ ok: false, error: "Invalid webhook signature." });
     const callResult = await processWhatsappCallWebhook(body, { deferSideEffects: true, verifiedMeta });
     const fields = whatsappWebhookPayloadFields(body);
@@ -23786,7 +24010,7 @@ async function whatsappCallFindRecentOutgoingLifecycleByPhone(phone = "", scope 
 app.get("/api/whatsapp-calls/config", async (req, res) => {
   return res.json({
     ok: true,
-    version: "phase3-20-manual-quotation-handoff-2026-05-29",
+    version: SERVER_PATCH_VERSION,
     server_patch_version: SERVER_PATCH_VERSION,
     transfer: operatorTransferMediaCapabilities(),
     phone_number_id_configured: !!WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID,
@@ -23796,7 +24020,7 @@ app.get("/api/whatsapp-calls/config", async (req, res) => {
     odoo_call_log_model: ODOO_CALL_LOG_MODEL,
     active_window_ms: WHATSAPP_CALL_ACTIVE_WINDOW_MS,
     outgoing_timeout_ms: WHATSAPP_CALL_OUTGOING_TIMEOUT_MS,
-    note: "Phase 3.19.1 syncs quotation status to Odoo. Diagnostics remain read-only."
+    note: "R13 protected operator integrations. Native room calling and legacy browser calling use separate media paths."
   });
 });
 
@@ -23852,7 +24076,7 @@ app.get("/api/whatsapp-calls/diagnostics", async (req, res) => {
     return res.json({
       ok: true,
       read_only: true,
-      version: "phase3-20-manual-quotation-handoff-2026-05-29",
+      version: SERVER_PATCH_VERSION,
       odoo_configured: !!odooConfigured,
       odoo_call_log_model: ODOO_CALL_LOG_MODEL,
       odoo_error: odooError,
@@ -24429,6 +24653,9 @@ function publishWhatsappCallHints(rows = []) {
 
 app.get("/api/whatsapp-calls/events", async (req, res) => {
   const origin = String(req.headers.origin || "");
+  const authorizedUntil = Number(req.operatorAuth?.exp || 0);
+  if (req.operatorAuth?.kind !== "browser" || !Number.isSafeInteger(authorizedUntil) || authorizedUntil <= Date.now())
+    return res.status(401).json({ ok: false, error: "Connect an authorized operator profile before opening call events." });
   const deviceId = aiModeSafeString(req.query.operator_device_id || "", 160);
   if (!allowedOrigins.includes(origin)) return res.status(403).json({ ok: false, error: "A registered Hub origin is required." });
   const device = operatorHubPresenceRows().find((row) => row.lock_device_id === deviceId && row.client_source === "odoo_operator_hub");
@@ -24441,11 +24668,12 @@ app.get("/api/whatsapp-calls/events", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, no-transform");
   res.setHeader("X-Accel-Buffering", "no");
   res.setHeader("Connection", "keep-alive");
-  let heartbeat = null;
+  let heartbeat = null, authorizationExpiry = null;
   const client = { res, closed: false, close: () => {
     if (client.closed) return;
     client.closed = true;
     if (heartbeat) clearInterval(heartbeat);
+    if (authorizationExpiry) clearTimeout(authorizationExpiry);
     if (whatsappCallEventClients.get(deviceId) === client) whatsappCallEventClients.delete(deviceId);
     if (!res.writableEnded) res.end();
   } };
@@ -24458,6 +24686,10 @@ app.get("/api/whatsapp-calls/events", async (req, res) => {
     if (res.write(`retry: 2500\nevent: ready\ndata: ${JSON.stringify({ refresh: true })}\n\n`) === false) client.close();
   } catch (_) { client.close(); }
   if (client.closed) return;
+  // A stream must not outlive the short authorization that opened it. The Hub
+  // refreshes its scoped lease and reconnects with an Authorization header.
+  authorizationExpiry = setTimeout(client.close, authorizedUntil - Date.now());
+  authorizationExpiry.unref?.();
   heartbeat = setInterval(() => {
     const present = operatorHubPresenceRows().some((row) => row.lock_device_id === deviceId);
     if (!present) return client.close();
@@ -25060,6 +25292,18 @@ process.on("unhandledRejection", (reason) => {
 // Native enrollment is explicit and server authenticated. Device tokens never
 // enter the Odoo embed, and this adapter never exposes SDP through native push.
 const operatorFirestoreRuntime = createOperatorFirestoreRuntime();
+const operatorAiReplyAuth = createOperatorAiReplyAuth({
+  secret: process.env.PROFILE_SESSION_SECRET || '',
+  getState: () => aiModeGlobalState,
+  getFirestore: () => operatorFirestoreRuntime.firestore,
+  collectionPrefix: () => operatorFirestoreRuntime.collectionPrefix || 'sh_operator'
+});
+const operatorHandoverDispatcher = createOdooHandoverDispatcher({
+  userIdsJson: process.env.SH_AI_HANDOVER_USER_IDS_JSON || '',
+  getFirestore: () => operatorFirestoreRuntime.firestore,
+  collectionPrefix: () => operatorFirestoreRuntime.collectionPrefix || 'sh_operator',
+  execute: async (model, method, params, kwargs = {}) => odooExecute(await odooLoginCached(), model, method, params, kwargs)
+});
 const authorizeOperatorAdmin = req => readProfileSession(req)?.profile === "SUDO";
 const operatorReportingRuntime = createOperatorReportingRuntime({
   firestoreRuntime: operatorFirestoreRuntime,
@@ -25084,8 +25328,19 @@ const androidPushBridge = createAndroidPushBridge({
     return call ? { ...call, handling: !!getOperatorCallLock(callId) } : null;
   }
 });
+let operatorCallPermissionRuntime = null;
+const operatorCallPermission = createOperatorCallPermission({
+  getRuntime: () => operatorCallPermissionRuntime,
+  getFirestore: () => operatorFirestoreRuntime.firestore,
+  collectionPrefix: () => operatorFirestoreRuntime.collectionPrefix || 'sh_operator'
+});
 const operatorMediaGateway = createOperatorMediaGateway({
   firestoreRuntime: operatorFirestoreRuntime,
+  runtimeFactory: options => {
+    const bundle = createNativeCallRuntime(options);
+    operatorCallPermissionRuntime = bundle.runtime;
+    return bundle;
+  },
   pushBridge: androidPushBridge,
   rejectIncoming: ({ callId, phoneNumberId }) => whatsappCallGraphAction({ callId, phoneNumberId, action: "reject" }),
   onCallState: async state => {
@@ -25104,6 +25359,7 @@ const operatorMediaGateway = createOperatorMediaGateway({
   }
 });
 operatorMediaGateway.mount(app);
+operatorCallPermission.mount(app);
 androidPushBridge.registerRoutes(app);
 operatorReportingRuntime.mount(app);
 registerOperatorAdminRoutes(app, {

@@ -1,0 +1,473 @@
+TAP version 13
+# Subtest: configured Firestore without an adapter never enrolls or reads a fallback registry
+ok 1 - configured Firestore without an adapter never enrolls or reads a fallback registry
+  ---
+  duration_ms: 26.71027
+  ...
+# Subtest: misspelled registry configuration fails closed and creates no local device file
+ok 2 - misspelled registry configuration fails closed and creates no local device file
+  ---
+  duration_ms: 3.888615
+  ...
+# Subtest: Firestore IAM/server-auth errors are 503, recover without reenrollment, and reveal no SDK details
+ok 3 - Firestore IAM/server-auth errors are 503, recover without reenrollment, and reveal no SDK details
+  ---
+  duration_ms: 2.52278
+  ...
+# Subtest: only deliberate registry credential errors become phone 401
+ok 4 - only deliberate registry credential errors become phone 401
+  ---
+  duration_ms: 1.644448
+  ...
+# Subtest: call-history storage authentication failures do not invalidate an enrolled phone
+ok 5 - call-history storage authentication failures do not invalidate an enrolled phone
+  ---
+  duration_ms: 2.007366
+  ...
+# Subtest: public config reports unavailable storage without exposing service credentials or enrollment code
+ok 6 - public config reports unavailable storage without exposing service credentials or enrollment code
+  ---
+  duration_ms: 2.137219
+  ...
+# Subtest: external enrollment is Odoo-independent and malformed FCM input never reaches storage
+ok 7 - external enrollment is Odoo-independent and malformed FCM input never reaches storage
+  ---
+  duration_ms: 1.745608
+  ...
+# Subtest: renewal dispatches a separate authenticated domain operation and cannot overwrite refreshed FCM tokens
+ok 8 - renewal dispatches a separate authenticated domain operation and cannot overwrite refreshed FCM tokens
+  ---
+  duration_ms: 3.137081
+  ...
+# Subtest: renewal is retry-safe and extends only the current valid device without replacing its bearer
+ok 9 - renewal is retry-safe and extends only the current valid device without replacing its bearer
+  ---
+  duration_ms: 6.490853
+  ...
+# Subtest: renewal cannot revive expired or revoked enrollment and cannot run anonymously
+ok 10 - renewal cannot revive expired or revoked enrollment and cannot run anonymously
+  ---
+  duration_ms: 5.250515
+  ...
+# Subtest: FCM server authorization failure on a test route never invalidates the enrolled phone
+ok 11 - FCM server authorization failure on a test route never invalidates the enrolled phone
+  ---
+  duration_ms: 2.928562
+  ...
+# Subtest: legacy file storage recovers from a temporary malformed read without caching failure permanently
+ok 12 - legacy file storage recovers from a temporary malformed read without caching failure permanently
+  ---
+  duration_ms: 5.002894
+  ...
+# Subtest: legacy acknowledged delivery rows still suppress duplicate notifications after upgrade
+ok 13 - legacy acknowledged delivery rows still suppress duplicate notifications after upgrade
+  ---
+  duration_ms: 10.987385
+  ...
+# Subtest: availability performs one metadata read, accepts a fresh database, and writes nothing
+ok 14 - availability performs one metadata read, accepts a fresh database, and writes nothing
+  ---
+  duration_ms: 1.955119
+  ...
+# Subtest: native protocol metadata persists without changing identity and rejects revoked credentials
+ok 15 - native protocol metadata persists without changing identity and rejects revoked credentials
+  ---
+  duration_ms: 4.658127
+  ...
+# Subtest: availability validates initialized metadata and maps SDK/auth failures to 503
+ok 16 - availability validates initialized metadata and maps SDK/auth failures to 503
+  ---
+  duration_ms: 1.523679
+  ...
+# Subtest: bootstrap registration persists separate records with hashed credentials and consumed invitation
+ok 17 - bootstrap registration persists separate records with hashed credentials and consumed invitation
+  ---
+  duration_ms: 1.694593
+  ...
+# Subtest: two instances competing for one invitation enroll only one installation
+ok 18 - two instances competing for one invitation enroll only one installation
+  ---
+  duration_ms: 10.014037
+  ...
+# Subtest: two identical concurrent requests recover the same result instead of enrolling twice
+ok 19 - two identical concurrent requests recover the same result instead of enrolling twice
+  ---
+  duration_ms: 1.938033
+  ...
+# Subtest: invitation issue works without env changes and enforces expiry and installation binding
+ok 20 - invitation issue works without env changes and enforces expiry and installation binding
+  ---
+  duration_ms: 2.368512
+  ...
+# Subtest: administrator invitation names override handset models without changing request fingerprints
+ok 21 - administrator invitation names override handset models without changing request fingerprints
+  ---
+  duration_ms: 3.202518
+  ...
+# Subtest: named invitation lost-ack recovery preserves its name and exact original request binding
+ok 22 - named invitation lost-ack recovery preserves its name and exact original request binding
+  ---
+  duration_ms: 1.619751
+  ...
+# Subtest: concurrent named invitation retries create one device with the administrator name
+ok 23 - concurrent named invitation retries create one device with the administrator name
+  ---
+  duration_ms: 1.280709
+  ...
+# Subtest: bootstrap and unlabeled legacy invitations retain handset and default name fallback
+ok 24 - bootstrap and unlabeled legacy invitations retain handset and default name fallback
+  ---
+  duration_ms: 4.393394
+  ...
+# Subtest: a fresh named invitation cannot rename an already active installation
+ok 25 - a fresh named invitation cannot rename an already active installation
+  ---
+  duration_ms: 1.147181
+  ...
+# Subtest: independent invitations cannot bypass concurrent device-cap enforcement
+ok 26 - independent invitations cannot bypass concurrent device-cap enforcement
+  ---
+  duration_ms: 0.913894
+  ...
+# Subtest: failed commit does not consume invitation or leak a success credential
+ok 27 - failed commit does not consume invitation or leak a success credential
+  ---
+  duration_ms: 0.817612
+  ...
+# Subtest: lost commit response safely recovers same bearer after backend restart
+ok 28 - lost commit response safely recovers same bearer after backend restart
+  ---
+  duration_ms: 0.831533
+  ...
+# Subtest: enrollment replay binds installation, FCM token, request and label
+ok 29 - enrollment replay binds installation, FCM token, request and label
+  ---
+  duration_ms: 1.633431
+  ...
+# Subtest: enrollment replay cannot recover after revoke, expiration, rotation or two-minute window
+ok 30 - enrollment replay cannot recover after revoke, expiration, rotation or two-minute window
+  ---
+  duration_ms: 3.094308
+  ...
+# Subtest: encrypted replay is authenticated and corrupt storage fails closed
+ok 31 - encrypted replay is authenticated and corrupt storage fails closed
+  ---
+  duration_ms: 0.952823
+  ...
+# Subtest: authentication never uses caller-supplied identity and only current unexpired bearer works
+ok 32 - authentication never uses caller-supplied identity and only current unexpired bearer works
+  ---
+  duration_ms: 1.202593
+  ...
+# Subtest: SDK auth errors become safe 503 and do not erase stored enrollment
+ok 33 - SDK auth errors become safe 503 and do not erase stored enrollment
+  ---
+  duration_ms: 0.971691
+  ...
+# Subtest: FCM token update does not extend expiry unless renewal is explicitly requested
+ok 34 - FCM token update does not extend expiry unless renewal is explicitly requested
+  ---
+  duration_ms: 1.701132
+  ...
+# Subtest: lease renewal and simultaneous FCM update preserve latest token and preferences
+ok 35 - lease renewal and simultaneous FCM update preserve latest token and preferences
+  ---
+  duration_ms: 1.184757
+  ...
+# Subtest: revocation wins races with token update or renewal and invalidates bearer immediately
+ok 36 - revocation wins races with token update or renewal and invalidates bearer immediately
+  ---
+  duration_ms: 1.287969
+  ...
+# Subtest: rotation rejects old token everywhere except bounded exact lost-response recovery
+ok 37 - rotation rejects old token everywhere except bounded exact lost-response recovery
+  ---
+  duration_ms: 2.154754
+  ...
+# Subtest: lost rotation response retries atomically; stale generation, revoke and expiry cannot recover
+ok 38 - lost rotation response retries atomically; stale generation, revoke and expiry cannot recover
+  ---
+  duration_ms: 3.148548
+  ...
+# Subtest: different concurrent rotations produce one current generation and no forked credentials
+ok 39 - different concurrent rotations produce one current generation and no forked credentials
+  ---
+  duration_ms: 1.788141
+  ...
+# Subtest: re-enrollment of expired installation retains device identity and rejects previous bearer
+ok 40 - re-enrollment of expired installation retains device identity and rejects previous bearer
+  ---
+  duration_ms: 1.178056
+  ...
+# Subtest: admin revocation applies even to expired device and releases a registration slot
+ok 41 - admin revocation applies even to expired device and releases a registration slot
+  ---
+  duration_ms: 1.282772
+  ...
+# Subtest: environment revocation blocks auth, renewal, replay and deliveries
+ok 42 - environment revocation blocks auth, renewal, replay and deliveries
+  ---
+  duration_ms: 1.590638
+  ...
+# Subtest: FCM unregistered cleanup is compare-and-set and cannot erase a newer token
+ok 43 - FCM unregistered cleanup is compare-and-set and cannot erase a newer token
+  ---
+  duration_ms: 0.873064
+  ...
+# Subtest: two workers cannot both claim an alert and sent dedup survives a new registry instance
+ok 44 - two workers cannot both claim an alert and sent dedup survives a new registry instance
+  ---
+  duration_ms: 7.309568
+  ...
+# Subtest: stale lease owner cannot finish a newer worker claim
+ok 45 - stale lease owner cannot finish a newer worker claim
+  ---
+  duration_ms: 1.440936
+  ...
+# Subtest: failed claims can retry; cancelled and expired work is never offered again
+ok 46 - failed claims can retry; cancelled and expired work is never offered again
+  ---
+  duration_ms: 1.845797
+  ...
+# Subtest: pending incoming can be cancelled and ended claim blocks a late incoming retry
+ok 47 - pending incoming can be cancelled and ended claim blocks a late incoming retry
+  ---
+  duration_ms: 1.619271
+  ...
+# Subtest: call delivery reads independent guard documents concurrently within one atomic claim
+ok 48 - call delivery reads independent guard documents concurrently within one atomic claim
+  ---
+  duration_ms: 13.77255
+  ...
+# Subtest: claims revalidate preferences and device revocation transactionally
+ok 49 - claims revalidate preferences and device revocation transactionally
+  ---
+  duration_ms: 1.643938
+  ...
+# Subtest: storage failure cannot fabricate sent acknowledgement or claim success
+ok 50 - storage failure cannot fabricate sent acknowledgement or claim success
+  ---
+  duration_ms: 1.280729
+  ...
+# Subtest: replay cleanup removes encrypted material but preserves registration and consumed-code evidence
+ok 51 - replay cleanup removes encrypted material but preserves registration and consumed-code evidence
+  ---
+  duration_ms: 2.197989
+  ...
+# Subtest: invalid or corrupt device rows cannot be treated as an empty usable registry
+ok 52 - invalid or corrupt device rows cannot be treated as an empty usable registry
+  ---
+  duration_ms: 0.762861
+  ...
+# Subtest: disabled bridge returns no Firebase config and refuses enrollment
+ok 53 - disabled bridge returns no Firebase config and refuses enrollment
+  ---
+  duration_ms: 1.823263
+  ...
+# Subtest: public config contains only public Firebase options, package and flags
+ok 54 - public config contains only public Firebase options, package and flags
+  ---
+  duration_ms: 1.622305
+  ...
+# Subtest: project mismatch fails closed
+ok 55 - project mismatch fails closed
+  ---
+  duration_ms: 0.615403
+  ...
+# Subtest: wrong enrollment code and malformed inputs are rejected
+ok 56 - wrong enrollment code and malformed inputs are rejected
+  ---
+  duration_ms: 6.77241
+  ...
+# Subtest: enrollment stores only hashed bearer and consumes code durably
+ok 57 - enrollment stores only hashed bearer and consumes code durably
+  ---
+  duration_ms: 6.687475
+  ...
+# Subtest: concurrent enrollment cannot consume one code twice
+ok 58 - concurrent enrollment cannot consume one code twice
+  ---
+  duration_ms: 2.297386
+  ...
+# Subtest: new admin code permits another device, old code remains consumed
+ok 59 - new admin code permits another device, old code remains consumed
+  ---
+  duration_ms: 5.502383
+  ...
+# Subtest: unauthenticated calls/token/unregister fail even with trusted Origin
+ok 60 - unauthenticated calls/token/unregister fail even with trusted Origin
+  ---
+  duration_ms: 1.885525
+  ...
+# Subtest: bearer serves only minimal exact incoming call without SDP/phone/raw records
+ok 61 - bearer serves only minimal exact incoming call without SDP/phone/raw records
+  ---
+  duration_ms: 2.190007
+  ...
+# Subtest: unknown and outgoing exact calls are not exposed
+ok 62 - unknown and outgoing exact calls are not exposed
+  ---
+  duration_ms: 4.275663
+  ...
+# Subtest: old/future/claimed incoming offers cannot be presented as answerable
+ok 63 - old/future/claimed incoming offers cannot be presented as answerable
+  ---
+  duration_ms: 9.952347
+  ...
+# Subtest: expired bearer cannot read or update
+ok 64 - expired bearer cannot read or update
+  ---
+  duration_ms: 2.072333
+  ...
+# Subtest: token update and receiveCalls preference require same bearer
+ok 65 - token update and receiveCalls preference require same bearer
+  ---
+  duration_ms: 2.609869
+  ...
+# Subtest: self revocation removes FCM token and denies future reads
+ok 66 - self revocation removes FCM token and denies future reads
+  ---
+  duration_ms: 2.810902
+  ...
+# Subtest: administrator revoked-ID environment denies existing device
+ok 67 - administrator revoked-ID environment denies existing device
+  ---
+  duration_ms: 4.45855
+  ...
+# Subtest: registration rate is bounded and caller-supplied proxy header does not bypass it
+ok 68 - registration rate is bounded and caller-supplied proxy header does not bypass it
+  ---
+  duration_ms: 5.624078
+  ...
+# Subtest: malformed persistent registry fails closed instead of overwriting
+ok 69 - malformed persistent registry fails closed instead of overwriting
+  ---
+  duration_ms: 3.317874
+  ...
+# Subtest: incoming data is short lived and contains only exact routing state
+ok 70 - incoming data is short lived and contains only exact routing state
+  ---
+  duration_ms: 4.699968
+  ...
+# Subtest: duplicate/parallel incoming webhook hints and restart produce one alert
+ok 71 - duplicate/parallel incoming webhook hints and restart produce one alert
+  ---
+  duration_ms: 5.650757
+  ...
+# Subtest: connected or terminal states cancel ringing only, preserving exact call ID
+ok 72 - connected or terminal states cancel ringing only, preserving exact call ID
+  ---
+  duration_ms: 5.029095
+  ...
+# Subtest: ended notification reaches opted-out device that was already ringing
+ok 73 - ended notification reaches opted-out device that was already ringing
+  ---
+  duration_ms: 9.189185
+  ...
+# Subtest: unalerted terminal rows, outgoing rows and arbitrary event ids do not push
+ok 74 - unalerted terminal rows, outgoing rows and arbitrary event ids do not push
+  ---
+  duration_ms: 2.301792
+  ...
+# Subtest: transient delivery failure retries once and later hints stay deduplicated
+ok 75 - transient delivery failure retries once and later hints stay deduplicated
+  ---
+  duration_ms: 6.507939
+  ...
+# Subtest: unregistered FCM tokens are removed without exposing secrets
+ok 76 - unregistered FCM tokens are removed without exposing secrets
+  ---
+  duration_ms: 3.427803
+  ...
+# Subtest: Firebase HTTPv1 OAuth scope, token caching, fixed hosts and Android TTL are correct
+ok 77 - Firebase HTTPv1 OAuth scope, token caching, fixed hosts and Android TTL are correct
+  ---
+  duration_ms: 8.360755
+  ...
+# Subtest: new terminal state appearing during queued incoming work prevents stale ringing
+ok 78 - new terminal state appearing during queued incoming work prevents stale ringing
+  ---
+  duration_ms: 1.807139
+  ...
+# Subtest: only explicit trusted inbound message callbacks can produce native alerts
+ok 79 - only explicit trusted inbound message callbacks can produce native alerts
+  ---
+  duration_ms: 3.842527
+  ...
+# Subtest: message payload exposes exact positive routing IDs and no content
+ok 80 - message payload exposes exact positive routing IDs and no content
+  ---
+  duration_ms: 2.825299
+  ...
+# Subtest: synthetic tests, wrong model/channel, internal groups and old messages are excluded
+ok 81 - synthetic tests, wrong model/channel, internal groups and old messages are excluded
+  ---
+  duration_ms: 5.259808
+  ...
+# Subtest: message dedupe survives concurrent worker/Zapier callbacks and server restart
+ok 82 - message dedupe survives concurrent worker/Zapier callbacks and server restart
+  ---
+  duration_ms: 6.062157
+  ...
+# Subtest: message opt-out and revoked bearer prevent additional delivery
+ok 83 - message opt-out and revoked bearer prevent additional delivery
+  ---
+  duration_ms: 3.880703
+  ...
+# Subtest: newly enrolled devices are not flooded with older message history
+ok 84 - newly enrolled devices are not flooded with older message history
+  ---
+  duration_ms: 4.04621
+  ...
+# Subtest: Odoo UTC date format is accepted without host-timezone dependency
+ok 85 - Odoo UTC date format is accepted without host-timezone dependency
+  ---
+  duration_ms: 7.683913
+  ...
+# Subtest: FCM message request uses dedicated per-channel collapse and bounded five-minute TTL
+ok 86 - FCM message request uses dedicated per-channel collapse and bounded five-minute TTL
+  ---
+  duration_ms: 5.024579
+  ...
+# Subtest: cloud test is authenticated and sends only to the authenticated installation
+ok 87 - cloud test is authenticated and sends only to the authenticated installation
+  ---
+  duration_ms: 1.783044
+  ...
+# Subtest: cloud test has a dedicated three-per-minute bound
+ok 88 - cloud test has a dedicated three-per-minute bound
+  ---
+  duration_ms: 2.002949
+  ...
+# Subtest: cloud test FCM failure is not represented as device receipt or accepted success
+ok 89 - cloud test FCM failure is not represented as device receipt or accepted success
+  ---
+  duration_ms: 1.877824
+  ...
+# Subtest: actual patched worker notifies photo-only messages then stops before AI in all modes
+ok 90 - actual patched worker notifies photo-only messages then stops before AI in all modes
+  ---
+  duration_ms: 8.175181
+  ...
+# Subtest: actual patched worker still rejects genuinely empty messages without triggering AI
+ok 91 - actual patched worker still rejects genuinely empty messages without triggering AI
+  ---
+  duration_ms: 5.403391
+  ...
+# Subtest: generated backend hooks native paths without depending on Web Push readiness
+ok 92 - generated backend hooks native paths without depending on Web Push readiness
+  ---
+  duration_ms: 7.266674
+  ...
+# Subtest: Firestore readiness works with no legacy enrollment code and advertises administrator invitations
+ok 93 - Firestore readiness works with no legacy enrollment code and advertises administrator invitations
+  ---
+  duration_ms: 3.209258
+  ...
+# Subtest: readiness failure is never overwritten by an available enrollment code
+ok 94 - readiness failure is never overwritten by an available enrollment code
+  ---
+  duration_ms: 1.820339
+  ...
+# Subtest: bridge enrollment and authentication survive backend replacement without an Odoo dependency or a local file
+ok 95 - bridge enrollment and authentication survive backend replacement without an Odoo dependency or a local file

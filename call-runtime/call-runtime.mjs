@@ -5,12 +5,13 @@ import { roomNameFor, customerIdentity, operatorIdentity } from '../media/liveki
 
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
 export const sessionKey = id => `media_sessions/${hash(identifier(id))}`;
-export const eventKey = id => `media_events/${hash(identifier(id))}`;
+export const eventKey = id => `media_events/${hash(identifier(id, 'private event key', 512))}`;
 export const outgoingSessionId = (tenantId, deviceId, requestId) => `out_${hash(`${tenantId}:${deviceId}:${requestId}`).slice(0, 48)}`;
 const outgoingCancelId = (tenantId, deviceId, requestId) => `cancel:${hash(`${tenantId}:${deviceId}:${requestId}`)}`;
 const routeId = id => `route:${identifier(id)}`;
 const terminalId = id => `terminal:${identifier(id)}`;
 const acceptedId = id => `accepted:${identifier(id)}`;
+const answerId = id => `answer:${hash(identifier(id))}`;
 const copy = value => structuredClone(value);
 const isDue = (job, now) => job.status === 'pending' && job.notBefore <= now || job.status === 'running' && job.leaseUntil <= now;
 const exact = (value, expected) => requireValue(Number.isSafeInteger(expected) && value === expected,
@@ -18,13 +19,20 @@ const exact = (value, expected) => requireValue(Number.isSafeInteger(expected) &
 const request = value => { requireValue(typeof value === 'string' && /^[A-Za-z0-9_-]{8,120}$/.test(value), 'INVALID_REQUEST_ID', 'A stable request ID is required.', 400); return value; };
 const safePhone = value => { requireValue(typeof value === 'string' && /^[1-9][0-9]{6,14}$/.test(value), 'INVALID_PHONE', 'Use a country-code phone number without a leading +.', 400); return value; };
 const operationPending = session => Object.values(session.operations || {}).some(op => ['issued', 'uncertain'].includes(op.status));
+const actualAudioSdp = value => typeof value === 'string' && value.length < 200000 &&
+  Buffer.byteLength(value, 'utf8') < 240000 && /^v=0\r?\n/.test(value) && /(?:^|\r?\n)m=audio\s/.test(value);
 function job(session, data) {
   if (!session.outbox.some(item => item.id === data.id)) session.outbox.push({ ...data, status: 'pending', attempts: 0, notBefore: 0 });
 }
 function schedule(session, now) {
   const outstanding = session.outbox.filter(item => item.status !== 'done').map(item => item.status === 'running' ? item.leaseUntil : item.notBefore);
   const deadlines = [];
-  if (!session.terminal) deadlines.push(session.phase === 'connected' ? now + 15000 : session.deadlineAt);
+  if (!session.terminal) {
+    deadlines.push(session.phase === 'connected' ? now + 15000 : session.deadlineAt);
+    // A provider-accepted leg can carry media before /ready completes. Credential
+    // revocation/expiry must remain discoverable throughout that joining phase.
+    if (session.owner) deadlines.push(now + 15000);
+  }
   if (operationPending(session)) deadlines.push(now + 15000);
   session.nextActionAtMs = Math.min(...outstanding, ...deadlines.filter(Number.isFinite));
   if (!Number.isFinite(session.nextActionAtMs)) session.nextActionAtMs = null;
@@ -35,7 +43,7 @@ function terminalize(session, reason, now, { confirmed = false } = {}) {
   session.phase = session.terminal.confirmedAt ? 'ended' : 'ending';
   session.version++; session.updatedAt = now;
   if (session.providerCallId && !session.mediaReadyAt && (session.direction === 'outgoing' || session.owner))
-    job(session, { id: `terminate:${session.providerCallId}`, kind: 'terminate', callId: session.providerCallId,
+    job(session, { id: `terminate:${session.providerCallId.length <= 210 ? session.providerCallId : hash(session.providerCallId)}`, kind: 'terminate', callId: session.providerCallId,
     reason: confirmed ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
   if (session.direction === 'incoming' && !session.owner && !confirmed && session.routeChoice !== 'legacy')
     job(session, { id: 'reject-incoming', kind: 'reject', callId: session.providerCallId });
@@ -49,13 +57,14 @@ const sameBinding = (actor, binding) => binding && actor.deviceId === binding.de
 function ownerBinding(session, call) {
   const saved = session.bindings?.[call.owner.deviceId];
   if (saved?.identity === call.owner.identity) return saved;
-  const transfer = call.transfer;
-  const target = transfer && session.transferBindings?.[transfer.id];
   // Recovery after ownership commit but before the redundant session binding
   // update derives the exact leg only from the committed canonical transfer.
-  if (target && transfer.targetIdentity === call.owner.identity && transfer.toDeviceId === call.owner.deviceId &&
-    ['completing', 'completed'].includes(transfer.status))
-    return { ...target, identity: transfer.targetIdentity, legId: transfer.attemptId };
+  for (const transfer of [call.transfer, ...Object.values(call.transferHistory || {})].filter(Boolean)) {
+    const target = session.transferBindings?.[transfer.id];
+    if (target && transfer.targetIdentity === call.owner.identity && transfer.toDeviceId === call.owner.deviceId &&
+      ['completing', 'completed'].includes(transfer.status))
+      return { ...target, identity: transfer.targetIdentity, legId: transfer.attemptId };
+  }
   return undefined;
 }
 function terminalCanonical(call, now, { confirmed = false, policyReason } = {}) {
@@ -86,9 +95,11 @@ function terminalCanonical(call, now, { confirmed = false, policyReason } = {}) 
  * Device identity is derived from enrolled bearer credentials, not Odoo cookies.
  * Provider calls and notification delivery never occur inside a transaction. */
 export class CallRuntime {
+  #answerClaims = new Map();
+
   constructor({ store, provider, transferController, authenticate, resolveDevice, listDevices,
     capabilities = async () => ({ roomCalling: false, transferEnabled: false }), verifyReadiness,
-    rejectIncoming, notify = async () => {}, phoneNumberId, tenantId = 'smart-handicrafts',
+    rejectIncoming, notify = async () => {}, onWorkAvailable = () => {}, phoneNumberId, tenantId = 'smart-handicrafts',
     minimumNativeBuild = 1, operatorAbsentGraceMs = 45000, now = Date.now }) {
     requireValue(store?.durable === true && provider && typeof authenticate === 'function' && typeof resolveDevice === 'function',
       'CALL_RUNTIME_CONFIG', 'A durable store, media provider and verified device authentication are required.', 503);
@@ -97,7 +108,26 @@ export class CallRuntime {
     requireValue(Number.isSafeInteger(operatorAbsentGraceMs) && operatorAbsentGraceMs >= 30000 && operatorAbsentGraceMs <= 120000,
       'CALL_RUNTIME_CONFIG', 'The operator reconnect grace must be between 30 and 120 seconds.', 503);
     Object.assign(this, { store, provider, transferController, authenticate, resolveDevice, listDevices,
-      capabilityProvider: capabilities, verifyReadiness, rejectIncoming, notify, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now });
+      capabilityProvider: capabilities, verifyReadiness, rejectIncoming, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now });
+  }
+
+  signalWork(id) {
+    // The durable outbox is authoritative; a failed local wake-up only defers
+    // work to the persisted scanner and must not roll back a committed action.
+    try { Promise.resolve(this.onWorkAvailable(id)).catch(() => {}); } catch { /* persisted recovery remains scheduled */ }
+  }
+
+  async #claimAnswer(id, operation) {
+    // Avoid two phones handled by this process taking competing pessimistic
+    // read locks on the same incoming session. The durable transaction remains
+    // authoritative across Render instances/restarts. Only the short claim is
+    // ordered: a losing phone never waits behind LiveKit/media/FCM work.
+    const previous = this.#answerClaims.get(id) || Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(() => undefined, () => undefined);
+    this.#answerClaims.set(id, settled);
+    try { return await result; }
+    finally { if (this.#answerClaims.get(id) === settled) this.#answerClaims.delete(id); }
   }
 
   async actor(context, { media = true } = {}) {
@@ -208,13 +238,17 @@ export class CallRuntime {
     requireValue(session && session.tenantId === this.tenantId, 'CALL_NOT_FOUND', 'Call not found.', 404);
   }
 
-  async view(session) {
-    const call = session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
+  async view(session, observedCall) {
+    const call = observedCall !== undefined ? observedCall :
+      session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
     const terminal = call?.terminal || session.terminal || null;
     return { sessionId: session.id, callId: session.providerCallId || session.id, providerCallId: session.providerCallId || null,
       phase: call ? call.status : session.phase, version: call?.version || session.version, sessionVersion: session.version,
       direction: session.direction, ownerDeviceId: call?.owner?.deviceId || session.owner?.deviceId || null,
+      ownerLegId: call?.owner?.legId || session.owner?.legId || null,
       roomReady: !!call?.active && call.status === 'connected', endConfirmed: !!terminal?.confirmedAt,
+      // Historical readiness proof; current mute UI comes from the native track.
+      mediaReadiness: call?.mediaReadiness || null,
       customerAcceptedAt: session.customerAcceptedAt || null,
       cleanupPending: session.outbox.some(item => item.status !== 'done') || !!call?.outbox.some(item => item.status !== 'done') ||
         (!!terminal && operationPending(session)), terminal,
@@ -225,9 +259,31 @@ export class CallRuntime {
   }
 
   async status(context, id) {
-    await this.actor(context, { media: false });
+    const actor = await this.actor(context, { media: false });
     const session = await this.locate(id); this.requireSession(session);
-    return { call: await this.view(session) };
+    const [canonical, reservation] = await Promise.all([
+      session.providerCallId ? this.store.get(callStoreKey(session.providerCallId)) : null,
+      this.store.get(deviceReservationKey(actor.deviceId))
+    ]);
+    // Local hang-up can precede remote cleanup, including an outgoing call
+    // whose provider ID has not arrived. Only the durable reservation can say
+    // whether this exact actor is available to attempt a waiting call. The
+    // accepting transaction remains authoritative if state changes afterward.
+    // A transfer invitation intentionally reserves its target. It is available
+    // for that exact live invitation, while remaining busy for other calls.
+    // Require the same enrollment binding and durable invite as atomic Accept.
+    const transfer = canonical?.transfer;
+    const targetInvitation = transfer?.toDeviceId === actor.deviceId &&
+      ['invited', 'connecting'].includes(transfer.status);
+    const exactInvitation = !!(targetInvitation && !session.terminal && canonical.active && !canonical.terminal &&
+      canonical.id === session.providerCallId && canonical.tenantId === session.tenantId &&
+      transfer.fromDeviceId === canonical.owner?.deviceId && transfer.toUserId === actor.userId &&
+      sameBinding(actor, session.transferBindings?.[transfer.id]) &&
+      Number.isSafeInteger(transfer.expiresAt) && transfer.expiresAt > this.now() &&
+      reservation?.kind === 'invite' && reservation.callId === canonical.id &&
+      reservation.transferId === transfer.id && reservation.expiresAt === transfer.expiresAt);
+    return { call: await this.view(session, canonical || null), deviceAvailable: !reservation,
+      deviceAvailableForCall: targetInvitation ? exactInvitation : !reservation };
   }
 
   async availableDevices(context, id) {
@@ -277,18 +333,20 @@ export class CallRuntime {
       if (outgoing?.direction === 'outgoing' && outgoing.phoneNumberId === this.phoneNumberId) sessionId = outgoing.id;
     }
     if (!sessionId && event.type === 'incoming') { await this.requireEnabled(); sessionId = event.callId; }
-    if (!sessionId && !['accepted', 'terminate'].includes(event.type)) return { handled: false };
+    if (!sessionId && !['connect', 'accepted', 'terminate'].includes(event.type)) return { handled: false };
     const now = this.now();
-    if (event.type === 'incoming') requireValue(typeof event.offerSdp === 'string' && event.offerSdp.length < 200000 &&
-      /^v=0\r?\n/.test(event.offerSdp) && /(?:^|\r?\n)m=audio\s/.test(event.offerSdp), 'INVALID_SDP', 'An actual incoming audio offer is required.', 400);
+    if (event.type === 'incoming') requireValue(actualAudioSdp(event.offerSdp), 'INVALID_SDP', 'An actual incoming audio offer is required.', 400);
+    if (event.type === 'connect') requireValue(actualAudioSdp(event.answerSdp), 'INVALID_SDP', 'An actual outgoing audio answer is required.', 400);
     const result = await this.store.transaction(async tx => {
-      const [existingMarker, route, terminal, accepted] = await Promise.all([
+      const [existingMarker, route, terminal, accepted, answer] = await Promise.all([
         tx.get(eventKey(marker)), tx.get(eventKey(routeId(event.callId))),
-        tx.get(eventKey(terminalId(event.callId))), tx.get(eventKey(acceptedId(event.callId)))
+        tx.get(eventKey(terminalId(event.callId))), tx.get(eventKey(acceptedId(event.callId))),
+        ['connect', 'accepted'].includes(event.type) ? tx.get(eventKey(answerId(event.callId))) : Promise.resolve(undefined)
       ]);
       const resolvedSessionId = sessionId || route?.sessionId;
       const session = resolvedSessionId ? await tx.get(sessionKey(resolvedSessionId)) : undefined;
-      if (existingMarker) return { handled: !!session, sessionId: session?.id, replayed: true };
+      if (existingMarker && (existingMarker.sessionId || !session || session.providerCallId === event.callId))
+        return { handled: !!session || !!answer, sessionId: session?.id, replayed: true };
       const canonical = event.type === 'terminate' ? await tx.get(callStoreKey(event.callId)) : null;
       const reservations = new Map();
       if (event.type === 'terminate') {
@@ -304,8 +362,9 @@ export class CallRuntime {
           roomName: roomNameFor(sessionId), customerIdentity: customerIdentity(sessionId), owner: null,
           customerPhone: String(event.customerPhone || '').slice(0, 32), customerName: String(event.customerName || '').slice(0, 160),
           channelId: Number.isSafeInteger(event.channelId) && event.channelId > 0 ? event.channelId : 0,
-          offerSdp: event.offerSdp, operations: {}, outbox: [], bindings: {}, createdAt: now, updatedAt: now, deadlineAt: now + 90000 };
-        if (terminal || Number.isFinite(event.occurredAtMs) && now - event.occurredAtMs > 90000)
+          offerSdp: event.offerSdp, operations: {}, outbox: [], bindings: {}, createdAt: now, updatedAt: now,
+          deadlineAt: Math.min(now, Number.isSafeInteger(event.occurredAtMs) && event.occurredAtMs > 0 ? event.occurredAtMs : now) + 90000 };
+        if (terminal || next.deadlineAt <= now)
           terminalize(next, terminal ? 'USER_INITIATED' : 'TIMED_OUT', now, { confirmed: !!terminal });
         else job(next, { id: 'incoming-notification', kind: 'notify', event: 'incoming' });
       }
@@ -313,10 +372,21 @@ export class CallRuntime {
         requireValue(next.tenantId === this.tenantId && (!next.providerCallId || next.providerCallId === event.callId),
           'CALL_ROUTE_CONFLICT', 'The provider call does not match this durable attempt.');
         next.providerCallId = event.callId;
+        if (next.direction === 'outgoing' && answer && !next.terminal && !terminal && !next.mediaReadyAt) {
+          requireValue(answer.tenantId === next.tenantId && answer.phoneNumberId === next.phoneNumberId &&
+            answer.providerFingerprint === next.providerFingerprint && (!next.answerSdp || next.answerSdp === answer.answerSdp),
+          'SDP_ANSWER_CONFLICT', 'The pending answer does not belong to this exact durable call.');
+          next.answerSdp = answer.answerSdp; next.phase = 'connecting';
+          job(next, { id: 'connect-answer', kind: 'connect', callId: event.callId });
+          if (next.operations.dial) next.operations.dial.status = 'acknowledged';
+        }
         if (event.type === 'connect' && next.direction === 'outgoing') {
-          requireValue(typeof event.answerSdp === 'string' && event.answerSdp.length < 200000 && /^v=0\r?\n/.test(event.answerSdp),
-            'INVALID_SDP', 'An actual outgoing audio answer is required.', 400);
-          if (!next.terminal && !next.mediaReadyAt) { next.answerSdp = event.answerSdp; next.phase = 'connecting';
+          requireValue(!answer || answer.tenantId === this.tenantId && answer.phoneNumberId === this.phoneNumberId &&
+            answer.providerFingerprint === next.providerFingerprint && answer.answerSdp === event.answerSdp,
+          'SDP_ANSWER_CONFLICT', 'The verified answer conflicts with the first answer for this exact call.');
+          requireValue(!next.answerSdp || next.answerSdp === event.answerSdp,
+            'SDP_ANSWER_CONFLICT', 'An established call answer cannot be replaced.');
+          if (!next.terminal && !terminal && !next.mediaReadyAt) { next.answerSdp = event.answerSdp; next.phase = 'connecting';
             job(next, { id: 'connect-answer', kind: 'connect', callId: event.callId }); }
           if (next.operations.dial) next.operations.dial.status = 'acknowledged';
         }
@@ -351,25 +421,37 @@ export class CallRuntime {
       if (event.type === 'accepted' && !accepted) tx.set(eventKey(acceptedId(event.callId)),
         { id: acceptedId(event.callId), kind: 'customer-accepted', providerCallId: event.callId,
           tenantId: this.tenantId, acceptedAt: now, createdAt: now });
+      if (event.type === 'connect' && !terminal && !next?.terminal) {
+        requireValue(!answer || answer.tenantId === this.tenantId && answer.phoneNumberId === this.phoneNumberId &&
+          answer.providerFingerprint === this.provider.config.fingerprint && answer.answerSdp === event.answerSdp,
+        'SDP_ANSWER_CONFLICT', 'The verified answer conflicts with the first answer for this exact call.');
+        if (!answer) tx.set(eventKey(answerId(event.callId)), { id: answerId(event.callId), kind: 'pending-answer',
+          tenantId: this.tenantId, phoneNumberId: this.phoneNumberId, providerCallId: event.callId,
+          providerFingerprint: this.provider.config.fingerprint, createdAt: now, answerSdp: event.answerSdp });
+      }
       if (next) {
         if (!route) tx.set(eventKey(routeId(event.callId)), { id: routeId(event.callId), kind: 'route', sessionId: next.id,
           providerCallId: event.callId, tenantId: this.tenantId, createdAt: now });
         tx.set(sessionKey(next.id), next);
       }
-      tx.set(eventKey(marker), { id: marker, kind: 'provider-event', eventType: event.type, providerCallId: event.callId,
+      if (!existingMarker) tx.set(eventKey(marker), { id: marker, kind: 'provider-event', eventType: event.type, providerCallId: event.callId,
         sessionId: next?.id || '', tenantId: this.tenantId, createdAt: now });
-      return { handled: !!next, sessionId: next?.id, terminal: event.type === 'terminate' };
+      return { handled: !!next || event.type === 'connect', sessionId: next?.id, terminal: event.type === 'terminate' };
     });
     return result;
   }
 
   async accept(context, id, { requestId }) {
     const actor = await this.actor(context); request(requestId);
-    const snapshot = await this.locate(id); this.requireSession(snapshot);
+    let snapshot = await this.locate(id); this.requireSession(snapshot);
+    if (snapshot.direction === 'incoming' && sameBinding(actor, snapshot.owner) && snapshot.operations.accept?.status === 'uncertain') {
+      await this.reconcileIncomingAcceptance(snapshot.id);
+      snapshot = await this.locate(id); this.requireSession(snapshot);
+    }
     if (snapshot.mediaReadyAt) return this.resume(context, snapshot, actor);
     if (!snapshot.owner) await this.requireEnabled();
     const legId = `leg_${randomUUID()}`, readinessNonce = randomUUID();
-    const prepared = await this.store.transaction(async tx => {
+    const prepared = await this.#claimAnswer(snapshot.id, () => this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(snapshot.id));
       const reservation = await tx.get(deviceReservationKey(actor.deviceId));
       this.requireSession(session);
@@ -391,11 +473,15 @@ export class CallRuntime {
       session.routeChoice = 'native';
       session.phase = 'accepting'; session.version++; session.updatedAt = this.now(); session.deadlineAt = this.now() + 120000;
       session.operations.accept = { id: requestId, status: 'issued', issuedAt: this.now(), leaseUntil: this.now() + 45000 };
+      // This cancels alerts only. The answered phone keeps its room audio; all
+      // other devices must stop ringing as soon as first-answer ownership wins.
+      job(session, { id: 'ended-notification', kind: 'notify', event: 'ended' });
       schedule(session, this.now());
       tx.set(deviceReservationKey(actor.deviceId), { callId: session.id, sessionId: session.id, deviceId: actor.deviceId, kind: 'pending' });
       tx.set(sessionKey(session.id), session);
       return { session, issueProvider: true };
-    });
+    }));
+    if (prepared.issueProvider) this.signalWork(prepared.session.id);
     if (prepared.issueProvider) {
       let dispatched = false;
       try {
@@ -408,7 +494,12 @@ export class CallRuntime {
         await this.finishProviderOperation(prepared.session.id, 'accept', result);
       } catch (error) {
         await this.failProviderOperation(prepared.session.id, 'accept', error, { notDispatched: !dispatched });
-        throw this.publicProviderError(error);
+        const reconciled = dispatched && error?.outcomeUnknown !== false &&
+          await this.reconcileIncomingAcceptance(prepared.session.id);
+        if (!reconciled) {
+          const publicError = this.publicProviderError(error); publicError.sessionId = prepared.session.id;
+          this.signalWork(prepared.session.id); throw publicError;
+        }
       }
     }
     const current = await this.store.get(sessionKey(prepared.session.id));
@@ -507,9 +598,11 @@ export class CallRuntime {
       if (!session) return { sessionId: id, cancelled: true, awaitingOriginalRequest: true };
       requireValue(sameBinding(actor, session.owner), 'NOT_CALL_OWNER', 'This outgoing attempt belongs to another enrollment.', 403);
       const view = await this.view(session);
-      if (view.ownerDeviceId !== actor.deviceId) return { sessionId: id, cancelled: false, ownershipMoved: true, call: view };
+      if (view.ownerDeviceId !== actor.deviceId || view.ownerLegId !== session.owner.legId)
+        return { sessionId: id, cancelled: false, ownershipMoved: true, call: view };
       if (session.terminal) return { sessionId: id, cancelled: true, call: view };
-      try { return { sessionId: id, cancelled: true, ...await this.end(context, id, { version: view.version, requestId }) }; }
+      try { return { sessionId: id, cancelled: true, ...await this.end(context, id,
+        { version: view.version, requestId, expectedOwnerLegId: session.owner.legId }) }; }
       catch (error) { if (error.code !== 'STALE_CALL_VERSION' || attempt === 2) throw error; }
     }
   }
@@ -520,18 +613,24 @@ export class CallRuntime {
       error?.outcomeUnknown === false ? 'The provider did not accept this operation.' : 'The provider result is uncertain; the existing attempt is being reconciled.', 502);
   }
 
-  async finishProviderOperation(id, operation, result) {
+  async finishProviderOperation(id, operation, result, observation = null) {
     identifier(result?.callId);
     return this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(id)); this.requireSession(session);
-      const route = await tx.get(eventKey(routeId(result.callId)));
-      const terminal = await tx.get(eventKey(terminalId(result.callId)));
-      const accepted = await tx.get(eventKey(acceptedId(result.callId)));
+      const [route, terminal, accepted, answer] = await Promise.all([
+        tx.get(eventKey(routeId(result.callId))), tx.get(eventKey(terminalId(result.callId))),
+        operation === 'dial' ? tx.get(eventKey(acceptedId(result.callId))) : Promise.resolve(undefined),
+        operation === 'dial' ? tx.get(eventKey(answerId(result.callId))) : Promise.resolve(undefined)
+      ]);
+      if (observation && (session.operations[operation]?.id !== observation.operationId ||
+          session.owner?.identity !== observation.ownerIdentity ||
+          !['issued', 'uncertain'].includes(session.operations[operation]?.status))) return session;
       requireValue(result.roomName === session.roomName && result.customerIdentity === session.customerIdentity &&
         (!session.providerCallId || session.providerCallId === result.callId) && (!route || route.sessionId === id),
         'MEDIA_IDENTITY_MISMATCH', 'The provider returned an unexpected call or room identity.', 502);
       session.providerCallId = result.callId;
       session.operations[operation].status = 'acknowledged'; session.operations[operation].acknowledgedAt = this.now();
+      if (observation) session.operations[operation].acknowledgementSource = 'exact-customer-leg-observed';
       if (terminal && !session.terminal) terminalize(session, 'USER_INITIATED', this.now(), { confirmed: true });
       if (session.terminal) {
         // A cancellation can precede the provider's response. This distinct
@@ -540,7 +639,16 @@ export class CallRuntime {
           reason: session.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
       } else {
         if (session.direction === 'outgoing' && accepted) session.customerAcceptedAt ||= accepted.acceptedAt;
+        if (session.direction === 'outgoing' && answer && !session.mediaReadyAt) {
+          requireValue(answer.tenantId === session.tenantId && answer.phoneNumberId === session.phoneNumberId &&
+            answer.providerCallId === result.callId && answer.providerFingerprint === session.providerFingerprint &&
+            (!session.answerSdp || session.answerSdp === answer.answerSdp),
+          'SDP_ANSWER_CONFLICT', 'The pending answer does not belong to this exact durable call.');
+          session.answerSdp = answer.answerSdp;
+          job(session, { id: 'connect-answer', kind: 'connect', callId: result.callId });
+        }
         if (!session.mediaReadyAt) session.phase = operation === 'accept' ? 'joining' : session.answerSdp ? 'connecting' : 'ringing';
+        if (!session.mediaReadyAt && session.deadlineAt <= this.now()) terminalize(session, 'TIMED_OUT', this.now());
       }
       session.version++; session.updatedAt = this.now(); schedule(session, this.now());
       if (!route) tx.set(eventKey(routeId(result.callId)), { id: routeId(result.callId), kind: 'route', sessionId: id,
@@ -548,6 +656,27 @@ export class CallRuntime {
       tx.set(sessionKey(id), session);
       return session;
     });
+  }
+
+  /** Recover a lost Accept HTTP response by observing the exact preassigned
+   * customer leg. Presence permits the same operator to join; it never asserts
+   * Connected, bidirectional media or customer pickup. Accept is never retried. */
+  async reconcileIncomingAcceptance(id) {
+    const session = await this.store.get(sessionKey(id));
+    const operation = session?.operations?.accept;
+    if (!session || session.direction !== 'incoming' || session.routeChoice !== 'native' || !session.owner ||
+        !session.providerCallId || !operation || !(operation.status === 'uncertain' ||
+        operation.status === 'issued' && operation.leaseUntil <= this.now())) return false;
+    let observed;
+    try { observed = await this.providerFor(session).inspectParticipants({ roomName: session.roomName,
+      customerIdentity: session.customerIdentity, operatorIdentity: session.owner.identity }); }
+    catch { return false; }
+    if (!observed.customerActive || !Number.isFinite(observed.observedAt) || observed.observedAt > this.now() ||
+        this.now() - observed.observedAt > 5000) return false;
+    const current = await this.finishProviderOperation(id, 'accept', { callId: session.providerCallId,
+      roomName: session.roomName, customerIdentity: session.customerIdentity },
+    { operationId: operation.id, ownerIdentity: session.owner.identity });
+    return !current.terminal && current.phase === 'joining' && current.owner.identity === session.owner.identity;
   }
 
   async failProviderOperation(id, operation, error, { notDispatched = false } = {}) {
@@ -585,7 +714,9 @@ export class CallRuntime {
     requireValue(typeof this.verifyReadiness === 'function', 'NATIVE_READINESS_UNAVAILABLE', 'Native media readiness is not integrated.', 501);
     const proof = await this.verifyReadiness({ actor, call: snapshot, evidence });
     const now = this.now();
-    requireValue(proof?.verified === true && proof.bidirectionalAudio === true && proof.callId === snapshot.id &&
+    const confirmedCustomerMute = proof?.transportReady === true && proof.customerMuted === true &&
+      proof.bidirectionalAudio === false && proof.evidenceKind === 'authenticated-sdk-rtc-with-provider-confirmed-customer-mute';
+    requireValue(proof?.verified === true && (proof.bidirectionalAudio === true || confirmedCustomerMute) && proof.callId === snapshot.id &&
       proof.deviceId === actor.deviceId && proof.identity === snapshot.owner.identity && proof.readinessNonce === snapshot.readinessNonce &&
       Number.isFinite(proof.observedAt) && proof.observedAt <= now && now - proof.observedAt <= 5000,
       'MEDIA_NOT_VERIFIED', 'Fresh corroborated audio progress is required.');
@@ -604,10 +735,20 @@ export class CallRuntime {
       // The native UI compares versions across joining and connected states.
       // Promoting to canonical storage must not reset that public counter to 1.
       call.version = session.version + 1;
-      // Real decoded/RTP readiness resolves a possibly lost Connect acknowledgement.
+      call.mediaReadiness = {
+        mode: confirmedCustomerMute ? 'customer-muted-transport' : 'bidirectional-audio',
+        bidirectionalAudioVerifiedAtReady: proof.bidirectionalAudio === true,
+        customerMutedAtReady: confirmedCustomerMute,
+        observedAt: proof.observedAt
+      };
+      // Corroborated transport readiness resolves a possibly lost Connect acknowledgement.
       // Do not replay SDP against an already established customer media leg.
       const answerJob = session.outbox.find(item => item.id === 'connect-answer');
       if (answerJob && answerJob.status !== 'done') { answerJob.status = 'done'; delete answerJob.leaseId; delete answerJob.leaseUntil; }
+      if (session.operations.connect && ['issued', 'uncertain'].includes(session.operations.connect.status)) {
+        session.operations.connect.status = 'acknowledged'; session.operations.connect.acknowledgedAt = this.now();
+        session.operations.connect.acknowledgementSource = 'fresh-media-readiness';
+      }
       session.phase = 'connected'; session.mediaReadyAt = this.now(); session.version++; session.updatedAt = this.now(); schedule(session, this.now());
       tx.set(sessionKey(session.id), session);
       tx.set(callStoreKey(call.id), call);
@@ -616,28 +757,46 @@ export class CallRuntime {
     return { call: await this.view(await this.store.get(sessionKey(snapshot.id))) };
   }
 
-  async end(context, id, { version, requestId, reject = false }) {
+  async end(context, id, { version, requestId, reject = false, expectedOwnerLegId }) {
     const actor = await this.actor(context, { media: false }); request(requestId);
+    if (expectedOwnerLegId !== undefined) identifier(expectedOwnerLegId, 'operator leg');
     const snapshot = await this.locate(id); this.requireSession(snapshot);
-    const canonical = snapshot.providerCallId ? await this.store.get(callStoreKey(snapshot.providerCallId)) : null;
-    if (canonical) {
-      requireValue(!reject, 'CALL_ALREADY_ANSWERED', 'Use End for an answered call.');
-      requireValue(this.transferController, 'CALL_RUNTIME_CONFIG', 'The connected call controller is unavailable.', 503);
-      await this.transferController.endByOperator(context, { callId: canonical.id, expectedVersion: version });
-      await this.markSessionEnded(snapshot.id, 'BUSINESS_INITIATED', false);
-    } else await this.store.transaction(async tx => {
+    await this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(snapshot.id));
-      const reservation = session.owner ? await tx.get(deviceReservationKey(session.owner.deviceId)) : null;
-      requireValue(!session.owner || sameBinding(actor, session.owner), 'NOT_CALL_OWNER', 'Another device owns this call.', 403);
-      if (session.terminal) return;
-      exact(session.version, version);
-      requireValue(!reject || session.direction === 'incoming' && session.phase === 'ringing' && !session.owner,
+      const call = session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
+      const owner = call?.owner || session.owner;
+      const identities = new Map(owner ? [[owner.deviceId, owner.identity]] : []);
+      if (call?.transfer?.sourceIdentity) identities.set(call.transfer.fromDeviceId, call.transfer.sourceIdentity);
+      if (call?.transfer?.toDeviceId) identities.set(call.transfer.toDeviceId, call.transfer.targetIdentity || null);
+      const reservations = new Map(await Promise.all([...identities.keys()].map(async deviceId =>
+        [deviceId, await tx.get(deviceReservationKey(deviceId))])));
+      requireValue(!owner || sameBinding(actor, call ? ownerBinding(session, call) : session.owner),
+        'NOT_CALL_OWNER', 'Another device or enrollment owns this call.', 403);
+      if (expectedOwnerLegId !== undefined) requireValue(owner?.legId === expectedOwnerLegId,
+        'CALL_LEG_CHANGED', 'The original operator leg no longer owns this call.');
+      if (call && expectedOwnerLegId === undefined) {
+        const priorLegs = [session.owner, ...[...Object.values(call.transferHistory || {}), ...(call.transfer ? [call.transfer] : [])]
+          .flatMap(tr => [{ deviceId: tr.fromDeviceId, identity: tr.sourceIdentity }, { deviceId: tr.toDeviceId, identity: tr.targetIdentity }])];
+        requireValue(!priorLegs.some(prior => prior?.deviceId === actor.deviceId && prior.identity && prior.identity !== owner.identity),
+          'CALL_LEG_REQUIRED', 'Update SH Chat to end a call that has transferred back to this device.');
+      }
+      if (session.terminal && (!call || !call.active)) return;
+      exact(call?.version || session.version, version);
+      requireValue(!reject || !call && session.direction === 'incoming' && session.phase === 'ringing' && !session.owner,
         'CALL_ALREADY_ANSWERED', 'This call has already started answering.');
-      terminalize(session, reject ? 'REJECTED' : 'BUSINESS_INITIATED', this.now());
-      if (session.owner && reservation?.sessionId === session.id)
-        tx.set(deviceReservationKey(session.owner.deviceId), { ...reservation, kind: 'cleanup', identity: session.owner.identity });
+      const now = this.now();
+      terminalize(session, reject ? 'REJECTED' : 'BUSINESS_INITIATED', now);
+      if (call) { terminalCanonical(call, now); tx.set(callStoreKey(call.id), call); }
+      for (const [deviceId, identity] of identities) {
+        const reservation = reservations.get(deviceId);
+        if (reservation && [session.id, session.providerCallId].includes(reservation.callId)) {
+          if (identity) tx.set(deviceReservationKey(deviceId), { ...reservation, kind: 'cleanup', identity, deviceId });
+          else if (reservation.kind === 'invite' && reservation.transferId === call?.transfer?.id) tx.delete(deviceReservationKey(deviceId));
+        }
+      }
       schedule(session, this.now()); tx.set(sessionKey(session.id), session);
     });
+    this.signalWork(snapshot.id);
     return { call: await this.view(await this.store.get(sessionKey(snapshot.id))) };
   }
 
@@ -659,11 +818,15 @@ export class CallRuntime {
     const callId = session.providerCallId;
     let result;
     if (action === 'invite') {
+      const currentCall = await this.store.get(callStoreKey(callId));
+      requireValue(currentCall?.active && sameBinding(actor, ownerBinding(session, currentCall)),
+        'DEVICE_BINDING_CHANGED', 'This transfer must belong to the current enrolled operator leg.', 403);
       const target = await this.resolveDevice(identifier(body.toDeviceId));
       requireValue(target && target.tenantId === this.tenantId && target.revoked !== true && target.receiveCalls !== false &&
         target.mediaProtocol === 'sh-room-audio-v1' && target.nativeBuild >= this.minimumNativeBuild &&
         target.credentialExpiresAt > this.now() && Number.isSafeInteger(target.credentialGeneration),
         'TARGET_UNAVAILABLE', 'The destination enrollment is not ready for native room calls.');
+      await this.recheck(context, actor);
       result = await this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
         expectedVersion: body.version, requestId: request(body.requestId) });
       await this.store.transaction(async tx => {
@@ -763,7 +926,7 @@ export class CallRuntime {
       if (session.owner) identities.set(session.owner.deviceId, session.owner.identity);
       if (call?.owner) identities.set(call.owner.deviceId, call.owner.identity);
       if (call?.transfer?.sourceIdentity) identities.set(call.transfer.fromDeviceId, call.transfer.sourceIdentity);
-      if (call?.transfer?.targetIdentity) identities.set(call.transfer.toDeviceId, call.transfer.targetIdentity);
+      if (call?.transfer?.toDeviceId) identities.set(call.transfer.toDeviceId, call.transfer.targetIdentity || null);
       const reservations = new Map();
       for (const deviceId of identities.keys()) reservations.set(deviceId, await tx.get(deviceReservationKey(deviceId)));
       const now = this.now();
@@ -774,22 +937,34 @@ export class CallRuntime {
       }
       for (const [deviceId, identity] of identities) {
         const reservation = reservations.get(deviceId);
-        if (reservation && (reservation.callId === session.id || reservation.callId === session.providerCallId))
-          tx.set(deviceReservationKey(deviceId), { ...reservation, kind: 'cleanup', identity, deviceId });
+        if (reservation && (reservation.callId === session.id || reservation.callId === session.providerCallId)) {
+          if (identity) tx.set(deviceReservationKey(deviceId), { ...reservation, kind: 'cleanup', identity, deviceId });
+          else if (reservation.kind === 'invite' && reservation.transferId === call?.transfer?.id) tx.delete(deviceReservationKey(deviceId));
+        }
       }
       schedule(session, now); tx.set(sessionKey(session.id), session);
     });
   }
 
   async reconcileEligibility(session) {
-    const call = session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
+    // A transfer may commit while this worker is awaiting provider cleanup.
+    // Resolve canonical ownership and its credential bindings from one current
+    // snapshot; old session data must not look like a revoked new owner.
+    const current = await this.store.transaction(async tx => {
+      const latest = await tx.get(sessionKey(session.id));
+      const call = latest?.providerCallId ? await tx.get(callStoreKey(latest.providerCallId)) : null;
+      return { session: latest, call };
+    });
+    session = current.session;
+    if (!session) return;
+    const call = current.call;
     if (call && !call.active && !session.terminal) {
       await this.markSessionEnded(session.id, call.terminal.reason, !!call.terminal.confirmedAt);
       return;
     }
     const owner = call?.active ? call.owner : session.terminal ? null : session.owner;
     if (owner) {
-      const binding = session.bindings[owner.deviceId] || Object.values(session.transferBindings || {}).find(row => row.deviceId === owner.deviceId);
+      const binding = call?.active ? ownerBinding(session, call) : session.owner;
       const row = await this.resolveDevice(owner.deviceId);
       if (!binding || !row || row.revoked || row.userId !== binding.userId || row.credentialGeneration !== binding.credentialGeneration ||
         row.credentialExpiresAt <= this.now() || row.tenantId !== this.tenantId) {
@@ -799,7 +974,12 @@ export class CallRuntime {
     if (call?.active && !session.terminal) await this.reconcileOperatorPresence(session, call);
     if (call?.active && call.transfer && ['invited', 'connecting'].includes(call.transfer.status)) {
       const binding = session.transferBindings?.[call.transfer.id], row = await this.resolveDevice(call.transfer.toDeviceId);
-      if (!binding || !row || row.revoked || row.userId !== binding.userId || row.credentialGeneration !== binding.credentialGeneration ||
+      // Invite commits before the coordinator's generation binding/outbox write.
+      // An absent binding cannot authorize target Accept, but it is not proof of
+      // revocation. Preserve the source and let replay repair it or expiry clean
+      // its unjoined reservation; do not cancel a concurrently initializing invite.
+      if (!binding) return;
+      if (!row || row.revoked || row.userId !== binding.userId || row.credentialGeneration !== binding.credentialGeneration ||
         row.credentialExpiresAt <= this.now()) {
         // Expire only the target invitation; preserve the existing operator/customer.
         await this.store.transaction(async tx => {
@@ -858,7 +1038,21 @@ export class CallRuntime {
     return { dispatched: effects.some(item => item.succeeded), effects };
   }
 
-  async drainSessionOutbox(id, { limit, incomingOnly = false }) {
+  async dispatchRingCancellation(id) {
+    return this.drainSessionOutbox(id, { limit: 1, endedOnly: true });
+  }
+
+  async dispatchCriticalCleanup(id) {
+    const session = await this.store.get(sessionKey(id));
+    if (!session || session.routeChoice === 'legacy') return;
+    if (session.providerCallId && this.transferController)
+      await this.transferController.drainOutbox(session.providerCallId, { limit: 2 });
+    if (session.terminal && !session.mediaReadyAt)
+      await this.drainSessionOutbox(id, { limit: 4, mediaCleanupOnly: true });
+    await this.releasePreMediaReservation(id);
+  }
+
+  async drainSessionOutbox(id, { limit, incomingOnly = false, endedOnly = false, mediaCleanupOnly = false }) {
     requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
     const effects = [];
     for (let index = 0; index < limit; index++) {
@@ -868,16 +1062,38 @@ export class CallRuntime {
         if (!current) return null;
         if (incomingOnly && (current.direction !== 'incoming' || current.terminal || current.owner ||
             current.phase !== 'ringing' || current.deadlineAt <= this.now())) return null;
+        if (endedOnly && !current.terminal && !current.owner) return null;
+        let changed = false;
+        for (const item of current.outbox.filter(row => row.kind === 'connect' && row.status !== 'done')) {
+          const operation = current.operations.connect;
+          if (current.terminal || current.mediaReadyAt || operation && ['acknowledged', 'provider-ended', 'failed'].includes(operation.status)) {
+            item.status = 'done'; delete item.leaseId; delete item.leaseUntil; changed = true;
+          } else if (operation && isDue(item, this.now())) {
+            // Connect is a one-shot SDP mutation. A transport failure or expired
+            // job lease must never replay it. Fresh native media can resolve the
+            // ambiguity; otherwise the original join deadline ends the attempt.
+            item.status = 'pending'; item.notBefore = this.now() + 15000;
+            delete item.leaseId; delete item.leaseUntil; changed = true;
+          }
+        }
         const selected = incomingOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())) :
+          endedOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'ended' && isDue(item, this.now())) :
+          mediaCleanupOnly ? current.outbox.find(item => ['terminate', 'reject'].includes(item.kind) && isDue(item, this.now())) ||
+            current.outbox.find(item => item.kind === 'detach' && isDue(item, this.now())) :
           current.outbox.find(item => ['terminate', 'reject'].includes(item.kind) && isDue(item, this.now())) ||
           current.outbox.find(item => isDue(item, this.now()));
-        if (!selected) return null;
+        if (!selected) {
+          if (changed) { schedule(current, this.now()); tx.set(sessionKey(id), current); }
+          return null;
+        }
+        if (selected.kind === 'connect') current.operations.connect = { id: selected.id, status: 'issued',
+          issuedAt: this.now(), leaseUntil: this.now() + 45000 };
         Object.assign(selected, { status: 'running', leaseId, leaseUntil: this.now() + 45000, attempts: selected.attempts + 1 });
         schedule(current, this.now()); tx.set(sessionKey(id), current);
         return { session: current, job: copy(selected) };
       });
       if (!claimed) break;
-      let succeeded = false;
+      let succeeded = false, providerError = null;
       try {
         const current = await this.store.get(sessionKey(id));
         const item = claimed.job;
@@ -886,25 +1102,54 @@ export class CallRuntime {
         } else if (item.kind === 'terminate') await this.providerFor(current).terminateCustomer(item);
         else if (item.kind === 'detach') await this.providerFor(current).detachOperator(item);
         else if (item.kind === 'reject') {
-          requireValue(typeof this.rejectIncoming === 'function', 'REJECT_PROVIDER_UNAVAILABLE', 'The server reject adapter is unavailable.', 503);
-          await this.rejectIncoming({ callId: item.callId, phoneNumberId: this.phoneNumberId });
+          if (!current.terminal?.confirmedAt) {
+            requireValue(typeof this.rejectIncoming === 'function', 'REJECT_PROVIDER_UNAVAILABLE', 'The server reject adapter is unavailable.', 503);
+            await this.rejectIncoming({ callId: item.callId, phoneNumberId: this.phoneNumberId });
+          }
         } else if (item.kind === 'notify') {
+          let expiresAtMs = current.deadlineAt;
           let eligible = ['ended', 'transfer-ended'].includes(item.event) || item.event === 'incoming' && !current.terminal && !current.owner && current.phase === 'ringing' && current.deadlineAt > this.now();
           if (item.event === 'transfer-incoming' && !current.terminal) {
             const active = await this.store.get(callStoreKey(current.providerCallId));
             eligible = active?.active && active.transfer?.id === item.transferId && active.transfer.status === 'invited';
+            expiresAtMs = active?.transfer?.expiresAt;
           }
           if (eligible) await this.notify({ session: current, event: item.event,
-            transferId: item.transferId, toDeviceId: item.toDeviceId, reason: item.reason });
+            transferId: item.transferId, toDeviceId: item.toDeviceId, reason: item.reason, expiresAtMs });
         } else throw new MediaError('INVALID_JOB', 'Unknown session recovery operation.');
         succeeded = true;
-      } catch { /* Persist retry; do not put SDK details/tokens/SDP into records. */ }
+      } catch (error) { providerError = error; /* Never persist SDK detail, token or SDP in error records. */ }
       await this.store.transaction(async tx => {
         const current = await tx.get(sessionKey(id));
         const item = current.outbox.find(row => row.id === claimed.job.id);
+        if (claimed.job.kind === 'connect' && current.terminal && current.operations.connect?.id === claimed.job.id) {
+          const operation = current.operations.connect;
+          if (['issued', 'uncertain'].includes(operation.status)) {
+            operation.status = succeeded ? 'acknowledged' : providerError?.outcomeUnknown === false ? 'failed' : 'uncertain';
+            operation.settledAt = this.now();
+          }
+          // End may invalidate this job lease while Connect's HTTP response is
+          // still in flight. Reconcile that late result against the old call,
+          // even after the primary disconnect has acknowledged. Never replay SDP.
+          job(current, { id: 'terminate:late-connect', kind: 'terminate', callId: claimed.job.callId,
+            reason: current.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
+          if (item && item.status !== 'done') { item.status = 'done'; delete item.leaseId; delete item.leaseUntil; }
+          current.updatedAt = this.now(); schedule(current, this.now()); tx.set(sessionKey(id), current);
+          return;
+        }
         if (!item || item.leaseId !== leaseId) return;
-        item.status = succeeded ? 'done' : 'pending'; item.notBefore = this.now() + Math.min(30000, 1000 * 2 ** Math.min(item.attempts, 5));
+        if (item.kind === 'connect' && current.operations.connect && current.operations.connect.status === 'issued') {
+          const operation = current.operations.connect;
+          operation.status = succeeded ? 'acknowledged' : providerError?.outcomeUnknown === false ? 'failed' : 'uncertain';
+          if (succeeded) operation.acknowledgedAt = this.now();
+          if (operation.status === 'failed' && !current.terminal) terminalize(current, 'FAILED', this.now());
+        }
+        item.status = succeeded || item.kind === 'connect' && current.operations.connect?.status === 'failed' ? 'done' : 'pending';
+        item.notBefore = this.now() + (item.kind === 'connect' ? 15000 : Math.min(30000, 1000 * 2 ** Math.min(item.attempts, 5)));
         delete item.leaseId; delete item.leaseUntil;
+        if (succeeded && item.kind === 'terminate' && (current.operations.connect?.status === 'uncertain' ||
+            current.operations.connect?.status === 'issued' && current.operations.connect.leaseUntil <= this.now()))
+          current.operations.connect.status = 'provider-ended';
         if (succeeded && ['terminate', 'reject'].includes(item.kind) && current.terminal && !operationPending(current) &&
           current.outbox.filter(row => ['terminate', 'reject'].includes(row.kind)).every(row => row.status === 'done') && !current.terminal.confirmedAt) {
           current.terminal.confirmedAt = this.now(); current.phase = 'ended'; current.version++;
@@ -920,39 +1165,63 @@ export class CallRuntime {
   async recoverSession(id, { limit = 4 } = {}) {
     requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
     let session = await this.store.get(sessionKey(id)); if (!session) return { recovered: false };
+    // Stop customer/operator media before waiting on FCM, history or presence
+    // checks. The same durable cleanup leases are shared with every worker.
+    await this.dispatchCriticalCleanup(id);
+    // Notification delivery must not delay revocation, expiration or a newly
+    // committed terminal cleanup either. Its own durable lease still dedupes it.
+    const cancellation = this.dispatchRingCancellation(id).catch(() => []);
+    await this.reconcileIncomingAcceptance(id);
+    session = await this.store.get(sessionKey(id));
     await this.reconcileEligibility(session);
     if (session.providerCallId && this.transferController) await this.transferController.expire(session.providerCallId);
     await this.syncTransferNotifications(id);
     await this.store.transaction(async tx => {
       const current = await tx.get(sessionKey(id));
       const now = this.now();
-      for (const op of Object.values(current.operations)) if (op.status === 'issued' && op.leaseUntil <= now) {
-        op.status = 'uncertain'; if (!current.terminal) current.phase = 'uncertain'; current.version++;
+      for (const [name, op] of Object.entries(current.operations)) if (op.status === 'issued' && op.leaseUntil <= now) {
+        op.status = 'uncertain'; if (!current.terminal && name !== 'connect') current.phase = 'uncertain'; current.version++;
+      }
+      if (current.terminal && current.operations.connect?.status === 'uncertain' && current.operations.connect.leaseUntil <= now) {
+        // Recover a process crash during Connect after its original bounded
+        // operation lease. A final exact-call disconnect settles uncertainty;
+        // the device remains reserved until that compensating cleanup succeeds.
+        job(current, { id: 'terminate:late-connect', kind: 'terminate', callId: current.providerCallId,
+          reason: current.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
       }
       if (!current.terminal && current.phase !== 'connected' && current.deadlineAt <= now) {
         terminalize(current, 'TIMED_OUT', now);
       }
       current.updatedAt = now; schedule(current, now); tx.set(sessionKey(id), current);
     });
+    await this.dispatchCriticalCleanup(id);
     const effects = await this.drainSessionOutbox(id, { limit });
     session = await this.store.get(sessionKey(id));
     if (session.providerCallId && this.transferController) await this.transferController.drainOutbox(session.providerCallId, { limit: 2 });
     await this.releasePreMediaReservation(id);
+    await cancellation;
     return { recovered: true, effects };
   }
 
   async releasePreMediaReservation(id) {
-    await this.store.transaction(async tx => {
+    for (let transition = 0; transition < 2; transition++) {
+    const advanced = await this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(id));
-      if (!session?.owner || !session.terminal?.confirmedAt || operationPending(session) || session.outbox.some(item => item.status !== 'done')) return;
+      if (!session?.owner || !session.terminal?.confirmedAt || operationPending(session) ||
+          session.outbox.some(item => item.kind !== 'notify' && item.status !== 'done')) return false;
       const call = session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
       const reservation = await tx.get(deviceReservationKey(session.owner.deviceId));
-      if (call || !reservation || reservation.sessionId !== session.id || !['pending', 'cleanup'].includes(reservation.kind)) return;
+      if (call || !reservation || reservation.sessionId !== session.id || reservation.deviceId !== session.owner.deviceId ||
+          !['pending', 'cleanup'].includes(reservation.kind) ||
+          reservation.kind === 'cleanup' && reservation.identity !== session.owner.identity) return false;
       if (reservation.kind === 'pending') {
         // Two commits deliberately preserve the explicit cleanup transition.
         tx.set(deviceReservationKey(session.owner.deviceId), { ...reservation, kind: 'cleanup', identity: session.owner.identity });
         session.nextActionAtMs = this.now(); tx.set(sessionKey(id), session);
-      } else tx.delete(deviceReservationKey(session.owner.deviceId));
+        return true;
+      } else { tx.delete(deviceReservationKey(session.owner.deviceId)); return false; }
     });
+    if (!advanced) break;
+    }
   }
 }

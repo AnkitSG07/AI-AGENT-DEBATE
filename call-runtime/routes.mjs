@@ -15,6 +15,7 @@ export function mountNativeCallRoutes(app, { runtime, prefix = '/api/operator-an
       res.status(200).json({ ok: true, ...result });
       if (req.method === 'POST' && result.call?.sessionId) scheduleRecovery(result.call.sessionId);
     } catch (error) {
+      if (error instanceof MediaError && typeof error.sessionId === 'string') scheduleRecovery(error.sessionId);
       const known = error instanceof MediaError;
       res.set?.('Cache-Control', 'no-store');
       res.status(known ? error.statusCode : 503).json({ ok: false,

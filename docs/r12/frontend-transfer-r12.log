@@ -1,0 +1,15 @@
+PASS ordinary incoming answer uses one microphone, one provider accept; end releases audio
+PASS old backend with no transfer capability cannot open a picker or request transfer
+PASS a server available=true flag cannot enable an unimplemented media adapter
+PASS legacy target invitation cannot ring, open microphone, claim ownership or repeat accept
+PASS a transfer notification is explanatory only and cannot mutate call state
+PASS an exact legacy target accepted lock does not prematurely stop source audio
+PASS an unrelated foreign owner still stops local audio safely
+PASS provider terminal event always closes audio despite an exact legacy transfer lock
+PASS legacy decline and expiry refresh status without ending the source call
+PASS cancelling a legacy invitation uses exact source identity and preserves customer audio
+PASS mismatched legacy transfer responses cannot replace source status or ownership
+PASS a status response started before cancellation cannot resurrect the invitation
+PASS ordinary outgoing call still waits for provider acceptance plus connected transport
+PASS R12 artifact versions, identical text copy and unambiguous colleague labels
+{"passed":14,"failed":0,"sha256":"e4a501acae8c119dbe181ee4efc7b4815c9927bda7a567a0e7bce2b4900d2e9f"}

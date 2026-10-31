@@ -1,0 +1,2328 @@
+<!-- Historical browser-call source fixture. Extracted verbatim from R8 embed SHA256 6f1ab21ae8dee54a4432a866ff71b1be1ca4224ccf7a3b57feea65e1a1a7d0fe. No live requests are used by its harness. -->
+  const whatsappCallsRuntime = {
+    requests: new Map(),
+    callReads: new Map(),
+    loadedAt: new Map(),
+    controllers: new Set(),
+    pollPromise: null,
+    notified: new Set(),
+    suppressed: new Set(),
+    actionToken: 0,
+    actionPending: false,
+    rejectingCallKey: "",
+    eventSource: null,
+    realtimeRefreshPromise: null,
+    realtimeRefreshDirty: false,
+    realtimeCallIds: new Set(),
+    realtimeRetryTimer: null,
+    realtimeFailures: 0,
+    disconnectTimer: null,
+    connectTimer: null,
+    focusedCallKey: "",
+    localStatus: new Map(),
+    lookedUpCallKeys: new Set(),
+    claimedLocks: new Map(),
+    lockOperations: new Map(),
+    identity: null,
+    profile: null,
+    audioContext: null,
+    soundMuted: false,
+    audioPlaybackBlocked: false,
+    ringtoneTimer: null,
+    ringingKey: "",
+    toneNodes: new Set(),
+    incomingExpiryTimer: null,
+    incomingExpiryKey: "",
+    incomingExpiryAt: 0,
+    notificationSequence: 0,
+    notificationChannels: new Map(),
+    lastHistoryPollMs: 0,
+    lastHistoryAttemptMs: 0,
+    session: null,
+    dialTarget: null,
+    pendingTransfer: null,
+    pendingTransferPromise: null,
+    transferDevices: [],
+    transferDevicesPromise: null,
+    transferSelectorOpen: false,
+    transferSendPending: false,
+    presenceTimer: null,
+    presencePromise: null,
+    presenceDirty: false,
+    availabilitySyncPromise: null,
+    presenceConfirmed: false,
+    presenceError: "",
+    presencePostedAt: 0,
+    callConfig: null,
+    callConfigPromise: null,
+    pendingOutgoing: new Map(),
+    notificationReadOnlyKey: "",
+    notificationTransferId: ""
+  };
+
+  // ---------- Android native notification bridge (r8) ----------
+  // Android owns device credentials and FCM. This bridge exposes only lifecycle
+  // hints and navigation; a notification never answers or rejects a call.
+  const hubNativeRuntime = { ready: false, timer: null, callId: "", lastState: "", openId: "", openPromise: null, chatId: 0, chatPromise: null };
+
+  function hasHubNativeBridge() {
+    try {
+      return window.top === window && location.origin === "https://www.smarthandicrafts.com" &&
+        !appRoot.isContentEditable && new URLSearchParams(location.search).get("enable_editor") !== "1" &&
+        typeof window.SHNative?.postMessage === "function";
+    } catch { return false; }
+  }
+
+  function postHubNativeMessage(message, { closing = false } = {}) {
+    if (!hasHubNativeBridge() || !state.session?.uid || (state.destroyed && !closing)) return false;
+    try { window.SHNative.postMessage(JSON.stringify(message)); return true; } catch { return false; }
+  }
+
+  function stopHubNativeCallState(session = null) {
+    const id = session ? whatsappOpaqueId(session.callId) : "";
+    if (session && whatsappCallsRuntime.session !== session && id !== hubNativeRuntime.callId) return;
+    clearInterval(hubNativeRuntime.timer); hubNativeRuntime.timer = null;
+    const previous = hubNativeRuntime.callId;
+    hubNativeRuntime.callId = ""; hubNativeRuntime.lastState = "";
+    if (previous) postHubNativeMessage({ type: "call-state", callId: previous, state: "ended" }, { closing: true });
+  }
+
+  function syncHubNativeCallState({ heartbeat = false } = {}) {
+    const session = whatsappCallsRuntime.session;
+    const id = whatsappOpaqueId(session?.callId);
+    if (!hubNativeRuntime.ready || !hasHubNativeBridge() || state.destroyed || !state.session?.uid ||
+        !session || session.finished || session.cancelRequested) {
+      stopHubNativeCallState(); return;
+    }
+    // An outgoing request without a real provider ID is not a native call yet.
+    if (!id) return;
+    if (hubNativeRuntime.callId && hubNativeRuntime.callId !== id) stopHubNativeCallState();
+    const connected = session.phase === "connected" && state.whatsappCallIsConnected &&
+      !!session.stream && whatsappPeerConnected(session.pc);
+    const phase = connected ? "connected" : session.phase === "starting" ? "starting" : "connecting";
+    if (heartbeat || hubNativeRuntime.callId !== id || hubNativeRuntime.lastState !== phase) {
+      if (!postHubNativeMessage({ type: "call-state", callId: id, state: phase })) {
+        stopHubNativeCallState(); return;
+      }
+      hubNativeRuntime.callId = id; hubNativeRuntime.lastState = phase;
+    }
+    if (!hubNativeRuntime.timer) hubNativeRuntime.timer = setInterval(() => syncHubNativeCallState({ heartbeat: true }), 15000);
+  }
+
+  function markHubNativeReady() {
+    if (state.destroyed || !state.session?.uid || !hasHubNativeBridge()) return;
+    hubNativeRuntime.ready = true;
+    postHubNativeMessage({ type: "ready", version: "2026.10.28-ui-r8" });
+    syncHubNativeCallState();
+  }
+
+  function setupHubNativeBridge() {
+    if (!hasHubNativeBridge()) return;
+    const signal = state.lifecycleController.signal;
+    window.addEventListener("sh-native-call-action", event => {
+      if (!hubNativeRuntime.ready || state.destroyed || !state.session?.uid || !hasHubNativeBridge()) return;
+      const detail = event.detail;
+      // Only exact-call navigation is accepted. SDP, remote URLs, accept, reject
+      // and terminate commands are deliberately outside this boundary.
+      if (!detail || detail.action !== "open" || typeof detail.callId !== "string") return;
+      const id = whatsappOpaqueId(detail.callId);
+      if (!id || (hubNativeRuntime.openId === id && hubNativeRuntime.openPromise)) return;
+      hubNativeRuntime.openId = id;
+      const request = Promise.resolve().then(() => openWhatsappCallNotification({ mode: "call", call_id: id }));
+      hubNativeRuntime.openPromise = request;
+      request.catch(error => { if (!state.destroyed) showOperatorToast(error.message || "This call could not be opened."); })
+        .finally(() => { if (hubNativeRuntime.openPromise === request) { hubNativeRuntime.openPromise = null; hubNativeRuntime.openId = ""; } });
+    }, { signal });
+    window.addEventListener("sh-native-chat-action", event => {
+      if (!hubNativeRuntime.ready || state.destroyed || !state.session?.uid || !hasHubNativeBridge()) return;
+      const id = event.detail?.channelId;
+      if (!Number.isSafeInteger(id) || id <= 0 || (hubNativeRuntime.chatId === id && hubNativeRuntime.chatPromise)) return;
+      hubNativeRuntime.chatId = id;
+      // Reuse the Odoo-authorized conversation path. It preserves saved drafts
+      // and the existing call session instead of reloading the WebView.
+      const request = Promise.resolve().then(() => openWhatsappChatNotification(id));
+      hubNativeRuntime.chatPromise = request;
+      request.catch(error => { if (!state.destroyed) showOperatorToast(error.message || "This conversation could not be opened."); })
+        .finally(() => { if (hubNativeRuntime.chatPromise === request) { hubNativeRuntime.chatPromise = null; hubNativeRuntime.chatId = 0; } });
+    }, { signal });
+    signal.addEventListener("abort", () => {
+      stopHubNativeCallState(); hubNativeRuntime.ready = false;
+      hubNativeRuntime.openId = ""; hubNativeRuntime.openPromise = null;
+      hubNativeRuntime.chatId = 0; hubNativeRuntime.chatPromise = null;
+    }, { once: true });
+  }
+
+  function whatsappProviderCallId(call) {
+    return String(call?.call_id || call?.callId || call?.raw?.call?.id || call?.call?.id || call?.id || "");
+  }
+
+  function whatsappCallPhone(call) {
+    return normalizePhoneForCompare(call?.customer_phone || call?.customerPhone || call?.phone || call?.wa_id || call?.from || call?.msisdn || "");
+  }
+
+  function whatsappOperatorIdentity(extra = {}) {
+    if (!whatsappCallsRuntime.identity) {
+      let profile = {};
+      try { profile = JSON.parse(localStorage.getItem("sh_operator_device") || "{}") || {}; } catch {}
+      if (typeof profile !== "object" || Array.isArray(profile)) profile = {};
+      const randomId = prefix => `${prefix}_${Date.now().toString(36)}_${typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : Math.random().toString(36).slice(2, 12)}`;
+      if (!profile.deviceId) profile.deviceId = randomId("dev");
+      if (!profile.operatorName) profile.operatorName = state.session?.name || state.session?.username || "Operator";
+      if (!profile.deviceLabel) profile.deviceLabel = "Odoo Operator Hub";
+      profile.status = profile.status || "online";
+      profile.receiveCalls = profile.receiveCalls !== false;
+      profile.receiveChats = profile.receiveChats !== false;
+      let sessionId = "";
+      try { sessionId = sessionStorage.getItem("sh_operator_session_id_v1") || ""; } catch {}
+      if (!sessionId) sessionId = randomId("sess");
+      try { localStorage.setItem("sh_operator_device", JSON.stringify(profile)); } catch {}
+      try { sessionStorage.setItem("sh_operator_session_id_v1", sessionId); } catch {}
+      whatsappCallsRuntime.profile = profile;
+      whatsappCallsRuntime.identity = {
+        operator_device_id: `${profile.deviceId}::${sessionId}`,
+        base_device_id: profile.deviceId,
+        operator_session_id: sessionId,
+        operator_name: profile.operatorName,
+        device_label: profile.deviceLabel
+      };
+    }
+    readWhatsappOperatorProfile();
+    return { ...whatsappCallsRuntime.identity, ...extra };
+  }
+
+  function readWhatsappOperatorProfile() {
+    const runtime = whatsappCallsRuntime;
+    if (!runtime.profile) return null;
+    try {
+      const latest = JSON.parse(localStorage.getItem("sh_operator_device") || "{}");
+      if (latest && typeof latest === "object" && !Array.isArray(latest) && latest.deviceId === runtime.profile.deviceId) {
+        runtime.profile = { ...runtime.profile, ...latest };
+      }
+    } catch {}
+    if (runtime.identity) {
+      runtime.identity.operator_name = runtime.profile.operatorName || state.session?.name || "Operator";
+      runtime.identity.device_label = runtime.profile.deviceLabel || "Odoo Operator Hub";
+    }
+    return runtime.profile;
+  }
+
+  function whatsappOperatorAvailable() {
+    const profile = readWhatsappOperatorProfile() || {};
+    return profile.receiveCalls !== false && String(profile.status || "online").toLowerCase() === "online";
+  }
+
+  function whatsappOpaqueId(value) {
+    if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? String(value) : "";
+    if (typeof value !== "string" || !value || value.length > 220 || /[\s\u0000-\u001f\u007f]/.test(value) || /^(?:null|undefined|none|nan|true|false|0)$/i.test(value)) return "";
+    try { encodeURIComponent(value); } catch { return ""; }
+    return value;
+  }
+
+  function whatsappDialPhone(value) {
+    if (typeof value !== "string" && typeof value !== "number") return "";
+    if (typeof value === "number" && (!Number.isSafeInteger(value) || value <= 0)) return "";
+    if (typeof value === "string" && !/^[+\d\s().-]+$/.test(value)) return "";
+    const phone = normalizePhoneForCompare(value);
+    return /^\d{7,15}$/.test(phone) ? phone : "";
+  }
+
+  function whatsappNotificationChannelId(value) {
+    if ((typeof value !== "string" && typeof value !== "number") || !/^\d+$/.test(String(value))) return 0;
+    const id = Number(value);
+    return Number.isSafeInteger(id) && id > 0 ? id : 0;
+  }
+
+  function whatsappSessionCurrent(session) {
+    return !!session && !state.destroyed && whatsappCallsRuntime.session === session && !session.cancelRequested && session.token === whatsappCallsRuntime.actionToken;
+  }
+
+  function syncWhatsappPresenceUi() {
+    const profile = readWhatsappOperatorProfile();
+    const select = byId("shWhatsappCallAvailability");
+    if (select && profile && document.activeElement !== select) select.value = profile.status || "online";
+    const status = byId("shWhatsappCallPresenceStatus");
+    const text = !state.autoRefreshEnabled ? "Live updates are paused" : whatsappCallsRuntime.presenceError ||
+      (whatsappCallsRuntime.presenceConfirmed ? (whatsappOperatorAvailable() ? "Ready in this Hub" : "Your availability is saved") : "Connecting this Hub\u2026");
+    setTextIfChanged(status, text);
+  }
+
+  async function postWhatsappHubPresence({ force = false, closing = false } = {}) {
+    if (!state.session?.uid || (state.destroyed && !closing)) return null;
+    if (!closing && whatsappCallsRuntime.presencePromise) { if (force) whatsappCallsRuntime.presenceDirty = true; return whatsappCallsRuntime.presencePromise; }
+    if (!force && Date.now() - whatsappCallsRuntime.presencePostedAt < 20000) return null;
+    const identity = whatsappOperatorIdentity();
+    const profile = readWhatsappOperatorProfile();
+    const session = whatsappCallsRuntime.session;
+    const inCall = !closing && !!session && !!session.ownershipReady && !session.finished;
+    const body = {
+      client_source: "odoo_operator_hub", deviceId: identity.base_device_id,
+      lockDeviceId: identity.operator_device_id, operatorSessionId: identity.operator_session_id,
+      operatorName: identity.operator_name, deviceLabel: identity.device_label,
+      status: closing ? "offline" : profile.status || "online",
+      receiveCalls: !closing && profile.receiveCalls !== false && state.autoRefreshEnabled,
+      receiveChats: profile.receiveChats !== false, inCall,
+      active_call_id: inCall ? session.callId || "" : "",
+      userAgent: navigator.userAgent || ""
+    };
+    if (closing) {
+      return window.fetch(`${AI_MODE_BACKEND_BASE}/api/operator-devices/heartbeat`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true
+      }).catch(() => null);
+    }
+    whatsappCallsRuntime.presencePromise = (async () => {
+      try {
+        const result = await fetchWhatsappCallJson("/api/operator-devices/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        if (state.destroyed) return result;
+        whatsappCallsRuntime.presencePostedAt = Date.now();
+        whatsappCallsRuntime.presenceConfirmed = result.presence === true && result.updated === true;
+        whatsappCallsRuntime.presenceError = whatsappCallsRuntime.presenceConfirmed ? "" : "This Hub could not register its call availability.";
+        if (whatsappCallsRuntime.presenceConfirmed) {
+          startWhatsappCallRealtime();
+          if (!whatsappCallsRuntime.callConfig) loadWhatsappCallConfiguration().catch(() => {});
+        }
+        if (whatsappSessionCurrent(session) && session.ownershipReady && session.callId && Date.now() - (session.lastLockRenewedAt || 0) >= 25000) {
+          try {
+            const renewal = await queueWhatsappCallLockOperation(session.callId, () => whatsappSessionCurrent(session) ? fetchWhatsappCallJson("/api/operator-call-locks/claim", { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...session.identity, call_id: session.callId, action: state.whatsappCallIsConnected ? "connected" : "connecting" }) }) : null);
+            if (whatsappSessionCurrent(session) && renewal) { session.lastLockRenewedAt = Date.now(); rememberWhatsappSessionLock(session, renewal.lock || null); }
+          } catch (error) {
+            if (error.status === 409 && whatsappSessionCurrent(session)) {
+              // Availability conflicts can omit the lock. Confirm this exact call
+              // before deciding whether a provisional transfer has completed.
+              let latest = null;
+              try { latest = await fetchWhatsappCallById(session.callId); } catch {}
+              if (whatsappSessionCurrent(session) && latest?.lock?.operator_device_id !== session.identity.operator_device_id && !isExpectedWhatsappProvisionalTransfer(session, latest)) {
+                finishWhatsappCallSession(session, { status: "Call is handled by another operator", release: true });
+              }
+            }
+          }
+        }
+        return result;
+      } catch (error) {
+        if (!state.destroyed) { whatsappCallsRuntime.presenceConfirmed = false; whatsappCallsRuntime.presenceError = "Call availability could not sync. Retrying\u2026"; }
+        return null;
+      } finally {
+        whatsappCallsRuntime.presencePromise = null;
+        if (!state.destroyed) {
+          syncWhatsappPresenceUi();
+          if (whatsappCallsRuntime.presenceDirty) { whatsappCallsRuntime.presenceDirty = false; Promise.resolve().then(() => postWhatsappHubPresence({ force: true })); }
+        }
+      }
+    })();
+    return whatsappCallsRuntime.presencePromise;
+  }
+
+  function stopWhatsappCallRealtime() {
+    const runtime = whatsappCallsRuntime;
+    const source = runtime.eventSource;
+    runtime.eventSource = null;
+    if (source) { try { source.close(); } catch {} }
+    clearTimeout(runtime.realtimeRetryTimer); runtime.realtimeRetryTimer = null;
+    runtime.realtimeRefreshDirty = false;
+    runtime.realtimeCallIds.clear();
+  }
+
+  function queueWhatsappCallRealtimeRefresh(callId = "") {
+    if (state.destroyed || (!state.autoRefreshEnabled && !whatsappCallsRuntime.session)) return Promise.resolve(null);
+    const runtime = whatsappCallsRuntime;
+    const id = whatsappOpaqueId(callId);
+    if (id && runtime.realtimeCallIds.size < 8) runtime.realtimeCallIds.add(id);
+    runtime.realtimeRefreshDirty = true;
+    if (runtime.realtimeRefreshPromise) return runtime.realtimeRefreshPromise;
+    const request = Promise.resolve().then(async () => {
+      while (!state.destroyed && runtime.realtimeRefreshDirty) {
+        runtime.realtimeRefreshDirty = false;
+        const ids = [...runtime.realtimeCallIds]; runtime.realtimeCallIds.clear();
+        const activeId = runtime.session?.callId;
+        if (activeId && !ids.includes(activeId)) ids.unshift(activeId);
+        // An event arriving during an older GET is not represented by that GET.
+        // Wait for those snapshots, then perform exactly one fresh read per ID.
+        const identity = whatsappOperatorIdentity();
+        const inFlight = ids.map(key => runtime.callReads.get(`${identity.operator_device_id}:${key}`)).filter(Boolean);
+        if (runtime.pollPromise) inFlight.push(runtime.pollPromise);
+        if (inFlight.length) await Promise.allSettled(inFlight);
+        if (state.destroyed || (!state.autoRefreshEnabled && !runtime.session)) break;
+        await Promise.allSettled([...ids.map(key => fetchWhatsappCallById(key, { afterPending: true })), pollRecentWhatsappCalls()]);
+        if (!state.destroyed) renderWhatsappCallPanel();
+      }
+    });
+    runtime.realtimeRefreshPromise = request;
+    request.finally(() => { if (runtime.realtimeRefreshPromise === request) runtime.realtimeRefreshPromise = null; }).catch(() => {});
+    return request;
+  }
+
+  function startWhatsappCallRealtime() {
+    const runtime = whatsappCallsRuntime;
+    if (state.destroyed || !runtime.presenceConfirmed || (!state.autoRefreshEnabled && !runtime.session)) { stopWhatsappCallRealtime(); return; }
+    if (runtime.eventSource || runtime.realtimeRetryTimer || typeof window.EventSource !== "function") return;
+    const identity = whatsappOperatorIdentity();
+    let source;
+    try { source = new window.EventSource(`${AI_MODE_BACKEND_BASE}/api/whatsapp-calls/events?operator_device_id=${encodeURIComponent(identity.operator_device_id)}`); }
+    catch { return; }
+    runtime.eventSource = source;
+    source.addEventListener("ready", () => {
+      if (state.destroyed || runtime.eventSource !== source) return;
+      runtime.realtimeFailures = 0;
+      queueWhatsappCallRealtimeRefresh().catch(() => {});
+    });
+    source.addEventListener("call-status", event => {
+      if (state.destroyed || runtime.eventSource !== source) return;
+      let hint;
+      try { hint = JSON.parse(event.data); } catch { return; }
+      const id = whatsappOpaqueId(hint?.call_id);
+      if (id) queueWhatsappCallRealtimeRefresh(id).catch(() => {});
+    });
+    source.onerror = () => {
+      if (runtime.eventSource !== source) return;
+      source.close(); runtime.eventSource = null;
+      // Bounded reconnects also handle an older server without this endpoint.
+      // Existing polling continues throughout, including active-call cleanup.
+      runtime.realtimeFailures += 1;
+      const delay = Math.min(30000, 5000 * 2 ** Math.min(3, runtime.realtimeFailures - 1));
+      clearTimeout(runtime.realtimeRetryTimer);
+      if (!state.destroyed) runtime.realtimeRetryTimer = setTimeout(() => {
+        runtime.realtimeRetryTimer = null;
+        startWhatsappCallRealtime();
+      }, delay);
+    };
+  }
+
+  function startWhatsappHubPresence() {
+    clearInterval(whatsappCallsRuntime.presenceTimer);
+    postWhatsappHubPresence({ force: true });
+    whatsappCallsRuntime.presenceTimer = setInterval(() => {
+      if (!state.destroyed && appRoot.isConnected) postWhatsappHubPresence({ force: true });
+    }, 25000);
+  }
+
+  async function setWhatsappCallAvailability(value) {
+    if (!["online", "busy", "away", "dnd", "offline"].includes(value)) return;
+    whatsappOperatorIdentity();
+    const profile = readWhatsappOperatorProfile();
+    profile.status = value;
+    try { localStorage.setItem("sh_operator_device", JSON.stringify(profile)); } catch {}
+    syncWhatsappPresenceUi(); renderWhatsappCallPanel();
+    // Only an explicit preference change updates the paired notification device.
+    // Heartbeat/unload presence must not persist Offline and disable closed-tab alerts.
+    const previous = whatsappCallsRuntime.availabilitySyncPromise || Promise.resolve();
+    const notificationUpdate = previous.catch(() => null).then(() => {
+      if (state.destroyed) return null;
+      return fetchWhatsappCallJson("/api/operator-devices/status", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId: whatsappOperatorIdentity().base_device_id, status: readWhatsappOperatorProfile().status || "online" }) });
+    });
+    whatsappCallsRuntime.availabilitySyncPromise = notificationUpdate;
+    const results = await Promise.allSettled([postWhatsappHubPresence({ force: true }), notificationUpdate]);
+    if (whatsappCallsRuntime.availabilitySyncPromise === notificationUpdate) whatsappCallsRuntime.availabilitySyncPromise = null;
+    if (!state.destroyed && results[1].status === "rejected") showInlineError(whatsappCallError, "Hub availability is saved. The device notification preference could not sync; retry your availability selection.");
+    if (value === "online" && state.autoRefreshEnabled) pollRecentWhatsappCalls().catch(() => {});
+  }
+
+  function whatsappCallLockedByOther(call) {
+    return !!(call?.locked_by_other && call?.lock && call.lock.operator_device_id !== whatsappOperatorIdentity().operator_device_id);
+  }
+
+  function whatsappCallLockLabel(call) {
+    return `Handled by ${call?.lock?.operator_name || call?.lock?.device_label || "another operator"}`;
+  }
+
+  function whatsappCallsFromResponse(data) {
+    if (Array.isArray(data)) return data;
+    if (data?.call && typeof data.call === "object") return [data.call];
+    for (const key of ["calls", "items", "records", "data", "events", "history"]) if (Array.isArray(data?.[key])) return data[key];
+    return [];
+  }
+
+  function normalizeWhatsappCallRecord(record) {
+    const terminal = new Set(["terminate", "missed", "rejected", "failed", "busy"]);
+    const event = normalizedWhatsappCallEvent(record.event || "");
+    const providerStatus = String(record.provider_status || "").toUpperCase();
+    const status = providerStatus === "REJECTED" ? "rejected" : normalizedWhatsappCallEvent(record.status || record.display_status || "");
+    const rank = value => ({ outgoing: 1, connect: 1, pre_accept: 2, accepted: 3, terminate: 4, failed: 4, busy: 4, missed: 5, rejected: 5 }[value] || 0);
+    const effectiveEvent = terminal.has(status) ? status : terminal.has(event) ? event : rank(status) > rank(event) ? status : event || status;
+    return { ...record,
+      call_id: record.call_id || record.callId || record.raw?.call?.id || record.call?.id || undefined,
+      customer_phone: whatsappCallPhone(record),
+      customer_name: record.partner_name || record.customer_name || record.name || record.from_name || record.wa_name || record.profile_name || "",
+      event: effectiveEvent };
+  }
+
+  function findWhatsappChannelForCall(call) {
+    return (state.channels || []).find(channel => callEventMatchesChannel(call, channel)) || null;
+  }
+
+  function whatsappCallParty(call) {
+    const channel = findWhatsappChannelForCall(call);
+    const phone = whatsappCallPhone(call);
+    return { channel, phone, name: call?.customer_name || (channel ? channelDisplayName(channel) : "") || (phone ? `+${phone}` : "WhatsApp caller") };
+  }
+
+  function getWhatsappCallByKey(key) {
+    return (state.whatsappCallLogs || []).find(call => whatsappCallKey(call) === key) ||
+      (state.whatsappActiveCall && whatsappCallKey(state.whatsappActiveCall) === key ? state.whatsappActiveCall : null) ||
+      (whatsappCallsRuntime.finishedCall && whatsappCallKey(whatsappCallsRuntime.finishedCall) === key ? whatsappCallsRuntime.finishedCall : null);
+  }
+
+  function findIncomingWhatsappCall() {
+    if (!whatsappOperatorAvailable() || !state.autoRefreshEnabled) return null;
+    const transfer = whatsappCallsRuntime.pendingTransfer;
+    if (transfer && whatsappCallKey(transfer.call) !== whatsappCallsRuntime.notificationReadOnlyKey && isPendingWhatsappSourceTransfer(transfer.call)) return transfer.call;
+    return (state.whatsappCallLogs || []).filter(call => whatsappCallKey(call) !== whatsappCallsRuntime.notificationReadOnlyKey && whatsappCallIsOpenForAnswer(call))
+      .sort((a, b) => whatsappCallTimeMs(b) - whatsappCallTimeMs(a))[0] || null;
+  }
+
+  function focusedWhatsappCall() {
+    if (whatsappCallsRuntime.dialTarget && !whatsappCallsRuntime.session) return whatsappCallsRuntime.dialTarget;
+    return getWhatsappCallByKey(whatsappCallsRuntime.focusedCallKey || "") ||
+      ((state.whatsappCallIsConnected || state.whatsappCallIsConnecting) ? state.whatsappActiveCall : null);
+  }
+
+  function whatsappCallTerminalLabel(call) {
+    if (String(call?.direction || "").toLowerCase() === "outgoing" && normalizedWhatsappCallEvent(call?.event) === "missed") return "No answer";
+    return callEventLabel(call?.event);
+  }
+
+  function whatsappCallActionResult(result, callId) {
+    const call = whatsappCallsFromResponse(result).find(item => whatsappProviderCallId(item) === String(callId));
+    return call ? normalizeWhatsappCallRecord(call) : null;
+  }
+
+  function whatsappCallCurrentStatus(call) {
+    if (!call) return "Call history";
+    if (call._uiEndLabel) return call._uiEndLabel;
+    if (whatsappCallsRuntime.notificationReadOnlyKey === whatsappCallKey(call)) return `${callEventLabel(call.event)} \u00b7 audio cannot be resumed from a link`;
+    if (whatsappCallIsTerminal(call)) return whatsappCallTerminalLabel(call);
+    if (whatsappCallsRuntime.rejectingCallKey === whatsappCallKey(call)) return "Declining call\u2026";
+    const session = whatsappCallsRuntime.session;
+    if (session && whatsappCallKey(session.call) === whatsappCallKey(call)) {
+      if (session.endUnconfirmed) return "Audio stopped - retry ending call";
+      if (session.cancelRequested) return "Ending call\u2026";
+      if (isExpectedWhatsappProvisionalTransfer(session, call)) return "Transferring call\u2026";
+      if (state.whatsappCallIsConnected) {
+        if (whatsappCallsRuntime.audioPlaybackBlocked) return "Call audio paused \u00b7 tap Play call audio";
+        return session.muted ? "Call connected \u00b7 microphone muted" : "Call connected";
+      }
+      return session.phase === "opening-microphone" ? "Opening microphone\u2026" : session.phase === "starting" ? "Starting WhatsApp call\u2026" : session.phase === "ringing" ? "Ringing\u2026" : session.phase === "reconnecting" ? "Reconnecting audio\u2026" : "Connecting audio\u2026";
+    }
+    if (isPendingWhatsappSourceTransfer(call)) return `Transfer from ${whatsappCallsRuntime.pendingTransfer.transfer.from_operator || "another operator"}`;
+    if (call._uiDialTarget) return "Ready to call";
+    if (whatsappCallLockedByOther(call)) return whatsappCallLockLabel(call);
+    const active = state.whatsappActiveCall && whatsappCallKey(state.whatsappActiveCall) === whatsappCallKey(call);
+    if (active && state.whatsappCallIsConnected) return "Call connected";
+    if (active && state.whatsappCallIsConnecting) return "Connecting call\u2026";
+    const local = whatsappCallsRuntime.localStatus.get(whatsappCallKey(call));
+    if (local) return local;
+    if (whatsappCallIsOpenForAnswer(call)) return "Incoming WhatsApp call";
+    if (normalizedWhatsappCallEvent(call.event) === "connect") {
+      const time = whatsappCallEventTimeMs(call) || Number(call._uiReceivedMs) || 0;
+      if (time && Date.now() - time < 120000 && !whatsappCallHasRemoteOffer(call)) return "Waiting for the call audio session\u2026";
+      return "This call is no longer ringing";
+    }
+    return callEventLabel(call.event);
+  }
+
+  function queueWhatsappCallLockOperation(callId, operation) {
+    const previous = whatsappCallsRuntime.lockOperations.get(callId) || Promise.resolve();
+    const pending = previous.catch(() => null).then(operation);
+    whatsappCallsRuntime.lockOperations.set(callId, pending);
+    const cleanup = () => { if (whatsappCallsRuntime.lockOperations.get(callId) === pending) whatsappCallsRuntime.lockOperations.delete(callId); };
+    pending.then(cleanup, cleanup);
+    return pending;
+  }
+
+  function rememberWhatsappSessionLock(session, lock) {
+    if (!session.lockRecord) session.lockRecord = { callId: session.callId, identity: session.identity, lock: null };
+    session.lockRecord.lock = lock;
+    whatsappCallsRuntime.claimedLocks.set(session.callId, session.lockRecord);
+  }
+
+  async function claimWhatsappCallLock(call, session = null) {
+    const id = whatsappProviderCallId(call);
+    if (!id) throw new Error("The incoming call has no provider call ID.");
+    const identity = whatsappOperatorIdentity();
+    const profile = whatsappCallsRuntime.profile;
+    if (profile.receiveCalls === false || String(profile.status).toLowerCase() !== "online") throw new Error("This device is unavailable for calls. Set its operator status to Online first.");
+    // Remember this tab's own pending claim so teardown can release an ambiguous network result.
+    const claimed = { callId: id, identity, lock: null };
+    if (session) session.lockRecord = claimed;
+    whatsappCallsRuntime.claimedLocks.set(id, claimed);
+    const result = await queueWhatsappCallLockOperation(id, () => session && !whatsappSessionCurrent(session) ? null : fetchWhatsappCallJson("/api/operator-call-locks/claim", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...identity, call_id: id, action: "accepting",
+        ...(session?.mode === "outgoing" && session.requestId ? { client_request_id: session.requestId } : {}) })
+    }));
+    // A cancelled attempt's late result must not replace a newer attempt's record.
+    claimed.lock = result?.lock || null;
+    return result;
+  }
+
+  function releaseWhatsappCallLock({ callId = "", closing = false, claim = null } = {}) {
+    const records = claim ? [claim] : callId ? [whatsappCallsRuntime.claimedLocks.get(callId)].filter(Boolean) : [...whatsappCallsRuntime.claimedLocks.values()];
+    records.forEach(record => { if (whatsappCallsRuntime.claimedLocks.get(record.callId) === record) whatsappCallsRuntime.claimedLocks.delete(record.callId); });
+    return Promise.all(records.map(claimed => claimed.releasePromise || (claimed.releasePromise = queueWhatsappCallLockOperation(claimed.callId, () => {
+      const body = JSON.stringify({ ...claimed.identity, call_id: claimed.callId });
+      if (closing || state.destroyed) {
+        // Only release this tab's own claimed lock; keepalive is best effort during page teardown.
+        return window.fetch(`${AI_MODE_BACKEND_BASE}/api/operator-call-locks/release`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true
+        }).catch(() => {});
+      }
+      return fetchWhatsappCallJson("/api/operator-call-locks/release", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body
+      }).catch(() => {});
+    }))));
+  }
+
+  async function fetchWhatsappCallById(callId, { afterPending = false } = {}) {
+    if (!callId || state.destroyed) return null;
+    const identity = whatsappOperatorIdentity();
+    // The active-session timer, a manual refresh and an incoming-call refresh can
+    // request the same provider record together. Share the read, never a mutation.
+    const key = `${identity.operator_device_id}:${String(callId)}`;
+    const existing = whatsappCallsRuntime.callReads.get(key);
+    if (existing) {
+      if (!afterPending) return existing;
+      // A status hint received during a read needs one read after that snapshot.
+      await existing.catch(() => null);
+      if (state.destroyed) return null;
+      return fetchWhatsappCallById(callId);
+    }
+    const request = (async () => {
+      const data = await fetchWhatsappCallJson(`/api/whatsapp-calls/${encodeURIComponent(callId)}?operator_device_id=${encodeURIComponent(identity.operator_device_id)}`, { cache: "no-store" });
+      const call = whatsappCallsFromResponse(data).find(item => whatsappProviderCallId(item) === String(callId));
+      if (!call || state.destroyed) return null;
+      mergeWhatsappCallLogs([call]);
+      return (state.whatsappCallLogs || []).find(item => whatsappProviderCallId(item) === String(callId)) || null;
+    })();
+    whatsappCallsRuntime.callReads.set(key, request);
+    try { return await request; }
+    finally { if (whatsappCallsRuntime.callReads.get(key) === request) whatsappCallsRuntime.callReads.delete(key); }
+  }
+
+  function isPendingWhatsappSourceTransfer(call, pending = whatsappCallsRuntime.pendingTransfer) {
+    const transfer = pending?.transfer;
+    if (!call || !transfer || whatsappCallIsTerminal(call) || !whatsappOpaqueId(transfer.transfer_id)) return false;
+    const identity = whatsappOperatorIdentity();
+    const id = whatsappProviderCallId(call);
+    if (!id || String(transfer.call_id) !== id || transfer.to_device_id !== identity.operator_device_id || !transfer.from_device_id || transfer.from_device_id === identity.operator_device_id) return false;
+    if (!["pending", "accepted"].includes(String(transfer.status))) return false;
+    const expiry = Date.parse(transfer.expires_at || "");
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) return false;
+    if (whatsappCallsRuntime.session?.mode === "transfer" && whatsappCallsRuntime.session.signalingAccepted) return false;
+    return call.lock?.operator_device_id === transfer.from_device_id && whatsappCallHasRemoteOffer(call);
+  }
+
+  function isExpectedWhatsappProvisionalTransfer(session, call) {
+    const transfer = session?.sentTransfer, lock = call?.lock;
+    if (!whatsappSessionCurrent(session) || !session.signalingAccepted || !session.ownershipReady || !transfer || !lock || whatsappCallIsTerminal(call)) return false;
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(transfer.transfer_id || "") || !["pending", "accepted"].includes(transfer.status)) return false;
+    return whatsappProviderCallId(call) === session.callId && transfer.call_id === session.callId && lock.call_id === session.callId &&
+      transfer.from_device_id === session.identity.operator_device_id && transfer.to_device_id && transfer.to_device_id !== session.identity.operator_device_id &&
+      lock.operator_device_id === transfer.to_device_id && lock.transfer_id === transfer.transfer_id && lock.action === "transfer_accepting" &&
+      Date.parse(transfer.expires_at || "") > Date.now() && (Number(lock.expires_at_ms) || Date.parse(lock.expires_at || "")) > Date.now();
+  }
+
+  async function pollWhatsappPendingTransfer({ transferId = "", callId = "" } = {}) {
+    if (state.destroyed || !state.session?.uid || !whatsappOperatorAvailable()) return null;
+    const live = whatsappCallsRuntime.session;
+    if (live && live.mode !== "transfer") return null;
+    if (whatsappCallsRuntime.pendingTransferPromise) {
+      const pending = await whatsappCallsRuntime.pendingTransferPromise;
+      return (!transferId || pending?.transfer?.transfer_id === transferId) && (!callId || pending?.transfer?.call_id === callId) ? pending : null;
+    }
+    const requestedFor = whatsappOperatorIdentity().operator_device_id;
+    whatsappCallsRuntime.pendingTransferPromise = (async () => {
+      try {
+        const result = await fetchWhatsappCallJson(`/api/operator-call-transfer/pending?operator_device_id=${encodeURIComponent(requestedFor)}`, { cache: "no-store" });
+        if (state.destroyed || (whatsappCallsRuntime.session && whatsappCallsRuntime.session.mode !== "transfer")) return null;
+        if (result.pending && result.transfer && result.call) {
+          const candidate = { transfer: result.transfer, call: normalizeWhatsappCallRecord(result.call) };
+          if (isPendingWhatsappSourceTransfer(candidate.call, candidate)) {
+            whatsappCallsRuntime.pendingTransfer = candidate;
+            mergeWhatsappCallLogs([candidate.call]);
+            candidate.call = getWhatsappCallByKey(whatsappCallKey(candidate.call)) || candidate.call;
+            return candidate;
+          }
+        }
+        if (!whatsappCallsRuntime.session || whatsappCallsRuntime.session.mode !== "transfer") whatsappCallsRuntime.pendingTransfer = null;
+        return null;
+      } finally { whatsappCallsRuntime.pendingTransferPromise = null; }
+    })();
+    const pending = await whatsappCallsRuntime.pendingTransferPromise;
+    return (!transferId || pending?.transfer?.transfer_id === transferId) && (!callId || pending?.transfer?.call_id === callId) ? pending : null;
+  }
+
+  function whatsappTransferDeviceId(device) {
+    return String(device?.lock_device_id || device?.lockDeviceId || device?.operator_lock_device_id || "");
+  }
+
+  function whatsappTransferDeviceLabel(device) {
+    return [device?.operator_name || device?.operatorName || "Operator", device?.device_label || device?.deviceLabel || ""].filter(Boolean).join(" \u00b7 ");
+  }
+
+  function canTransferWhatsappCall() {
+    const session = whatsappCallsRuntime.session;
+    return whatsappSessionCurrent(session) && state.whatsappCallIsConnected && session.ownershipReady && session.callId &&
+      String(session.call.direction || "incoming") !== "outgoing" && whatsappCallHasRemoteOffer(session.call);
+  }
+
+  function renderWhatsappTransferChoices() {
+    const box = byId("shWhatsappCallTransferBox");
+    if (!box) return;
+    box.classList.toggle("is-hidden", !whatsappCallsRuntime.transferSelectorOpen || !canTransferWhatsappCall());
+    if (!whatsappCallsRuntime.transferSelectorOpen) return;
+    const identity = whatsappOperatorIdentity();
+    const devices = whatsappCallsRuntime.transferDevices.filter(device => {
+      const id = whatsappTransferDeviceId(device);
+      return id && id !== identity.operator_device_id && device.client_source === "odoo_operator_hub" && Date.parse(device.presence_expires_at || "") > Date.now() && String(device.status || "").toLowerCase() === "online" && device.receive_calls !== false && !device.in_call;
+    });
+    const html = devices.length ? devices.map(device => `<button type="button" data-render-key="transfer:${escapeHtml(whatsappTransferDeviceId(device))}" data-whatsapp-call-action="send-transfer" data-device-id="${escapeHtml(whatsappTransferDeviceId(device))}"${whatsappCallsRuntime.transferSendPending ? " disabled" : ""}>${escapeHtml(whatsappTransferDeviceLabel(device))}</button>`).join("") : `<p data-render-key="transfer-empty">${whatsappCallsRuntime.transferDevicesPromise ? "Loading available operators\u2026" : "No other available operator is online."}</p>`;
+    patchKeyedChildren(byId("shWhatsappCallTransferList"), html);
+  }
+
+  async function openWhatsappTransferChoices() {
+    if (!canTransferWhatsappCall()) return;
+    const session = whatsappCallsRuntime.session;
+    whatsappCallsRuntime.transferSelectorOpen = true;
+    setTextIfChanged(byId("shWhatsappCallTransferStatus"), "Choose an operator. Stay connected until they accept.");
+    const request = fetchWhatsappCallJson("/api/operator-devices", { cache: "no-store" });
+    whatsappCallsRuntime.transferDevicesPromise = request;
+    renderWhatsappTransferChoices();
+    try {
+      const result = await request;
+      if (!whatsappSessionCurrent(session)) return;
+      whatsappCallsRuntime.transferDevices = Array.isArray(result.devices) ? result.devices : [];
+    } catch (error) { if (whatsappSessionCurrent(session)) setTextIfChanged(byId("shWhatsappCallTransferStatus"), error.message || "Could not load operators."); }
+    finally { if (whatsappCallsRuntime.transferDevicesPromise === request) whatsappCallsRuntime.transferDevicesPromise = null; if (!state.destroyed) renderWhatsappTransferChoices(); }
+  }
+
+  async function requestWhatsappCallTransfer(deviceId) {
+    if (!canTransferWhatsappCall() || whatsappCallsRuntime.transferSendPending) return;
+    const session = whatsappCallsRuntime.session;
+    const target = whatsappCallsRuntime.transferDevices.find(device => whatsappTransferDeviceId(device) === deviceId);
+    if (!target || target.client_source !== "odoo_operator_hub" || !(Date.parse(target.presence_expires_at || "") > Date.now()) || deviceId === session.identity.operator_device_id || target.status !== "online" || target.receive_calls === false || target.in_call) return;
+    whatsappCallsRuntime.transferSendPending = true; renderWhatsappTransferChoices();
+    try {
+      const result = await fetchWhatsappCallJson("/api/operator-call-transfer/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        ...session.identity, call_id: session.callId, from_operator_device_id: session.identity.operator_device_id,
+        from_operator: session.identity.operator_name, from_device_label: session.identity.device_label,
+        to_operator_device_id: deviceId, to_operator: target.operator_name || target.operatorName || "Operator",
+        to_device_label: target.device_label || target.deviceLabel || "", customer_phone: session.phone, customer_name: session.name
+      }) });
+      if (!whatsappSessionCurrent(session)) return;
+      session.sentTransfer = result.transfer || null;
+      setTextIfChanged(byId("shWhatsappCallTransferStatus"), `Transfer sent to ${whatsappTransferDeviceLabel(target)}. Stay connected until they accept.`);
+    } catch (error) { if (whatsappSessionCurrent(session)) setTextIfChanged(byId("shWhatsappCallTransferStatus"), error.message || "Could not request the transfer."); }
+    finally { whatsappCallsRuntime.transferSendPending = false; if (!state.destroyed) renderWhatsappTransferChoices(); }
+  }
+
+  function stopWhatsappRingtone() {
+    clearInterval(whatsappCallsRuntime.ringtoneTimer);
+    whatsappCallsRuntime.ringtoneTimer = null;
+    whatsappCallsRuntime.ringingKey = "";
+    for (const oscillator of whatsappCallsRuntime.toneNodes) {
+      try { oscillator.stop(); oscillator.disconnect(); } catch {}
+    }
+    whatsappCallsRuntime.toneNodes.clear();
+  }
+
+  function playWhatsappRingPulse() {
+    const ctx = whatsappCallsRuntime.audioContext;
+    if (!ctx || ctx.state !== "running" || whatsappCallsRuntime.soundMuted || state.destroyed) return;
+    for (const delay of [0, 0.5]) for (const frequency of [440, 480]) {
+      const oscillator = ctx.createOscillator();
+      const volume = ctx.createGain();
+      const start = ctx.currentTime + delay;
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequency;
+      volume.gain.setValueAtTime(0, start);
+      volume.gain.linearRampToValueAtTime(0.04, start + 0.025);
+      volume.gain.setValueAtTime(0.04, start + 0.27);
+      volume.gain.linearRampToValueAtTime(0, start + 0.32);
+      oscillator.connect(volume); volume.connect(ctx.destination);
+      whatsappCallsRuntime.toneNodes.add(oscillator);
+      oscillator.onended = () => { whatsappCallsRuntime.toneNodes.delete(oscillator); oscillator.disconnect(); volume.disconnect(); };
+      oscillator.start(start); oscillator.stop(start + 0.35);
+    }
+  }
+
+  function syncWhatsappRingtone(call) {
+    const ctx = whatsappCallsRuntime.audioContext;
+    const canRing = !!call && !state.destroyed && !state.whatsappCallIsConnecting && !state.whatsappCallIsConnected &&
+      !whatsappCallsRuntime.actionPending && !whatsappCallsRuntime.soundMuted && ctx?.state === "running";
+    const key = canRing ? whatsappCallKey(call) : "";
+    if (!key) { stopWhatsappRingtone(); return; }
+    if (whatsappCallsRuntime.ringingKey === key && whatsappCallsRuntime.ringtoneTimer) return;
+    stopWhatsappRingtone();
+    whatsappCallsRuntime.ringingKey = key;
+    playWhatsappRingPulse();
+    whatsappCallsRuntime.ringtoneTimer = setInterval(playWhatsappRingPulse, 3500);
+  }
+
+  async function unlockWhatsappCallSound() {
+    if (state.destroyed || whatsappCallsRuntime.soundMuted) return false;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return false;
+      if (whatsappCallsRuntime.audioContext?.state === "running") return true;
+      if (!whatsappCallsRuntime.audioContext) whatsappCallsRuntime.audioContext = new AudioContextClass();
+      if (whatsappCallsRuntime.audioContext.state !== "running") await whatsappCallsRuntime.audioContext.resume();
+      syncWhatsappIncomingUi();
+      return whatsappCallsRuntime.audioContext.state === "running";
+    } catch { return false; }
+  }
+
+  function whatsappSoundButtonLabel() {
+    if (whatsappCallsRuntime.soundMuted) return "Enable call sound";
+    return whatsappCallsRuntime.audioContext?.state === "running" ? "Mute call sound" : "Enable call sound";
+  }
+
+  function syncWhatsappIncomingUi() {
+    if (state.destroyed) return;
+    const banner = byId("shWhatsappIncomingBanner");
+    const incoming = findIncomingWhatsappCall();
+    const active = whatsappCallsRuntime.session?.call || ((state.whatsappCallIsConnected || state.whatsappCallIsConnecting) ? state.whatsappActiveCall : null);
+    const call = active || incoming;
+    setWhatsappCallClass(banner, "is-ongoing-call", !!active);
+    setWhatsappCallClass(banner, "is-ending-call", !!whatsappCallsRuntime.session?.cancelRequested);
+    setWhatsappCallClass(banner, "is-end-unconfirmed", !!whatsappCallsRuntime.session?.endUnconfirmed);
+    setWhatsappCallClass(appRoot, "sh-call-minimized", !!active && !appRoot.classList.contains("sh-call-modal-visible"));
+    syncWhatsappRingtone(incoming);
+    const expiryKey = incoming ? whatsappCallKey(incoming) : "";
+    const expiryAt = incoming ? (whatsappCallEventTimeMs(incoming) || Number(incoming._uiReceivedMs) || Date.now()) + 120000 : 0;
+    if (expiryKey !== whatsappCallsRuntime.incomingExpiryKey || expiryAt !== whatsappCallsRuntime.incomingExpiryAt) {
+      clearTimeout(whatsappCallsRuntime.incomingExpiryTimer);
+      whatsappCallsRuntime.incomingExpiryTimer = null;
+      whatsappCallsRuntime.incomingExpiryKey = expiryKey;
+      whatsappCallsRuntime.incomingExpiryAt = expiryAt;
+      if (incoming) whatsappCallsRuntime.incomingExpiryTimer = setTimeout(() => {
+        whatsappCallsRuntime.incomingExpiryTimer = null;
+        renderWhatsappCallPanel();
+      }, Math.max(20, expiryAt - Date.now() + 20));
+    }
+    const soundButton = byId("shWhatsappCallSoundBtn");
+    if (soundButton) setTextIfChanged(soundButton, whatsappSoundButtonLabel());
+    const playButton = byId("shWhatsappCallPlayAudioBtn");
+    playButton?.classList.toggle("is-hidden", !whatsappCallsRuntime.audioPlaybackBlocked || !active);
+    if (!banner) return;
+    if (!call) { setWhatsappCallClass(banner, "is-hidden", true); return; }
+    const party = whatsappCallParty(call);
+    const key = escapeHtml(whatsappCallKey(call));
+    const busy = whatsappCallsRuntime.actionPending || !!active;
+    const status = whatsappCallsRuntime.session?.endUnconfirmed ? "End not confirmed" : active || isPendingWhatsappSourceTransfer(call) || whatsappCallsRuntime.rejectingCallKey === whatsappCallKey(call) ? whatsappCallCurrentStatus(call) : "Incoming WhatsApp call";
+    patchKeyedChildren(banner, `<div class="sh-incoming-call-icon" data-render-key="icon">${whatsappCallIconMarkup()}</div>
+      <div class="sh-incoming-call-copy" data-render-key="copy"><span role="status">${escapeHtml(status)}</span><strong>${escapeHtml(party.name)}</strong><small>${escapeHtml(party.phone ? `+${party.phone}` : "WhatsApp caller")}</small></div>
+      <div class="sh-incoming-call-actions" data-render-key="actions">
+        <button type="button" data-render-key="open" data-whatsapp-call-action="open" data-call-key="${key}">${active ? whatsappCallsRuntime.session?.cancelRequested ? "Call status" : "Return to call" : "Details"}</button>
+        <button type="button" data-render-key="chat" data-whatsapp-call-action="chat" data-call-key="${key}"${party.channel ? "" : " disabled"}>Open chat</button>
+        ${active ? `<button type="button" class="is-decline" data-render-key="end" data-whatsapp-call-action="end" data-call-key="${key}"${whatsappCallsRuntime.session?.cancelRequested && (!whatsappCallsRuntime.session?.endUnconfirmed || whatsappCallsRuntime.actionPending) ? " disabled" : ""}>${whatsappCallsRuntime.session?.endUnconfirmed ? "Retry end" : whatsappCallsRuntime.session?.callId ? "End call" : "Cancel call"}</button>` : `<button type="button" class="is-decline" data-render-key="reject" data-whatsapp-call-action="reject" data-call-key="${key}"${busy ? " disabled" : ""}>Decline</button><button type="button" class="is-answer" data-render-key="accept" data-whatsapp-call-action="accept" data-call-key="${key}"${busy ? " disabled" : ""}>${isPendingWhatsappSourceTransfer(call) ? "Accept transfer" : "Accept"}</button>`}
+      </div>`);
+    setWhatsappCallClass(banner, "is-hidden", false);
+  }
+
+  function focusWhatsappCall(call, { open = true } = {}) {
+    if (!call || state.destroyed) return false;
+    whatsappCallsRuntime.dialTarget = null;
+    whatsappCallsRuntime.notificationReadOnlyKey = "";
+    whatsappCallsRuntime.focusedCallKey = whatsappCallKey(call);
+    whatsappCallsRuntime.notified.add(whatsappCallKey(call));
+    if (open) {
+      state.whatsappCallPanelOpen = true;
+      showPanel(whatsappCallPanel);
+    }
+    renderWhatsappCallPanel();
+    return true;
+  }
+
+  async function routeWhatsappIncomingAction(action, key) {
+    if (state.destroyed) return;
+    if (action === "dial") { closeMobileFloatingPanels(); openWhatsappOutgoingDial(); return; }
+    if (action === "mute") { toggleWhatsappMicrophoneMute(); return; }
+    if (action === "transfer") { await openWhatsappTransferChoices(); return; }
+    if (action === "send-transfer") { await requestWhatsappCallTransfer(key); return; }
+    if (action === "close-transfer") { whatsappCallsRuntime.transferSelectorOpen = false; renderWhatsappTransferChoices(); return; }
+    if (action === "sound") {
+      if (!whatsappCallsRuntime.soundMuted && whatsappCallsRuntime.audioContext?.state === "running") whatsappCallsRuntime.soundMuted = true;
+      else { whatsappCallsRuntime.soundMuted = false; await unlockWhatsappCallSound(); }
+      syncWhatsappIncomingUi();
+      return;
+    }
+    if (action === "audio") {
+      try {
+        await whatsappRemoteAudio.play();
+        whatsappCallsRuntime.audioPlaybackBlocked = false;
+        hideInlineError(whatsappCallError);
+      } catch { showInlineError(whatsappCallError, "Allow audio playback in your browser's site settings, then try Play call audio again."); }
+      renderWhatsappCallPanel(); return;
+    }
+    const call = getWhatsappCallByKey(key);
+    if (!call) { showOperatorToast("This call is no longer available."); return; }
+    if (action === "chat") {
+      const channel = findWhatsappChannelForCall(call);
+      if (!channel) { showOperatorToast("This caller does not have a linked conversation yet."); return; }
+      await selectChannel(channel.id);
+      if (state.destroyed || Number(state.selectedChannelId) !== Number(channel.id)) return;
+    }
+    if ((action === "accept" || action === "reject") && !whatsappCallIsOpenForAnswer(call) && !isPendingWhatsappSourceTransfer(call)) { showOperatorToast("This call is no longer available to answer."); return; }
+    if (action === "end") {
+      // A minimized End/Retry action must not reopen the call or leave the
+      // operator's current screen, and a stale button must not end a new call.
+      const session = whatsappCallsRuntime.session;
+      if (session && whatsappCallKey(session.call) === key) await endWhatsappCallSession(session);
+      return;
+    }
+    focusWhatsappCall(call);
+    if (action === "accept") await acceptIncomingWhatsappCall();
+    if (action === "reject") await rejectIncomingWhatsappCall();
+  }
+
+  async function ensureWhatsappNotificationChannel(channelId) {
+    const id = Number(channelId);
+    if (!Number.isSafeInteger(id) || id <= 0 || state.destroyed || !state.session?.uid) return null;
+    const existing = (state.channels || []).find(channel => Number(channel.id) === id);
+    if (existing) return existing;
+    // Read exactly the clicked notification's channel; Odoo still enforces its access rules.
+    const fields = ["id", "name", "display_name", "channel_type", "active", "uuid", "create_date", "write_date", "last_interest_dt", "member_count",
+      "livechat_channel_id", "livechat_operator_id", "livechat_visitor_id", "whatsapp_number", "whatsapp_channel_valid_until", "last_wa_mail_message_id",
+      "whatsapp_partner_id", "wa_account_id", "whatsapp_channel_active", "message_unread_counter", "unread_counter", "unread_count", "message_needaction_counter"];
+    const rows = await searchReadAvailable("discuss.channel", [["id", "=", id]], fields, { limit: 1 });
+    if (state.destroyed) return null;
+    const channel = (rows || []).find(item => Number(item.id) === id && ["whatsapp", "livechat", "group"].includes(item.channel_type));
+    if (!channel) return null;
+    channel._uiUnreadCount = channelUnreadCount(channel);
+    whatsappCallsRuntime.notificationChannels.set(String(id), channel);
+    if (whatsappCallsRuntime.notificationChannels.size > 8) whatsappCallsRuntime.notificationChannels.delete(whatsappCallsRuntime.notificationChannels.keys().next().value);
+    const current = (state.channels || []).find(item => Number(item.id) === id);
+    if (!current) state.channels.push(channel);
+    applyFiltersAndRender();
+    return current || channel;
+  }
+
+  async function openWhatsappChatNotification(channelId) {
+    const sequence = ++whatsappCallsRuntime.notificationSequence;
+    const channel = await ensureWhatsappNotificationChannel(channelId);
+    if (state.destroyed || sequence !== whatsappCallsRuntime.notificationSequence) return false;
+    if (!channel) { showOperatorToast("This conversation could not be opened."); return false; }
+    await selectChannel(channel.id);
+    return !state.destroyed && sequence === whatsappCallsRuntime.notificationSequence && Number(state.selectedChannelId) === Number(channel.id);
+  }
+
+  function validWhatsappNotificationTarget(target) {
+    if (!target || typeof target !== "object") return null;
+    const ids = [target.call_id, target.callId].filter(value => value !== undefined && value !== null && value !== "");
+    const normalizedIds = ids.map(whatsappOpaqueId);
+    const id = normalizedIds.length && normalizedIds.every(value => value && value === normalizedIds[0]) ? normalizedIds[0] : "";
+    if (ids.length && !id) return null;
+    const phone = whatsappDialPhone(target.phone || target.customer_phone || "");
+    const channelValues = [target.channel_id, target.channelId, target.channel].filter(value => value !== undefined && value !== null && value !== "");
+    const channels = channelValues.map(whatsappNotificationChannelId);
+    if (channels.length && !channels.every(value => value && value === channels[0])) return null;
+    const channelId = channels[0] || 0;
+    const validChannelId = Number.isSafeInteger(channelId) && channelId > 0 ? channelId : 0;
+    const mode = String(target.mode || "").toLowerCase();
+    if (mode && !["call", "incoming", "chat", "outgoing", "transfer", "rejoin", "recovery"].includes(mode)) return null;
+    const transferIds = [target.transfer_id, target.transferId].filter(value => value !== undefined && value !== null && value !== "");
+    if (transferIds.length && !transferIds.every(value => typeof value === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value) && value === transferIds[0])) return null;
+    const transferId = transferIds[0] || "";
+    const statusOnly = ["rejoin", "recovery"].includes(mode) || !!(target.rejoin_token || target.recovery_token || target.rejoinToken || target.recoveryToken);
+    if ((transferId && statusOnly) || (mode === "outgoing" && (transferId || statusOnly)) || (mode === "transfer" && statusOnly) || (mode === "chat" && (id || transferId || statusOnly))) return null;
+    if (mode === "outgoing" && !phone && !id) return null;
+    const kind = statusOnly ? "status" : mode === "outgoing" ? "outgoing" : mode === "transfer" || transferId ? "transfer" : mode === "call" || id ? "call" : validChannelId && (mode === "chat" || !mode) ? "chat" : "";
+    if (!kind) return null;
+    return { kind, mode, callId: id, phone, channelId: validChannelId, transferId: transferId.length <= 120 ? transferId : "", name: String(target.name || "").slice(0, 160) };
+  }
+
+  async function openWhatsappCallNotification(target) {
+    const request = validWhatsappNotificationTarget(target);
+    if (!request || state.destroyed) return false;
+    if (request.kind === "chat") return openWhatsappChatNotification(request.channelId);
+    const sequence = ++whatsappCallsRuntime.notificationSequence;
+    if (request.kind === "outgoing") {
+      let savedCall = null;
+      if (request.callId) { try { savedCall = await fetchWhatsappCallById(request.callId); } catch {} }
+      if (state.destroyed || sequence !== whatsappCallsRuntime.notificationSequence) return false;
+      openWhatsappOutgoingDial({ phone: request.phone || whatsappCallPhone(savedCall), name: savedCall?.customer_name || request.name });
+      return true;
+    }
+    if (request.kind === "transfer") {
+      if (!request.transferId || !request.callId) { showOperatorToast("This transfer link is incomplete. Open the Hub session that received the transfer."); return false; }
+      const pending = await pollWhatsappPendingTransfer({ transferId: request.transferId, callId: request.callId });
+      if (state.destroyed || sequence !== whatsappCallsRuntime.notificationSequence) return false;
+      if (!pending || pending.transfer.transfer_id !== request.transferId || pending.transfer.call_id !== request.callId) {
+        showOperatorToast("This transfer is not available to this Hub session. Use the Hub that received it."); return false;
+      }
+      focusWhatsappCall(pending.call); return true;
+    }
+    if (!request.callId) { showOperatorToast(request.kind === "status" ? "Audio cannot be resumed from this link. Open the active call in its original Hub." : "This notification has no valid call ID."); return false; }
+    let call = null;
+    if (request.callId) {
+      try { call = await fetchWhatsappCallById(request.callId); } catch {}
+    }
+    if (!call) {
+      await pollRecentWhatsappCalls();
+      const matches = item => (request.callId ? whatsappProviderCallId(item) === request.callId : whatsappCallIsOpenForAnswer(item)) && (!request.phone || whatsappCallPhone(item) === request.phone);
+      call = (state.whatsappCallLogs || []).find(matches) || null;
+      if (!call && request.phone) {
+        try {
+          const data = await fetchWhatsappCallJson(`/api/whatsapp-calls/logs?limit=40&phone=${encodeURIComponent(request.phone)}`);
+          if (!state.destroyed) mergeWhatsappCallLogs(whatsappCallsFromResponse(data));
+          call = (state.whatsappCallLogs || []).find(matches) || null;
+        } catch {}
+      }
+    }
+    if (state.destroyed || sequence !== whatsappCallsRuntime.notificationSequence) return false;
+    if (!call || (!request.callId && !whatsappCallIsOpenForAnswer(call))) {
+      showOperatorToast("This call is no longer available. Check its conversation for call history.");
+      return false;
+    }
+    // A notification opens a verified backend record. It never supplies an SDP or answers the call.
+    focusWhatsappCall(call);
+    if (request.kind === "status") {
+      whatsappCallsRuntime.notificationReadOnlyKey = whatsappCallKey(call);
+      showInlineError(whatsappCallError, "This shows the saved call status. Audio cannot be resumed from a link; use the Hub session where the call is active.");
+      renderWhatsappCallPanel();
+    }
+    return true;
+  }
+
+  function whatsappNotificationTargetFromQuery(query) {
+    const keys = ["mode", "call_id", "callId", "phone", "name", "channel_id", "channelId", "channel", "odoo_channel_id", "chat", "transfer_id", "transferId", "rejoin_token", "rejoinToken", "recovery_token", "recoveryToken"];
+    if (keys.some(key => query.getAll(key).length > 1)) return null;
+    const channelValues = ["channel_id", "channelId", "channel", "odoo_channel_id", "chat"].map(key => query.get(key)).filter(value => value !== null && value !== "");
+    if (channelValues.length && !channelValues.every(value => whatsappNotificationChannelId(value) && whatsappNotificationChannelId(value) === whatsappNotificationChannelId(channelValues[0]))) return null;
+    const target = { mode: query.get("mode"), call_id: query.get("call_id"), callId: query.get("callId"), phone: query.get("phone"), name: query.get("name"),
+      channel_id: channelValues[0] || "", transfer_id: query.get("transfer_id"), transferId: query.get("transferId"),
+      rejoin_token: query.get("rejoin_token") || query.get("rejoinToken"), recovery_token: query.get("recovery_token") || query.get("recoveryToken") };
+    return validWhatsappNotificationTarget(target) ? target : null;
+  }
+
+  function openIncomingWhatsappNotificationFromUrl() {
+    const query = new URLSearchParams(location.search);
+    const target = whatsappNotificationTargetFromQuery(query);
+    if (!target) {
+      if (["mode", "call_id", "callId", "transfer_id", "transferId"].some(key => query.has(key))) showOperatorToast("This call link is invalid or ambiguous. Open the call from this Hub.");
+      return Promise.resolve(false);
+    }
+    return openWhatsappCallNotification(target);
+  }
+
+  function setupWhatsappIncomingUi() {
+    const options = { signal: state.lifecycleController.signal };
+    const unlock = event => { if (event.isTrusted && !event.target.closest?.('[data-whatsapp-call-action="sound"]')) unlockWhatsappCallSound().catch(() => {}); };
+    appRoot.addEventListener("pointerdown", unlock, options);
+    appRoot.addEventListener("keydown", unlock, options);
+    appRoot.addEventListener("click", event => {
+      const button = event.target.closest("[data-whatsapp-call-action]");
+      if (!button || !appRoot.contains(button) || button.disabled) return;
+      routeWhatsappIncomingAction(button.dataset.whatsappCallAction, button.dataset.callKey || button.dataset.deviceId || "").catch(error => showInlineError(whatsappCallError, error.message));
+    }, options);
+    navigator.serviceWorker?.addEventListener("message", event => {
+      if (state.destroyed || !state.session?.uid || event.data?.type !== "SH_OPERATOR_NOTIFICATION") return;
+      const target = validWhatsappNotificationTarget(event.data.target);
+      if (!target) return;
+      try { event.ports?.[0]?.postMessage({ handled: true }); } catch {}
+      openWhatsappCallNotification(event.data.target).catch(error => showOperatorToast(error.message));
+    }, options);
+    byId("shWhatsappCallAvailability")?.addEventListener("change", event => setWhatsappCallAvailability(event.target.value), options);
+    window.addEventListener("storage", event => {
+      if (event.key !== "sh_operator_device" || state.destroyed) return;
+      readWhatsappOperatorProfile(); syncWhatsappPresenceUi(); renderWhatsappCallPanel();
+      postWhatsappHubPresence({ force: true });
+    }, options);
+  }
+
+  function disposeWhatsappIncomingUi() {
+    stopWhatsappCallRealtime();
+    clearInterval(whatsappCallsRuntime.presenceTimer);
+    whatsappCallsRuntime.presenceTimer = null;
+    postWhatsappHubPresence({ force: true, closing: true });
+    clearTimeout(whatsappCallsRuntime.incomingExpiryTimer);
+    stopWhatsappRingtone();
+    const ctx = whatsappCallsRuntime.audioContext;
+    whatsappCallsRuntime.audioContext = null;
+    if (ctx && ctx.state !== "closed") { try { ctx.close().catch(() => {}); } catch {} }
+    releaseWhatsappCallLock({ closing: true });
+  }
+
+  function selectedWhatsappPhone() {
+    return normalizePhoneForCompare(state.selectedChannel?.whatsapp_number || "");
+  }
+
+  function syncWhatsappCallButton(channel = state.selectedChannel) {
+    if (!whatsappCallBtn) return;
+    const show = channel?.channel_type === "whatsapp" && !!normalizePhoneForCompare(channel.whatsapp_number || "");
+    whatsappCallBtn.classList.toggle("is-hidden", !show);
+    if (show) whatsappCallBtn.title = `WhatsApp calls for ${channelDisplayName(channel)}`;
+  }
+
+  function normalizedWhatsappCallEvent(event) {
+    const value = String(event || "").toLowerCase().replace(/[-\s]+/g, "_");
+    if (["ringing", "incoming", "incoming_ringing", "connect"].includes(value)) return "connect";
+    if (["outgoing", "outgoing_ringing", "dialing", "connect_requested"].includes(value)) return "outgoing";
+    if (["accept", "accepted", "connected", "answered"].includes(value)) return "accepted";
+    if (["terminate", "terminated", "end", "ended", "completed", "cancelled", "canceled"].includes(value)) return "terminate";
+    if (["reject", "rejected", "declined"].includes(value)) return "rejected";
+    if (["missed", "no_answer", "unanswered", "timeout"].includes(value)) return "missed";
+    if (["pre_accepted", "pre_accept"].includes(value)) return "pre_accept";
+    return value;
+  }
+
+  function callEventLabel(event) {
+    const e = normalizedWhatsappCallEvent(event);
+    if (e === "connect") return "Incoming voice call";
+    if (e === "outgoing") return "Outgoing voice call";
+    if (e === "accepted") return "Voice call accepted";
+    if (e === "pre_accept") return "Connecting voice call";
+    if (e === "terminate") return "Voice call ended";
+    if (e === "rejected") return "Declined voice call";
+    if (e === "missed") return "Missed voice call";
+    if (e === "failed") return "Call failed";
+    if (e === "busy") return "Caller busy";
+    return "Voice call";
+  }
+
+  function callEventClass(event) {
+    const e = normalizedWhatsappCallEvent(event);
+    if (e === "accepted" || e === "pre_accept") return "is-connected";
+    if (["missed", "rejected", "failed", "busy"].includes(e)) return "is-missed";
+    if (e === "terminate") return "is-ended";
+    return "is-info";
+  }
+
+  function whatsappCallIsTerminal(call) {
+    return ["terminate", "rejected", "missed", "failed", "busy"].includes(normalizedWhatsappCallEvent(call?.event));
+  }
+
+  function whatsappCallEventTimeMs(call) {
+    const raw = call?.timestamp || call?.date || call?.updated_at || call?.received_at || call?.created_at || call?.time || 0;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      const ms = numeric < 1e12 ? numeric * 1000 : numeric;
+      return Number.isFinite(new Date(ms).getTime()) ? ms : 0;
+    }
+    const date = raw ? parseOdooUtc(raw) : null;
+    return date && Number.isFinite(date.getTime()) ? date.getTime() : 0;
+  }
+
+  function whatsappCallTimeMs(call) {
+    return Number(call?._uiStartedMs) || whatsappCallEventTimeMs(call);
+  }
+
+  function whatsappCallKey(call) {
+    if (call?._uiCallKey) return String(call._uiCallKey);
+    const callId = call?.call_id || call?.callId || call?.raw?.call?.id || call?.call?.id;
+    if (callId) return `session:${String(callId)}`;
+    if (call?.id) return `event:${String(call.id)}`;
+    const phone = normalizePhoneForCompare(call?.customer_phone || call?.wa_id || call?.from || "");
+    return `event:${phone}:${whatsappCallEventTimeMs(call)}:${normalizedWhatsappCallEvent(call?.event)}`;
+  }
+
+  function callEventMatchesChannel(call, channel = state.selectedChannel) {
+    if (!call || !channel || channel.channel_type !== "whatsapp") return false;
+    const channelPhone = normalizePhoneForCompare(channel.whatsapp_number || "");
+    const callPhone = whatsappCallPhone(call);
+    if (!channelPhone || !callPhone) return false;
+    // Exact international numbers take priority. Only tolerate a missing country prefix.
+    if (channelPhone === callPhone) return true;
+    const shorter = channelPhone.length < callPhone.length ? channelPhone : callPhone;
+    const longer = shorter === channelPhone ? callPhone : channelPhone;
+    return shorter.length === 10 && longer.length <= 13 && longer.endsWith(shorter);
+  }
+
+  function whatsappCallRemoteOffer(call) {
+    const direct = call?.sdp ? { sdp: call.sdp, type: call.sdp_type || call.sdpType || "offer" } : null;
+    const sessions = [direct, call?.session, call?.raw?.call?.session, call?.raw?.call?.connect?.session, call?._uiOffer];
+    const session = sessions.find(value => value?.sdp) || {};
+    return { sdp: String(session.sdp || ""), type: String(session.type || session.sdp_type || session.sdpType || "offer").toLowerCase() };
+  }
+
+  function whatsappCallHasRemoteOffer(call) {
+    const offer = whatsappCallRemoteOffer(call);
+    // Reject empty/test labels. The browser validates the actual provider SDP before acceptance.
+    return offer.type === "offer" && /^v=0(?:\r?\n|$)/.test(offer.sdp.trim()) && /^m=audio\s+\d+\s+/m.test(offer.sdp);
+  }
+
+  function whatsappCallRemoteAnswer(call) {
+    const sources = [call?.sdp ? { sdp: call.sdp, type: call.sdp_type || call.sdpType || (call.remote_answer_available ? "answer" : "") } : null,
+      call?.session, call?.raw?.call?.answer?.session, call?.raw?.call?.session, call?.raw?.call?.connect?.session, call?._uiAnswer];
+    let provisional = null;
+    for (const source of sources) {
+      const type = String(source?.type || source?.sdp_type || source?.sdpType || "").toLowerCase();
+      const sdp = String(source?.sdp || "");
+      if (!["answer", "pranswer"].includes(type) || !/^v=0(?:\r?\n|$)/.test(sdp.trim()) || !/^m=audio\s+\d+\s+/m.test(sdp)) continue;
+      if (type === "answer") return { type, sdp };
+      provisional ||= { type, sdp };
+    }
+    return provisional || { type: "", sdp: "" };
+  }
+
+  function mergeWhatsappCallRecord(previous, incoming) {
+    const next = normalizeWhatsappCallRecord(incoming);
+    const nextTime = whatsappCallEventTimeMs(next);
+    if (!previous) {
+      return { ...next, _uiCallKey: whatsappCallKey(next), _uiStartedMs: Number(next._uiStartedMs) || nextTime,
+        _uiEventMs: Number(next._uiEventMs) || nextTime, _uiUpdatedMs: Number(next._uiUpdatedMs) || nextTime, _uiReceivedMs: next._uiReceivedMs || Date.now(),
+        _uiOffer: whatsappCallRemoteOffer(next), _uiAnswer: whatsappCallRemoteAnswer(next) };
+    }
+    const previousTime = Number(previous._uiEventMs) || whatsappCallEventTimeMs(previous);
+    const prevTerminal = whatsappCallIsTerminal(previous);
+    const nextTerminal = whatsappCallIsTerminal(next);
+    const rank = event => ({ outgoing: 1, connect: 1, pre_accept: 2, accepted: 3, terminate: 4, failed: 4, busy: 4, rejected: 5, missed: 5 }[normalizedWhatsappCallEvent(event)] || 0);
+    let useNext = nextTime >= previousTime;
+    if (prevTerminal !== nextTerminal) useNext = nextTerminal;
+    else if (rank(next.event) !== rank(previous.event)) useNext = rank(next.event) > rank(previous.event);
+    // An ACCEPTED webhook can arrive after a local no-answer acknowledgement but
+    // carry an earlier provider timestamp. Its authoritative terminal Ended
+    // correction is allowed; neither this nor any later media event revives audio.
+    if (prevTerminal && nextTerminal && String(next.direction || previous.direction || "").toLowerCase() === "outgoing") {
+      if (normalizedWhatsappCallEvent(previous.event) === "missed" && normalizedWhatsappCallEvent(next.event) === "terminate" && whatsappProviderAnswered(next)) useNext = true;
+      else if (normalizedWhatsappCallEvent(previous.event) === "terminate" && whatsappProviderAnswered(previous) && normalizedWhatsappCallEvent(next.event) === "missed") useNext = false;
+    }
+    const winner = useNext ? next : previous;
+    const times = [whatsappCallTimeMs(previous), nextTime].filter(value => value > 0);
+    const offer = whatsappCallHasRemoteOffer(next) ? whatsappCallRemoteOffer(next) : whatsappCallRemoteOffer(previous);
+    return { ...previous, ...next, ...winner,
+      _uiCallKey: whatsappCallKey(previous),
+      _uiStartedMs: times.length ? Math.min(...times) : 0,
+      _uiEventMs: useNext ? nextTime : previousTime,
+      _uiUpdatedMs: Math.max(Number(previous._uiUpdatedMs) || previousTime, nextTime),
+      _uiReceivedMs: previous._uiReceivedMs || Date.now(),
+      _uiOffer: offer,
+      provider_answer_confirmed: whatsappProviderAnswered(previous) || whatsappProviderAnswered(next),
+      _uiAnswer: whatsappCallRemoteAnswer(next).sdp ? whatsappCallRemoteAnswer(next) : whatsappCallRemoteAnswer(previous),
+      locked_by_other: Object.prototype.hasOwnProperty.call(next, "locked_by_other") ? next.locked_by_other : previous.locked_by_other,
+      lock: Object.prototype.hasOwnProperty.call(next, "lock") ? next.lock : previous.lock };
+  }
+
+  function whatsappCallVisualSignature(call) {
+    return JSON.stringify([whatsappCallKey(call), call.event, whatsappCallTimeMs(call), call.customer_name || "", call.customer_phone || call.wa_id || call.from || "", !!whatsappCallRemoteOffer(call).sdp, !!whatsappCallRemoteAnswer(call).sdp, whatsappProviderAnswered(call), call.provider_status || "", !!call.locked_by_other, call.lock?.operator_device_id || ""]);
+  }
+
+  function mergeWhatsappCallLogs(incoming = []) {
+    const before = (state.whatsappCallLogs || []).map(whatsappCallVisualSignature).join("|");
+    const records = new Map();
+    [...(state.whatsappCallLogs || []), ...(Array.isArray(incoming) ? incoming : [])].forEach(call => {
+      if (!call || typeof call !== "object") return;
+      const key = whatsappCallKey(call);
+      records.set(key, mergeWhatsappCallRecord(records.get(key), call));
+    });
+    state.whatsappCallLogs = [...records.values()]
+      .sort((a, b) => (Number(b._uiUpdatedMs) || 0) - (Number(a._uiUpdatedMs) || 0) || whatsappCallKey(a).localeCompare(whatsappCallKey(b)))
+      .slice(0, 200);
+    if (state.whatsappActiveCall) {
+      const current = records.get(whatsappCallKey(state.whatsappActiveCall));
+      if (current) {
+        state.whatsappActiveCall = current;
+        const session = whatsappCallsRuntime.session;
+        if (session && session.callId === whatsappProviderCallId(current)) session.call = current;
+        const expectedTransferOwner = (session?.mode === "transfer" && !session.signalingAccepted && isPendingWhatsappSourceTransfer(current)) || isExpectedWhatsappProvisionalTransfer(session, current);
+        if (whatsappCallIsTerminal(current)) {
+          if (session) finishWhatsappCallSession(session, { status: whatsappCallTerminalLabel(current), release: true });
+          else closeWhatsappPeerConnection();
+        } else if (whatsappCallLockedByOther(current) && !expectedTransferOwner) {
+          whatsappCallsRuntime.localStatus.set(whatsappCallKey(current), whatsappCallLockLabel(current));
+          if (session) finishWhatsappCallSession(session, { status: whatsappCallLockLabel(current), release: true });
+          else closeWhatsappPeerConnection();
+        } else if (session?.mode === "outgoing" && whatsappSessionCurrent(session)) {
+          // A provider status can arrive from polling or a realtime hint after
+          // the media transport is already up. Re-evaluate both independently.
+          applyWhatsappOutgoingAnswer(session, current).catch(() => {});
+        }
+      }
+    }
+    const finished = whatsappCallsRuntime.finishedCall;
+    if (finished) {
+      const current = records.get(whatsappCallKey(finished));
+      if (current && whatsappCallIsTerminal(current) && normalizedWhatsappCallEvent(current.event) !== normalizedWhatsappCallEvent(finished.event)) {
+        const label = whatsappCallTerminalLabel(current);
+        whatsappCallsRuntime.finishedCall = { ...current, _uiEndLabel: label };
+        whatsappCallsRuntime.localStatus.set(whatsappCallKey(current), label);
+      }
+    }
+    if (whatsappCallsRuntime.pendingTransfer) {
+      const pending = whatsappCallsRuntime.pendingTransfer;
+      const current = records.get(whatsappCallKey(pending.call));
+      if (current) pending.call = current;
+      if (!whatsappCallsRuntime.session && !isPendingWhatsappSourceTransfer(pending.call, pending)) whatsappCallsRuntime.pendingTransfer = null;
+    }
+    const changed = before !== state.whatsappCallLogs.map(whatsappCallVisualSignature).join("|");
+    if (changed && typeof renderHubCallsPage === "function") renderHubCallsPage();
+    return changed;
+  }
+
+  function whatsappCallIsOpenForAnswer(call) {
+    if (!call || String(call.direction || "").toLowerCase() === "outgoing" || normalizedWhatsappCallEvent(call.event) !== "connect" || !whatsappCallHasRemoteOffer(call) || whatsappCallLockedByOther(call)) return false;
+    if (whatsappCallsRuntime.suppressed.has(whatsappCallKey(call))) return false;
+    const time = whatsappCallEventTimeMs(call) || Number(call._uiReceivedMs) || 0;
+    const age = Date.now() - time;
+    return time > 0 && age >= -60000 && age < 120000;
+  }
+
+  function findAnswerableWhatsappCall() {
+    const focused = focusedWhatsappCall();
+    if (focused && whatsappCallsRuntime.notificationReadOnlyKey === whatsappCallKey(focused)) return null;
+    if (focused) return whatsappCallIsOpenForAnswer(focused) || isPendingWhatsappSourceTransfer(focused) ? focused : null;
+    return (state.whatsappCallLogs || []).filter(call => callEventMatchesChannel(call) && whatsappCallIsOpenForAnswer(call))
+      .sort((a, b) => whatsappCallTimeMs(b) - whatsappCallTimeMs(a))[0] || null;
+  }
+
+  function setWhatsappCallClass(node, name, value) {
+    const enabled = Boolean(value);
+    if (node && node.classList.contains(name) !== enabled) node.classList.toggle(name, enabled);
+  }
+
+  function setWhatsappCallDisabled(node, value) {
+    const disabled = Boolean(value);
+    if (node && node.disabled !== disabled) node.disabled = disabled;
+  }
+
+  function setWhatsappCallAttribute(node, name, value) {
+    const text = String(value);
+    if (node && node.getAttribute(name) !== text) node.setAttribute(name, text);
+  }
+
+  function updateWhatsappCallActionButtons() {
+    const answerable = findAnswerableWhatsappCall();
+    const session = whatsappCallsRuntime.session;
+    const busy = !!session || whatsappCallsRuntime.actionPending || state.whatsappCallIsConnecting || state.whatsappCallIsConnected;
+    const focused = focusedWhatsappCall();
+    const activeHere = !!state.whatsappActiveCall && !!focused && whatsappCallKey(state.whatsappActiveCall) === whatsappCallKey(focused);
+    setWhatsappCallDisabled(whatsappCallAcceptBtn, !answerable || busy || !whatsappOperatorAvailable() || !state.autoRefreshEnabled);
+    setWhatsappCallDisabled(whatsappCallRejectBtn, !answerable || busy);
+    setWhatsappCallDisabled(whatsappCallEndBtn, !activeHere || !session || (!!session.cancelRequested && !session.endUnconfirmed) || (!!session.endUnconfirmed && whatsappCallsRuntime.actionPending));
+    const party = focused ? whatsappCallParty(focused) : { phone: selectedWhatsappPhone() };
+    const target = whatsappCallsRuntime.dialTarget;
+    const startVisible = !session && !answerable && (!focused || !!target || whatsappCallIsTerminal(focused)) && !whatsappCallsRuntime.notificationReadOnlyKey;
+    whatsappCallStartBtn?.classList.toggle("is-hidden", !startVisible);
+    if (whatsappCallStartBtn) {
+      setWhatsappCallDisabled(whatsappCallStartBtn, busy || whatsappCallsRuntime.pendingOutgoing.size > 0 || !whatsappOperatorAvailable() || !state.autoRefreshEnabled || !whatsappDialPhone(target ? whatsappCallPhoneInput?.value : party.phone));
+      setTextIfChanged(whatsappCallStartBtn, whatsappCallsRuntime.pendingOutgoing.size > 0 ? "Finishing previous call\u2026" : "Start audio call");
+    }
+    const canMute = !!session?.stream && !session.cancelRequested;
+    whatsappCallMuteBtn?.classList.toggle("is-hidden", !canMute);
+    if (whatsappCallMuteBtn) { setTextIfChanged(whatsappCallMuteBtn, session?.muted ? "Unmute microphone" : "Mute microphone"); setWhatsappCallAttribute(whatsappCallMuteBtn, "aria-pressed", !!session?.muted); }
+    whatsappCallTransferBtn?.classList.toggle("is-hidden", !canTransferWhatsappCall());
+    setTextIfChanged(whatsappCallEndBtn, session?.endUnconfirmed ? "Retry end" : session && !session.callId ? "Cancel call" : "End call");
+  }
+
+  async function fetchWhatsappCallJson(path, options = {}) {
+    const controller = new AbortController();
+    whatsappCallsRuntime.controllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await appFetch(`${AI_MODE_BACKEND_BASE}${path}`, { ...options, signal: controller.signal,
+        headers: { Accept: "application/json", ...(options.headers || {}) } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.ok === false) { const error = new Error(data?.error || `HTTP ${response.status}`); error.status = response.status; error.data = data; throw error; }
+      return data;
+    } finally {
+      clearTimeout(timeout);
+      whatsappCallsRuntime.controllers.delete(controller);
+    }
+  }
+
+  async function loadWhatsappCallLogsForSelected({ silent = false, force = false } = {}) {
+    const channel = state.selectedChannel;
+    const phone = selectedWhatsappPhone();
+    if (!phone || channel?.channel_type !== "whatsapp" || state.destroyed) return [];
+    const selectedId = state.selectedChannelId;
+    const cached = () => (state.whatsappCallLogs || []).filter(call => callEventMatchesChannel(call, channel));
+    if (silent && !force && Date.now() - (whatsappCallsRuntime.loadedAt.get(phone) || 0) < 10000) return cached();
+    let request = whatsappCallsRuntime.requests.get(phone);
+    if (!request) {
+      request = fetchWhatsappCallJson(`/api/whatsapp-calls/logs?limit=40&phone=${encodeURIComponent(phone)}`)
+        .then(data => {
+          if (state.destroyed) return false;
+          whatsappCallsRuntime.loadedAt.set(phone, Date.now());
+          return mergeWhatsappCallLogs(whatsappCallsFromResponse(data));
+        }).finally(() => whatsappCallsRuntime.requests.delete(phone));
+      whatsappCallsRuntime.requests.set(phone, request);
+    }
+    try {
+      const changed = await request;
+      if (state.destroyed) return [];
+      if (state.selectedChannelId === selectedId && selectedWhatsappPhone() === phone) {
+        if (!silent) hideInlineError(whatsappCallError);
+        renderWhatsappCallPanel();
+        if (changed) renderMessages({ scrollToBottom: false });
+      }
+      return cached();
+    } catch (error) {
+      if (!state.destroyed && state.selectedChannelId === selectedId && !silent) showInlineError(whatsappCallError, error.message || "Could not load WhatsApp calls.");
+      return cached();
+    }
+  }
+
+  function whatsappCallIconMarkup() {
+    return '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3H4.8A1.8 1.8 0 0 0 3 5c.8 8.4 7.6 15.2 16 16a1.8 1.8 0 0 0 2-1.8V17l-5-2-2 2a15 15 0 0 1-7-7l2-2-2-5Z"/></svg>';
+  }
+
+  function whatsappCallDateValue(call) {
+    const ms = whatsappCallTimeMs(call);
+    return ms ? new Date(ms).toISOString() : (call.date || "");
+  }
+
+  function renderWhatsappCallPanel() {
+    if (!whatsappCallPanel || !whatsappCallList || state.destroyed) return;
+    syncHubNativeCallState();
+    const focused = focusedWhatsappCall();
+    const answerable = findAnswerableWhatsappCall();
+    const displayCall = focused || answerable;
+    const selected = state.selectedChannel;
+    const activeHere = !!displayCall && !!state.whatsappActiveCall &&
+      whatsappCallKey(displayCall) === whatsappCallKey(state.whatsappActiveCall) &&
+      (!!whatsappCallsRuntime.session || state.whatsappCallIsConnected || state.whatsappCallIsConnecting);
+    const answerableHere = !!displayCall && !!answerable && whatsappCallKey(displayCall) === whatsappCallKey(answerable);
+    const eventTime = displayCall ? whatsappCallEventTimeMs(displayCall) || Number(displayCall._uiReceivedMs) || 0 : 0;
+    const waitingForSession = !!displayCall && !whatsappCallIsTerminal(displayCall) && !whatsappCallLockedByOther(displayCall) &&
+      normalizedWhatsappCallEvent(displayCall.event) === "connect" && !whatsappCallHasRemoteOffer(displayCall) &&
+      eventTime > 0 && Date.now() - eventTime < 120000;
+    const dialReady = !!whatsappCallsRuntime.dialTarget && !whatsappCallsRuntime.session;
+    const liveCall = Boolean(activeHere || answerableHere || waitingForSession || dialReady);
+    const toggleState = (node, name, value) => {
+      const enabled = Boolean(value);
+      if (node.classList.contains(name) !== enabled) node.classList.toggle(name, enabled);
+    };
+    toggleState(whatsappCallPanel, "is-live-call", liveCall);
+    toggleState(whatsappCallPanel, "is-answerable-call", answerableHere && !activeHere);
+    toggleState(whatsappCallPanel, "is-active-call", activeHere);
+    toggleState(whatsappCallPanel, "is-outgoing-ready", dialReady);
+    const bannerCall = whatsappCallsRuntime.session?.call || ((state.whatsappCallIsConnected || state.whatsappCallIsConnecting) ? state.whatsappActiveCall : findIncomingWhatsappCall());
+    toggleState(appRoot, "sh-call-modal-visible", liveCall && !whatsappCallPanel.classList.contains("is-hidden") &&
+      !!displayCall && !!bannerCall && whatsappCallKey(displayCall) === whatsappCallKey(bannerCall));
+    syncWhatsappIncomingUi();
+    updateWhatsappCallActionButtons();
+    setTextIfChanged(whatsappCallPanel.querySelector(".sh-wa-call-head strong"), liveCall ? "WhatsApp call" : "Call history");
+    setTextIfChanged(whatsappCallAcceptBtn, displayCall && isPendingWhatsappSourceTransfer(displayCall) ? "Accept transfer" : "Accept");
+    setTextIfChanged(whatsappCallRejectBtn, "Decline");
+    setTextIfChanged(whatsappCallEndBtn, whatsappCallsRuntime.session?.endUnconfirmed ? "Retry end" : whatsappCallsRuntime.session && !whatsappCallsRuntime.session.callId ? "Cancel call" : "End call");
+    byId("shWhatsappCallDial")?.classList.toggle("is-hidden", !dialReady);
+    syncWhatsappPresenceUi(); renderWhatsappTransferChoices();
+    const party = displayCall ? whatsappCallParty(displayCall) : { channel: selected, phone: selectedWhatsappPhone(), name: selected ? channelDisplayName(selected) : "WhatsApp calls" };
+    if (!displayCall && selected?.channel_type !== "whatsapp") {
+      whatsappCallCurrent.__shCallSignature = undefined;
+      whatsappCallList.__shCallHistorySignature = undefined;
+      setTextIfChanged(whatsappCallCurrent, "Incoming calls appear here even when no conversation is selected.");
+      patchKeyedChildren(whatsappCallList, '<div class="sh-op-panel-empty" data-render-key="calls-empty">Choose a WhatsApp chat to browse its call history.</div>');
+      return;
+    }
+    setTextIfChanged(whatsappCallSubtitle, party.name);
+    const status = displayCall ? whatsappCallCurrentStatus(displayCall) : "Call history";
+    const initials = String(party.name || "").trim().split(/\s+/).slice(0, 2).map(part => Array.from(part)[0] || "").join("").toUpperCase();
+    const avatar = party.channel && typeof renderChannelAvatar === "function" ? renderChannelAvatar(party.channel) :
+      /^\+?[\d\s-]+$/.test(party.name) || party.name === "WhatsApp caller" ? whatsappCallIconMarkup() : escapeHtml(initials || "SH");
+    // The clock owns its own text node. A mute/status change must not first clear
+    // it, and an unchanged poll must not rebuild the name/avatar/status subtree.
+    const currentSignature = JSON.stringify([liveCall, activeHere, avatar, party.name, party.phone, status]);
+    if (whatsappCallCurrent.__shCallSignature !== currentSignature) {
+      const duration = whatsappCallDurationText(whatsappCallsRuntime.session);
+      patchKeyedChildren(whatsappCallCurrent, `${liveCall ? `<div class="sh-wa-call-avatar" data-render-key="avatar" aria-hidden="true">${avatar}</div>` : ""}<strong data-render-key="name">${escapeHtml(party.name)}</strong><span data-render-key="phone">${escapeHtml(party.phone ? `+${party.phone}` : "WhatsApp caller")}</span><em data-render-key="status" role="status">${escapeHtml(status)}</em>${activeHere ? `<small data-render-key="duration" id="shWhatsappCallDuration">${duration}</small>` : ''}`);
+      whatsappCallCurrent.__shCallSignature = currentSignature;
+    }
+    updateWhatsappCallDuration(whatsappCallsRuntime.session);
+    // The live call has no visible history list. Formatting 200 rows on every
+    // 1.5s active poll and every global poll competed with the call controls.
+    if (!liveCall && !whatsappCallPanel.classList.contains("is-hidden")) {
+      const calls = (state.whatsappCallLogs || []).filter(call => party.phone ? whatsappCallPhone(call) === party.phone : callEventMatchesChannel(call, party.channel));
+      const historySignature = JSON.stringify([party.name, party.phone, calls.map(call => [whatsappCallKey(call), call.event, whatsappCallTimeMs(call), call.customer_name || ""])]);
+      if (whatsappCallList.__shCallHistorySignature !== historySignature) {
+        patchKeyedChildren(whatsappCallList, calls.length ? calls.map(call => `
+          <div class="sh-wa-call-row ${callEventClass(call.event)}" data-render-key="call:${escapeHtml(whatsappCallKey(call))}">
+            <div class="sh-wa-call-row-icon">${whatsappCallIconMarkup()}</div>
+            <div><strong>${escapeHtml(callEventLabel(call.event))}</strong><span>${escapeHtml(call.customer_name || party.name)}</span><small>${escapeHtml(formatDateTime(whatsappCallDateValue(call)))}</small></div>
+          </div>`).join("") : '<div class="sh-op-panel-empty" data-render-key="calls-empty">No calls yet.</div>');
+        whatsappCallList.__shCallHistorySignature = historySignature;
+      }
+    }
+  }
+
+  function latestCallEventsForThread() {
+    if (state.selectedChannel?.channel_type !== "whatsapp") return [];
+    return (state.whatsappCallLogs || []).filter(call => callEventMatchesChannel(call))
+      .slice().sort((a, b) => whatsappCallTimeMs(a) - whatsappCallTimeMs(b) || whatsappCallKey(a).localeCompare(whatsappCallKey(b))).slice(-40);
+  }
+
+  function renderWhatsappCallThreadCard(call) {
+    return `<div class="sh-wa-call-thread-card ${callEventClass(call.event)} ${String(call.direction || "").toLowerCase() === "outgoing" ? "is-outgoing" : "is-incoming"}" data-render-key="call:${escapeHtml(whatsappCallKey(call))}" data-call-id="${escapeHtml(whatsappCallKey(call))}">
+      <div class="sh-wa-call-thread-icon">${whatsappCallIconMarkup()}</div>
+      <div><strong>${escapeHtml(callEventLabel(call.event))}</strong><span>${escapeHtml(call.customer_name || channelDisplayName(state.selectedChannel) || "Customer")}</span><small>${escapeHtml(formatTimeOnly(whatsappCallDateValue(call)))}</small></div>
+    </div>`;
+  }
+
+  function renderWhatsappCallEventsMarkup() {
+    return latestCallEventsForThread().map(renderWhatsappCallThreadCard).join("");
+  }
+
+  async function openWhatsappCallPanel() {
+    if (!whatsappCallPanel || state.destroyed) return;
+    const active = (state.whatsappCallIsConnected || state.whatsappCallIsConnecting) && state.whatsappActiveCall;
+    if (active) { focusWhatsappCall(active); return; }
+    whatsappCallsRuntime.dialTarget = null;
+    whatsappCallsRuntime.notificationReadOnlyKey = "";
+    whatsappCallsRuntime.focusedCallKey = "";
+    if (state.selectedChannel?.channel_type !== "whatsapp") {
+      const incoming = findIncomingWhatsappCall();
+      if (incoming) { focusWhatsappCall(incoming); return; }
+      showOperatorToast("Select a WhatsApp chat to view call history.");
+      return;
+    }
+    state.whatsappCallPanelOpen = true;
+    showPanel(whatsappCallPanel);
+    renderWhatsappCallPanel();
+    await loadWhatsappCallLogsForSelected({ silent: true, force: true });
+  }
+
+  async function refreshFocusedWhatsappCall() {
+    const call = focusedWhatsappCall();
+    if (!call || call._uiDialTarget || !whatsappProviderCallId(call)) return loadWhatsappCallLogsForSelected({ silent: false, force: true });
+    try {
+      hideInlineError(whatsappCallError);
+      await fetchWhatsappCallById(whatsappProviderCallId(call));
+      renderWhatsappCallPanel(); renderMessages({ scrollToBottom: false });
+    } catch (error) { if (!state.destroyed) showInlineError(whatsappCallError, error.message); }
+  }
+
+  function closeWhatsappCallPanel() {
+    const answerable = findAnswerableWhatsappCall();
+    if (answerable) whatsappCallsRuntime.notified.add(whatsappCallKey(answerable));
+    state.whatsappCallPanelOpen = false;
+    whatsappCallsRuntime.notificationReadOnlyKey = "";
+    hidePanel(whatsappCallPanel);
+    if (appRoot.classList.contains("sh-call-modal-visible")) appRoot.classList.remove("sh-call-modal-visible");
+  }
+
+  function stopWhatsappSessionMedia(session) {
+    if (!session) return;
+    stopHubNativeCallState(session);
+    const peer = session.pc;
+    session.pc = null;
+    if (peer) {
+      peer.ontrack = null; peer.onconnectionstatechange = null; peer.oniceconnectionstatechange = null;
+      try { peer.close(); } catch {}
+    }
+    const stream = session.stream;
+    session.stream = null;
+    if (stream) { try { stream.getTracks().forEach(track => track.stop()); } catch {} }
+    if (state.whatsappPeerConnection === peer) state.whatsappPeerConnection = null;
+    if (state.whatsappLocalStream === stream) state.whatsappLocalStream = null;
+    if (whatsappCallsRuntime.session === session && whatsappRemoteAudio) {
+      try { whatsappRemoteAudio.pause(); } catch {}
+      whatsappRemoteAudio.srcObject = null;
+      whatsappCallsRuntime.audioPlaybackBlocked = false;
+    }
+  }
+
+  function finishWhatsappCallSession(session, { status = "Call ended", terminalEvent = "", release = true } = {}) {
+    if (!session || session.finished) return;
+    session.finished = true; session.cancelRequested = true;
+    for (const timer of [session.pollTimer, session.durationTimer, session.connectTimer, session.disconnectTimer, session.ringTimer]) clearInterval(timer);
+    stopWhatsappSessionMedia(session);
+    const current = whatsappCallsRuntime.session === session;
+    if (current) {
+      whatsappCallsRuntime.session = null;
+      whatsappCallsRuntime.actionToken += 1;
+      whatsappCallsRuntime.actionPending = false;
+      whatsappCallsRuntime.transferSelectorOpen = false;
+      state.whatsappActiveCall = null;
+      state.whatsappCallIsConnecting = false;
+      state.whatsappCallIsConnected = false;
+      if (session.mode === "transfer") whatsappCallsRuntime.pendingTransfer = null;
+      if (!state.autoRefreshEnabled) { clearInterval(whatsappCallsRuntime.presenceTimer); whatsappCallsRuntime.presenceTimer = null; }
+      if (terminalEvent && session.callId) markWhatsappCallFinished(session.call, terminalEvent);
+      const record = (state.whatsappCallLogs || []).find(call => session.callId && whatsappProviderCallId(call) === session.callId) || session.call;
+      whatsappCallsRuntime.finishedCall = { ...record, _uiEndLabel: status };
+      whatsappCallsRuntime.focusedCallKey = whatsappCallKey(whatsappCallsRuntime.finishedCall);
+      whatsappCallsRuntime.localStatus.set(whatsappCallsRuntime.focusedCallKey, status);
+    }
+    if (release && session.lockRecord) releaseWhatsappCallLock({ claim: session.lockRecord, closing: state.destroyed });
+    if (current && !state.destroyed) {
+      renderWhatsappCallPanel(); renderMessages({ scrollToBottom: false });
+      postWhatsappHubPresence({ force: true });
+    }
+  }
+
+  function closeWhatsappPeerConnection() {
+    const session = whatsappCallsRuntime.session;
+    if (session) { finishWhatsappCallSession(session, { status: "Call disconnected", release: true }); return; }
+    // Also clean up a partially initialized/legacy media handle.
+    whatsappCallsRuntime.actionToken += 1; whatsappCallsRuntime.actionPending = false;
+    clearTimeout(whatsappCallsRuntime.disconnectTimer); clearTimeout(whatsappCallsRuntime.connectTimer);
+    const peer = state.whatsappPeerConnection; state.whatsappPeerConnection = null;
+    if (peer) { peer.ontrack = null; peer.onconnectionstatechange = null; peer.oniceconnectionstatechange = null; try { peer.close(); } catch {} }
+    const stream = state.whatsappLocalStream; state.whatsappLocalStream = null;
+    if (stream) { try { stream.getTracks().forEach(track => track.stop()); } catch {} }
+    const callId = whatsappProviderCallId(state.whatsappActiveCall);
+    state.whatsappActiveCall = null; state.whatsappCallIsConnected = false; state.whatsappCallIsConnecting = false;
+    if (whatsappRemoteAudio) { try { whatsappRemoteAudio.pause(); } catch {} whatsappRemoteAudio.srcObject = null; }
+    if (callId) releaseWhatsappCallLock({ callId, closing: state.destroyed });
+  }
+
+  function whatsappOutgoingAttemptPayload(session) {
+    return { ...session.identity, client_source: "odoo_operator_hub", client_request_id: session.requestId,
+      device_id: session.identity.base_device_id, phone: session.phone, customer_phone: session.phone };
+  }
+
+  function cancelWhatsappOutgoingRequest(session, { closing = false, reason = "operator_cancelled_before_call_id" } = {}) {
+    if (!session?.requestSent || !session.requestId) return Promise.resolve(null);
+    if (session.cancelPromise && !closing) return session.cancelPromise;
+    const body = JSON.stringify({ ...whatsappOutgoingAttemptPayload(session), reason });
+    if (closing) return window.fetch(`${AI_MODE_BACKEND_BASE}/api/whatsapp-calls/cancel-pending-outgoing`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true
+    }).catch(() => null);
+    const request = fetchWhatsappCallJson("/api/whatsapp-calls/cancel-pending-outgoing", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body
+    }).catch(error => { session.cancelError = error; return null; });
+    session.cancelPromise = request;
+    // A pending marker or lost acknowledgement needs a fresh exact-attempt
+    // lookup on Retry; never cache either as completed remote cancellation.
+    request.finally(() => { if (session.cancelPromise === request) session.cancelPromise = null; });
+    return request;
+  }
+
+  function terminateWhatsappSessionRemote(session, { closing = false } = {}) {
+    if (!session?.callId) return Promise.resolve(null);
+    if (session.terminatePromise && !closing) return session.terminatePromise;
+    const body = JSON.stringify({ ...session.identity, call_id: session.callId,
+      phone_number_id: session.call?.phone_number_id || "", direction: session.mode === "outgoing" ? "outgoing" : "incoming",
+      customer_phone: session.phone, connected_at_ms: session.connectedAtMs || 0, ended_at_ms: Date.now(),
+      duration_seconds: session.connectedAtMs ? Math.max(0, Math.floor((Date.now() - session.connectedAtMs) / 1000)) : 0,
+      ...(session.terminationReason ? { reason: session.terminationReason } : {}) });
+    if (closing) return window.fetch(`${AI_MODE_BACKEND_BASE}/api/whatsapp-calls/terminate`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true
+    }).catch(() => null);
+    const request = fetchWhatsappCallJson("/api/whatsapp-calls/terminate", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    session.terminatePromise = request;
+    // Coalesce only an in-flight/successful action, never cache rejection forever.
+    request.catch(() => { if (session.terminatePromise === request) session.terminatePromise = null; });
+    return request;
+  }
+
+  function disposeWhatsappCalls() {
+    const session = whatsappCallsRuntime.session;
+    if (session) {
+      session.cancelRequested = true;
+      if (session.callId && (session.ownershipReady || session.mode === "outgoing")) terminateWhatsappSessionRemote(session, { closing: true });
+      else if (session.mode === "transfer" && session.transfer) window.fetch(`${AI_MODE_BACKEND_BASE}/api/operator-call-transfer/decline`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, keepalive: true,
+        body: JSON.stringify({ ...session.identity, transfer_id: session.transfer.transfer_id, call_id: session.callId, to_operator_device_id: session.identity.operator_device_id })
+      }).catch(() => {});
+      else if (session.mode === "outgoing") cancelWhatsappOutgoingRequest(session, { closing: true });
+    }
+    for (const pending of whatsappCallsRuntime.pendingOutgoing.values()) {
+      if (pending !== session) cancelWhatsappOutgoingRequest(pending, { closing: true });
+    }
+    disposeWhatsappIncomingUi();
+    closeWhatsappPeerConnection();
+    whatsappCallsRuntime.controllers.forEach(controller => controller.abort());
+    whatsappCallsRuntime.controllers.clear();
+    whatsappCallsRuntime.callReads.clear();
+  }
+
+  function waitForWhatsappIce(pc) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise(resolve => {
+      let timer;
+      const finish = () => { clearTimeout(timer); pc.removeEventListener("icegatheringstatechange", check); resolve(); };
+      const check = () => { if (pc.iceGatheringState === "complete" || pc.signalingState === "closed") finish(); };
+      pc.addEventListener("icegatheringstatechange", check); timer = setTimeout(finish, 4000); check();
+    });
+  }
+
+  function markWhatsappCallFinished(call, event) {
+    whatsappCallsRuntime.suppressed.add(whatsappCallKey(call));
+    mergeWhatsappCallLogs([{ ...call, event, status: event, timestamp: Date.now() / 1000, _uiEventMs: 0 }]);
+    if (whatsappCallsRuntime.suppressed.size > 200) whatsappCallsRuntime.suppressed.delete(whatsappCallsRuntime.suppressed.values().next().value);
+  }
+
+  function beginWhatsappCallSession(call, mode, transfer = null) {
+    if (whatsappCallsRuntime.session || state.destroyed) throw new Error("Another call is already active in this Hub.");
+    const session = { token: ++whatsappCallsRuntime.actionToken, mode, call, callId: whatsappOpaqueId(whatsappProviderCallId(call)),
+      identity: whatsappOperatorIdentity({ client_source: "odoo_operator_hub" }), phone: whatsappCallPhone(call), name: whatsappCallParty(call).name,
+      transfer, phase: mode === "outgoing" ? "starting" : "opening-microphone", stream: null, pc: null, muted: false,
+      cancelRequested: false, finished: false, ownershipReady: false, signalingAccepted: false,
+      requestId: "", requestSent: false, requestPending: false, remoteAnswerApplied: false, providerAnswerConfirmed: false,
+      remoteSdpKey: "", remoteSdpPromise: null, pollPromise: null, connectedAtMs: 0,
+      startedAtMs: Date.now(), mediaConnectedAtMs: 0, endPromise: null, endUnconfirmed: false };
+    whatsappCallsRuntime.session = session;
+    whatsappCallsRuntime.finishedCall = null;
+    whatsappCallsRuntime.dialTarget = null;
+    whatsappCallsRuntime.notificationReadOnlyKey = "";
+    whatsappCallsRuntime.actionPending = true;
+    whatsappCallsRuntime.focusedCallKey = whatsappCallKey(call);
+    state.whatsappActiveCall = call; state.whatsappCallIsConnecting = true; state.whatsappCallIsConnected = false;
+    state.whatsappCallPanelOpen = true; showPanel(whatsappCallPanel);
+    hideInlineError(whatsappCallError); stopWhatsappRingtone();
+    session.pollTimer = setInterval(() => pollWhatsappActiveSession(session).catch(() => {}), 1500);
+    renderWhatsappCallPanel();
+    return session;
+  }
+
+  function whatsappPeerConnected(peer) {
+    if (!peer) return false;
+    // ICE and aggregate connection events can arrive in either order. A stale
+    // "connected" flag must never override either transport's failure signal.
+    const lost = ["failed", "closed", "disconnected"];
+    if (lost.includes(peer.connectionState) || lost.includes(peer.iceConnectionState)) return false;
+    if (peer.connectionState) return peer.connectionState === "connected";
+    return ["connected", "completed"].includes(peer.iceConnectionState);
+  }
+
+  function whatsappCallDurationText(session) {
+    if (!whatsappSessionCurrent(session) || !session.connectedAtMs) return "";
+    const seconds = Math.max(0, Math.floor((Date.now() - session.connectedAtMs) / 1000));
+    return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+
+  function updateWhatsappCallDuration(session) {
+    if (!whatsappSessionCurrent(session) || !session.connectedAtMs) return;
+    setTextIfChanged(byId("shWhatsappCallDuration"), whatsappCallDurationText(session));
+  }
+
+  function whatsappProviderAnswered(call) {
+    // Only the normalized provider ACCEPTED webhook confirms the other person
+    // answered. HTTP connect success, an SDP answer, and a connected ICE pair do
+    // not establish that fact (WhatsApp can negotiate media while still ringing).
+    return call?.provider_answer_confirmed === true || String(call?.provider_status || "").toUpperCase() === "ACCEPTED";
+  }
+
+  function syncWhatsappOutgoingConfirmation(session, call) {
+    if (!whatsappSessionCurrent(session) || session.mode !== "outgoing" || whatsappCallIsTerminal(call)) return;
+    if (!session.providerAnswerConfirmed && whatsappProviderAnswered(call)) {
+      session.providerAnswerConfirmed = true;
+      clearTimeout(session.ringTimer); session.ringTimer = null;
+      session.phase = "connecting";
+      watchWhatsappConnection(session);
+    }
+  }
+
+  function syncWhatsappPeerState(session) {
+    if (!whatsappSessionCurrent(session) || !session.pc) return;
+    const peer = session.pc;
+    const previousPhase = session.phase;
+    const previousConnected = state.whatsappCallIsConnected;
+    const previousConnecting = state.whatsappCallIsConnecting;
+    syncWhatsappOutgoingConfirmation(session, session.call);
+    const mediaConnected = whatsappPeerConnected(peer);
+    if (mediaConnected && !session.mediaConnectedAtMs) session.mediaConnectedAtMs = Date.now();
+    if (mediaConnected && session.signalingAccepted && (session.mode !== "outgoing" || (session.remoteAnswerApplied && session.providerAnswerConfirmed))) {
+      clearTimeout(session.connectTimer); clearTimeout(session.disconnectTimer); clearTimeout(session.ringTimer);
+      session.connectTimer = null; session.disconnectTimer = null; session.ringTimer = null;
+      const first = !session.connectedAtMs;
+      if (first) {
+        const now = Date.now();
+        const acceptedAt = session.mode === "outgoing" && session.providerAnswerConfirmed ? Date.parse(session.call?.connected_at || "") : 0;
+        // A delayed audit/HTTP response must not restart a real audio call at 0.
+        // Both the local media transport and this exact call's answer must exist.
+        const earliest = Math.max(Number(session.startedAtMs) || now, Number(session.mediaConnectedAtMs) || now);
+        session.connectedAtMs = Math.min(now, Math.max(earliest, Number.isFinite(acceptedAt) && acceptedAt > 0 ? acceptedAt : earliest));
+      }
+      session.phase = "connected";
+      state.whatsappCallIsConnected = true; state.whatsappCallIsConnecting = false;
+      if (!session.durationTimer) session.durationTimer = setInterval(() => updateWhatsappCallDuration(session), 1000);
+      if (first) showOperatorToast("WhatsApp call connected.");
+    } else if (mediaConnected && session.mode === "outgoing" && session.remoteAnswerApplied && !session.providerAnswerConfirmed) {
+      // The media leg can be ready before Meta's ACCEPTED audit arrives. Keep
+      // audio running and show Connecting; do not claim a human answer yet.
+      clearTimeout(session.disconnectTimer); session.disconnectTimer = null;
+      session.phase = "connecting";
+      state.whatsappCallIsConnected = false; state.whatsappCallIsConnecting = true;
+    } else if (["failed", "closed"].includes(peer.connectionState) || ["failed", "closed"].includes(peer.iceConnectionState)) {
+      endWhatsappCallSession(session, "Call connection failed").catch(() => {}); return;
+    } else if (peer.connectionState === "disconnected" || peer.iceConnectionState === "disconnected") {
+      session.phase = session.mode === "outgoing" && !session.providerAnswerConfirmed ? "ringing" : "reconnecting";
+      state.whatsappCallIsConnected = false; state.whatsappCallIsConnecting = true;
+      if (!session.disconnectTimer) session.disconnectTimer = setTimeout(() => {
+        session.disconnectTimer = null;
+        if (whatsappSessionCurrent(session) && !whatsappPeerConnected(session.pc)) endWhatsappCallSession(session, "Call connection lost").catch(() => {});
+      }, 12000);
+    }
+    if (session.phase !== previousPhase || state.whatsappCallIsConnected !== previousConnected || state.whatsappCallIsConnecting !== previousConnecting) renderWhatsappCallPanel();
+    updateWhatsappCallDuration(session);
+  }
+
+  function watchWhatsappConnection(session) {
+    if (!whatsappSessionCurrent(session) || state.whatsappCallIsConnected || session.connectTimer) return;
+    session.connectTimer = setTimeout(() => {
+      session.connectTimer = null;
+      if (whatsappSessionCurrent(session) && !state.whatsappCallIsConnected) endWhatsappCallSession(session, "Audio connection timed out").catch(() => {});
+    }, 30000);
+  }
+
+  function attachWhatsappSessionPeer(session, stream) {
+    if (!whatsappSessionCurrent(session)) { stream.getTracks().forEach(track => track.stop()); return null; }
+    const peer = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+    session.stream = stream; session.pc = peer;
+    state.whatsappLocalStream = stream; state.whatsappPeerConnection = peer;
+    stream.getTracks().forEach(track => peer.addTrack(track, stream));
+    peer.ontrack = event => {
+      if (!whatsappSessionCurrent(session) || session.pc !== peer || !whatsappRemoteAudio) return;
+      whatsappRemoteAudio.srcObject = event.streams?.[0] || new MediaStream([event.track]);
+      const play = whatsappRemoteAudio.play?.();
+      if (play?.catch) play.catch(() => {
+        if (whatsappSessionCurrent(session)) { whatsappCallsRuntime.audioPlaybackBlocked = true; showInlineError(whatsappCallError, "Your browser paused audio. Tap Play call audio."); renderWhatsappCallPanel(); }
+      });
+    };
+    const changed = () => { if (session.pc === peer) syncWhatsappPeerState(session); };
+    peer.onconnectionstatechange = changed; peer.oniceconnectionstatechange = changed;
+    return peer;
+  }
+
+  function toggleWhatsappMicrophoneMute() {
+    const session = whatsappCallsRuntime.session;
+    if (!whatsappSessionCurrent(session) || !session.stream) return;
+    session.muted = !session.muted;
+    const tracks = session.stream.getAudioTracks ? session.stream.getAudioTracks() : session.stream.getTracks().filter(track => !track.kind || track.kind === "audio");
+    tracks.forEach(track => { track.enabled = !session.muted; });
+    renderWhatsappCallPanel();
+  }
+
+  async function applyWhatsappOutgoingAnswer(session, call) {
+    if (!whatsappSessionCurrent(session) || session.mode !== "outgoing") return false;
+    syncWhatsappOutgoingConfirmation(session, call);
+    syncWhatsappPeerState(session);
+    if (!session.pc || session.remoteAnswerApplied || session.remoteSdpPromise) return session.remoteSdpPromise;
+    const answer = whatsappCallRemoteAnswer(call);
+    if (!answer.sdp) return false;
+    const key = `${answer.type}:${answer.sdp}`;
+    if (session.remoteSdpKey === key) return false;
+    const peer = session.pc;
+    session.remoteSdpPromise = (async () => {
+      try {
+        await peer.setRemoteDescription(answer);
+        if (!whatsappSessionCurrent(session) || session.pc !== peer) return false;
+        session.remoteSdpKey = key;
+        session.remoteAnswerApplied = answer.type === "answer";
+        session.phase = session.providerAnswerConfirmed ? "connecting" : "ringing";
+        // Keep the no-answer timer running for early SDP/ICE. It ends only when
+        // the provider confirms the recipient accepted or a terminal event wins.
+        if (session.providerAnswerConfirmed) watchWhatsappConnection(session);
+        syncWhatsappPeerState(session); return true;
+      } catch (error) {
+        if (whatsappSessionCurrent(session)) {
+          showInlineError(whatsappCallError, "The returned call audio session could not be opened.");
+          await endWhatsappCallSession(session, "Audio session failed");
+        }
+        return false;
+      } finally {
+        session.remoteSdpPromise = null;
+        // A final answer/status may have arrived while setRemoteDescription was
+        // applying a provisional answer. Apply the newest snapshot immediately.
+        if (whatsappSessionCurrent(session) && !session.remoteAnswerApplied) {
+          const latest = whatsappCallRemoteAnswer(session.call);
+          if (latest.sdp && `${latest.type}:${latest.sdp}` !== session.remoteSdpKey) applyWhatsappOutgoingAnswer(session, session.call).catch(() => {});
+        }
+      }
+    })();
+    return session.remoteSdpPromise;
+  }
+
+  async function pollWhatsappActiveSession(session = whatsappCallsRuntime.session) {
+    if (!whatsappSessionCurrent(session) || !session.callId) return null;
+    if (session.pollPromise) return session.pollPromise;
+    session.pollPromise = (async () => {
+      try {
+        const call = await fetchWhatsappCallById(session.callId);
+        if (!whatsappSessionCurrent(session) || !call) return null;
+        session.call = call; state.whatsappActiveCall = call;
+        if (session.mode === "outgoing") await applyWhatsappOutgoingAnswer(session, call);
+        if (whatsappSessionCurrent(session)) renderWhatsappCallPanel();
+        return call;
+      } finally { session.pollPromise = null; }
+    })();
+    return session.pollPromise;
+  }
+
+  async function loadWhatsappCallConfiguration() {
+    if (whatsappCallsRuntime.callConfig) return whatsappCallsRuntime.callConfig;
+    if (!whatsappCallsRuntime.callConfigPromise) whatsappCallsRuntime.callConfigPromise = fetchWhatsappCallJson("/api/whatsapp-calls/config", { cache: "no-store" })
+      .then(result => { whatsappCallsRuntime.callConfig = result; return result; })
+      .finally(() => { whatsappCallsRuntime.callConfigPromise = null; });
+    return whatsappCallsRuntime.callConfigPromise;
+  }
+
+  function openWhatsappOutgoingDial(options = {}) {
+    if (state.destroyed) return false;
+    if (whatsappCallsRuntime.session) { focusWhatsappCall(whatsappCallsRuntime.session.call); return false; }
+    const hasPhone = Object.prototype.hasOwnProperty.call(options, "phone");
+    const phone = whatsappDialPhone(hasPhone ? options.phone : selectedWhatsappPhone());
+    const name = String(options.name || (!hasPhone && state.selectedChannel ? channelDisplayName(state.selectedChannel) : "") || (phone ? `+${phone}` : "New WhatsApp call")).slice(0, 160);
+    const target = { _uiDialTarget: true, _uiCallKey: "outgoing-dial", _uiContactPhone: phone, _uiContactName: name, customer_phone: phone, customer_name: name, direction: "outgoing", event: "outgoing_ready" };
+    whatsappCallsRuntime.dialTarget = target; whatsappCallsRuntime.finishedCall = null; whatsappCallsRuntime.notificationReadOnlyKey = "";
+    whatsappCallsRuntime.focusedCallKey = whatsappCallKey(target);
+    if (whatsappCallPhoneInput) whatsappCallPhoneInput.value = phone ? `+${phone}` : "";
+    state.whatsappCallPanelOpen = true; showPanel(whatsappCallPanel); hideInlineError(whatsappCallError); renderWhatsappCallPanel();
+    return true;
+  }
+
+  async function startWhatsappCallForTarget(options = {}) {
+    if (state.destroyed) return false;
+    if (whatsappCallsRuntime.session) { focusWhatsappCall(whatsappCallsRuntime.session.call); return false; }
+    if (whatsappCallsRuntime.actionPending || !openWhatsappOutgoingDial(options)) return false;
+    // Only explicit call-button gestures invoke this helper. Notification links
+    // and history details keep their status/prefill-only behavior.
+    await startOutgoingWhatsappCall();
+    return !!whatsappCallsRuntime.session;
+  }
+
+  async function startOutgoingWhatsappCall() {
+    if (whatsappCallsRuntime.session || whatsappCallsRuntime.actionPending || state.destroyed) return;
+    if (whatsappCallsRuntime.pendingOutgoing.size) { showInlineError(whatsappCallError, "Wait for the previous outgoing request to finish before starting another call."); return; }
+    if (!whatsappOperatorAvailable() || !state.autoRefreshEnabled) { showInlineError(whatsappCallError, "Set call availability to Online and resume live updates first."); return; }
+    const focused = focusedWhatsappCall();
+    const dial = whatsappCallsRuntime.dialTarget;
+    const phone = whatsappDialPhone(dial ? whatsappCallPhoneInput?.value : focused ? whatsappCallPhone(focused) : selectedWhatsappPhone());
+    if (!phone) { showInlineError(whatsappCallError, "Enter a WhatsApp number with its country code (7\u201315 digits)."); return; }
+    const party = focused ? whatsappCallParty(focused) : { name: state.selectedChannel ? channelDisplayName(state.selectedChannel) : `+${phone}` };
+    const name = dial && phone !== whatsappCallPhone(dial) ? `+${phone}` : party.name || `+${phone}`;
+    const requestId = `out_${Date.now().toString(36)}_${typeof globalThis.crypto?.randomUUID === "function" ? globalThis.crypto.randomUUID() : Math.random().toString(36).slice(2, 14)}`;
+    const call = { _uiCallKey: `outgoing:${requestId}`, customer_phone: phone, customer_name: name, direction: "outgoing", event: "outgoing", timestamp: Date.now() / 1000 };
+    const session = beginWhatsappCallSession(call, "outgoing");
+    session.requestId = requestId;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") throw new Error("Microphone calling requires a supported browser and HTTPS.");
+      const presenceFresh = whatsappCallsRuntime.presenceConfirmed && Date.now() - whatsappCallsRuntime.presencePostedAt < 20000;
+      const [, config] = await Promise.all([
+        presenceFresh ? Promise.resolve(null) : postWhatsappHubPresence({ force: true }),
+        loadWhatsappCallConfiguration()
+      ]);
+      if (!whatsappSessionCurrent(session)) return;
+      if (!whatsappCallsRuntime.presenceConfirmed) throw new Error("The Hub call service is not ready. Update the matching backend and retry.");
+      if ((config.own_numbers_last10 || []).some(own => normalizePhoneForCompare(own).slice(-10) === phone.slice(-10))) throw new Error("This is your own WhatsApp Business number.");
+      session.phase = "opening-microphone"; renderWhatsappCallPanel();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (!whatsappSessionCurrent(session)) { stream.getTracks().forEach(track => track.stop()); return; }
+      const peer = attachWhatsappSessionPeer(session, stream);
+      const offer = await peer.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+      if (!whatsappSessionCurrent(session) || peer !== session.pc) return;
+      await peer.setLocalDescription(offer); await waitForWhatsappIce(peer);
+      if (!whatsappSessionCurrent(session) || peer !== session.pc) return;
+      session.phase = "starting"; session.requestSent = true; session.requestPending = true;
+      whatsappCallsRuntime.pendingOutgoing.set(requestId, session); renderWhatsappCallPanel();
+      const result = await fetchWhatsappCallJson("/api/whatsapp-calls/outgoing", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...whatsappOutgoingAttemptPayload(session), to: phone, customer_name: name, sdp: peer.localDescription?.sdp || offer.sdp, sdp_type: peer.localDescription?.type || "offer" }) });
+      session.requestPending = false;
+      const providerId = whatsappOpaqueId(result.call_id || result.id || "");
+      if (result.client_request_id && result.client_request_id !== requestId) throw new Error("The call response does not match this attempt.");
+      if (result.cancelled && !providerId) {
+        if (whatsappCallsRuntime.session === session && !session.finished) finishWhatsappCallSession(session, { status: "Call cancelled" });
+        return;
+      }
+      if (!providerId) throw new Error("The call service returned no provider call ID.");
+      session.callId = providerId;
+      session.call = normalizeWhatsappCallRecord({ ...(result.call || {}), call_id: providerId, customer_phone: phone, customer_name: name,
+        phone_number_id: result.phone_number_id || result.call?.phone_number_id || "", direction: "outgoing", event: result.call?.event || "outgoing", timestamp: result.call?.timestamp || Date.now() / 1000 });
+      if (!whatsappSessionCurrent(session) || session.cancelRequested) {
+        if (whatsappCallsRuntime.session === session && !session.finished) {
+          if (result.cancelled) finishWhatsappCallSession(session, { status: "Call cancelled", terminalEvent: "terminate" });
+          else {
+            if (session.endPromise) await session.endPromise;
+            if (whatsappCallsRuntime.session === session && !session.finished) {
+              session.endUnconfirmed = true;
+              await endWhatsappCallSession(session, session.endStatus || "Call cancelled");
+            }
+          }
+        } else if (!result.cancelled) await terminateWhatsappSessionRemote(session).catch(() => null);
+        return;
+      }
+      if (result.cancelled || result.cancel_pending) {
+        if (result.cancelled) finishWhatsappCallSession(session, { status: "Call cancelled", terminalEvent: "terminate" });
+        else await endWhatsappCallSession(session, "Call cancelled");
+        return;
+      }
+      state.whatsappActiveCall = session.call; whatsappCallsRuntime.focusedCallKey = whatsappCallKey(session.call);
+      mergeWhatsappCallLogs([session.call]);
+      if (!whatsappSessionCurrent(session)) return;
+      await claimWhatsappCallLock(session.call, session);
+      if (!whatsappSessionCurrent(session)) { releaseWhatsappCallLock({ claim: session.lockRecord }); return; }
+      session.ownershipReady = true; session.lastLockRenewedAt = Date.now(); session.signalingAccepted = true;
+      session.phase = session.providerAnswerConfirmed ? "connecting" : "ringing";
+      whatsappCallsRuntime.actionPending = false;
+      postWhatsappHubPresence({ force: true });
+      if (!session.providerAnswerConfirmed) session.ringTimer = setTimeout(() => {
+        session.ringTimer = null;
+        if (whatsappSessionCurrent(session) && !session.providerAnswerConfirmed) endWhatsappCallSession(session, "No answer").catch(() => {});
+      }, Math.max(10000, Number(config.outgoing_timeout_ms) || 75000));
+      await applyWhatsappOutgoingAnswer(session, session.call);
+      if (whatsappSessionCurrent(session)) {
+        renderWhatsappCallPanel();
+        // A webhook may arrive before the outgoing HTTP response gives this tab
+        // its provider ID. Always hydrate that ID once it has been bound.
+        const latest = await fetchWhatsappCallById(session.callId, { afterPending: true }).catch(() => null);
+        if (whatsappSessionCurrent(session) && latest) await applyWhatsappOutgoingAnswer(session, latest);
+      }
+    } catch (error) {
+      if (!whatsappSessionCurrent(session)) return;
+      if (session.callId || session.requestSent) await endWhatsappCallSession(session, "Could not start the call");
+      else finishWhatsappCallSession(session, { status: "Could not start the call" });
+      if (!state.destroyed && !session.endUnconfirmed) showInlineError(whatsappCallError, error.message || "Could not start the WhatsApp call.");
+    } finally {
+      session.requestPending = false;
+      whatsappCallsRuntime.pendingOutgoing.delete(requestId);
+      if (!state.destroyed) updateWhatsappCallActionButtons();
+    }
+  }
+
+  async function acceptIncomingWhatsappCall() {
+    if (whatsappCallsRuntime.session || whatsappCallsRuntime.actionPending || state.destroyed) return;
+    let call = findAnswerableWhatsappCall();
+    if (!call || !whatsappOperatorAvailable() || !state.autoRefreshEnabled) { showInlineError(whatsappCallError, "This call is unavailable, or this Hub is not Online with live updates."); return; }
+    const pending = isPendingWhatsappSourceTransfer(call) ? whatsappCallsRuntime.pendingTransfer : null;
+    const session = beginWhatsappCallSession(call, pending ? "transfer" : "incoming", pending?.transfer || null);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") throw new Error("Microphone calling requires a supported browser and HTTPS.");
+      if (pending) {
+        const freshPending = await pollWhatsappPendingTransfer({ transferId: session.transfer.transfer_id, callId: session.callId });
+        if (!whatsappSessionCurrent(session)) return;
+        if (!freshPending || !isPendingWhatsappSourceTransfer(freshPending.call, freshPending)) throw new Error("This transfer is no longer available to this Hub session.");
+        session.transfer = freshPending.transfer;
+        const acceptedTransfer = await fetchWhatsappCallJson("/api/operator-call-transfer/accept", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...session.identity, transfer_id: session.transfer.transfer_id, call_id: session.callId, to_operator_device_id: session.identity.operator_device_id }) });
+        if (!whatsappSessionCurrent(session)) return;
+        if (acceptedTransfer.transfer) session.transfer = acceptedTransfer.transfer;
+        if (acceptedTransfer.call) { mergeWhatsappCallLogs([acceptedTransfer.call]); call = getWhatsappCallByKey(whatsappCallKey(acceptedTransfer.call)) || normalizeWhatsappCallRecord(acceptedTransfer.call); }
+        whatsappCallsRuntime.pendingTransfer = { transfer: session.transfer, call };
+        if (!isPendingWhatsappSourceTransfer(call)) throw new Error("The transfer owner or expiry changed.");
+      } else {
+        const latest = await fetchWhatsappCallById(session.callId);
+        if (!whatsappSessionCurrent(session)) return;
+        if (!latest || !whatsappCallIsOpenForAnswer(latest)) throw new Error(latest && whatsappCallLockedByOther(latest) ? whatsappCallLockLabel(latest) : "This call is no longer available to answer.");
+        call = latest;
+        await claimWhatsappCallLock(call, session);
+        if (!whatsappSessionCurrent(session)) { releaseWhatsappCallLock({ claim: session.lockRecord }); return; }
+        session.ownershipReady = true; session.lastLockRenewedAt = Date.now(); postWhatsappHubPresence({ force: true });
+      }
+      if (!whatsappSessionCurrent(session)) return;
+      session.call = call; state.whatsappActiveCall = call;
+      const offer = whatsappCallRemoteOffer(call);
+      if (!whatsappCallHasRemoteOffer(call)) throw new Error("The incoming audio offer is unavailable.");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (!whatsappSessionCurrent(session)) { stream.getTracks().forEach(track => track.stop()); return; }
+      const peer = attachWhatsappSessionPeer(session, stream);
+      await peer.setRemoteDescription({ type: offer.type || "offer", sdp: offer.sdp });
+      if (!whatsappSessionCurrent(session) || peer !== session.pc) return;
+      const answer = await peer.createAnswer();
+      if (!whatsappSessionCurrent(session)) return;
+      await peer.setLocalDescription(answer); await waitForWhatsappIce(peer);
+      if (!whatsappSessionCurrent(session) || peer !== session.pc) return;
+      session.phase = "connecting"; renderWhatsappCallPanel();
+      session.acceptDispatched = true;
+      const result = await fetchWhatsappCallJson("/api/whatsapp-calls/accept", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...session.identity, call_id: session.callId, transfer_id: session.transfer?.transfer_id || "",
+          phone_number_id: call.phone_number_id || call.raw?.metadata?.phone_number_id || "", sdp: peer.localDescription?.sdp || answer.sdp, sdp_type: peer.localDescription?.type || answer.type || "answer" }) });
+      if (!whatsappSessionCurrent(session)) {
+        if (result.ok !== false) terminateWhatsappSessionRemote(session).catch(() => null);
+        return;
+      }
+      session.ownershipReady = true; session.lastLockRenewedAt = Date.now(); session.signalingAccepted = true;
+      rememberWhatsappSessionLock(session, result.lock || null);
+      whatsappCallsRuntime.pendingTransfer = null;
+      mergeWhatsappCallLogs([{ ...(result.call || call), call_id: session.callId, event: "accepted", status: "connected", locked_by_other: false, lock: result.lock || null, timestamp: Date.now() / 1000 }]);
+      whatsappCallsRuntime.actionPending = false;
+      syncWhatsappPeerState(session); watchWhatsappConnection(session); postWhatsappHubPresence({ force: true });
+      renderWhatsappCallPanel(); renderMessages({ scrollToBottom: false });
+    } catch (error) {
+      if (!whatsappSessionCurrent(session)) return;
+      stopWhatsappSessionMedia(session);
+      await cleanupWhatsappAcceptanceFailure(session);
+      if (!state.destroyed && !session.endUnconfirmed) showInlineError(whatsappCallError, error.message || "Could not accept the WhatsApp call.");
+    }
+  }
+
+  async function cleanupWhatsappAcceptanceFailure(session) {
+    if (session.acceptDispatched) {
+      // A failed HTTP response can still mean the provider accepted the call.
+      // Stop/reconcile the exact remote session through the same retryable End.
+      session.transferEndNeedsReconcile = session.mode === "transfer" && !session.ownershipReady;
+      await endWhatsappCallSession(session, "Could not answer");
+      return;
+    }
+    if (session.mode === "transfer" && session.transfer) {
+      try {
+        await fetchWhatsappCallJson("/api/operator-call-transfer/decline", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...session.identity, transfer_id: session.transfer.transfer_id, call_id: session.callId, to_operator_device_id: session.identity.operator_device_id }) });
+      } catch {}
+    }
+    if (whatsappSessionCurrent(session)) finishWhatsappCallSession(session, { status: "Could not answer", release: true });
+  }
+
+  async function rejectIncomingWhatsappCall() {
+    if (whatsappCallsRuntime.session || whatsappCallsRuntime.actionPending || state.destroyed) return;
+    const call = findAnswerableWhatsappCall();
+    if (!call) return;
+    const pending = isPendingWhatsappSourceTransfer(call) ? whatsappCallsRuntime.pendingTransfer : null;
+    const token = ++whatsappCallsRuntime.actionToken;
+    const identity = whatsappOperatorIdentity();
+    whatsappCallsRuntime.actionPending = true;
+    whatsappCallsRuntime.rejectingCallKey = whatsappCallKey(call);
+    stopWhatsappRingtone(); renderWhatsappCallPanel();
+    try {
+      let result = null;
+      if (pending) {
+        result = await fetchWhatsappCallJson("/api/operator-call-transfer/decline", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...identity, transfer_id: pending.transfer.transfer_id, call_id: pending.transfer.call_id, to_operator_device_id: identity.operator_device_id }) });
+      } else {
+        result = await fetchWhatsappCallJson("/api/whatsapp-calls/reject", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...identity, call_id: whatsappProviderCallId(call), phone_number_id: call.phone_number_id || call.raw?.metadata?.phone_number_id || "" }) });
+      }
+      if (state.destroyed || token !== whatsappCallsRuntime.actionToken) return;
+      if (pending) {
+        whatsappCallsRuntime.pendingTransfer = null;
+        whatsappCallsRuntime.finishedCall = { ...call, _uiEndLabel: "Transfer declined" };
+      } else {
+        const actual = whatsappCallActionResult(result, whatsappProviderCallId(call));
+        if (actual) mergeWhatsappCallLogs([actual]);
+        const latest = (state.whatsappCallLogs || []).find(item => whatsappProviderCallId(item) === whatsappProviderCallId(call));
+        // A caller may hang up while Decline is in flight. Preserve the backend's
+        // idempotent terminal result instead of inventing a later rejection.
+        if (latest && whatsappCallIsTerminal(latest)) {
+          whatsappCallsRuntime.localStatus.set(whatsappCallKey(call), whatsappCallTerminalLabel(latest));
+        } else {
+          markWhatsappCallFinished(call, "rejected");
+          whatsappCallsRuntime.localStatus.set(whatsappCallKey(call), "Call declined");
+        }
+      }
+      if (pending) whatsappCallsRuntime.localStatus.set(whatsappCallKey(call), "Transfer declined");
+    } catch (error) { if (!state.destroyed && token === whatsappCallsRuntime.actionToken) showInlineError(whatsappCallError, error.message || "Could not decline the call."); }
+    finally {
+      if (token === whatsappCallsRuntime.actionToken) {
+        whatsappCallsRuntime.actionPending = false;
+        whatsappCallsRuntime.rejectingCallKey = "";
+      }
+      if (!state.destroyed) { renderWhatsappCallPanel(); renderMessages({ scrollToBottom: false }); }
+    }
+  }
+
+  function returnToChatAfterWhatsappEnd(session) {
+    const wasOpen = state.whatsappCallPanelOpen && !whatsappCallPanel?.classList.contains("is-hidden");
+    closeWhatsappCallPanel();
+    // A minimized call must not navigate away from the operator's current work.
+    if (!wasOpen) return;
+    if (typeof closeHubCallsPage === "function") closeHubCallsPage();
+    if (typeof closeWorkspaceTools === "function") closeWorkspaceTools();
+    const customer = byId("shCustomerDrawer");
+    if (customer) hidePanel(customer);
+    if (state.selectedChannelId && state.selectedChannel) {
+      byId("shChatEmpty")?.classList.add("is-hidden");
+      byId("shChatPanel")?.classList.remove("is-hidden");
+      byId("shAppLayout")?.classList.add("has-selected-chat");
+      return;
+    }
+    const channel = findWhatsappChannelForCall(session.call);
+    if (channel) { selectChannel(channel.id).catch(() => {}); return; }
+    const channelId = whatsappNotificationChannelId(session.call?.odoo_channel_id || session.call?.channel_id);
+    const epoch = state.selectionEpoch;
+    if (channelId) ensureWhatsappNotificationChannel(channelId).then(found => {
+      if (found && !state.destroyed && !state.selectedChannelId && state.selectionEpoch === epoch &&
+          (!whatsappCallsRuntime.session || whatsappCallsRuntime.session === session)) selectChannel(found.id).catch(() => {});
+    }).catch(() => {});
+  }
+
+  async function reconcileWhatsappFailedTransferEnd(session) {
+    // Decline can roll back an unfinished takeover, but cannot end the source's
+    // live customer call. A lost acceptance response needs exact lock proof.
+    try {
+      await fetchWhatsappCallJson("/api/operator-call-transfer/decline", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...session.identity, transfer_id: session.transfer.transfer_id, call_id: session.callId, to_operator_device_id: session.identity.operator_device_id }) });
+    } catch {}
+    if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return null;
+    const data = await fetchWhatsappCallJson(`/api/whatsapp-calls/${encodeURIComponent(session.callId)}?operator_device_id=${encodeURIComponent(session.identity.operator_device_id)}`, { cache: "no-store" });
+    if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return null;
+    const raw = whatsappCallsFromResponse(data).find(item => whatsappProviderCallId(item) === session.callId);
+    if (!raw) throw new Error("The call transfer status could not be confirmed.");
+    const call = normalizeWhatsappCallRecord(raw);
+    if (whatsappCallIsTerminal(call)) return call;
+    const lock = call.lock;
+    if (lock?.operator_device_id && lock.operator_device_id !== session.identity.operator_device_id && lock.action !== "transfer_accepting") {
+      finishWhatsappCallSession(session, { status: session.endStatus || "Could not answer", release: true });
+      return null;
+    }
+    if (lock?.operator_device_id !== session.identity.operator_device_id || lock.transfer_id !== session.transfer.transfer_id || lock.action !== "accepted") {
+      throw new Error("The call transfer status could not be confirmed.");
+    }
+    session.ownershipReady = true; session.transferEndNeedsReconcile = false;
+    session.call = mergeWhatsappCallRecord(session.call, call);
+    rememberWhatsappSessionLock(session, lock);
+    return call;
+  }
+
+  async function endWhatsappCallSession(session, status = "Call ended") {
+    if (!session || session.finished) return;
+    if (session.endPromise) return;
+    if (session.cancelRequested && !session.endUnconfirmed) return;
+    const noAnswer = session.mode === "outgoing" && status === "No answer" && !session.providerAnswerConfirmed;
+    if (noAnswer) session.terminationReason = "outgoing_no_answer";
+    session.endStatus ||= status;
+    session.cancelRequested = true; session.endUnconfirmed = false;
+    whatsappCallsRuntime.actionToken += 1;
+    // End is immediate locally even when the network is slow. Keep only the
+    // exact-call control state until the provider end is acknowledged.
+    for (const timer of [session.pollTimer, session.durationTimer, session.connectTimer, session.disconnectTimer, session.ringTimer]) clearInterval(timer);
+    stopWhatsappSessionMedia(session);
+    if (whatsappCallsRuntime.session === session) {
+      const toast = byId("shOperatorToast");
+      if (toast?.textContent === "WhatsApp call connected.") {
+        toast.textContent = "";
+        toast.classList.remove("is-visible");
+        clearTimeout(showOperatorToast._timer);
+        toast.remove?.();
+      }
+      whatsappCallsRuntime.actionPending = true;
+      state.whatsappCallIsConnected = false; state.whatsappCallIsConnecting = false;
+      returnToChatAfterWhatsappEnd(session);
+      renderWhatsappCallPanel();
+    }
+    if (session.mode === "outgoing" && !session.callId && !session.requestSent) {
+      finishWhatsappCallSession(session, { status: "Call cancelled", release: true }); return;
+    }
+    // Before takeover succeeds, a transfer recipient must never terminate the source's live customer call.
+    if (session.mode === "transfer" && !session.ownershipReady && !session.transferEndNeedsReconcile) {
+      if (session.transfer) fetchWhatsappCallJson("/api/operator-call-transfer/decline", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...session.identity, transfer_id: session.transfer.transfer_id, call_id: session.callId, to_operator_device_id: session.identity.operator_device_id }) }).catch(() => {});
+      finishWhatsappCallSession(session, { status: "Transfer cancelled", release: true }); return;
+    }
+    const finishAcknowledged = result => {
+      if (session.finished) return;
+      const actual = whatsappCallActionResult(result, session.callId);
+      if (actual) session.call = mergeWhatsappCallRecord(session.call, actual);
+      const terminal = whatsappCallIsTerminal(session.call) ? session.call : null;
+      const answered = session.providerAnswerConfirmed || whatsappProviderAnswered(session.call);
+      const noAnswerEnd = session.terminationReason === "outgoing_no_answer";
+      const terminalEvent = terminal?.event || (noAnswerEnd && !answered ? "no_answer" : "terminate");
+      let finalStatus = session.endStatus;
+      if (terminal && normalizedWhatsappCallEvent(terminal.event) !== "terminate") finalStatus = whatsappCallTerminalLabel(terminal);
+      else if (noAnswerEnd && (answered || terminal)) finalStatus = "Call ended";
+      finishWhatsappCallSession(session, { status: finalStatus, terminalEvent, release: true });
+    };
+    const operation = (async () => {
+      let lastError = null;
+      // One retry is safe only for this already captured, idempotent call ID.
+      // A lost acknowledgement first gets an exact status read: if Meta ended
+      // the call, do not send an unnecessary second terminate action.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          if (session.mode === "outgoing" && !session.callId) {
+            const result = await cancelWhatsappOutgoingRequest(session);
+            if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return;
+            const cancelledId = whatsappOpaqueId(result?.call_id || "");
+            if (result?.terminated === true && cancelledId && result.client_request_id === session.requestId) {
+              session.callId = cancelledId;
+              const actual = whatsappCallActionResult(result, cancelledId);
+              session.call = normalizeWhatsappCallRecord({ ...session.call, ...(actual || {}), call_id: cancelledId,
+                ...(actual && whatsappCallIsTerminal(actual) ? {} : { event: "terminate", status: "ended" }) });
+              finishAcknowledged({ call: session.call }); return;
+            }
+            // pending:true only confirms a cancellation marker. It does not
+            // prove that a racing provider connect has finished or never began.
+            if (!session.callId) throw new Error(result?.terminate_error || "The outgoing cancellation is still pending.");
+          }
+          if (session.transferEndNeedsReconcile) {
+            const call = await reconcileWhatsappFailedTransferEnd(session);
+            if (!call || session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return;
+            if (whatsappCallIsTerminal(call)) { finishAcknowledged({ call }); return; }
+          }
+          const result = await terminateWhatsappSessionRemote(session);
+          finishAcknowledged(result); return;
+        } catch (error) {
+          lastError = error;
+          if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return;
+          let latest = null;
+          // Unknown transfer ownership may only be retried through the guarded
+          // reconciliation above; never terminate a source/provisional owner.
+          if (!session.transferEndNeedsReconcile) {
+            try { latest = await fetchWhatsappCallById(session.callId, { afterPending: true }); } catch {}
+          }
+          if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return;
+          if (latest && whatsappProviderCallId(latest) === session.callId && whatsappCallIsTerminal(latest)) {
+            finishAcknowledged({ call: latest }); return;
+          }
+          const statusCode = Number(error.status) || 0;
+          if (statusCode >= 400 && statusCode < 500 && ![408, 429].includes(statusCode)) break;
+        }
+      }
+      if (session.finished || state.destroyed || whatsappCallsRuntime.session !== session) return;
+      session.endUnconfirmed = true;
+      session.phase = "end-unconfirmed";
+      showInlineError(whatsappCallError, "Audio is stopped. The call end could not be confirmed. Tap Retry end before calling again." +
+        (lastError?.message ? ` ${lastError.message}` : ""));
+      // Retain this exact call's guard and ownership. Releasing it here lets a
+      // callback race an unended provider call and produces 'already in call'.
+      postWhatsappHubPresence({ force: true });
+    })();
+    session.endPromise = operation;
+    try { return await operation; }
+    finally {
+      if (session.endPromise === operation) session.endPromise = null;
+      if (!state.destroyed && whatsappCallsRuntime.session === session && session.endUnconfirmed) {
+        whatsappCallsRuntime.actionPending = false;
+        renderWhatsappCallPanel();
+      }
+    }
+  }
+
+  async function endActiveWhatsappCall() {
+    const session = whatsappCallsRuntime.session;
+    if (session) await endWhatsappCallSession(session);
+  }
+
+  async function pollRecentWhatsappCalls() {
+    if (state.destroyed) return;
+    if (whatsappCallsRuntime.pollPromise) return whatsappCallsRuntime.pollPromise;
+    const startedAt = Date.now();
+    const identity = whatsappOperatorIdentity();
+    const suffix = `operator_device_id=${encodeURIComponent(identity.operator_device_id)}`;
+    const since = Math.max(0, (state.whatsappCallLastPollMs || startedAt - 30 * 60 * 1000) - 5000);
+    const watched = !whatsappCallsRuntime.session ? findIncomingWhatsappCall() : null;
+    const jobs = [{ type: "incoming", path: `/api/whatsapp-calls/incoming?${suffix}` }];
+    if (watched && whatsappProviderCallId(watched)) jobs.push({ type: "active", path: `/api/whatsapp-calls/${encodeURIComponent(whatsappProviderCallId(watched))}?${suffix}` });
+    if (!whatsappCallsRuntime.lastHistoryAttemptMs || startedAt - whatsappCallsRuntime.lastHistoryAttemptMs >= 15000) {
+      whatsappCallsRuntime.lastHistoryAttemptMs = startedAt;
+      jobs.push({ type: "history", path: `/api/whatsapp-calls/recent?live=1&since_ms=${encodeURIComponent(since)}` });
+    }
+    whatsappCallsRuntime.pollPromise = (async () => {
+      try {
+        const results = await Promise.allSettled(jobs.map(job => fetchWhatsappCallJson(job.path, { cache: "no-store" })));
+        if (state.destroyed) return;
+        let changed = false;
+        results.forEach((result, index) => {
+          if (result.status !== "fulfilled") return;
+          if (jobs[index].type === "history") {
+            state.whatsappCallLastPollMs = startedAt;
+            whatsappCallsRuntime.lastHistoryPollMs = startedAt;
+          }
+          changed = mergeWhatsappCallLogs(whatsappCallsFromResponse(result.value)) || changed;
+        });
+        const incomingResult = results[jobs.findIndex(job => job.type === "incoming")];
+        const unhydrated = incomingResult?.status === "fulfilled" ? whatsappCallsFromResponse(incomingResult.value)
+          .map(normalizeWhatsappCallRecord).filter(call => normalizedWhatsappCallEvent(call.event) === "connect" && whatsappProviderCallId(call) && !whatsappCallHasRemoteOffer(call) && !whatsappCallLockedByOther(call)).slice(0, 3) : [];
+        if (unhydrated.length) {
+          const hydrated = await Promise.allSettled(unhydrated.map(call => fetchWhatsappCallById(whatsappProviderCallId(call))));
+          if (state.destroyed) return;
+          changed = hydrated.some(result => result.status === "fulfilled" && result.value) || changed;
+        }
+        if (!whatsappCallsRuntime.session && whatsappOperatorAvailable()) {
+          try { await pollWhatsappPendingTransfer(); } catch {}
+          if (state.destroyed) return;
+        }
+        const incoming = findIncomingWhatsappCall();
+        if (incoming) {
+          const key = whatsappCallKey(incoming);
+          if (!whatsappCallsRuntime.notified.has(key)) {
+            whatsappCallsRuntime.notified.add(key);
+            if (whatsappCallsRuntime.notified.size > 200) whatsappCallsRuntime.notified.delete(whatsappCallsRuntime.notified.values().next().value);
+            showOperatorToast(`Incoming WhatsApp call from ${whatsappCallParty(incoming).name}`);
+          }
+          if (!findWhatsappChannelForCall(incoming) && !whatsappCallsRuntime.lookedUpCallKeys.has(key)) {
+            whatsappCallsRuntime.lookedUpCallKeys.add(key);
+            loadChannels({ preserveSelection: true }).then(() => { if (!state.destroyed) renderWhatsappCallPanel(); }).catch(() => {});
+          }
+        }
+        renderWhatsappCallPanel();
+        if (changed) renderMessages({ scrollToBottom: false });
+      } finally {
+        whatsappCallsRuntime.pollPromise = null;
+      }
+    })();
+    return whatsappCallsRuntime.pollPromise;
+  }
+
+
+  // Incremental rendering:

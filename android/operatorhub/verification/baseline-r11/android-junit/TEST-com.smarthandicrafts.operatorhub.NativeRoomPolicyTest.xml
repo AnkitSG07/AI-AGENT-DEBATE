@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-10-29T14:05:39" hostname="d990de9d2d6d" time="0.005">
+  <properties/>
+  <testcase name="transferIdentityCannotInjectAPathOrUseOrdinaryProviderCallId" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="staleSourceEndAfterTransferMustNeverEndTheNewOwnersCall" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="counterResetAfterReconnectIsNotFreshMedia" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="aNewCallCannotBeOverwrittenByPreviousCallCallbacks" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="realPacketsAndDecodedSilenceDoNotNeedPositiveAudioEnergy" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="staleAndTooShortSamplesAreRejected" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="targetLocalEndRacingSuccessfulCommitEndsItsOwnNowOwnedCall" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="oldRingingPollCannotRegressNewerConnectedOrTransferStatus" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="localEndWinsOverLateAcceptCallback" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="iceAndDtlsAreBothRequired" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="declinedOrReplacedInvitationCannotTerminateCustomer" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="targetEndWhileJoiningDeclinesOnlyItsInvitation" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="notificationTransferDeclineKeepsSourceConnected" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="notificationDeclineRejectsOnlyAnUnownedRingingCall" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="sourceMayEndWhileStillOwnerBeforeCommit" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="subscriptionAndSignalingAloneCannotBeReady" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.002"/>
+  <testcase name="delayedNotificationDeclineCannotHangUpAlreadyAcceptedSamePhone" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="outgoingPhoneIsCountryCodeDigitsOnly" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="roomTokensMayOnlyGoToCanonicalLiveKitCloudOrigin" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <testcase name="alreadyEndingServerNeedsNoSecondTermination" classname="com.smarthandicrafts.operatorhub.NativeRoomPolicyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

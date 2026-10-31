@@ -1,0 +1,161 @@
+TAP version 13
+# Subtest: lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice
+ok 1 - lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice
+  ---
+  duration_ms: 20.434538
+  ...
+# Subtest: a lost Accept response can recover immediately without displaying a definite failure
+ok 2 - a lost Accept response can recover immediately without displaying a definite failure
+  ---
+  duration_ms: 7.549095
+  ...
+# Subtest: lost Accept remains pending when exact customer presence is unavailable or stale
+ok 3 - lost Accept remains pending when exact customer presence is unavailable or stale
+  ---
+  duration_ms: 11.427573
+  ...
+# Subtest: customer termination wins while lost-Accept observation is in flight
+ok 4 - customer termination wins while lost-Accept observation is in flight
+  ---
+  duration_ms: 4.85037
+  ...
+# Subtest: an outgoing SDP answer received before the dial response is retained and connected once
+ok 5 - an outgoing SDP answer received before the dial response is retained and connected once
+  ---
+  duration_ms: 12.662025
+  ...
+# Subtest: early SDP survives a lost dial acknowledgement and later trusted opaque correlation
+ok 6 - early SDP survives a lost dial acknowledgement and later trusted opaque correlation
+  ---
+  duration_ms: 11.314315
+  ...
+# Subtest: early SDP followed by provider termination never connects when the dial response finally arrives
+ok 7 - early SDP followed by provider termination never connects when the dial response finally arrives
+  ---
+  duration_ms: 20.727638
+  ...
+# Subtest: early-answer records support real-sized private SDP, reject conflicting answers, and stay immutable
+ok 8 - early-answer records support real-sized private SDP, reject conflicting answers, and stay immutable
+  ---
+  duration_ms: 3.797407
+  ...
+# Subtest: an early duplicate without a route may acquire trusted opaque correlation without rewriting its immutable marker
+ok 9 - an early duplicate without a route may acquire trusted opaque correlation without rewriting its immutable marker
+  ---
+  duration_ms: 5.029666
+  ...
+# Subtest: a delayed verified incoming offer retains its original bounded ringing lifetime
+ok 10 - a delayed verified incoming offer retains its original bounded ringing lifetime
+  ---
+  duration_ms: 1.655347
+  ...
+# Subtest: claiming an incoming call durably cancels other-device ringing before provider answer completes
+ok 11 - claiming an incoming call durably cancels other-device ringing before provider answer completes
+  ---
+  duration_ms: 4.487081
+  ...
+# Subtest: failed FCM delivery does not keep a settled pre-media call device busy
+ok 12 - failed FCM delivery does not keep a settled pre-media call device busy
+  ---
+  duration_ms: 31.076449
+  ...
+# Subtest: connected customer cleanup starts before a stalled notification delivery
+ok 13 - connected customer cleanup starts before a stalled notification delivery
+  ---
+  duration_ms: 28.161463
+  ...
+# Subtest: an End intent bound to an earlier operator leg cannot terminate the current leg
+ok 14 - an End intent bound to an earlier operator leg cannot terminate the current leg
+  ---
+  duration_ms: 7.629555
+  ...
+# Subtest: an uncertain outgoing Connect response is not blindly replayed by recovery
+ok 15 - an uncertain outgoing Connect response is not blindly replayed by recovery
+  ---
+  duration_ms: 15.559877
+  ...
+# Subtest: End during an in-flight Connect preserves its reservation until exact late-response cleanup settles
+not ok 16 - End during an in-flight Connect preserves its reservation until exact late-response cleanup settles
+  ---
+  duration_ms: 19.660615
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:230:1'
+  failureType: 'testCodeFailure'
+  error: 'undefined == true'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:240:16)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: fresh real-leg readiness resolves an uncertain Connect without resending SDP
+ok 17 - fresh real-leg readiness resolves an uncertain Connect without resending SDP
+  ---
+  duration_ms: 19.980979
+  ...
+# Subtest: a definite Connect rejection ends and cleans the call without retrying the mutation
+ok 18 - a definite Connect rejection ends and cleans the call without retrying the mutation
+  ---
+  duration_ms: 19.456031
+  ...
+# Subtest: enrollment persists native capability metadata before the first background call
+ok 19 - enrollment persists native capability metadata before the first background call
+  ---
+  duration_ms: 7.611849
+  ...
+# Subtest: enrollment retries preserve the credential and cannot use metadata to mutate consumed invitations
+ok 20 - enrollment retries preserve the credential and cannot use metadata to mutate consumed invitations
+  ---
+  duration_ms: 3.222924
+  ...
+# Subtest: FCM token refresh atomically updates supported client metadata with the same valid enrollment
+ok 21 - FCM token refresh atomically updates supported client metadata with the same valid enrollment
+  ---
+  duration_ms: 3.934771
+  ...
+# Subtest: invalid enrollment metadata is rejected before consuming its one-use invitation
+ok 22 - invalid enrollment metadata is rejected before consuming its one-use invitation
+  ---
+  duration_ms: 2.064995
+  ...
+# Subtest: expired incoming/transfer alert deadlines cannot be extended by a fresh FCM send time
+ok 23 - expired incoming/transfer alert deadlines cannot be extended by a fresh FCM send time
+  ---
+  duration_ms: 2.643994
+  ...
+# Subtest: compatibility history I/O cannot hold customer termination or call recovery open
+ok 24 - compatibility history I/O cannot hold customer termination or call recovery open
+  ---
+  duration_ms: 35.335543
+  ...
+# Subtest: R11 End remains compatible on the original leg but cannot end a transferred-back new leg
+ok 25 - R11 End remains compatible on the original leg but cannot end a transferred-back new leg
+  ---
+  duration_ms: 44.080183
+  ...
+# Subtest: R11 End without leg metadata remains valid on a first transferred-to device
+ok 26 - R11 End without leg metadata remains valid on a first transferred-to device
+  ---
+  duration_ms: 20.453481
+  ...
+# Subtest: an outgoing request cancellation cannot end its original device after transfer back on a new leg
+ok 27 - an outgoing request cancellation cannot end its original device after transfer back on a new leg
+  ---
+  duration_ms: 33.14434
+  ...
+# Subtest: ending during an unanswered transfer releases the unjoined target without waiting for its expiry
+ok 28 - ending during an unanswered transfer releases the unjoined target without waiting for its expiry
+  ---
+  duration_ms: 8.494209
+  ...
+1..28
+# tests 28
+# suites 0
+# pass 27
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 610.536196

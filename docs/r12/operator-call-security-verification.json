@@ -1,0 +1,89 @@
+{
+  "createdAt": "2026-10-29T19:27:51.277286+00:00",
+  "runtime": {
+    "binary": "/tmp/sh-r12-node/node_modules/node/bin/node",
+    "version": "v18.20.8"
+  },
+  "scope": "Actual selected server push/SSE handlers extracted into VM, with production auth and ownership modules; synthetic storage, credentials, subscriptions, clocks and responses; no network or whole-app import.",
+  "sourceFiles": {
+    "server.js": {
+      "sha256": "91193be7aa4cd6b3617fac49e2ecdd47cdf8ff554931826c14bb6d04b88231d0",
+      "bytes": 1065847
+    },
+    "operator-browser-auth.js": {
+      "sha256": "345e06b409df69d3a8c8934f07f620f0dcdb9fdd43308fc0ee75de2bf0cbf6c9",
+      "bytes": 23183
+    },
+    "operator-browser-auth.test.mjs": {
+      "sha256": "5b3d1cafc01e66fc5100f6ab7ed478a0e4730b6f4c6c7156c459498f520551d6",
+      "bytes": 29871
+    },
+    "operator-push-ownership.js": {
+      "sha256": "f1e63d827994868cd94752b88efee9220f8c51a69c1011f102773c0c21924161",
+      "bytes": 1972
+    },
+    "tests/operator-call-security.test.mjs": {
+      "sha256": "0f73ecf5afe9b60067d6e266d42f22aa4aa226cab477d9ed58b7ef421b38f9b1",
+      "bytes": 24523
+    },
+    "public/operator-notifications-auth.js": {
+      "sha256": "9033a0a29f8bb3ea4aaaac409f62d8a3f0460a40ef02c986732909f2bf55920d",
+      "bytes": 5046
+    },
+    "public/operator-notifications.html": {
+      "sha256": "cda695e98facfa6fa1891ab84869eb53dad3e61a033ec70b3a45e2565e7b118b",
+      "bytes": 175720
+    }
+  },
+  "currentSecurity": {
+    "log": "/workspace/scratch/aa73a01fba65/work/backend-audit/operator-call-security-current.tap",
+    "sha256": "498232fb4e93359f6dd2ba29a02d02510841148a53ac9b7accdb973476820337",
+    "tests": 20,
+    "pass": 20,
+    "fail": 0,
+    "failedCases": []
+  },
+  "currentAuth": {
+    "log": "/workspace/scratch/aa73a01fba65/work/backend-audit/operator-browser-auth-current.tap",
+    "sha256": "2eb5513dbdb352ad39be20b9cbd7937bdd5b47aa5bd1ca70ea685c766c9d88e8",
+    "tests": 22,
+    "pass": 22,
+    "fail": 0,
+    "failedCases": []
+  },
+  "baseline": {
+    "commit": "8b863b7638acfa8c981c67ca536a0c0c83a46b94",
+    "path": "/workspace/scratch/aa73a01fba65/work/backend-audit/server-r11-baseline.js",
+    "sourceVerifiedAgainstGitObject": true,
+    "log": "/workspace/scratch/aa73a01fba65/work/backend-audit/operator-call-security-r11-before.tap",
+    "tests": 20,
+    "pass": 13,
+    "fail": 7,
+    "failedCases": [
+      "endpoint-only unsubscribe by another authenticated operator is denied without a storage write",
+      "subscribe takeover with endpoint but unrelated valid subscription keys is denied atomically",
+      "both subscription auth and public-key proofs are required for subscribe and unsubscribe migration",
+      "same-browser key possession permits reauthentication migration and then denies the previous actor endpoint-only access",
+      "unsubscribe migration proof is bound to the exact endpoint selected for removal",
+      "actual SSE handler independently refuses missing, non-browser, expired and invalid authorization",
+      "SSE expires at its exact opening capability deadline and clears heartbeat, timeout and client map"
+    ],
+    "sourceSHA256": "39bde521d5c6e54a143b4aabfe4bafb6d14ca19cb8c6c9cf07430c23ac8d9dea",
+    "sourceBytes": 1062819,
+    "logSHA256": "4e327db3d041d70840a2905070fb23c69a34a31e8feffa5434de1d8679a3f035"
+  },
+  "limitations": [
+    "Baseline replaces only the extracted server source; the current auth/ownership modules remain external, deliberately isolating handler regressions.",
+    "Replacement cleanup and backpressure already passed on baseline; they are preserved behavior checks.",
+    "No live calls, push deliveries, service deployment or device/audio test was performed."
+  ],
+  "ownershipReview": "Signed current actor may update its row. Reauthentication migration additionally requires the same endpoint plus both exact existing subscription key bytes; the 16-byte auth value is secret possession evidence, while p256dh is public and binds the subscription. Endpoint-only requests, invalid actors and mismatched/missing keys are rejected before writes. No credentials are logged in tested paths.",
+  "notificationReview": {
+    "productionEditsByReviewer": false,
+    "scope": "Fixed-origin/path/method wrapper and push-only cookie auth, no mutation replay; reset requires authenticated server acknowledgement before local unsubscribe.",
+    "findingsSentToRoot": [
+      "enable() should require body.ok === true before committing Hub setup.",
+      "refresh() wording should describe browser permission/subscription rather than imply fresh server acknowledgement."
+    ]
+  }
+}

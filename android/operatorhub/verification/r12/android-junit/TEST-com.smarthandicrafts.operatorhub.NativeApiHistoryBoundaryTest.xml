@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:21" hostname="ca82e965341e" time="0.284">
+  <properties/>
+  <testcase name="invalidHubMutationNeverOpensAnyConnection" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.076"/>
+  <testcase name="oversizedProjectionIsRejectedAndConnectionClosed" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.051"/>
+  <testcase name="authErrorRemains401WithoutRequiringAHistorySuccessMarker" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.039"/>
+  <testcase name="authenticatedFixedOriginGetReturnsMarkedJsonWithoutRedirects" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.039"/>
+  <testcase name="wrongMarkerAlsoFailsBeforeReading" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.044"/>
+  <testcase name="oldServerWithoutProjectionMarkerCannotExposeItsBody" classname="com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest" time="0.034"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

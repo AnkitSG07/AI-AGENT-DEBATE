@@ -32,6 +32,20 @@ const deliverySent = row => row?.state === 'sent' || (!row?.state && Number(row?
 const sameDelivery = (row, value) => row.deviceId === value.deviceId && row.event === value.event &&
   (value.callId ? row.callId === value.callId : row.messageId === value.messageId);
 
+function nativeClientMetadata(req) {
+  const body = req.body || {}, headers = req.headers || {};
+  const headerBuild = headers['x-sh-native-build'], headerProtocol = headers['x-sh-media-protocol'];
+  const hasBody = body.nativeBuild !== undefined || body.mediaProtocol !== undefined;
+  const hasHeaders = headerBuild !== undefined || headerProtocol !== undefined;
+  if (!hasBody && !hasHeaders) return {};
+  const nativeBuild = hasBody ? body.nativeBuild : /^\d{1,6}$/.test(String(headerBuild || '')) ? Number(headerBuild) : NaN;
+  const mediaProtocol = hasBody ? body.mediaProtocol : headerProtocol;
+  if (!Number.isSafeInteger(nativeBuild) || nativeBuild < 1 || nativeBuild > 100000 || mediaProtocol !== 'sh-room-audio-v1' ||
+      hasHeaders && (!/^\d{1,6}$/.test(String(headerBuild || '')) || Number(headerBuild) !== nativeBuild || headerProtocol !== mediaProtocol))
+    throw fail(400, 'The native client build and media protocol are invalid or inconsistent.');
+  return { nativeBuild, mediaProtocol };
+}
+
 function configuration(env) {
   const firebase = {
     apiKey: text(env.SH_ANDROID_FIREBASE_API_KEY, 200),
@@ -205,6 +219,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     // trusted proxies. Never use caller-supplied X-Forwarded-For here.
     limited(`register:${req.ip || req.socket?.remoteAddress || 'unknown'}`, 8, 15 * 60000);
     const body = req.body || {};
+    const nativeClient = nativeClientMetadata(req);
     const id = installation(body.installationId), token = fcmTokenValue(body.fcmToken);
     const code = text(body.enrollmentCode, 256);
     if (!id || !token) throw fail(400, 'A valid installation ID and Firebase token are required.');
@@ -212,7 +227,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       const requestId = body.requestId === undefined ? '' : installation(body.requestId);
       if (body.requestId !== undefined && !requestId) throw fail(400, 'A valid enrollment request ID is required.');
       const result = await registryCall('enroll', { installationId: id, fcmToken: token, enrollmentCode: code,
-        requestId, deviceLabel: text(body.deviceLabel, 120) || 'Android operator device' });
+        requestId, deviceLabel: text(body.deviceLabel, 120) || 'Android operator device', ...nativeClient });
       return { ok: true, ...result, version: ANDROID_PUSH_VERSION };
     }
     if (!config.enrollmentCode || !equal(HASH(code), HASH(config.enrollmentCode))) throw fail(403, 'The enrollment code is invalid or unavailable.');
@@ -229,7 +244,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       store.devices = store.devices.filter(row => row.installationId !== id);
       store.devices.push({ id: deviceId, installationId: id, tokenHash: HASH(deviceToken), fcmToken: token,
         deviceLabel: text(body.deviceLabel, 120) || 'Android operator device', createdAt: clock(), updatedAt: clock(),
-        tokenExpiresAt: expiresAt, revokedAt: 0, receiveCalls: true, receiveChats: true });
+        tokenExpiresAt: expiresAt, revokedAt: 0, receiveCalls: true, receiveChats: true, ...nativeClient });
       store.usedEnrollmentHashes.push(codeHash);
       return { ok: true, deviceId, deviceToken, expiresAt, version: ANDROID_PUSH_VERSION };
     });
@@ -273,9 +288,10 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     app.post(`${PREFIX}/devices/register`, route(registration));
     app.post(`${PREFIX}/devices/token`, route(async req => {
       const device = await authenticated(req), token = fcmTokenValue(req.body?.fcmToken);
+      const nativeClient = nativeClientMetadata(req);
       if (!token) throw fail(400, 'A valid Firebase token is required.');
       if (useExternalRegistry) {
-        const value = { fcmToken: token };
+        const value = { fcmToken: token, ...nativeClient };
         if (typeof req.body?.receiveCalls === 'boolean') value.receiveCalls = req.body.receiveCalls;
         if (typeof req.body?.receiveChats === 'boolean') value.receiveChats = req.body.receiveChats;
         return { ok: true, ...await registryCall('updateToken', String(req.headers.authorization).slice(7), value) };
@@ -283,7 +299,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       return mutate(store => {
         const row = store.devices.find(item => item.id === device.id && !item.revokedAt);
         if (!row || row.tokenExpiresAt <= clock()) throw fail(401, 'Device enrollment expired or was revoked.');
-        row.fcmToken = token; row.updatedAt = clock();
+        row.fcmToken = token; row.updatedAt = clock(); Object.assign(row, nativeClient);
         if (typeof req.body?.receiveCalls === 'boolean') row.receiveCalls = req.body.receiveCalls;
         if (typeof req.body?.receiveChats === 'boolean') row.receiveChats = req.body.receiveChats;
         return { ok: true, deviceId: row.id, receiveCalls: row.receiveCalls, receiveChats: row.receiveChats !== false, expiresAt: row.tokenExpiresAt };
@@ -479,7 +495,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   }
   // Called only by the authenticated, durable room-call coordinator. FCM wakes
   // an enrolled client; the client rechecks server state before any call action.
-  async function publishRoomEvent({ session, event, transferId = '', toDeviceId = '', stillCurrent = async () => true } = {}) {
+  async function publishRoomEvent({ session, event, transferId = '', toDeviceId = '', expiresAtMs, stillCurrent = async () => true } = {}) {
     configured();
     const id = callIdValue(session?.id), isTransfer = event === 'transfer-incoming' || event === 'transfer-ended';
     if (!id || !['incoming', 'ended', 'transfer-incoming', 'transfer-ended'].includes(event) ||
@@ -494,9 +510,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       (!toDeviceId || row.id === toDeviceId));
     let sent = 0, failed = 0;
     await Promise.all(targets.map(async device => {
+      const deadline = isTransfer ? expiresAtMs : session.deadlineAt;
+      const expiry = deliveryEvent === 'incoming' && Number.isSafeInteger(deadline) ?
+        Math.min(clock() + ALERT_TTL_MS, deadline) : clock() + ALERT_TTL_MS;
+      if (deliveryEvent === 'incoming' && expiry <= clock()) return;
       const data = { type: isTransfer ? 'sh_operator_transfer' : 'sh_operator_call', engine: 'livekit',
         event: deliveryEvent, call_id: id, issued_at_ms: String(clock()),
-        expires_at_ms: String(clock() + ALERT_TTL_MS), hub_url: fixedHubUrl(id) };
+        expires_at_ms: String(expiry), hub_url: fixedHubUrl(id) };
       if (isTransfer) data.transfer_id = transferId;
       const outcome = await deliverNotification({ descriptor: { callId: scopeId, deviceId: device.id, event: deliveryEvent }, data, stillCurrent });
       if (outcome === 'sent') sent++;
