@@ -533,12 +533,12 @@ class NativeRoomCallService : Service() {
     private fun endLocally(message: String = "Call ended", failed: Boolean = false) {
         if (closed) return
         val id = callId; val transfer = transferId; val ownedLeg = legId
+        // Invalidate callbacks and silence PCM first. Persist/dispatch the exact
+        // terminal action before any SDK teardown which might wait on RTC work.
+        guard.close(); engine?.silenceForClose()
+        if (HubPolicy.validCallId(id)) NativeRoomCleanup.enqueue(this, credential, id, transfer, ownedLeg)
+        else if (outgoingAttempt) NativeRoomCleanup.enqueueOutgoingCancellation(this, credential, requestId)
         finishLocal(if (failed) "failed" else "ended", message)
-        if (!HubPolicy.validCallId(id)) {
-            if (outgoingAttempt) NativeRoomCleanup.enqueueOutgoingCancellation(this, credential, requestId)
-            return
-        }
-        NativeRoomCleanup.enqueue(this, credential, id, transfer, ownedLeg)
     }
 
     private fun cleanupLateAccept(result: JSONObject) {

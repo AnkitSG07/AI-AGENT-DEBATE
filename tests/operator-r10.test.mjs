@@ -1347,7 +1347,7 @@ test3("Odoo UTC date format is accepted without host-timezone dependency", async
   await h.bridge.publishMessage(value);
   assert4.equal(h.sent.length, 1);
 });
-test3("FCM message request uses dedicated per-channel collapse and bounded five-minute TTL", async () => {
+test3("FCM message request retains distinct messages with bounded five-minute TTL and no collapsing", async () => {
   const requests = [];
   const fetchImpl = /* @__PURE__ */ __name(async (url, options) => {
     requests.push({ url, options });
@@ -1357,7 +1357,7 @@ test3("FCM message request uses dedicated per-channel collapse and bounded five-
   await h.register();
   await h.bridge.publishMessage(inboundMessage2());
   const payload = JSON.parse(requests[1].options.body);
-  assert4.equal(payload.message.android.collapse_key, "sh-chat-123");
+  assert4.equal(Object.hasOwn(payload.message.android, "collapse_key"), false);
   assert4.equal(payload.message.android.ttl, "300s");
   assert4.equal(payload.message.android.priority, "HIGH");
   assert4.equal(payload.message.notification, void 0);

@@ -36,6 +36,7 @@ class NativeRoomLifecycleRegressionTest {
         override fun connect(descriptor: JSONObject) = Unit
         override fun setMuted(value: Boolean) { muteChanges++ }
         override fun setSpeaker(value: Boolean) { speakerChanges++ }
+        override fun silenceForClose() = true
         override fun close() { closes++ }
     }
     @Before fun setup() {

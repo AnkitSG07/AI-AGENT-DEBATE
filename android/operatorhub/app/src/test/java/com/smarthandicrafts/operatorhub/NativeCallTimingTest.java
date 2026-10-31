@@ -21,4 +21,12 @@ public class NativeCallTimingTest {
         assertEquals("call-control elapsedMs=199 status=200 serverMs=200 outsideServerMs=0", line);
         assertFalse(line.contains("secret")); assertFalse(line.contains("private-customer"));
     }
+    @Test public void incomingAlertTimingSeparatesDeliveryAgeFromLocalRenderAttempt() {
+        assertEquals("incoming approxDeliveryAgeMs=5200 renderAttemptMs=17", NativeCallTiming.incomingSummary(false, 100000, 105200, 17));
+        assertEquals("transfer-incoming approxDeliveryAgeMs=2100 renderAttemptMs=3", NativeCallTiming.incomingSummary(true, 100000, 102100, 3));
+    }
+    @Test public void clockMismatchDoesNotFabricateAnIncomingDeliveryMeasurement() {
+        assertEquals("incoming approxDeliveryAgeMs=unknown renderAttemptMs=0", NativeCallTiming.incomingSummary(false, 100000, 99999, -1));
+        assertEquals("incoming approxDeliveryAgeMs=unknown renderAttemptMs=1", NativeCallTiming.incomingSummary(false, 1, 999999, 1));
+    }
 }

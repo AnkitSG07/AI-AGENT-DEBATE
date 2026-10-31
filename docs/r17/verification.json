@@ -1,0 +1,247 @@
+{
+  "release": "SH Chat R17 deep delay audit and supplied logo",
+  "baselineCommit": "0be628124c0f548e0171270ea292fb6cfcf98964",
+  "backend": {
+    "pass": 672,
+    "fail": 0,
+    "sourceInputsMatch": true
+  },
+  "firestoreEmulator": {
+    "pass": 12,
+    "fail": 0,
+    "sourceInputsMatch": true
+  },
+  "androidJvm": {
+    "suites": 27,
+    "tests": 240,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suiteResults": [
+      {
+        "name": "com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubLaunchStateTest",
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationDataTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationsTest",
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallCloseQueueTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionStateTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionUiTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallTimingTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeOperatorAuthPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCapabilityCacheTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCleanupPriorityTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCleanupProcessorTest",
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomControlTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDisposalTest",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDrainGateTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomLifecycleRegressionTest",
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPolicyTest",
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomStartGateTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest",
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomWaitingCallTest",
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeStoreLeaseTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "androidReleaseLint": "passed",
+  "androidAssembly": "passed from clean branded build",
+  "branding": {
+    "sourceSha256": "21e40476d3aa1c07b864f61da738174040c36255bf9f21dfc56c59fde0d369d6",
+    "packagedResource": "res/N0.png",
+    "packagedPixelsMatchSuppliedLogo": true,
+    "nativeScreenRenderReviewed": true,
+    "adaptiveBackground": "black"
+  },
+  "physicalAcceptanceTargets": {
+    "callRingingAnswerAudioRemoteEndMaxMs": 2000,
+    "transferMaxMs": 5000,
+    "condition": "fast device internet",
+    "status": "not measured as achieved on physical phones"
+  },
+  "incomingDelayReport": "5\u20136s caller ringing to operator alert; exact phone cause/after timing unconfirmed",
+  "remainingLimit": "provider Accept acknowledgement precedes native room setup; prior provider sample2243ms",
+  "actualFcmAndHandsetAcceptance": "not executed; payload and native ordering checks are synthetic",
+  "browserNativeOsAcceptance": "not executed; prior host socket limitation persists",
+  "apk": {
+    "filename": "SH-Chat-1.0-r17-DELAY-AND-INCOMING-ALERT-FIX-SIGNED.apk",
+    "bytes": 60413529,
+    "sha256": "23a04468cbe1c390be6ad998ec8bb869351891173c3c3ead83eb049be2d3ee2f",
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "package": "com.smarthandicrafts.operatorhub",
+    "versionCode": 17,
+    "versionName": "1.0-r17",
+    "zipIntegrity": "passed",
+    "zipAlignment16KiB": "passed",
+    "cryptographicSignature": "passed",
+    "r13ToR16FreshReleaseSignerMatches": true,
+    "r17ImplementationStringsPresent": true
+  },
+  "signingKeyPublished": false,
+  "hostingPlanOrBillingChanged": false
+}

@@ -118,3 +118,19 @@ test('multi-leg End reads prior cleanup leases in a batch and retains durable re
   await f.runtime.recoverSession(connected.call.sessionId);
   assert.equal((await f.runtime.status('a', connected.call.sessionId)).call.cleanupPending, false);
 });
+
+test('call delivery claims batch device, current and opposite-event authority without reviving a finished ring', async () => {
+  const f = registryFixture(), enrollment = await f.enroll(), deviceId = enrollment.result.body.deviceId;
+  const original = f.db.runTransaction.bind(f.db); const batches = [];
+  f.db.runTransaction = callback => original(tx => {
+    tx.getAll = (...refs) => { batches.push(refs.map(ref => ref.path)); return Promise.all(refs.map(ref => tx.get(ref))); };
+    return callback(tx);
+  });
+  const input = { deviceId, callId: 'batch-call-alert', event: 'incoming', expiresAtMs: 1800000030000 };
+  const incoming = await f.registry.claimDelivery(input); assert.equal(incoming.claimed, true);
+  await f.registry.finishDelivery({ deliveryId: incoming.deliveryId, claimId: incoming.claimId, outcome: 'sent' });
+  const ended = await f.registry.claimDelivery({ ...input, event: 'ended' }); assert.equal(ended.claimed, true);
+  const replay = await f.registry.claimDelivery(input); assert.equal(replay.claimed, false);
+  assert.equal(batches.length, 3); assert.ok(batches.every(refs => refs.length === 3));
+  assert.ok(batches.every(refs => refs[0].endsWith('/' + deviceId)));
+});

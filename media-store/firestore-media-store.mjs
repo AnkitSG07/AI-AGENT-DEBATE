@@ -331,10 +331,24 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
         const row = readEnvelope(await native.get(reference(key)), key);
         reads.set(key, row); return row;
       };
+      const readAll = async keys => {
+        const missing = [...new Set(keys)].filter(key => !reads.has(key));
+        if (missing.length && typeof native.getAll === 'function') {
+          const snapshots = await native.getAll(...missing.map(reference));
+          missing.forEach((key, index) => reads.set(key, readEnvelope(snapshots[index], key)));
+        } else await Promise.all(missing.map(read));
+        return keys.map(key => reads.get(key));
+      };
       const tx = Object.freeze({
         get: async key => {
           if (writing) fail('READS_BEFORE_WRITES', 'Read all transaction records before staging writes.', 400);
           parseKey(key); return clone((await read(key))?.data);
+        },
+        getAll: async keys => {
+          if (writing) fail('READS_BEFORE_WRITES', 'Read all transaction records before staging writes.', 400);
+          requireInput(Array.isArray(keys) && keys.length <= MAX_WRITES, 'Transaction read batches must be bounded.');
+          keys.forEach(parseKey);
+          return (await readAll(keys)).map(row => clone(row?.data));
         },
         set: (key, value) => { parseKey(key); writing = true; staged.set(key, { value: clone(value), createOnly: staged.get(key)?.createOnly || !reads.has(key) }); },
         create: (key, value) => { parseKey(key); writing = true; staged.set(key, { value: clone(value), createOnly: true }); },
@@ -350,11 +364,7 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
       // Absent-only creates still need snapshot reads before any native write.
       // Read their independent keys in one RPC, retaining the same transaction
       // snapshot, validation and retry behavior instead of serial round trips.
-      const missing = [...staged.keys()].filter(key => !reads.has(key));
-      if (missing.length && typeof native.getAll === 'function') {
-        const snapshots = await native.getAll(...missing.map(reference));
-        missing.forEach((key, index) => reads.set(key, readEnvelope(snapshots[index], key)));
-      } else await Promise.all(missing.map(read));
+      await readAll([...staged.keys()]);
       const now = nowMs(), writes = [], changedCalls = [], changedSessions = [], reservationChanges = [];
       // All writes are buffered. Even an unread create gets a transactional
       // absent-only read before any native Firestore mutation is staged.

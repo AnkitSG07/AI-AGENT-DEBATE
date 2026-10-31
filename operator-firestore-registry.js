@@ -452,11 +452,10 @@ export function createFirestoreDeviceRegistry({
       const opposite = identity.callId ? { ...identity, event: identity.event === 'incoming' ? 'ended' : 'incoming' } : null;
       // These exact documents do not depend on one another. Read them together
       // in the same transaction, retaining the atomic terminal/lease checks.
-      const [deviceSnapshot, previousSnapshot, oppositeSnapshot] = await Promise.all([
-        tx.get(collections.devices.doc(identity.deviceId)),
-        tx.get(reference),
-        opposite ? tx.get(collections.deliveries.doc(deliveryIdFor(opposite))) : Promise.resolve(null)
-      ]);
+      const refs = [collections.devices.doc(identity.deviceId), reference,
+        ...(opposite ? [collections.deliveries.doc(deliveryIdFor(opposite))] : [])];
+      const [deviceSnapshot, previousSnapshot, oppositeSnapshot = null] = typeof tx.getAll === 'function'
+        ? await tx.getAll(...refs) : await Promise.all(refs.map(ref => tx.get(ref)));
       const row = deviceRow(deviceSnapshot);
       if (!isActive(row, now) || !row.fcmToken) return { claimed: false, reason: 'device_unavailable', deliveryId };
       if ((identity.event === 'incoming' && !row.receiveCalls) || (identity.event === 'message' && !row.receiveChats)) return { claimed: false, reason: 'opted_out', deliveryId };

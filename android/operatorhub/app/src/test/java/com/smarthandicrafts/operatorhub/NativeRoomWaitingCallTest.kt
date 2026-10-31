@@ -51,6 +51,7 @@ class NativeRoomWaitingCallTest {
     private class FakeMedia : NativeRoomMedia {
         var closes = 0
         override fun connect(descriptor: JSONObject) = Unit
+        override fun silenceForClose() = true
         override fun setMuted(value: Boolean) = Unit
         override fun setSpeaker(value: Boolean) = Unit
         override fun close() { closes++ }

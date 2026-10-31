@@ -20,6 +20,11 @@ public final class NativeRoomCleanup {
     private static final Object LOCK = new Object();
     // End/Decline cannot queue behind Hub history, enrollment or contact loads.
     private static final java.util.concurrent.ExecutorService CONTROL_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
+    // A fresh terminal gesture must also bypass an older blocked cleanup record.
+    // Bound both active transports and queued work; persisted OS retries cover overload.
+    private static final java.util.concurrent.ThreadPoolExecutor FRESH_CONTROL_IO = new java.util.concurrent.ThreadPoolExecutor(
+        2, 2, 30, TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(16));
+    static { FRESH_CONTROL_IO.allowCoreThreadTimeOut(true); }
     public static void enqueueOutgoingCancellation(Context context, DeviceLeasePolicy.Credential credential, String requestId) {
         if (requestId == null || !requestId.matches("[A-Za-z0-9_-]{16,100}")) return;
         enqueueRecord(context, credential, "outgoing:" + requestId, "", "", requestId, "end", "");
@@ -53,7 +58,7 @@ public final class NativeRoomCleanup {
                 // Duplicate taps and late ACKs retain the same idempotency key and retry age.
                 if (!prefs(app).contains(key) && !prefs(app).edit().putString(key, record.toString()).commit()) throw new IllegalStateException();
             }
-            drain(app); schedule(app);
+            attemptNow(app, key); drain(app); schedule(app);
         } catch (Exception ignored) { store.problemIfMatches(credential, "Local audio stopped; reopen the app to check server call cleanup."); }
     }
     static void schedule(Context context) {
@@ -64,6 +69,19 @@ public final class NativeRoomCleanup {
             // Work arriving during a worker's last snapshot gets a subsequent OS-managed pass.
             WorkManager.getInstance(context).enqueueUniqueWork("sh-native-call-cleanup", ExistingWorkPolicy.APPEND_OR_REPLACE, work);
         } catch (RuntimeException ignored) { new NativeStore(context).problem("Local audio stopped. Reopen SH Chat if server cleanup remains pending."); }
+    }
+    private static void attemptNow(Context app, String key) {
+        try {
+            FRESH_CONTROL_IO.execute(() -> {
+                boolean pending;
+                try { pending = processor(app).runKey(key, System.currentTimeMillis()); }
+                catch (RuntimeException ignored) { pending = true; }
+                if (pending) schedule(app);
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // No record is lost if the bounded foreground lane is full.
+            schedule(app);
+        }
     }
     public static void drain(Context context) {
         Context app = context.getApplicationContext();

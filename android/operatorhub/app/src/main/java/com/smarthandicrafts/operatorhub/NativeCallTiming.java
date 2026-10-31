@@ -26,5 +26,13 @@ final class NativeCallTiming {
         return fixed + " elapsedMs=" + elapsed + " status=" + status +
             (server < 0 ? " serverMs=unknown" : " serverMs=" + server + " outsideServerMs=" + Math.max(0, elapsed - server));
     }
+    static String incomingSummary(boolean transfer, long issuedEpochMs, long receivedEpochMs, long renderAttemptMs) {
+        long age = issuedEpochMs > 0 && receivedEpochMs >= issuedEpochMs ? receivedEpochMs - issuedEpochMs : -1;
+        // Reject negative/large clock differences. Small clock skew can remain;
+        // this approximate age is not a handset-to-handset timing measurement.
+        if (age > 120000) age = -1;
+        return (transfer ? "transfer-incoming" : "incoming") + " approxDeliveryAgeMs=" + (age < 0 ? "unknown" : Long.toString(age))
+            + " renderAttemptMs=" + Math.max(0, renderAttemptMs);
+    }
     private NativeCallTiming() { }
 }

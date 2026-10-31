@@ -13,6 +13,7 @@ public final class HubMessagingService extends FirebaseMessagingService {
     // Shared receive boundary: instrumentation can inject an already-delivered
     // synthetic FCM data envelope without adding an exported debug receiver.
     static void dispatchData(Context context, Map<String, String> d) {
+        final long receivedEpochMs = System.currentTimeMillis(), receivedElapsedMs = android.os.SystemClock.elapsedRealtime();
         if ("sh_operator_transfer".equals(d.get("type")) || ("sh_operator_call".equals(d.get("type")) && "livekit".equals(d.get("engine")))) {
             String id = d.get("call_id");
             String transfer = "sh_operator_transfer".equals(d.get("type")) ? d.get("transfer_id") : "";
@@ -25,7 +26,11 @@ public final class HubMessagingService extends FirebaseMessagingService {
             if (!"incoming".equals(d.get("event"))) return;
             try {
                 long issued = Long.parseLong(d.get("issued_at_ms")), expiry = Long.parseLong(d.get("expires_at_ms"));
-                if (store.roomIncoming(id, transfer, issued, expiry)) NativeRoomNotifications.show(context, id, transfer, expiry);
+                if (store.roomIncoming(id, transfer, issued, expiry)) {
+                    NativeRoomNotifications.show(context, id, transfer, expiry);
+                    try { android.util.Log.i("SHCallAlertTiming", NativeCallTiming.incomingSummary(!transfer.isEmpty(), issued,
+                        receivedEpochMs, android.os.SystemClock.elapsedRealtime() - receivedElapsedMs)); } catch (RuntimeException ignored) { }
+                }
             } catch (Exception ignored) { }
             return;
         }

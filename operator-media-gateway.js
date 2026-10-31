@@ -58,6 +58,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const workerId = `render_${randomUUID()}`;
   const publishedStates = new Map();
   const historyWork = new Map();
+  const housekeepingWork = new Map();
   // Reuse only the row returned by the immediately preceding authentication
   // of this request. Every recheck authenticates again and replaces it. There
   // is no cross-request or time-based credential/revocation cache.
@@ -183,9 +184,29 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.
     queueHistoryProjection(id);
-    const result = await bundle.runtime.recoverSession(id);
-    queueHistoryProjection(id);
-    return result;
+    // Every wake above can still dispatch End/SDP/FCM independently. Only the
+    // slower full reconciliation is coalesced: concurrent POST/webhook wakes
+    // must not pile up transactions against the same call's authoritative rows.
+    const pending = housekeepingWork.get(id);
+    if (pending) { pending.dirty = true; return pending.promise; }
+    const state = { dirty: true, promise: null };
+    housekeepingWork.set(id, state);
+    state.promise = (async () => {
+      let result;
+      try {
+        while (state.dirty) {
+          state.dirty = false;
+          result = await bundle.runtime.recoverSession(id);
+          queueHistoryProjection(id);
+        }
+        return result;
+      } finally {
+        // A failed pass cannot wedge this call. Durable due-index recovery and
+        // the next explicit wake can always begin a new reconciliation pass.
+        if (housekeepingWork.get(id) === state) housekeepingWork.delete(id);
+      }
+    })();
+    return state.promise;
   }
   const queueRecovery = id => setImmediate(() => { recoverSession(id).catch(() => {}); });
   async function runRecovery() {

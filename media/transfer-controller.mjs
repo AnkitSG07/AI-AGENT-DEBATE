@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { MediaError, identifier, requireValue } from './errors.mjs';
+import { readTransactionRecords } from './transaction-reads.mjs';
 import { operatorIdentity } from './livekit-provider.mjs';
 
 const digest = value => createHash('sha256').update(identifier(value)).digest('hex');
@@ -152,9 +153,8 @@ export class TransferController {
     await this.expire(callId, observedCall);
     const transferId = `tr_${randomUUID()}`;
     return this.store.transaction(async tx => {
-      const [call, targetReservation, sourceReservation] = await Promise.all([
-        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(toDeviceId)),
-        tx.get(deviceReservationKey(actor.deviceId))
+      const [call, targetReservation, sourceReservation] = await readTransactionRecords(tx, [
+        callStoreKey(callId), deviceReservationKey(toDeviceId), deviceReservationKey(actor.deviceId)
       ]);
       this.requireCall(call, actor);
       const replay = call.requests[`${actor.deviceId}:${requestId}`];
@@ -196,8 +196,8 @@ export class TransferController {
     const attemptId = `leg_${randomUUID()}`;
     const readinessNonce = randomUUID();
     const prepared = await this.store.transaction(async tx => {
-      const [call, reservation] = await Promise.all([
-        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(actor.deviceId))
+      const [call, reservation] = await readTransactionRecords(tx, [
+        callStoreKey(callId), deviceReservationKey(actor.deviceId)
       ]);
       this.requireCall(call, actor);
       const transfer = this.requireTransfer(call, transferId, actor, 'target');
@@ -273,9 +273,8 @@ export class TransferController {
     // Revocation during a slow provider/telemetry check must be observed before commit.
     await this.recheckActor(context, actor);
     return this.store.transaction(async tx => {
-      const [call, destination, source] = await Promise.all([
-        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(actor.deviceId)),
-        tx.get(deviceReservationKey(transfer.fromDeviceId))
+      const [call, destination, source] = await readTransactionRecords(tx, [
+        callStoreKey(callId), deviceReservationKey(actor.deviceId), deviceReservationKey(transfer.fromDeviceId)
       ]);
       this.requireCall(call, actor); this.requireActive(call);
       const current = this.requireTransfer(call, transferId, actor, 'target');

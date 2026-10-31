@@ -168,4 +168,26 @@ public class NativeRoomCleanupProcessorTest {
         }).runPass(NOW));
         assertEquals(Arrays.asList("POST","GET","POST"),methods); assertTrue(q.records.isEmpty());
     }
+    @Test public void anOlderPassRereadsAKeySettledByTheImmediateLaneBeforeSending() throws Exception {
+        Queue q = new Queue(); Device d = new Device();
+        q.records.put("priority-old", record("old-leg", "end", "").toString());
+        q.records.put("priority-fresh", record("fresh-leg", "end", "").put("callId", "out_abcdef0123456789abcdef0123456789").put("requestId", "fresh-cleanup-request-0001").toString());
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1), release = new java.util.concurrent.CountDownLatch(1);
+        AtomicInteger freshPosts = new AtomicInteger();
+        NativeRoomCleanupProcessor.Requester api = (path, method, body, bearer) -> {
+            assertEquals("POST", method);
+            if (path.contains(CALL)) { entered.countDown(); assertTrue(release.await(3, java.util.concurrent.TimeUnit.SECONDS)); }
+            else { freshPosts.incrementAndGet(); assertEquals("fresh-leg", body.getString("expectedOwnerLegId")); assertEquals("fresh-cleanup-request-0001", body.getString("requestId")); }
+            return new JSONObject().put("ok", true);
+        };
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<Boolean> oldPass = executor.submit(() -> new NativeRoomCleanupProcessor(q,d,api).runPass(NOW));
+            assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertFalse(new NativeRoomCleanupProcessor(q,d,api).runKey("priority-fresh", NOW));
+            assertNull(q.read("priority-fresh")); assertEquals(1, freshPosts.get());
+            release.countDown(); assertFalse(oldPass.get(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(1, freshPosts.get()); assertTrue(q.records.isEmpty());
+        } finally { release.countDown(); executor.shutdownNow(); }
+    }
 }

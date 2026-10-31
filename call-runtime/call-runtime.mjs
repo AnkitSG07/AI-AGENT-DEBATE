@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { MediaError, identifier, requireValue } from '../media/errors.mjs';
 import { callStoreKey, deviceReservationKey, newBridgedCall } from '../media/transfer-controller.mjs';
 import { roomNameFor, customerIdentity, operatorIdentity } from '../media/livekit-provider.mjs';
+import { readTransactionRecords } from '../media/transaction-reads.mjs';
 
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
 export const sessionKey = id => `media_sessions/${hash(identifier(id))}`;
@@ -351,21 +352,25 @@ export class CallRuntime {
     if (event.type === 'incoming') requireValue(actualAudioSdp(event.offerSdp), 'INVALID_SDP', 'An actual incoming audio offer is required.', 400);
     if (event.type === 'connect') requireValue(actualAudioSdp(event.answerSdp), 'INVALID_SDP', 'An actual outgoing audio answer is required.', 400);
     const result = await this.store.transaction(async tx => {
-      const [existingMarker, route, terminal, accepted, answer] = await Promise.all([
-        tx.get(eventKey(marker)), tx.get(eventKey(routeId(event.callId))),
-        tx.get(eventKey(terminalId(event.callId))), tx.get(eventKey(acceptedId(event.callId))),
-        ['connect', 'accepted'].includes(event.type) ? tx.get(eventKey(answerId(event.callId))) : Promise.resolve(undefined)
+      const [existingMarker, route, terminal, accepted, answer, observedSession, canonical] = await readTransactionRecords(tx, [
+        eventKey(marker), eventKey(routeId(event.callId)),
+        eventKey(terminalId(event.callId)), eventKey(acceptedId(event.callId)),
+        ['connect', 'accepted'].includes(event.type) ? eventKey(answerId(event.callId)) : null,
+        sessionId ? sessionKey(sessionId) : null,
+        event.type === 'terminate' ? callStoreKey(event.callId) : null
       ]);
       const resolvedSessionId = sessionId || route?.sessionId;
-      const session = resolvedSessionId ? await tx.get(sessionKey(resolvedSessionId)) : undefined;
+      const session = resolvedSessionId === sessionId ? observedSession :
+        resolvedSessionId ? await tx.get(sessionKey(resolvedSessionId)) : undefined;
       if (existingMarker && (existingMarker.sessionId || !session || session.providerCallId === event.callId))
         return { handled: !!session || !!answer, sessionId: session?.id, replayed: true };
-      const canonical = event.type === 'terminate' ? await tx.get(callStoreKey(event.callId)) : null;
       const reservations = new Map();
       if (event.type === 'terminate') {
         const ids = new Set([session?.owner?.deviceId, canonical?.owner?.deviceId,
           canonical?.transfer?.fromDeviceId, canonical?.transfer?.toDeviceId].filter(Boolean));
-        for (const deviceId of ids) reservations.set(deviceId, await tx.get(deviceReservationKey(deviceId)));
+        const deviceIds = [...ids];
+        const rows = await readTransactionRecords(tx, deviceIds.map(deviceReservationKey));
+        deviceIds.forEach((deviceId, index) => reservations.set(deviceId, rows[index]));
       }
       requireValue(!route || route.sessionId === resolvedSessionId, 'CALL_ROUTE_CONFLICT', 'The provider call is already bound to another session.');
       let next = session;
@@ -465,8 +470,8 @@ export class CallRuntime {
     if (!snapshot.owner) await this.requireEnabled();
     const legId = `leg_${randomUUID()}`, readinessNonce = randomUUID();
     const prepared = await this.#claimAnswer(snapshot.id, () => this.store.transaction(async tx => {
-      const [session, reservation] = await Promise.all([
-        tx.get(sessionKey(snapshot.id)), tx.get(deviceReservationKey(actor.deviceId))
+      const [session, reservation] = await readTransactionRecords(tx, [
+        sessionKey(snapshot.id), deviceReservationKey(actor.deviceId)
       ]);
       this.requireSession(session);
       requireValue(!session.terminal && session.deadlineAt > this.now(), 'CALL_ENDED', 'This call is no longer answerable.');
@@ -544,9 +549,9 @@ export class CallRuntime {
     const id = outgoingSessionId(this.tenantId, actor.deviceId, requestId);
     const legId = `leg_${randomUUID()}`, nonce = randomUUID();
     const prepared = await this.store.transaction(async tx => {
-      const [existing, reservation, cancelled] = await Promise.all([
-        tx.get(sessionKey(id)), tx.get(deviceReservationKey(actor.deviceId)),
-        tx.get(eventKey(outgoingCancelId(this.tenantId, actor.deviceId, requestId)))
+      const [existing, reservation, cancelled] = await readTransactionRecords(tx, [
+        sessionKey(id), deviceReservationKey(actor.deviceId),
+        eventKey(outgoingCancelId(this.tenantId, actor.deviceId, requestId))
       ]);
       if (existing) {
         requireValue(existing.customerPhone === to && sameBinding(actor, existing.owner), 'REQUEST_ID_CONFLICT',
@@ -632,10 +637,10 @@ export class CallRuntime {
   async finishProviderOperation(id, operation, result, observation = null) {
     identifier(result?.callId);
     return this.store.transaction(async tx => {
-      const [session, route, terminal, accepted, answer] = await Promise.all([
-        tx.get(sessionKey(id)), tx.get(eventKey(routeId(result.callId))), tx.get(eventKey(terminalId(result.callId))),
-        operation === 'dial' ? tx.get(eventKey(acceptedId(result.callId))) : Promise.resolve(undefined),
-        operation === 'dial' ? tx.get(eventKey(answerId(result.callId))) : Promise.resolve(undefined)
+      const [session, route, terminal, accepted, answer] = await readTransactionRecords(tx, [
+        sessionKey(id), eventKey(routeId(result.callId)), eventKey(terminalId(result.callId)),
+        operation === 'dial' ? eventKey(acceptedId(result.callId)) : null,
+        operation === 'dial' ? eventKey(answerId(result.callId)) : null
       ]);
       this.requireSession(session);
       if (observation && (session.operations[operation]?.id !== observation.operationId ||
@@ -738,9 +743,8 @@ export class CallRuntime {
       'MEDIA_NOT_VERIFIED', 'Fresh corroborated audio progress is required.');
     await this.recheck(context, actor);
     await this.store.transaction(async tx => {
-      const [session, reservation, existing] = await Promise.all([
-        tx.get(sessionKey(snapshot.id)), tx.get(deviceReservationKey(actor.deviceId)),
-        tx.get(callStoreKey(snapshot.providerCallId))
+      const [session, reservation, existing] = await readTransactionRecords(tx, [
+        sessionKey(snapshot.id), deviceReservationKey(actor.deviceId), callStoreKey(snapshot.providerCallId)
       ]);
       requireValue(!session.terminal && session.version === snapshot.version && session.deadlineAt > this.now() &&
         (session.direction !== 'outgoing' || Number.isFinite(session.customerAcceptedAt)) &&
@@ -782,8 +786,8 @@ export class CallRuntime {
     if (expectedOwnerLegId !== undefined) identifier(expectedOwnerLegId, 'operator leg');
     const snapshot = await this.locate(id); this.requireSession(snapshot);
     const committed = await this.store.transaction(async tx => {
-      const [session, observedCall] = await Promise.all([
-        tx.get(sessionKey(snapshot.id)), snapshot.providerCallId ? tx.get(callStoreKey(snapshot.providerCallId)) : Promise.resolve(null)
+      const [session, observedCall] = await readTransactionRecords(tx, [
+        sessionKey(snapshot.id), snapshot.providerCallId ? callStoreKey(snapshot.providerCallId) : null
       ]);
       const call = session.providerCallId === snapshot.providerCallId ? observedCall :
         session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
@@ -791,8 +795,9 @@ export class CallRuntime {
       const identities = new Map(owner ? [[owner.deviceId, owner.identity]] : []);
       if (call?.transfer?.sourceIdentity) identities.set(call.transfer.fromDeviceId, call.transfer.sourceIdentity);
       if (call?.transfer?.toDeviceId) identities.set(call.transfer.toDeviceId, call.transfer.targetIdentity || null);
-      const reservations = new Map(await Promise.all([...identities.keys()].map(async deviceId =>
-        [deviceId, await tx.get(deviceReservationKey(deviceId))])));
+      const deviceIds = [...identities.keys()];
+      const reservationRows = await readTransactionRecords(tx, deviceIds.map(deviceReservationKey));
+      const reservations = new Map(deviceIds.map((deviceId, index) => [deviceId, reservationRows[index]]));
       requireValue(!owner || sameBinding(actor, call ? ownerBinding(session, call) : session.owner),
         'NOT_CALL_OWNER', 'Another device or enrollment owns this call.', 403);
       if (expectedOwnerLegId !== undefined) requireValue(owner?.legId === expectedOwnerLegId,

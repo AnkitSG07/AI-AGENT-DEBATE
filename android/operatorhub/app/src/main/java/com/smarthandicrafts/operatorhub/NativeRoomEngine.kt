@@ -34,7 +34,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val engineCreatedAt = SystemClock.elapsedRealtime()
     private val room = LiveKit.create(context.applicationContext)
-    private var closed = false
+    @Volatile private var closed = false
     private var failureReported = false
     private var setupStage = NativeRoomAudioSetup.Stage.AUTHORIZATION
     private var stageStartedAt = engineCreatedAt
@@ -48,6 +48,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var mutePending = false
     private var focusLost = false
     private var startupEvidenceSent = false
+    private var immediatelySilenced = false
     private val routeListener = object : AudioDeviceChangeListener {
         override fun invoke(audioDevices: List<AudioDevice>, selectedAudioDevice: AudioDevice?) {
             scope.launch {
@@ -79,7 +80,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             }
         }
     }
-    private val sink = AudioTrackSink { _, _, _, _, frames, _ -> decodedFrames.addAndGet(frames.toLong()) }
+    private val sink = AudioTrackSink { _, _, _, _, frames, _ -> if (!closed) decodedFrames.addAndGet(frames.toLong()) }
 
     override fun connect(descriptor: JSONObject) {
         join = descriptor
@@ -301,17 +302,34 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         } catch (_: Exception) { listener.onRouteUnavailable() }
     }
 
+    override fun silenceForClose(): Boolean {
+        // The pinned SDK delegates these directly to the ADM's volatile mute
+        // flags. Track.stop() instead waits on the RTC executor via Future.get().
+        val microphone = runCatching { room.setMicrophoneMute(true) }.isSuccess
+        val playout = runCatching { room.setSpeakerMute(true) }.isSuccess
+        immediatelySilenced = microphone && playout
+        return immediatelySilenced
+    }
+
     override fun close() {
         if (closed) return
         closed = true
         room.audioSwitchHandler?.unregisterAudioDeviceChangeListener(routeListener)
         room.audioSwitchHandler?.unregisterOnAudioFocusChangeListener(focusListener)
-        runCatching { customerTrack?.removeSink(sink) }; customerTrack = null; previous = null
+        val detachedCustomerTrack = customerTrack
+        customerTrack = null; customerTrackSid = ""; previous = null; decodedFrames.set(0)
         // Disable local audio immediately. SDK disconnect/disposal itself can block while
         // waiting for its transport lock and must not hold the End button/UI thread.
-        runCatching { room.setMicrophoneMute(true) }; runCatching { room.setSpeakerMute(true) }
-        room.localParticipant.trackPublications.values.forEach { publication -> runCatching { publication.track?.stop() } }
+        val silenced = immediatelySilenced || silenceForClose()
+        val tracks = room.localParticipant.trackPublications.values.mapNotNull { it.track }
+        // Preserve the prior fail-closed stop path if immediate ADM muting is
+        // unavailable. The ordinary successful close never waits on RTC here.
+        if (!silenced) tracks.forEach { track -> runCatching { track.stop() } }
         scope.cancel()
-        NativeRoomDisposal.enqueue { room.release() }
+        NativeRoomDisposal.enqueue {
+            runCatching { detachedCustomerTrack?.removeSink(sink) }
+            if (silenced) tracks.forEach { track -> runCatching { track.stop() } }
+            room.release()
+        }
     }
 }

@@ -21,6 +21,8 @@ final class NativeRoomCleanupProcessor {
         void problem(DeviceLeasePolicy.Credential expected, String message);
     }
     interface Requester { JSONObject request(String path, String method, JSONObject body, String bearer) throws Exception; }
+    // Shared by foreground attempts and OS/retry drains in this app process.
+    private static final java.util.Set<String> IN_FLIGHT = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final Queue queue;
     private final Device device;
     private final Requester api;
@@ -28,75 +30,84 @@ final class NativeRoomCleanupProcessor {
 
     boolean runPass(long now) {
         boolean pending = false;
-        for (String key : queue.keys()) {
-            JSONObject record = null;
-            DeviceLeasePolicy.Credential credential = device.current();
-            try {
-                record = queue.read(key);
-                if (record == null) continue;
-                String requestId = record.optString("requestId");
-                if (!matches(credential, record) || now - record.optLong("createdAt", 0) > MAX_AGE_MS
-                    || !DeviceLeasePolicy.valid(credential, now)) { queue.remove(key, requestId); continue; }
-                String outgoing = record.optString("outgoingRequestId");
-                if (outgoing.matches("[A-Za-z0-9_-]{16,100}")) {
-                    api.request("/calls/outgoing/" + encode(outgoing) + "/cancel", "POST",
-                        new JSONObject().put("requestId", outgoing), credential.bearer);
-                    queue.remove(key, requestId); continue;
-                }
-                String id = record.optString("callId"), transferId = record.optString("transferId");
-                if (!HubPolicy.validCallId(id)) { queue.remove(key, requestId); continue; }
-                String expectedLeg = record.optString("ownerLegId");
-                if ("end".equals(record.optString("intent")) && transferId.isEmpty() && !expectedLeg.isEmpty()) {
-                    // Current server validates ownership + immutable leg atomically.
-                    // A status GET here added a full phone/server/database round trip.
-                    if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); continue; }
-                    try {
-                        api.request("/calls/" + encode(id) + "/end", "POST",
-                            new JSONObject().put("requestId", requestId).put("expectedOwnerLegId", expectedLeg), credential.bearer);
-                        queue.remove(key, requestId); continue;
-                    } catch (NativeApi.ApiException error) {
-                        // R13 servers require the older versioned contract. Keep
-                        // compatibility while the backend/APK rollout overlaps.
-                        if (!"STALE_CALL_VERSION".equals(error.errorCode)) throw error;
-                    }
-                }
-                JSONObject call = api.request("/calls/" + encode(id) + "/status", "GET", null, credential.bearer).getJSONObject("call");
-                if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); continue; }
-                JSONObject transfer = call.optJSONObject("transfer");
-                String transferKey = transfer == null ? "" : transfer.optString("transferId", transfer.optString("id"));
-                String transferStatus = transfer == null ? "" : transfer.optString("status");
-                String target = transfer == null ? "" : transfer.optString("toDeviceId");
-                NativeRoomPolicy.Cleanup action = "decline".equals(record.optString("intent"))
-                    ? NativeRoomPolicy.declineAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target)
-                    : NativeRoomPolicy.cleanupAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target);
-                // Never adopt a newly observed owner leg for an old queued End (A -> B -> A).
-                if (action == NativeRoomPolicy.Cleanup.END && !expectedLeg.isEmpty() && !expectedLeg.equals(NativeRoomJson.text(call,"ownerLegId"))) action = NativeRoomPolicy.Cleanup.NONE;
-                if (action == NativeRoomPolicy.Cleanup.END && !transferId.isEmpty() && expectedLeg.isEmpty() && !transferId.equals(transferKey)) action = NativeRoomPolicy.Cleanup.NONE;
-                if (action != NativeRoomPolicy.Cleanup.NONE) {
-                    String suffix = action == NativeRoomPolicy.Cleanup.END ? "/end" : action == NativeRoomPolicy.Cleanup.REJECT ? "/reject" : "/transfers/" + encode(transferId) + "/decline";
-                    JSONObject body = new JSONObject().put("version", call.optLong("version", -1)).put("requestId", requestId);
-                    if (action == NativeRoomPolicy.Cleanup.END && !expectedLeg.isEmpty()) body.put("expectedOwnerLegId", expectedLeg);
-                    api.request("/calls/" + encode(id) + suffix, "POST", body, credential.bearer);
-                }
-                queue.remove(key, requestId);
-            } catch (Exception error) {
-                if (record == null) continue;
-                String requestId = record.optString("requestId");
-                int status = error instanceof NativeApi.ApiException ? ((NativeApi.ApiException)error).status : 0;
-                String code = error instanceof NativeApi.ApiException ? ((NativeApi.ApiException)error).errorCode : "";
-                try {
-                    if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) queue.remove(key, requestId);
-                    else if (status == 401) { device.unauthorized(credential, error.getMessage()); queue.remove(key, requestId); }
-                    else if ((status == 404 && record.optString("outgoingRequestId").isEmpty())
-                        || "CALL_LEG_CHANGED".equals(code) || "CALL_LEG_REQUIRED".equals(code)
-                        || "NOT_CALL_OWNER".equals(code)) queue.remove(key, requestId);
-                    else {
-                        record.put("attempts", record.optInt("attempts") + 1);
-                        queue.update(key, requestId, record); pending = true;
-                        device.problem(credential, "Local audio stopped. Call cleanup is queued and will retry when the connection is available.");
-                    }
-                } catch (Exception ignored) { pending = true; }
+        for (String key : queue.keys()) pending |= runKey(key, now);
+        return pending;
+    }
+    /** Claim a single persisted record without waiting for unrelated cleanup. */
+    boolean runKey(String key, long now) {
+        if (!IN_FLIGHT.add(key)) return true;
+        try { return processRecord(key, now); }
+        finally { IN_FLIGHT.remove(key); }
+    }
+    private boolean processRecord(String key, long now) {
+        boolean pending = false;
+        JSONObject record = null;
+        DeviceLeasePolicy.Credential credential = device.current();
+        try {
+            record = queue.read(key);
+            if (record == null) return false;
+            String requestId = record.optString("requestId");
+            if (!matches(credential, record) || now - record.optLong("createdAt", 0) > MAX_AGE_MS
+                || !DeviceLeasePolicy.valid(credential, now)) { queue.remove(key, requestId); return false; }
+            String outgoing = record.optString("outgoingRequestId");
+            if (outgoing.matches("[A-Za-z0-9_-]{16,100}")) {
+                api.request("/calls/outgoing/" + encode(outgoing) + "/cancel", "POST",
+                    new JSONObject().put("requestId", outgoing), credential.bearer);
+                queue.remove(key, requestId); return false;
             }
+            String id = record.optString("callId"), transferId = record.optString("transferId");
+            if (!HubPolicy.validCallId(id)) { queue.remove(key, requestId); return false; }
+            String expectedLeg = record.optString("ownerLegId");
+            if ("end".equals(record.optString("intent")) && transferId.isEmpty() && !expectedLeg.isEmpty()) {
+                // Current server validates ownership + immutable leg atomically.
+                // A status GET here added a full phone/server/database round trip.
+                if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); return false; }
+                try {
+                    api.request("/calls/" + encode(id) + "/end", "POST",
+                        new JSONObject().put("requestId", requestId).put("expectedOwnerLegId", expectedLeg), credential.bearer);
+                    queue.remove(key, requestId); return false;
+                } catch (NativeApi.ApiException error) {
+                    // R13 servers require the older versioned contract. Keep
+                    // compatibility while the backend/APK rollout overlaps.
+                    if (!"STALE_CALL_VERSION".equals(error.errorCode)) throw error;
+                }
+            }
+            JSONObject call = api.request("/calls/" + encode(id) + "/status", "GET", null, credential.bearer).getJSONObject("call");
+            if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); return false; }
+            JSONObject transfer = call.optJSONObject("transfer");
+            String transferKey = transfer == null ? "" : transfer.optString("transferId", transfer.optString("id"));
+            String transferStatus = transfer == null ? "" : transfer.optString("status");
+            String target = transfer == null ? "" : transfer.optString("toDeviceId");
+            NativeRoomPolicy.Cleanup action = "decline".equals(record.optString("intent"))
+                ? NativeRoomPolicy.declineAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target)
+                : NativeRoomPolicy.cleanupAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target);
+            // Never adopt a newly observed owner leg for an old queued End (A -> B -> A).
+            if (action == NativeRoomPolicy.Cleanup.END && !expectedLeg.isEmpty() && !expectedLeg.equals(NativeRoomJson.text(call,"ownerLegId"))) action = NativeRoomPolicy.Cleanup.NONE;
+            if (action == NativeRoomPolicy.Cleanup.END && !transferId.isEmpty() && expectedLeg.isEmpty() && !transferId.equals(transferKey)) action = NativeRoomPolicy.Cleanup.NONE;
+            if (action != NativeRoomPolicy.Cleanup.NONE) {
+                String suffix = action == NativeRoomPolicy.Cleanup.END ? "/end" : action == NativeRoomPolicy.Cleanup.REJECT ? "/reject" : "/transfers/" + encode(transferId) + "/decline";
+                JSONObject body = new JSONObject().put("version", call.optLong("version", -1)).put("requestId", requestId);
+                if (action == NativeRoomPolicy.Cleanup.END && !expectedLeg.isEmpty()) body.put("expectedOwnerLegId", expectedLeg);
+                api.request("/calls/" + encode(id) + suffix, "POST", body, credential.bearer);
+            }
+            queue.remove(key, requestId);
+        } catch (Exception error) {
+            if (record == null) return false;
+            String requestId = record.optString("requestId");
+            int status = error instanceof NativeApi.ApiException ? ((NativeApi.ApiException)error).status : 0;
+            String code = error instanceof NativeApi.ApiException ? ((NativeApi.ApiException)error).errorCode : "";
+            try {
+                if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) queue.remove(key, requestId);
+                else if (status == 401) { device.unauthorized(credential, error.getMessage()); queue.remove(key, requestId); }
+                else if ((status == 404 && record.optString("outgoingRequestId").isEmpty())
+                    || "CALL_LEG_CHANGED".equals(code) || "CALL_LEG_REQUIRED".equals(code)
+                    || "NOT_CALL_OWNER".equals(code)) queue.remove(key, requestId);
+                else {
+                    record.put("attempts", record.optInt("attempts") + 1);
+                    queue.update(key, requestId, record); pending = true;
+                    device.problem(credential, "Local audio stopped. Call cleanup is queued and will retry when the connection is available.");
+                }
+            } catch (Exception ignored) { pending = true; }
         }
         return pending;
     }

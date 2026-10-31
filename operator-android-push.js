@@ -389,7 +389,12 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       method: 'POST', headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { token: device.fcmToken, data,
         android: { priority: 'HIGH', ttl: ['sh_operator_call', 'sh_operator_transfer'].includes(data.type) ? '30s' : `${Math.max(1, Math.min(300, Math.ceil((Number(data.expires_at_ms) - clock()) / 1000)))}s`,
-          collapse_key: data.type === 'sh_operator_test' ? `sh-test-${device.id}` : data.type === 'sh_operator_message' ? `sh-chat-${data.channel_id}` : `sh-call-${HASH(data.call_id + (data.transfer_id || '')).slice(0, 32)}`,
+          // Chat messages and call/transfer events are distinct, content-bearing
+          // data messages. Per-chat/call collapse keys can both replace content
+          // and exceed FCM's four pending keys per token, losing unrelated alerts.
+          // Expiry, durable event claims and Android tombstones still reject stale
+          // or repeated events, including an End delivered before Incoming.
+          ...(data.type === 'sh_operator_test' ? { collapse_key: `sh-test-${device.id}` } : {}),
           restricted_package_name: config.packageName } } })
     });
     if (response.status === 401) { accessToken = ''; accessExpiresAt = 0; }

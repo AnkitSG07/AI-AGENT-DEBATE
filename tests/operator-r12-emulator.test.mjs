@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { fixture, deferred, registryFixture } from './operator-r12-helpers.mjs';
-import { createFirestoreMediaStore } from '../media-store/firestore-media-store.mjs';
+import { createFirestoreMediaStore, eventStoreKey } from '../media-store/firestore-media-store.mjs';
 import { MediaError } from '../media/errors.mjs';
 import { outgoingSessionId } from '../call-runtime/call-runtime.mjs';
 import { deviceReservationKey } from '../media/transfer-controller.mjs';
@@ -105,4 +105,28 @@ test('official Firestore batch read-only authentication observes revocation with
   assert.equal((await h.registry.authenticate(deviceToken)).id, deviceId);
   await h.registry.revokeDevice(deviceId);
   await assert.rejects(() => h.registry.authenticate(deviceToken), { status: 401 });
+});
+
+test('official Firestore explicit media read batch uses one SDK getAll and preserves absent-only atomicity', async () => {
+  let calls = 0, recordReads = 0;
+  const instrumented = {
+    collection: (...args) => db.collection(...args),
+    runTransaction: callback => db.runTransaction(native => callback(new Proxy(native, {
+      get(target, field) {
+        if (field === 'getAll') return (...refs) => { calls++; recordReads += refs.length; return target.getAll(...refs); };
+        const value = Reflect.get(target, field); return typeof value === 'function' ? value.bind(target) : value;
+      }
+    })))
+  };
+  const store = createFirestoreMediaStore({ firestore: instrumented, collectionPrefix: `r17_${randomUUID().replaceAll('-', '')}` });
+  const a = eventStoreKey('batch-a'), b = eventStoreKey('batch-b');
+  await store.transaction(async tx => { tx.create(a, { id: 'batch-a' }); tx.create(b, { id: 'batch-b' }); });
+  calls = 0; recordReads = 0;
+  await store.transaction(async tx => {
+    const rows = await tx.getAll([a, b, a]);
+    assert.deepEqual(rows, [{ id: 'batch-a' }, { id: 'batch-b' }, { id: 'batch-a' }]);
+    assert.deepEqual(await tx.get(a), { id: 'batch-a' });
+  });
+  assert.equal(calls, 1); assert.equal(recordReads, 2);
+  await assert.rejects(() => store.transaction(async tx => { tx.create(a, { id: 'batch-a', replaced: true }); }), { code: 'RECORD_ALREADY_EXISTS' });
 });
