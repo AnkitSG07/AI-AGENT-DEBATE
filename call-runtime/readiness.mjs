@@ -10,7 +10,7 @@ const boundedNonnegative = value => Number.isSafeInteger(value) && value >= 0 &&
 export function createNativeReadinessVerifier({ provider, now = Date.now } = {}) {
   requireValue(provider?.rooms && typeof provider.rooms.listParticipants === 'function',
     'READINESS_PROVIDER_REQUIRED', 'An official room observation client is required.', 503);
-  return async function verify({ actor, call, transfer, evidence }) {
+  return async function verify({ actor, call, transfer, evidence, providerObservation }) {
     const owner = transfer ? { legId: transfer.attemptId, identity: transfer.targetIdentity, deviceId: transfer.toDeviceId } : call.owner;
     const nonce = transfer ? transfer.readinessNonce : call.readinessNonce;
     requireValue(evidence && evidence.protocol === 'sh-room-audio-v1' && evidence.legId === owner.legId &&
@@ -36,7 +36,9 @@ export function createNativeReadinessVerifier({ provider, now = Date.now } = {})
       boundedPositive(evidence.outbound?.packetsDelta) && boundedPositive(evidence.outbound?.bytesDelta) &&
       (mutedTransport || incomingProgress && evidence.customerMuted !== true),
       'MEDIA_NOT_READY', 'Fresh audio progress or exact provider-confirmed customer mute is required.');
-    const rows = await provider.run('ListParticipants', () => provider.rooms.listParticipants(call.roomName));
+    const observedRows = transfer && typeof provider.consumeParticipantObservation === 'function'
+      ? provider.consumeParticipantObservation(providerObservation, call.roomName) : null;
+    const rows = observedRows || await provider.run('ListParticipants', () => provider.rooms.listParticipants(call.roomName));
     const active = identity => rows.find(row => row.identity === identity && row.state === ParticipantInfo_State.ACTIVE);
     const operator = active(owner.identity), customer = active(call.customerIdentity);
     const audio = (row, sid) => row?.tracks?.find(track => track.sid === sid && track.type === TrackType.AUDIO);

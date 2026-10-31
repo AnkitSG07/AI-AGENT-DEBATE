@@ -18,6 +18,9 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.Implementation;
+import org.robolectric.shadows.ShadowNotificationManager;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 28, application = Application.class)
@@ -61,7 +64,10 @@ public class MessageNotificationsTest {
         assertEquals("Ankit Garia", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
         assertEquals(Notification.VISIBILITY_PRIVATE, n.visibility); assertNotNull(n.publicVersion);
         assertEquals("New message", n.publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
-        assertNull(n.fullScreenIntent); assertNull(summary());
+        assertNull(n.fullScreenIntent); assertNotNull(summary());
+        assertEquals(MessageAlerts.GROUP, n.getGroup()); assertEquals(n.getGroup(), summary().getGroup());
+        assertTrue((summary().flags & Notification.FLAG_GROUP_SUMMARY) != 0);
+        assertEquals(73, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
         Intent tap = Shadows.shadowOf(n.contentIntent).getSavedIntent();
         assertEquals(73, tap.getIntExtra("channel_id", 0)); assertEquals(MainActivity.class.getName(), tap.getComponent().getClassName());
         assertEquals("shoperator://message/" + store.credential().generation + "/73", tap.getDataString());
@@ -99,7 +105,8 @@ public class MessageNotificationsTest {
         post(73, 803, "Ankit", "New message arrived during tap");
         MessageAlerts.opened(app, oldTap); assertNotNull(notification(73));
         Intent currentTap = Shadows.shadowOf(notification(73).contentIntent).getSavedIntent();
-        MessageAlerts.opened(app, currentTap); assertNull(notification(73)); assertNotNull(notification(74)); assertNull(summary());
+        MessageAlerts.opened(app, currentTap); assertNull(notification(73)); assertNotNull(notification(74)); assertNotNull(summary());
+        assertEquals(74, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
     }
     @Test public void groupNotificationUsesConversationTitleAndPreservesActualSender() {
         Map<String, String> incoming = data(73, 801, "Ankit", "Hello team");
@@ -181,6 +188,61 @@ public class MessageNotificationsTest {
         assertNull(notification(1)); assertNotNull(notification(26));
         for (int i = 3; i < 26; i++) manager.cancel(MessageAlerts.tag(i), 300);
         new MessageDismissReceiver().onReceive(app, new Intent().putExtra(MessageAlerts.GENERATION, store.credential().generation));
-        assertNull(summary()); assertNotNull(notification(26));
+        assertNotNull(summary()); assertNotNull(notification(26));
+        assertEquals(26, Shadows.shadowOf(summary().contentIntent).getSavedIntent().getIntExtra("channel_id", 0));
+        manager.cancel(MessageAlerts.tag(26), 300);
+        new MessageDismissReceiver().onReceive(app, new Intent().putExtra(MessageAlerts.GENERATION, store.credential().generation));
+        assertNull(summary());
+    }
+
+    @Test @Config(sdk = 35) public void aMessageNotPostedForDeniedPermissionCanBeRetriedAfterPermissionIsGranted() {
+        Map<String, String> incoming = data(73, 801, "Ankit", "Please show after permission");
+        Shadows.shadowOf(app).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
+        HubMessagingService.dispatchData(app, incoming); assertNull(notification(73));
+        Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
+        HubMessagingService.dispatchData(app, incoming); assertNotNull(notification(73)); assertNotNull(summary());
+        assertEquals(1, notification(73).number);
+    }
+    @Test public void rollbackRemovesOnlyTheUnpostedIdAndCannotChangeAReplacementEnrollment() {
+        long now = System.currentTimeMillis(); DeviceLeasePolicy.Credential credential = store.credential();
+        assertTrue(store.receiveMessage(73, 801, now, now + 60000, credential));
+        assertTrue(store.receiveMessage(73, 802, now, now + 60000, credential));
+        store.unpostedMessage(73, 801, credential);
+        assertTrue(store.receiveMessage(73, 801, now, now + 60000, credential));
+        assertFalse(store.receiveMessage(73, 802, now, now + 60000, credential));
+        store.clearEnrollment(); enroll(); assertTrue(store.receiveMessage(73, 801, now, now + 60000));
+        store.unpostedMessage(73, 801, credential);
+        assertFalse(store.receiveMessage(73, 801, now, now + 60000));
+    }
+    @Test public void rollbackAfterAFullReplayWindowCannotReadmitPreviouslyEvictedDuplicates() {
+        long now = System.currentTimeMillis(); DeviceLeasePolicy.Credential credential = store.credential();
+        for (int i = 1; i <= 33; i++) assertTrue(store.receiveMessage(73, i, now, now + 60000));
+        store.unpostedMessage(73, 33, credential);
+        assertFalse(store.receiveMessage(73, 1, now, now + 60000));
+        assertTrue(store.receiveMessage(73, 33, now, now + 60000));
+        assertFalse(store.receiveMessage(73, 32, now, now + 60000));
+    }
+    @Test public void simpleFallbackRetainsActualPreviewExactChatAndAValidGroupSummary() {
+        assertTrue(MessageAlerts.fallback(app, 73, 801, data(73, 801, "Ankit", "Readable fallback"), store.credential()));
+        assertEquals("Ankit", notification(73).extras.getCharSequence(Notification.EXTRA_TITLE).toString());
+        assertEquals("Readable fallback", notification(73).extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+        assertNotNull(summary());
+        Intent tap = Shadows.shadowOf(summary().contentIntent).getSavedIntent();
+        assertEquals(73, tap.getIntExtra("channel_id", 0)); MessageAlerts.opened(app, tap);
+        assertNull(notification(73)); assertNull(summary());
+    }
+    @Test @Config(shadows = RichStyleFailure.class) public void anActualRichPostFailureFallsBackInsteadOfSilentlyLosingTheMessage() {
+        post(73, 801, "Ankit", "Fallback survives a style failure");
+        Notification shown = notification(73); assertNotNull(shown); assertNotNull(summary());
+        assertEquals("Ankit", shown.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
+        assertEquals("Fallback survives a style failure", shown.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+        assertTrue(shown.extras.getString(Notification.EXTRA_TEMPLATE).contains("BigTextStyle"));
+        assertFalse(store.receiveMessage(73, 801, System.currentTimeMillis(), System.currentTimeMillis() + 60000));
+    }
+    @Implements(NotificationManager.class) public static class RichStyleFailure extends ShadowNotificationManager {
+        @Implementation @Override protected void notify(String tag, int id, Notification notification) {
+            if (notification.extras.getString(Notification.EXTRA_TEMPLATE, "").contains("MessagingStyle")) throw new IllegalArgumentException("Synthetic rich-style failure");
+            super.notify(tag, id, notification);
+        }
     }
 }

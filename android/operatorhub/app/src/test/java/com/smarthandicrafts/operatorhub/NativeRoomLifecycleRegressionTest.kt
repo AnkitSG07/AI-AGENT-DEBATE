@@ -151,6 +151,42 @@ class NativeRoomLifecycleRegressionTest {
         runMainUntil { posted.size == 2 && NativeRoomCallService.snapshot()!!.optString("sourceTransferId") == "T1" }
         assertEquals(posted[0],posted[1]); assertEquals(2,posted.size); assertEquals(0,fake.closes)
     }
+    private fun startTransferAnswer(oldServer: Boolean): List<String> {
+        controller.destroy(); controller = Robolectric.buildService(NativeRoomCallService::class.java).create(); service = controller.get()
+        Shadows.shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+        val requests = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val accepts = AtomicInteger()
+        val pending = JSONObject().put("ok", true).put("call", JSONObject().put("sessionId", call).put("version", 8)
+            .put("phase", "connected").put("ownerDeviceId", "android_source_device_123456789").put("ownerLegId", "leg-source")
+            .put("transfer", JSONObject().put("id", "transfer-exact").put("status", "connecting").put("toDeviceId", store.deviceId())))
+        set("callApi", NativeRoomCleanupProcessor.Requester { path, method, body, _ ->
+            when {
+                path.endsWith("/transfers/transfer-exact/accept") -> {
+                    requests.add("POST:" + if (body.has("version")) body.optLong("version") else "no-version")
+                    assertEquals("POST", method); assertEquals("transfer-exact", body.getString("expectedTransferId")); assertEquals(b, body.getString("requestId"))
+                    if (accepts.incrementAndGet() == 1 && oldServer)
+                        throw NativeApi.ApiException(409, "Legacy server needs current version", JSONObject().put("code", "STALE_CALL_VERSION"))
+                    pending
+                }
+                path.endsWith("/status") -> { requests.add("GET:status"); assertEquals("GET", method); pending }
+                else -> throw AssertionError("Unexpected call request")
+            }
+        })
+        service.onStartCommand(boundStart(Intent().putExtra("client_attempt_id", b).putExtra("room_action", "accept")
+            .putExtra("call_id", call).putExtra("transfer_id", "transfer-exact")), 0, 1)
+        runMainUntil { accepts.get() == if (oldServer) 2 else 1 }
+        runMainUntil { requests.contains("GET:status") }
+        assertFalse(NativeRoomCallService.snapshot()!!.optBoolean("closed")); assertNull(get("engine"))
+        return requests.toList()
+    }
+    @Test fun transferAnswerPostsItsImmutableInvitationWithoutAnUpfrontStatusRoundTrip() {
+        val requests = startTransferAnswer(false)
+        assertEquals("POST:no-version", requests.first()); assertEquals(1, requests.count { it.startsWith("POST:") })
+    }
+    @Test fun oldServerTransferFallbackFetchesVersionOnlyAfterItsExplicitRejection() {
+        val requests = startTransferAnswer(true)
+        assertEquals(listOf("POST:no-version", "GET:status", "POST:8"), requests.take(3))
+    }
     @Test fun delayedAndroidStartCannotUseAReplacementEnrollment() {
         val queued = boundStart(Intent().putExtra("client_attempt_id",b).putExtra("room_action","accept").putExtra("call_id",call))
         controller.destroy(); controller = Robolectric.buildService(NativeRoomCallService::class.java).create(); service = controller.get()

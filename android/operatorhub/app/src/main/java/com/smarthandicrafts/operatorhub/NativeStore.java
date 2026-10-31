@@ -255,7 +255,8 @@ public final class NativeStore {
         // Later fresh out-of-order FCM messages are accepted once within a bounded window.
         if (seen.contains(message) || message <= migrationFloor ||
             (seen.size() >= 32 && message < seen.first())) return false;
-        seen.add(message); while (seen.size() > 32) seen.pollFirst();
+        seen.add(message);
+        while (seen.size() > 32) migrationFloor = Math.max(migrationFloor, seen.pollFirst());
         SharedPreferences.Editor edit = prefs.edit().putLong(key, Math.max(highWater, message))
             .putString(seenKey, new JSONArray(seen).toString()).putLong("message_floor:" + channel, migrationFloor).putLong("message_time:" + channel, now);
         java.util.ArrayList<String> keys = new java.util.ArrayList<>();
@@ -269,6 +270,18 @@ public final class NativeStore {
             }
     }
     public void testReceived(String id) { prefs.edit().putLong("last_test_received", System.currentTimeMillis()).putString("last_test_id", id).apply(); }
+    /** Undo only an unposted local delivery; never clears other IDs, the replay floor or account state. */
+    public void unpostedMessage(long channel, long message, DeviceLeasePolicy.Credential expected) {
+        synchronized (EVENT_LOCK) {
+            if (!DeviceLeasePolicy.sameIdentity(credential(), expected)) return;
+            try {
+                String key = "message_seen:" + channel;
+                JSONArray before = new JSONArray(prefs.getString(key, "[]")), after = new JSONArray();
+                for (int i = 0; i < before.length(); i++) if (before.optLong(i) != message) after.put(before.optLong(i));
+                prefs.edit().putString(key, after.toString()).apply();
+            } catch (Exception ignored) { }
+        }
+    }
     public long lastTestReceived() { return prefs.getLong("last_test_received", 0); }
     public String lastTestId() { return prefs.getString("last_test_id", ""); }
 

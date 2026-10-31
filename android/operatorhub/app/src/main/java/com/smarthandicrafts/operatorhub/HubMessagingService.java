@@ -35,9 +35,18 @@ public final class HubMessagingService extends FirebaseMessagingService {
                 long issued = Long.parseLong(d.get("issued_at_ms")), expiry = Long.parseLong(d.get("expires_at_ms"));
                 String expected = HubPolicy.HUB_URL + "?channel_id=" + channel + "&channel=" + channel;
                 NativeStore store = new NativeStore(context); DeviceLeasePolicy.Credential credential = store.credential();
-                if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && store.receiveMessage(channel, id, issued, expiry, credential))
-                    MessageAlerts.show(context, (int)channel, id, d, credential);
-            } catch (Exception ignored) { }
+                if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && store.receiveMessage(channel, id, issued, expiry, credential)) {
+                    boolean posted = false;
+                    try { posted = MessageAlerts.show(context, (int)channel, id, d, credential); }
+                    catch (RuntimeException richFailure) {
+                        MessageAlerts.delivery("rich_render_failed");
+                        try { posted = MessageAlerts.fallback(context, (int)channel, id, d, credential); }
+                        catch (RuntimeException fallbackFailure) { MessageAlerts.delivery("fallback_render_failed"); }
+                    }
+                    if (posted) MessageAlerts.delivery("posted");
+                    else { store.unpostedMessage(channel, id, credential); MessageAlerts.delivery("not_posted"); }
+                } else MessageAlerts.delivery("rejected_envelope_or_duplicate");
+            } catch (Exception ignored) { MessageAlerts.delivery("invalid_envelope"); }
             return;
         }
         if ("sh_operator_test".equals(d.get("type"))) {

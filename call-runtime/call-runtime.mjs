@@ -100,7 +100,7 @@ export class CallRuntime {
   constructor({ store, provider, transferController, authenticate, resolveDevice, listDevices,
     capabilities = async () => ({ roomCalling: false, transferEnabled: false }), verifyReadiness,
     rejectIncoming, notify = async () => {}, onWorkAvailable = () => {}, phoneNumberId, tenantId = 'smart-handicrafts',
-    minimumNativeBuild = 1, operatorAbsentGraceMs = 45000, now = Date.now }) {
+    minimumNativeBuild = 1, operatorAbsentGraceMs = 45000, now = Date.now, onRuntimeTiming = () => {} }) {
     requireValue(store?.durable === true && provider && typeof authenticate === 'function' && typeof resolveDevice === 'function',
       'CALL_RUNTIME_CONFIG', 'A durable store, media provider and verified device authentication are required.', 503);
     identifier(phoneNumberId); identifier(tenantId);
@@ -108,7 +108,13 @@ export class CallRuntime {
     requireValue(Number.isSafeInteger(operatorAbsentGraceMs) && operatorAbsentGraceMs >= 30000 && operatorAbsentGraceMs <= 120000,
       'CALL_RUNTIME_CONFIG', 'The operator reconnect grace must be between 30 and 120 seconds.', 503);
     Object.assign(this, { store, provider, transferController, authenticate, resolveDevice, listDevices,
-      capabilityProvider: capabilities, verifyReadiness, rejectIncoming, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now });
+      capabilityProvider: capabilities, verifyReadiness, rejectIncoming, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now, onRuntimeTiming });
+  }
+
+  async timed(stage, operation) {
+    const started = performance.now(); let ok = false;
+    try { const result = await operation(); ok = true; return result; }
+    finally { try { this.onRuntimeTiming({ stage, elapsedMs: Math.round(performance.now() - started), ok }); } catch { /* timing cannot control media */ } }
   }
 
   signalWork(id) {
@@ -131,10 +137,10 @@ export class CallRuntime {
   }
 
   async actor(context, { media = true } = {}) {
-    const value = await this.authenticate(context);
+    const value = await this.timed('authenticate', () => this.authenticate(context));
     requireValue(value?.authenticated === true && value.canCall === true && value.tenantId === this.tenantId,
       'UNAUTHENTICATED_DEVICE', 'An enrolled operator bearer credential is required.', 401);
-    const registered = await this.resolveDevice(identifier(value.deviceId), context);
+    const registered = await this.timed('resolve-authenticated-device', () => this.resolveDevice(identifier(value.deviceId), context));
     requireValue(registered && registered.revoked !== true && registered.deviceId === value.deviceId &&
       registered.userId === value.userId && registered.tenantId === this.tenantId &&
       Number.isSafeInteger(value.credentialGeneration) && value.credentialGeneration >= 1 &&
@@ -157,7 +163,7 @@ export class CallRuntime {
 
   async capabilities(context) {
     const actor = await this.actor(context, { media: false });
-    const value = await this.capabilityProvider();
+    const value = await this.timed('capabilities-policy', () => this.capabilityProvider());
     return { protocol: 'sh-room-audio-v1', roomCalling: value?.roomCalling === true,
       transferEnabled: value?.roomCalling === true && value?.transferEnabled === true &&
         (value.mode !== 'pilot' || value.pilotDeviceIds?.includes(actor.deviceId)), mode: value?.mode || 'disabled',
@@ -166,7 +172,7 @@ export class CallRuntime {
   }
 
   async requireEnabled({ transfer = false } = {}) {
-    const value = await this.capabilityProvider();
+    const value = await this.timed('action-policy', () => this.capabilityProvider());
     requireValue(value?.roomCalling === true && (!transfer || value.transferEnabled === true),
       transfer ? 'TRANSFER_MEDIA_NOT_VALIDATED' : 'ROOM_CALLING_NOT_ENABLED',
       transfer ? 'This release has not enabled verified audio handoff.' : 'Native room calling is not enabled for this release.', 501);
@@ -315,11 +321,14 @@ export class CallRuntime {
     const join = await this.providerFor(session).issueOperatorJoin({ roomName: session.roomName,
       deviceId: actor.deviceId, legId: session.owner.legId, ttlSeconds: 90 });
     await this.recheck(context, actor);
-    const current = await this.store.get(sessionKey(session.id)); this.requireSession(current);
+    const [current, canonical] = await Promise.all([
+      this.store.get(sessionKey(session.id)), session.providerCallId ? this.store.get(callStoreKey(session.providerCallId)) : Promise.resolve(null)
+    ]);
+    this.requireSession(current);
     requireValue(!current.terminal && sameBinding(actor, current.owner) && current.owner.legId === session.owner.legId &&
-      current.deadlineAt > this.now(), 'CALL_ENDED', 'The call ended or changed while joining.');
+      current.providerCallId === session.providerCallId && current.deadlineAt > this.now(), 'CALL_ENDED', 'The call ended or changed while joining.');
     requireValue(join.identity === current.owner.identity, 'MEDIA_IDENTITY_MISMATCH', 'The provider join identity does not match this leg.', 502);
-    return { call: await this.view(current), join: { ...join, legId: current.owner.legId, customerIdentity: current.customerIdentity },
+    return { call: await this.view(current, canonical || null), join: { ...join, legId: current.owner.legId, customerIdentity: current.customerIdentity },
       readinessNonce: current.readinessNonce };
   }
 
@@ -487,6 +496,7 @@ export class CallRuntime {
       return { session, issueProvider: true };
     }));
     if (prepared.issueProvider) this.signalWork(prepared.session.id);
+    let current = prepared.session;
     if (prepared.issueProvider) {
       let dispatched = false;
       try {
@@ -496,7 +506,7 @@ export class CallRuntime {
         dispatched = true;
         const result = await provider.acceptIncoming({ callId: prepared.session.providerCallId,
           phoneNumberId: this.phoneNumberId, offerSdp: prepared.session.offerSdp, roomName: prepared.session.roomName });
-        await this.finishProviderOperation(prepared.session.id, 'accept', result);
+        current = await this.finishProviderOperation(prepared.session.id, 'accept', result);
       } catch (error) {
         await this.failProviderOperation(prepared.session.id, 'accept', error, { notDispatched: !dispatched });
         const reconciled = dispatched && error?.outcomeUnknown !== false &&
@@ -505,9 +515,9 @@ export class CallRuntime {
           const publicError = this.publicProviderError(error); publicError.sessionId = prepared.session.id;
           this.signalWork(prepared.session.id); throw publicError;
         }
+        current = await this.store.get(sessionKey(prepared.session.id));
       }
     }
-    const current = await this.store.get(sessionKey(prepared.session.id));
     return this.join(context, current, actor);
   }
 
@@ -520,11 +530,12 @@ export class CallRuntime {
     const join = await this.providerFor(session).issueOperatorJoin({ roomName: call.roomName,
       deviceId: actor.deviceId, legId: call.owner.legId, ttlSeconds: 90 });
     await this.recheck(context, actor);
-    const latest = await this.store.get(callStoreKey(call.id));
-    const latestSession = await this.store.get(sessionKey(session.id));
+    const [latest, latestSession] = await Promise.all([
+      this.store.get(callStoreKey(call.id)), this.store.get(sessionKey(session.id))
+    ]);
     requireValue(latest?.active && !latestSession.terminal && latest.owner.identity === call.owner.identity && join.identity === call.owner.identity,
       'CALL_ENDED', 'The call owner changed while restoring audio.');
-    return { call: await this.view(latestSession), join: { ...join, legId: call.owner.legId, customerIdentity: call.customerIdentity },
+    return { call: await this.view(latestSession, latest), join: { ...join, legId: call.owner.legId, customerIdentity: call.customerIdentity },
       readinessNonce: call.transfer?.toDeviceId === actor.deviceId ? call.transfer.readinessNonce : session.readinessNonce };
   }
 
@@ -564,6 +575,7 @@ export class CallRuntime {
     if (prepared.cancelled) return { sessionId: id, cancelled: true, call: { sessionId: id, callId: id, providerCallId: null,
       phase: 'ended', direction: 'outgoing', ownerDeviceId: actor.deviceId, roomReady: false, endConfirmed: true, cleanupPending: false,
       version: 0, sessionVersion: 0, transfer: null } };
+    let current = prepared.session;
     if (prepared.issueProvider) {
       let dispatched = false;
       try {
@@ -573,14 +585,13 @@ export class CallRuntime {
         dispatched = true;
         const result = await provider.dialOutgoing({ phoneNumberId: this.phoneNumberId,
           to, requestId: id, roomName: prepared.session.roomName, ringingTimeout: 60 });
-        await this.finishProviderOperation(id, 'dial', result);
+        current = await this.finishProviderOperation(id, 'dial', result);
       } catch (error) {
         await this.failProviderOperation(id, 'dial', error, { notDispatched: !dispatched });
         // Include only the durable session locator. Never retry the dial here.
         const publicError = this.publicProviderError(error); publicError.sessionId = id; throw publicError;
       }
     }
-    const current = await this.store.get(sessionKey(id));
     if (current.terminal || ['dialing', 'uncertain'].includes(current.phase)) return { call: await this.view(current) };
     return this.join(context, current, actor);
   }
@@ -621,12 +632,12 @@ export class CallRuntime {
   async finishProviderOperation(id, operation, result, observation = null) {
     identifier(result?.callId);
     return this.store.transaction(async tx => {
-      const session = await tx.get(sessionKey(id)); this.requireSession(session);
-      const [route, terminal, accepted, answer] = await Promise.all([
-        tx.get(eventKey(routeId(result.callId))), tx.get(eventKey(terminalId(result.callId))),
+      const [session, route, terminal, accepted, answer] = await Promise.all([
+        tx.get(sessionKey(id)), tx.get(eventKey(routeId(result.callId))), tx.get(eventKey(terminalId(result.callId))),
         operation === 'dial' ? tx.get(eventKey(acceptedId(result.callId))) : Promise.resolve(undefined),
         operation === 'dial' ? tx.get(eventKey(answerId(result.callId))) : Promise.resolve(undefined)
       ]);
+      this.requireSession(session);
       if (observation && (session.operations[operation]?.id !== observation.operationId ||
           session.owner?.identity !== observation.ownerIdentity ||
           !['issued', 'uncertain'].includes(session.operations[operation]?.status))) return session;
@@ -760,16 +771,22 @@ export class CallRuntime {
       tx.set(callStoreKey(call.id), call);
       tx.set(deviceReservationKey(actor.deviceId), { callId: call.id, sessionId: session.id, deviceId: actor.deviceId, kind: 'owner' });
     });
-    return { call: await this.view(await this.store.get(sessionKey(snapshot.id))) };
+    const [current, canonical] = await Promise.all([
+      this.store.get(sessionKey(snapshot.id)), this.store.get(callStoreKey(snapshot.providerCallId))
+    ]);
+    return { call: await this.view(current, canonical || null) };
   }
 
   async end(context, id, { version, requestId, reject = false, expectedOwnerLegId }) {
     const actor = await this.actor(context, { media: false }); request(requestId);
     if (expectedOwnerLegId !== undefined) identifier(expectedOwnerLegId, 'operator leg');
     const snapshot = await this.locate(id); this.requireSession(snapshot);
-    await this.store.transaction(async tx => {
-      const session = await tx.get(sessionKey(snapshot.id));
-      const call = session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
+    const committed = await this.store.transaction(async tx => {
+      const [session, observedCall] = await Promise.all([
+        tx.get(sessionKey(snapshot.id)), snapshot.providerCallId ? tx.get(callStoreKey(snapshot.providerCallId)) : Promise.resolve(null)
+      ]);
+      const call = session.providerCallId === snapshot.providerCallId ? observedCall :
+        session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
       const owner = call?.owner || session.owner;
       const identities = new Map(owner ? [[owner.deviceId, owner.identity]] : []);
       if (call?.transfer?.sourceIdentity) identities.set(call.transfer.fromDeviceId, call.transfer.sourceIdentity);
@@ -786,7 +803,7 @@ export class CallRuntime {
         requireValue(!priorLegs.some(prior => prior?.deviceId === actor.deviceId && prior.identity && prior.identity !== owner.identity),
           'CALL_LEG_REQUIRED', 'Update SH Chat to end a call that has transferred back to this device.');
       }
-      if (session.terminal && (!call || !call.active)) return;
+      if (session.terminal && (!call || !call.active)) return { session, call };
       // A local End already bound to this exact immutable owner leg does not
       // need an extra GET merely to echo a changing UI version. Ownership,
       // enrollment and leg identity remain checked in this same transaction.
@@ -805,9 +822,10 @@ export class CallRuntime {
         }
       }
       schedule(session, this.now()); tx.set(sessionKey(session.id), session);
+      return { session, call };
     });
     this.signalWork(snapshot.id);
-    return { call: await this.view(await this.store.get(sessionKey(snapshot.id))) };
+    return { call: await this.view(committed.session, committed.call || null) };
   }
 
   async markSessionEnded(id, reason, confirmed) {
@@ -821,7 +839,10 @@ export class CallRuntime {
 
   async transfer(context, id, action, body = {}) {
     const actor = await this.actor(context);
-    if (!['decline', 'cancel'].includes(action)) await this.requireEnabled({ transfer: true });
+    // The controller's rollout gate checks room/pilot policy once for each
+    // authority-changing action. Do not repeat the full device-list policy here.
+    if (!['decline', 'cancel'].includes(action) && !this.transferController?.enforcesRuntimeCapabilities)
+      await this.requireEnabled({ transfer: true });
     requireValue(this.transferController, 'TRANSFER_MEDIA_NOT_VALIDATED', 'The transfer controller is not installed.', 501);
     const session = await this.locate(id); this.requireSession(session);
     requireValue(session.providerCallId && !session.terminal, 'CALL_ENDED', 'This call is no longer active.');
@@ -837,8 +858,8 @@ export class CallRuntime {
         target.credentialExpiresAt > this.now() && Number.isSafeInteger(target.credentialGeneration),
         'TARGET_UNAVAILABLE', 'The destination enrollment is not ready for native room calls.');
       await this.recheck(context, actor);
-      result = await this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
-        expectedVersion: body.version, requestId: request(body.requestId) });
+      result = await this.timed('transfer-invite-controller', () => this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
+        expectedVersion: body.version, requestId: request(body.requestId), observedCall: currentCall }));
       await this.store.transaction(async tx => {
         const current = await tx.get(sessionKey(session.id));
         current.transferBindings ||= {};
@@ -860,11 +881,12 @@ export class CallRuntime {
         const binding = session.transferBindings?.[transfer.id];
         requireValue(sameBinding(actor, binding), 'DEVICE_BINDING_CHANGED', 'The invitation belongs to an earlier enrolled credential.', 403);
       }
-      if (action === 'accept') result = await this.transferController.accept(context,
-        { callId, transferId: body.transferId, expectedVersion: body.version });
+      if (action === 'accept') result = await this.timed('transfer-accept-controller', () => this.transferController.accept(context,
+        { callId, transferId: body.transferId, expectedVersion: body.version, observedCall: currentCall,
+          expectedTransferId: actor.nativeBuild >= 16 ? body.expectedTransferId : undefined }));
       else if (action === 'ready') {
-        result = await this.transferController.confirmReady(context, { callId, transferId: body.transferId,
-          expectedVersion: body.version, readinessNonce: body.readinessNonce, evidence: body.evidence });
+        result = await this.timed('transfer-ready-controller', () => this.transferController.confirmReady(context, { callId, transferId: body.transferId,
+          expectedVersion: body.version, readinessNonce: body.readinessNonce, evidence: body.evidence, observedCall: currentCall }));
         await this.store.transaction(async tx => {
           const current = await tx.get(sessionKey(session.id));
           const binding = current.transferBindings?.[transfer.id];
@@ -875,12 +897,17 @@ export class CallRuntime {
         { callId, transferId: body.transferId, expectedVersion: body.version, action });
       else throw new MediaError('INVALID_TRANSFER_ACTION', 'Unknown transfer action.', 400);
     }
-    await this.syncTransferNotifications(session.id);
-    const fresh = await this.store.get(sessionKey(session.id));
-    const response = { call: await this.view(fresh) };
+    // Only stop actions create a declined/cancelled notification. Normal
+    // invite/join/readiness must not pay for a no-op reconciliation transaction;
+    // the durable recovery path still backfills any older terminal invitations.
+    if (['decline', 'cancel'].includes(action)) await this.syncTransferNotifications(session.id);
+    if (result.join) await this.recheck(context, actor);
+    const [fresh, currentCall] = await Promise.all([
+      this.store.get(sessionKey(session.id)), this.store.get(callStoreKey(callId))
+    ]);
+    this.requireSession(fresh);
+    const response = { call: await this.view(fresh, currentCall || null) };
     if (result.join) {
-      const currentCall = await this.store.get(callStoreKey(callId));
-      await this.recheck(context, actor);
       requireValue(currentCall?.active && !fresh.terminal && currentCall.transfer?.id === body.transferId &&
         currentCall.transfer.status === 'connecting' && sameBinding(actor, fresh.transferBindings?.[body.transferId]),
         'TRANSFER_CHANGED', 'The invitation changed while the room token was being prepared.');

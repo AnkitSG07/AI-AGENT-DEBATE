@@ -124,10 +124,12 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   try {
     if (registry && firestoreRuntime?.firestore) {
       mediaStore = storeFactory({ firestore: firestoreRuntime.firestore,
-        collectionPrefix: `${firestoreRuntime.collectionPrefix}_media`, clock: now, recoveryLeaseMs: 60000 });
+        collectionPrefix: `${firestoreRuntime.collectionPrefix}_media`, clock: now, recoveryLeaseMs: 60000,
+        onTiming: value => logger.info?.('SH_CALL_STORAGE_TIMING', JSON.stringify(value)) });
     }
     if (mediaStore && phoneNumberId) {
       bundle = runtimeFactory({ store: mediaStore, env, authenticate, resolveDevice, listDevices,
+        onRuntimeTiming: value => logger.info?.('SH_CALL_RUNTIME_TIMING', JSON.stringify(value)),
         onTiming: value => logger.info?.('SH_CALL_PROVIDER_TIMING', JSON.stringify(value)),
         capabilities: policy, rejectIncoming, onWorkAvailable: id => queueRecovery(id), phoneNumberId, minimumNativeBuild: 10, now,
         notify: async event => pushBridge.publishRoomEvent({ ...event, stillCurrent: async () => {

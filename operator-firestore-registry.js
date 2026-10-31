@@ -101,7 +101,7 @@ function openRecovery(secret, operation, binding, envelope) {
 export function createFirestoreDeviceRegistry({
   firestore, clock = Date.now, bootstrapEnrollmentCode = '',
   collectionPrefix = 'sh_operator', revokedIds = [], maxDevices = 500,
-  tokenTtlMs = DEVICE_TOKEN_TTL_MS, deliveryLeaseMs = DELIVERY_LEASE_MS
+  tokenTtlMs = DEVICE_TOKEN_TTL_MS, deliveryLeaseMs = DELIVERY_LEASE_MS, onTiming = () => {}
 } = {}) {
   if (!firestore || typeof firestore.collection !== 'function' || typeof firestore.runTransaction !== 'function') throw new TypeError('A server Firestore client is required.');
   if (!/^[A-Za-z][A-Za-z0-9_]{0,80}$/.test(collectionPrefix)) throw new TypeError('Invalid registry collection prefix.');
@@ -114,9 +114,11 @@ export function createFirestoreDeviceRegistry({
     .map(name => [name, firestore.collection(`${collectionPrefix}_${name}`)]));
   const gate = collections.metadata.doc('registry');
 
-  async function guarded(operation) {
-    try { return await operation(); }
+  async function guarded(operation, stage) {
+    const started = performance.now(); let ok = false;
+    try { const value = await operation(); ok = true; return value; }
     catch (error) { if (error instanceof RegistryError) throw error; throw unavailable(); }
+    finally { if (stage) try { onTiming({ stage, elapsedMs: Math.round(performance.now() - started), ok }); } catch { /* diagnostics only */ } }
   }
   function nowMs() {
     const now = clock();
@@ -275,10 +277,24 @@ export function createFirestoreDeviceRegistry({
 
   async function authenticate(rawToken) {
     const digest = bearerDigest(rawToken);
+    // Current credentials include the public device ID. Use it only as a read
+    // selector; the private digest/index/generation remain the authority.
+    const hint = rawToken.slice(0, rawToken.indexOf('.'));
     return guarded(() => firestore.runTransaction(async tx => {
-      const { row, index } = await readCredential(tx, digest);
+      let row, index;
+      if (ID_PATTERN.test(hint)) {
+        const refs = [collections.credentials.doc(digest), collections.devices.doc(hint)];
+        const snapshots = typeof tx.getAll === 'function' ? await tx.getAll(...refs) : await Promise.all(refs.map(ref => tx.get(ref)));
+        if (!snapshots[0].exists) throw unauthorized();
+        index = snapshots[0].data(); row = deviceRow(snapshots[1]);
+      } else {
+        // Existing opaque imported credentials keep their lookup contract.
+        ({ row, index } = await readCredential(tx, digest));
+      }
       return validateCurrent(row, index, digest, nowMs());
-    }));
+    // Authentication is a fresh snapshot, without write locks or an empty
+    // commit RPC. No historical readTime or cross-request cache is supplied.
+    }, { readOnly: true }), 'authenticate');
   }
 
   // Capability metadata is reported only by the current enrolled credential.

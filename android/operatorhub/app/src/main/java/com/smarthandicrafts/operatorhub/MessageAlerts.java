@@ -54,15 +54,16 @@ public final class MessageAlerts {
     public static void show(Context context, int channel, long messageId, Map<String, String> data) {
         show(context, channel, messageId, data, new NativeStore(context).credential());
     }
-    static void show(Context context, int channel, long messageId, Map<String, String> data, DeviceLeasePolicy.Credential credential) {
-        if (channel <= 0) return;
+    static boolean show(Context context, int channel, long messageId, Map<String, String> data, DeviceLeasePolicy.Credential credential) {
+        if (channel <= 0) return false;
         NativeStore store = new NativeStore(context);
-        if (!DeviceLeasePolicy.valid(credential, System.currentTimeMillis())) return;
+        if (!DeviceLeasePolicy.valid(credential, System.currentTimeMillis())) return false;
         MessageNotificationData preview = MessageNotificationData.from(data, System.currentTimeMillis());
         synchronized (LOCK) {
-            NotificationManager nm = manager(context); if (!permitted(context, nm)) return;
+            NotificationManager nm = manager(context); if (!permitted(context, nm)) { delivery("blocked_permission"); return false; }
             // Android preserves existing user channel/sound/importance choices.
             nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Customer messages", NotificationManager.IMPORTANCE_HIGH));
+            if (nm.getNotificationChannel(CHANNEL).getImportance() == NotificationManager.IMPORTANCE_NONE) { delivery("blocked_channel"); return false; }
             Notification old = null;
             for (StatusBarNotification row : conversations(nm)) if (tag(channel).equals(row.getTag()) &&
                 row.getNotification().extras.getLong(GENERATION, -1) == credential.generation) old = row.getNotification();
@@ -72,7 +73,7 @@ public final class MessageAlerts {
                 NotificationCompat.MessagingStyle prior = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(old);
                 if (prior != null) messages.addAll(prior.getMessages());
                 for (NotificationCompat.MessagingStyle.Message row : messages)
-                    if (messageId > 0 && row.getExtras().getLong(MESSAGE_ID) == messageId) return;
+                    if (messageId > 0 && row.getExtras().getLong(MESSAGE_ID) == messageId) return true;
             }
             Person customer = new Person.Builder().setName(preview.sender).setKey("sh-sender:" + channel + ":" + preview.sender)
                 .setIcon(IconCompat.createWithBitmap(avatar(preview.sender))).build();
@@ -106,7 +107,7 @@ public final class MessageAlerts {
                 .setOnlyAlertOnce(old != null && messageId < old.extras.getLong(LATEST_ID));
             // This final enrollment fence also covers OS notification/shortcut writes.
             // Logout clears old previews under the same fence, so late callbacks cannot recreate them.
-            store.withMessageCredential(credential, () -> {
+            return store.withMessageCredential(credential, () -> {
                 String shortcut = "sh-chat-" + credential.generation + "-" + channel;
                 try {
                     if (ShortcutManagerCompat.pushDynamicShortcut(context, new ShortcutInfoCompat.Builder(context, shortcut)
@@ -117,6 +118,29 @@ public final class MessageAlerts {
                 active.sort(recency());
                 if (!replacing && active.size() >= CHAT_LIMIT) nm.cancel(active.get(0).getTag(), ID);
                 nm.notify(tag(channel), ID, builder.build()); refreshSummary(context, nm, credential.generation);
+            });
+        }
+    }
+
+    /** A rich-style/bitmap/launcher failure must not silently discard the message. */
+    static boolean fallback(Context context, int channel, long messageId, Map<String, String> data, DeviceLeasePolicy.Credential credential) {
+        NotificationManager nm = manager(context); if (channel <= 0 || !permitted(context, nm)) return false;
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Customer messages", NotificationManager.IMPORTANCE_HIGH));
+        if (nm.getNotificationChannel(CHANNEL).getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
+        MessageNotificationData preview = MessageNotificationData.from(data, System.currentTimeMillis());
+        synchronized (LOCK) {
+            return new NativeStore(context).withMessageCredential(credential, () -> {
+                Bundle extras = new Bundle(); extras.putLong(GENERATION, credential.generation); extras.putLong(LATEST_ID, messageId);
+                extras.putInt(COUNT, 1); extras.putString(TITLE, preview.sender); extras.putString(PREVIEW, preview.preview);
+                PendingIntent open = PendingIntent.getActivity(context, 3, openIntent(context, channel, credential.generation).putExtra(LATEST_ID, messageId),
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+                nm.notify(tag(channel), ID, new NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_message_notification)
+                    .setContentTitle(preview.sender).setContentText(preview.preview).setStyle(new NotificationCompat.BigTextStyle().bigText(preview.preview))
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(publicNotification(context))
+                    .addExtras(extras).setContentIntent(open).setAutoCancel(true).setWhen(preview.at).setGroup(GROUP)
+                    .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN).build());
+                refreshSummary(context, nm, credential.generation);
+                delivery("posted_fallback");
             });
         }
     }
@@ -164,7 +188,7 @@ public final class MessageAlerts {
     private static void refreshSummary(Context context, NotificationManager nm, long generation) {
         List<StatusBarNotification> rows = conversations(nm);
         rows.removeIf(row -> row.getNotification().extras.getLong(GENERATION, -1) != generation);
-        if (rows.size() < 2) { nm.cancel(SUMMARY, SUMMARY_ID); return; }
+        if (rows.isEmpty()) { nm.cancel(SUMMARY, SUMMARY_ID); return; }
         rows.sort(recency().reversed());
         int total = 0;
         NotificationCompat.InboxStyle style = new NotificationCompat.InboxStyle();
@@ -173,12 +197,15 @@ public final class MessageAlerts {
             style.addLine(extras.getString(TITLE, "Customer") + ": " + extras.getString(PREVIEW, "New message"));
         }
         style.setBigContentTitle(total + " new messages").setSummaryText(rows.size() + " conversations");
-        PendingIntent open = PendingIntent.getActivity(context, 5, new Intent(context, MainActivity.class)
-            .setData(Uri.parse("shoperator://messages")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        StatusBarNotification single = rows.size() == 1 ? rows.get(0) : null;
+        Intent target = single == null ? new Intent(context, MainActivity.class)
+            .setData(Uri.parse("shoperator://messages")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            : openIntent(context, Integer.parseInt(single.getTag().substring(8)), generation).putExtra(LATEST_ID, single.getNotification().extras.getLong(LATEST_ID));
+        PendingIntent open = PendingIntent.getActivity(context, 5, target, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         nm.notify(SUMMARY, SUMMARY_ID, new NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_message_notification).setColor(NativeBrand.GREEN).setContentTitle("SH Chat")
-            .setContentText(total + " new messages from " + rows.size() + " conversations").setStyle(style)
+            .setSmallIcon(R.drawable.ic_message_notification).setColor(NativeBrand.GREEN)
+            .setContentTitle(single == null ? "SH Chat" : single.getNotification().extras.getString(TITLE, "Customer"))
+            .setContentText(single == null ? total + " new messages from " + rows.size() + " conversations" : single.getNotification().extras.getString(PREVIEW, "New message")).setStyle(style)
             .setNumber(total).setGroup(GROUP).setGroupSummary(true).setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
             .setOnlyAlertOnce(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(publicNotification(context))
             .setAutoCancel(true).setContentIntent(open).build());
@@ -198,6 +225,7 @@ public final class MessageAlerts {
     }
     static String tag(int channel) { return "message:" + channel; }
     private static NotificationManager manager(Context context) { return context.getSystemService(NotificationManager.class); }
+    static void delivery(String code) { android.util.Log.i("SHMessageDelivery", code); }
     private static boolean permitted(Context context, NotificationManager manager) {
         return manager != null && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) && manager.areNotificationsEnabled();
     }

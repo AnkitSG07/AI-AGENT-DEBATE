@@ -32,10 +32,12 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         fun onRouteUnavailable()
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val engineCreatedAt = SystemClock.elapsedRealtime()
     private val room = LiveKit.create(context.applicationContext)
     private var closed = false
     private var failureReported = false
     private var setupStage = NativeRoomAudioSetup.Stage.AUTHORIZATION
+    private var stageStartedAt = engineCreatedAt
     private var join = JSONObject()
     private var customerTrack: RemoteAudioTrack? = null
     private var customerTrackSid = ""
@@ -81,6 +83,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
 
     override fun connect(descriptor: JSONObject) {
         join = descriptor
+        android.util.Log.i("SHCallTiming", "audio-engine-created elapsedMs=" + (SystemClock.elapsedRealtime() - engineCreatedAt))
         scope.launch {
             try {
                 require(NativeRoomPolicy.validRoomUrl(join.optString("url"))) { "Invalid native audio server." }
@@ -102,28 +105,35 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                     registerOnAudioFocusChangeListener(focusListener)
                 }
                 // Subscribe only to the customer, never automatically to other operator microphones.
-                setupStage = NativeRoomAudioSetup.Stage.ROOM_JOIN
+                stage(NativeRoomAudioSetup.Stage.ROOM_JOIN)
                 if (!NativeRoomDisposal.awaitPrevious()) throw IllegalStateException("The previous audio connection is still closing.")
                 if (closed) return@launch
+                android.util.Log.i("SHCallTiming", "audio-previous-disposal elapsedMs=" + (SystemClock.elapsedRealtime() - stageStartedAt))
                 room.connect(join.getString("url"), join.getString("token"), ConnectOptions(autoSubscribe = false))
                 if (closed) return@launch
-                setupStage = NativeRoomAudioSetup.Stage.IDENTITY
+                stage(NativeRoomAudioSetup.Stage.IDENTITY)
                 require(room.localParticipant.identity?.value == join.getString("identity")) { "The audio identity did not match this call." }
-                setupStage = NativeRoomAudioSetup.Stage.MICROPHONE_PERMISSION
+                stage(NativeRoomAudioSetup.Stage.MICROPHONE_PERMISSION)
                 room.localParticipant.setTrackSubscriptionPermissions(false,
                     listOf(NativeRoomAudioSetup.customerPermission(join.getString("customerIdentity"))))
                 // Disable DTX while proving fresh outgoing RTP even if the operator is silent.
-                setupStage = NativeRoomAudioSetup.Stage.MICROPHONE_PUBLISH
+                stage(NativeRoomAudioSetup.Stage.MICROPHONE_PUBLISH)
                 room.audioTrackPublishDefaults = AudioTrackPublishDefaults(audioBitrate = 24000, dtx = false, red = true, preconnect = false)
                 if (!room.localParticipant.setMicrophoneEnabled(true)) throw IllegalStateException("Microphone could not start.")
                 if (closed) return@launch
-                setupStage = NativeRoomAudioSetup.Stage.CUSTOMER_SUBSCRIPTION
+                stage(NativeRoomAudioSetup.Stage.CUSTOMER_SUBSCRIPTION)
                 subscribeCustomer()
-                setupStage = NativeRoomAudioSetup.Stage.AUDIO_ACTIVE
+                stage(NativeRoomAudioSetup.Stage.AUDIO_ACTIVE)
                 launch { while (isActive && !closed) { sample(); delay(if (startupEvidenceSent) 1000 else 500) } }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
         }
+    }
+
+    private fun stage(next: NativeRoomAudioSetup.Stage) {
+        val now = SystemClock.elapsedRealtime()
+        android.util.Log.i("SHCallTiming", "audio-stage=" + setupStage.name + " elapsedMs=" + (now - stageStartedAt) + " totalMs=" + (now - engineCreatedAt))
+        setupStage = next; stageStartedAt = now
     }
 
     private fun reportFailure(error: Exception, stage: NativeRoomAudioSetup.Stage = setupStage) {
@@ -259,6 +269,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 .put("iceState", "succeeded").put("dtlsState", "connected")
                 .put("customerMuted", customerMuted)
             if (mutedTransport) evidence.put("readinessMode", "customer-muted-transport").put("customerTrackSubscribed", true)
+            if (!startupEvidenceSent) android.util.Log.i("SHCallTiming", "audio-first-evidence elapsedMs=" + (SystemClock.elapsedRealtime() - engineCreatedAt))
             startupEvidenceSent = true
             listener.onEvidence(evidence)
         } catch (cancelled: CancellationException) { throw cancelled }

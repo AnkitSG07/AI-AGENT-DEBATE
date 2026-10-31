@@ -10,7 +10,7 @@ import { createBoundedNativeReject } from '../media/native-meta-reject.mjs';
  * Construction performs no network action. verifyConfiguration() is a read-only
  * control API check; it never proves audio or enables transfer by itself. */
 export function createNativeCallRuntime({ store, env, authenticate, resolveDevice, listDevices,
-  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable, onTiming,
+  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable, onTiming, onRuntimeTiming,
   phoneNumberId, minimumNativeBuild = 10, tenantId = 'smart-handicrafts', now = Date.now,
   provider: injectedProvider } = {}) {
   const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env), { onTiming });
@@ -37,33 +37,26 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
   // Explicit, bounded pilot authority is separate from production evidence.
   // No fabricated live-test ID or request-supplied mode bypasses the guard.
   class RuntimeTransferController extends TransferController {
-    async requireRollout() {
+    get enforcesRuntimeCapabilities() { return true; }
+    async requireRollout(context, args, actor) {
       const policy = await release();
-      if (policy.mode === 'pilot') {
-        requireValue(policy.transferEnabled, 'TRANSFER_PILOT_NOT_ENABLED', 'The enrolled-device pilot has not been enabled.', 501);
-        return;
-      }
-      return super.requireRollout();
-    }
-    async checkPilot(context, args) {
-      const policy = await release();
-      if (policy.mode !== 'pilot') return;
+      if (policy.mode !== 'pilot') return this.validateRollout(policy.transferEnabled ? policy.transferValidation : false);
       requireValue(policy.transferEnabled, 'TRANSFER_PILOT_NOT_ENABLED', 'The enrolled-device pilot has not been enabled.', 501);
-      const actor = await runtime.actor(context), call = await store.get(callStoreKey(args.callId));
+      const call = await store.get(callStoreKey(args.callId));
       const transfer = call?.transfer?.id === args.transferId ? call.transfer : call?.transferHistory?.[args.transferId];
       const ids = new Set([actor.deviceId, call?.owner?.deviceId, args.toDeviceId, transfer?.fromDeviceId, transfer?.toDeviceId].filter(Boolean));
       requireValue(ids.size >= 2 && [...ids].every(id => policy.pilotDeviceIds.includes(id)),
         'DEVICE_NOT_IN_TRANSFER_PILOT', 'Both enrolled devices must be in the server-owned transfer pilot.', 403);
-      for (const id of ids) {
-        const row = await resolveDevice(id);
+      await Promise.all([...ids].map(async id => {
+        // actor was freshly authenticated by this operation, including generation,
+        // expiry and supported native protocol. Other participants remain fresh
+        // durable registry reads, performed independently rather than serially.
+        const row = id === actor.deviceId ? actor : await resolveDevice(id);
         requireValue(row && !row.revoked && row.tenantId === tenantId && row.credentialExpiresAt > now() &&
           row.nativeBuild >= minimumNativeBuild && row.mediaProtocol === 'sh-room-audio-v1',
           'PILOT_DEVICE_UNAVAILABLE', 'A pilot device is not enrolled with the supported native build.', 403);
-      }
+      }));
     }
-    async invite(context, args) { await this.checkPilot(context, args); return super.invite(context, args); }
-    async accept(context, args) { await this.checkPilot(context, args); return super.accept(context, args); }
-    async confirmReady(context, args) { await this.checkPilot(context, args); return super.confirmReady(context, args); }
   }
   const controller = new RuntimeTransferController({ store, provider, authenticate: context => runtime.actor(context),
     resolveDevice, now, rolloutGuard: async () => {
@@ -71,7 +64,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
       return policy.transferEnabled ? policy.transferValidation : false;
     }, verifyReadiness: data => runtime.verifyTransferReadiness(data) });
   runtime = new CallRuntime({ store, provider, transferController: controller, authenticate, resolveDevice, listDevices,
-    capabilities: release, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now });
+    capabilities: release, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now, onRuntimeTiming });
   return { runtime, provider, controller,
     verifyConfiguration: async () => {
       controlVerified = false;

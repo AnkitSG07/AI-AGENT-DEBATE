@@ -303,21 +303,23 @@ function projections(call) {
  * derived atomically and only used for lookup and bounded recovery discovery.
  */
 export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_operator_media', clock = Date.now,
-  recoveryLeaseMs = 60000 } = {}) {
+  recoveryLeaseMs = 60000, onTiming = () => {} } = {}) {
   requireInput(firestore && typeof firestore.collection === 'function' && typeof firestore.runTransaction === 'function', 'A server Firestore client is required.');
   requireInput(/^[A-Za-z][A-Za-z0-9_]{0,80}$/.test(collectionPrefix), 'Invalid media namespace.');
   requireInput(Number.isSafeInteger(recoveryLeaseMs) && recoveryLeaseMs >= 45000 && recoveryLeaseMs <= 120000, 'Recovery leases must be between 45 and 120 seconds.');
   const collections = Object.fromEntries(['calls', 'reservations', 'transfers', 'jobs', 'sessions', 'events'].map(name => [name, firestore.collection(`${collectionPrefix}_${name}`)]));
   const reference = key => { const parsed = parseKey(key); return collections[parsed.kind].doc(parsed.id); };
   const nowMs = () => { const now = clock(); if (!validTime(now) || !now) throw unavailable(); return now; };
-  const guarded = async operation => {
-    try { return await operation(); }
+  const guarded = async (operation, stage) => {
+    const started = performance.now(); let ok = false;
+    try { const value = await operation(); ok = true; return value; }
     catch (error) { if (error instanceof MediaError) throw error; throw unavailable(); }
+    finally { if (stage) try { onTiming({ stage, elapsedMs: Math.round(performance.now() - started), ok }); } catch { /* diagnostics only */ } }
   };
 
   async function get(key) {
     const ref = reference(key);
-    return guarded(async () => clone(readEnvelope(await ref.get(), key)?.data));
+    return guarded(async () => clone(readEnvelope(await ref.get(), key)?.data), 'read');
   }
 
   async function transaction(operation) {
@@ -345,6 +347,14 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
       });
       const result = await operation(tx);
       if (!staged.size) return result;
+      // Absent-only creates still need snapshot reads before any native write.
+      // Read their independent keys in one RPC, retaining the same transaction
+      // snapshot, validation and retry behavior instead of serial round trips.
+      const missing = [...staged.keys()].filter(key => !reads.has(key));
+      if (missing.length && typeof native.getAll === 'function') {
+        const snapshots = await native.getAll(...missing.map(reference));
+        missing.forEach((key, index) => reads.set(key, readEnvelope(snapshots[index], key)));
+      } else await Promise.all(missing.map(read));
       const now = nowMs(), writes = [], changedCalls = [], changedSessions = [], reservationChanges = [];
       // All writes are buffered. Even an unread create gets a transactional
       // absent-only read before any native Firestore mutation is staged.
@@ -397,6 +407,24 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
           fail('OWNER_RESERVATION_REQUIRED', 'Create the initial call and its exact owner reservation atomically.');
         }
       }
+      // Multi-leg End can project several cleanup jobs. Their prior leases are
+      // independent reads in this same transaction, not sequential RPCs.
+      const jobRefs = new Map();
+      for (const { before, call } of changedCalls) {
+        const previous = before ? projections(before).jobs : new Map();
+        for (const [id, value] of projections(call).jobs)
+          if (!previous.has(id) || fingerprint(previous.get(id)) !== fingerprint(value)) jobRefs.set(id, collections.jobs.doc(id));
+      }
+      for (const { before, session } of changedSessions) {
+        const { id, value } = sessionProjection(session);
+        if (!before || fingerprint(sessionProjection(before).value) !== fingerprint(value)) jobRefs.set(id, collections.jobs.doc(id));
+      }
+      const jobEntries = [...jobRefs], jobSnapshots = new Map();
+      if (jobEntries.length) {
+        const refs = jobEntries.map(([, ref]) => ref);
+        const snapshots = typeof native.getAll === 'function' ? await native.getAll(...refs) : await Promise.all(refs.map(ref => native.get(ref)));
+        jobEntries.forEach(([id], index) => jobSnapshots.set(id, snapshots[index]));
+      }
       for (const { before, call, revision } of changedCalls) {
         const previous = before ? projections(before) : { transfers: new Map(), jobs: new Map() };
         const next = projections(call);
@@ -408,7 +436,7 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
         for (const [id, value] of next.jobs) {
           const prior = previous.jobs.get(id);
           if (prior && fingerprint(prior) === fingerprint(value)) continue;
-          const ref = collections.jobs.doc(id), snapshot = await native.get(ref), existing = snapshot.exists ? snapshot.data() : null;
+          const ref = collections.jobs.doc(id), snapshot = jobSnapshots.get(id), existing = snapshot.exists ? snapshot.data() : null;
           if (existing && (existing.schema !== 1 || existing.callKey !== value.callKey || existing.workId !== value.workId)) throw unavailable();
           const leaseUntil = existing?.claimUntilMs || 0, retryAt = existing?.retryNotBeforeMs || 0;
           writes.push({ kind: 'set', ref, value: { schema: 1, ...value, sourceFingerprint: fingerprint(value), callRevision: revision,
@@ -420,7 +448,7 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
       for (const { before, session, revision } of changedSessions) {
         const { id, value } = sessionProjection(session);
         if (before && fingerprint(sessionProjection(before).value) === fingerprint(value)) continue;
-        const ref = collections.jobs.doc(id), snapshot = await native.get(ref), existing = snapshot.exists ? snapshot.data() : null;
+        const ref = collections.jobs.doc(id), snapshot = jobSnapshots.get(id), existing = snapshot.exists ? snapshot.data() : null;
         if (existing && (existing.schema !== 1 || existing.callKey !== value.callKey || existing.workType !== 'session')) throw unavailable();
         const leaseUntil = existing?.claimUntilMs || 0, retryAt = existing?.retryNotBeforeMs || 0;
         writes.push({ kind: 'set', ref, value: { schema: 1, ...value, sourceFingerprint: fingerprint(value), callRevision: revision,
@@ -435,7 +463,7 @@ export function createFirestoreMediaStore({ firestore, collectionPrefix = 'sh_op
         else native.set(write.ref, write.value);
       }
       return result;
-    }));
+    }), 'transaction');
   }
 
   /** Trusted coordinator helper; never converts/replaces an existing call. */

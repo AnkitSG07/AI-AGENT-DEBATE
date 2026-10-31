@@ -57,6 +57,7 @@ function audioSdp(sdp, type) {
  * These low-level methods MUST remain behind authenticated application control.
  */
 export class LiveKitWhatsAppProvider {
+  #participantObservations = new WeakMap();
   constructor(config, { clients, now = Date.now, timeoutMs = 15000, onTiming = () => {} } = {}) {
     this.config = config;
     this.now = now;
@@ -165,10 +166,26 @@ export class LiveKitWhatsAppProvider {
     const target = active(operator);
     const customerRow = active(customer);
     const hasAudio = row => !!row?.tracks?.some(t => t.type === TrackType.AUDIO && t.muted !== true);
-    return { observedAt: this.now(), customerActive: !!customerRow, customerAudioPublished: hasAudio(customerRow),
+    const observation = { observedAt: this.now(), customerActive: !!customerRow, customerAudioPublished: hasAudio(customerRow),
       operatorActive: !!target, operatorAudioPublished: hasAudio(target), sourceActive: !!active(sourceIdentity),
       // Presence and publication do not prove playout or bidirectional RTP.
       bidirectionalAudioVerified: false };
+    // Only this exact server-owned object can reuse the provider snapshot in
+    // the same readiness flow. No rows, token, or reusable observation ID is
+    // accepted from a native request or serialized into the public response.
+    this.#participantObservations.set(observation, { roomName, rows, observedAt: observation.observedAt,
+      fingerprint: this.config.fingerprint });
+    return observation;
+  }
+
+  consumeParticipantObservation(observation, roomName) {
+    const snapshot = observation && this.#participantObservations.get(observation);
+    if (!snapshot) return null;
+    this.#participantObservations.delete(observation);
+    const now = this.now();
+    return snapshot.roomName === roomName && snapshot.fingerprint === this.config.fingerprint &&
+      snapshot.observedAt === observation.observedAt && snapshot.observedAt <= now && now - snapshot.observedAt <= 5000
+      ? snapshot.rows : null;
   }
 
   async detachOperator({ roomName, identity, revokeBeforeMs = this.now() }) {

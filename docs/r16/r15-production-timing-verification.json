@@ -1,0 +1,91 @@
+{
+  "source": "Render fixed-label production timing logs",
+  "deployedCommit": "79f867efb7885ef08683a7ac53a1010024b34b10",
+  "observations": [
+    {
+      "timestamp": "2026-10-31T09:45:49.005556191Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "accept",
+      "elapsedMs": 8586,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:45:56.807168581Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "ready",
+      "elapsedMs": 3845,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:46:03.096958241Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "devices",
+      "elapsedMs": 2050,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:46:13.795867794Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "transfer-invite",
+      "elapsedMs": 9239,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:46:29.152328118Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "transfer-decline",
+      "elapsedMs": 5019,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:46:42.167859574Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "devices",
+      "elapsedMs": 2384,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:46:53.213313804Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "transfer-invite",
+      "elapsedMs": 9667,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:47:20.438726096Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "transfer-accept",
+      "elapsedMs": 9434,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:47:36.005277849Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "transfer-ready",
+      "elapsedMs": 11347,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:47:39.089616093Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "capabilities",
+      "elapsedMs": 1230,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:47:45.290206022Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "capabilities",
+      "elapsedMs": 1228,
+      "ok": true
+    },
+    {
+      "timestamp": "2026-10-31T09:47:48.318307007Z",
+      "kind": "SH_CALL_TIMING",
+      "action": "end",
+      "elapsedMs": 4274,
+      "ok": true
+    }
+  ],
+  "physicalAudioMeasurement": false
+}

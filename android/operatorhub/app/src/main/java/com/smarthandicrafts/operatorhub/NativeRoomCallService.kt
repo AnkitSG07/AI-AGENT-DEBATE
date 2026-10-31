@@ -165,10 +165,9 @@ class NativeRoomCallService : Service() {
                 if (!current()) return@launch
                 val body = JSONObject().put("requestId", requestId)
                 if (outgoing) body.put("to", phone)
-                if (transferId.isNotEmpty()) {
-                    val checked = request(path("status"), "GET").optJSONObject("call") ?: throw IllegalStateException("Transfer is no longer available.")
-                    version = checked.optLong("version", -1); body.put("version", version)
-                }
+                // The R16 server atomically binds this exact invitation/target. The
+                // immutable transfer ID avoids a status round trip on every Answer.
+                if (transferId.isNotEmpty()) body.put("expectedTransferId", transferId)
                 val path = if (outgoing) "/calls/outgoing" else path(if (transferId.isEmpty()) "accept" else "transfers/${Uri.encode(transferId)}/accept")
                 // Retry only this same idempotency key. Never redial after an ambiguous response.
                 var result: JSONObject? = null
@@ -188,6 +187,15 @@ class NativeRoomCallService : Service() {
                     try { result = request(path, "POST", body); break }
                     catch (error: Exception) {
                         last = error
+                        if (current() && transferId.isNotEmpty() && !body.has("version") && error is NativeApi.ApiException && error.errorCode == "STALE_CALL_VERSION") {
+                            // R13–R15 servers require a version. Only that explicit
+                            // rejection may retry via their original guarded contract;
+                            // keep the same invitation and idempotency key throughout.
+                            val checked = request(path("status"), "GET").optJSONObject("call") ?: throw IllegalStateException("Transfer is no longer available.")
+                            version = checked.optLong("version", -1)
+                            if (version < 0) throw IllegalStateException("Transfer version was missing.")
+                            body.put("version", version); continue
+                        }
                         if (current() && !outgoing && transferId.isEmpty() && error is NativeApi.ApiException && error.errorCode == "DEVICE_BUSY") {
                             waitingForReservation = true
                             // An outgoing response may reserve the device just after the

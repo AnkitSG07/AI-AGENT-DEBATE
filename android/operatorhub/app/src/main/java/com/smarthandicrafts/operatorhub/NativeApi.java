@@ -31,6 +31,7 @@ public final class NativeApi {
         HttpsURLConnection c = connections.open(new URL(base + path));
         long started = android.os.SystemClock.elapsedRealtime();
         int observedStatus = 0;
+        String serverTiming = null;
         c.setConnectTimeout(connectMs); c.setReadTimeout(readMs); c.setInstanceFollowRedirects(false);
         c.setRequestMethod(method); c.setRequestProperty("Accept", "application/json");
         if (bearer != null && !bearer.isEmpty()) {
@@ -47,6 +48,7 @@ public final class NativeApi {
             }
             int status = c.getResponseCode();
             observedStatus = status;
+            serverTiming = c.getHeaderField("Server-Timing");
             if (requireHistoryProjection && status >= 200 && status < 300 && !"sh-call-history-v1".equals(c.getHeaderField("X-SH-Call-History")))
                 throw new ApiException(503, "Call history needs the updated backend.");
             InputStream in = status >= 200 && status < 300 ? c.getInputStream() : c.getErrorStream();
@@ -76,7 +78,8 @@ public final class NativeApi {
                     : path.endsWith("/cancel") ? "cancel" : path.endsWith("/transfers") ? "transfer-invite"
                     : path.endsWith("/outgoing") ? "outgoing" : "call-control";
                 // Fixed stage names only: never log paths, tokens or customer details.
-                android.util.Log.i("SHCallTiming", action + " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - started) + " status=" + observedStatus);
+                android.util.Log.i("SHCallTiming", NativeCallTiming.requestSummary(action,
+                    android.os.SystemClock.elapsedRealtime() - started, observedStatus, serverTiming));
             }
         }
     }

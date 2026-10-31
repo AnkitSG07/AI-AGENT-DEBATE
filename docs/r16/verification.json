@@ -1,0 +1,230 @@
+{
+  "release": "SH Chat R16 call latency and notification correction",
+  "baselineCommit": "79f867efb7885ef08683a7ac53a1010024b34b10",
+  "backend": {
+    "pass": 659,
+    "fail": 0,
+    "sourceInputsMatch": true
+  },
+  "firestoreEmulator": {
+    "pass": 11,
+    "fail": 0,
+    "sourceInputsMatch": true
+  },
+  "androidJvm": {
+    "suites": 26,
+    "tests": 235,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suiteResults": [
+      {
+        "name": "com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubLaunchStateTest",
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationDataTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationsTest",
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallCloseQueueTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionStateTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionUiTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallTimingTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeOperatorAuthPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCapabilityCacheTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCleanupProcessorTest",
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomControlTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDisposalTest",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDrainGateTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomLifecycleRegressionTest",
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPolicyTest",
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomStartGateTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest",
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomWaitingCallTest",
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeStoreLeaseTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "androidReleaseLint": "passed",
+  "androidAssembly": "passed",
+  "physicalAcceptanceTargets": {
+    "callRingingAnswerAudioRemoteEndMaxMs": 2000,
+    "transferMaxMs": 5000,
+    "condition": "fast device internet",
+    "status": "not measured as achieved on physical phones"
+  },
+  "actualFcmAndHandsetAcceptance": "not executed on this host; notification grouping defect corrected, specific handset cause unconfirmed",
+  "browserNativeOsAcceptance": "not executed; prior host socket limitation persists",
+  "apk": {
+    "filename": "SH-Chat-1.0-r16-CALL-AND-NOTIFICATION-FIX-SIGNED.apk",
+    "bytes": 59516505,
+    "sha256": "2a54cf59f17573e2ece4b05d705db5b959921dc2336d7301cba2b288d92ecbfd",
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "package": "com.smarthandicrafts.operatorhub",
+    "versionCode": 16,
+    "versionName": "1.0-r16",
+    "zipIntegrity": "passed",
+    "zipAlignment16KiB": "passed",
+    "cryptographicSignature": "passed",
+    "r13R14R15FreshReleaseSignerMatches": true
+  },
+  "signingKeyPublished": false,
+  "hostingPlanOrBillingChanged": false
+}

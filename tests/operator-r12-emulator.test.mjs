@@ -96,3 +96,13 @@ test('official Firestore enrollment metadata is committed before the first nativ
   await h.bridge.publishRoomEvent({ session: { id: `emulator-alert-${randomUUID()}`, deadlineAt: 1800000001000 }, event: 'incoming' });
   assert.ok(h.deliveries.some(item => item.device.id === enrolled.result.body.deviceId && item.data.engine === 'livekit'));
 });
+
+test('official Firestore batch read-only authentication observes revocation without cached authority', async () => {
+  const h = registryFixture({ db });
+  const enrolled = await h.enroll(randomUUID().replaceAll('-', ''));
+  assert.equal(enrolled.result.status, 200);
+  const { deviceId, deviceToken } = enrolled.result.body;
+  assert.equal((await h.registry.authenticate(deviceToken)).id, deviceId);
+  await h.registry.revokeDevice(deviceId);
+  await assert.rejects(() => h.registry.authenticate(deviceToken), { status: 401 });
+});

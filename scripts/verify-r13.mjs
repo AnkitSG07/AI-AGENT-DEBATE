@@ -17,6 +17,8 @@ const groups = {
     'tests/operator-call-permission.test.mjs',
     'tests/operator-call-latency.test.mjs',
     'tests/operator-message-preview.test.mjs',
+    'tests/operator-registry-latency.test.mjs',
+    'tests/operator-call-critical-path.test.mjs',
     'tests/simulator-media-r13/provider-revocation.test.mjs',
     'tests/simulator-media-r13/answer-contention.test.mjs',
     'tests/simulator-media-r13/startup-audio-readiness.test.mjs',

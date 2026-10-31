@@ -36,6 +36,7 @@ export function createOperatorFirestoreRuntime({
     });
     const deviceRegistry = registryFactory({
       firestore, collectionPrefix,
+      onTiming: value => logger.info?.('SH_CALL_REGISTRY_TIMING', JSON.stringify(value)),
       revokedIds: String(env.SH_ANDROID_REVOKED_DEVICE_IDS || '').split(',').map(value => value.trim()).filter(Boolean),
       // An old /tmp registry may already have consumed the env code. An empty
       // Firestore database cannot know that history. Default to no bootstrap;

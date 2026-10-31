@@ -136,7 +136,7 @@ public class NativeSystemInstrumentationTest {
     @Test public void messageEnvelopeCreatesPrivateConversationNotification() throws Exception {
         long now=System.currentTimeMillis();Map<String,String> data=new HashMap<>();data.put("type","sh_operator_message");data.put("channel_id","73");data.put("message_id","901");data.put("issued_at_ms",String.valueOf(now));data.put("expires_at_ms",String.valueOf(now+30000));data.put("hub_url",HubPolicy.HUB_URL+"?channel_id=73&channel=73");
         HubMessagingService.dispatchData(context,data);await(()->notification("message:73")!=null);Notification value=notification("message:73");assertEquals(Notification.VISIBILITY_PRIVATE,value.visibility);assertTrue(value.extras.getString(Notification.EXTRA_TEMPLATE).contains("MessagingStyle"));assertNotNull(value.contentIntent);
-        HubMessagingService.dispatchData(context,data);assertEquals(1,manager.getActiveNotifications().length);
+        HubMessagingService.dispatchData(context,data);assertEquals(2,manager.getActiveNotifications().length); // conversation + required group summary
     }
     @Test public void realWebViewPopupConnectsThroughExactOpenerWithoutNativeCredential() throws Exception {
         // Genuine pointer input is necessary: programmatic click() is not a user gesture.

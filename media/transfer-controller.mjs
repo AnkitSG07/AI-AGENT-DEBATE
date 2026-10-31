@@ -102,13 +102,14 @@ export class TransferController {
     return actor;
   }
 
-  async requireRollout() {
-    const validation = await this.rolloutGuard();
+  validateRollout(validation) {
     requireValue(validation && validation.enabled === true && validation.provider === this.provider.kind &&
       validation.clientProtocol === 'sh-room-audio-v1' && typeof validation.liveTwoDeviceEvidenceId === 'string' &&
       validation.liveTwoDeviceEvidenceId.length >= 8,
       'TRANSFER_MEDIA_NOT_VALIDATED', 'Room audio and two-device handoff have not been validated for this release.', 501);
   }
+
+  async requireRollout() { this.validateRollout(await this.rolloutGuard()); }
 
   async recheckActor(context, previous) {
     const current = await this.actor(context);
@@ -137,9 +138,9 @@ export class TransferController {
     return transfer;
   }
 
-  async invite(context, { callId, toDeviceId, expectedVersion, requestId }) {
+  async invite(context, { callId, toDeviceId, expectedVersion, requestId, observedCall }) {
     const actor = await this.actor(context);
-    await this.requireRollout();
+    await this.requireRollout(context, { callId, toDeviceId }, actor);
     identifier(callId, 'call ID'); identifier(toDeviceId, 'target device');
     requireValue(typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,120}$/.test(requestId),
       'INVALID_REQUEST_ID', 'A stable request ID is required.', 400);
@@ -148,7 +149,7 @@ export class TransferController {
     requireValue(target && target.deviceId === toDeviceId && target.tenantId === actor.tenantId &&
       target.revoked !== true && target.receiveCalls !== false && target.mediaProtocol === 'sh-room-audio-v1',
       'TARGET_UNAVAILABLE', 'The target device is unavailable or lacks the room audio client.');
-    await this.expire(callId);
+    await this.expire(callId, observedCall);
     const transferId = `tr_${randomUUID()}`;
     return this.store.transaction(async tx => {
       const [call, targetReservation, sourceReservation] = await Promise.all([
@@ -188,10 +189,10 @@ export class TransferController {
     });
   }
 
-  async accept(context, { callId, transferId, expectedVersion }) {
+  async accept(context, { callId, transferId, expectedVersion, expectedTransferId, observedCall }) {
     const actor = await this.actor(context);
-    await this.requireRollout();
-    await this.expire(callId);
+    await this.requireRollout(context, { callId, transferId }, actor);
+    await this.expire(callId, observedCall);
     const attemptId = `leg_${randomUUID()}`;
     const readinessNonce = randomUUID();
     const prepared = await this.store.transaction(async tx => {
@@ -200,15 +201,21 @@ export class TransferController {
       ]);
       this.requireCall(call, actor);
       const transfer = this.requireTransfer(call, transferId, actor, 'target');
+      if (expectedTransferId !== undefined) requireValue(expectedTransferId === transfer.id,
+        'TRANSFER_CHANGED', 'The exact invitation identity changed before accepting.');
       if (['completed', 'completing'].includes(transfer.status)) return { result: visible(call, transfer) };
       this.requireActive(call);
       requireValue(call.transfer?.id === transfer.id && PENDING.has(transfer.status) && transfer.expiresAt > this.now(),
         'TRANSFER_EXPIRED', 'This transfer is no longer available.');
-      requireValue(call.owner.deviceId === transfer.fromDeviceId && matchReservation(reservation, call, transfer.id) && reservation.kind === 'invite',
+      requireValue(call.owner.deviceId === transfer.fromDeviceId && call.owner.identity === transfer.sourceIdentity &&
+        matchReservation(reservation, call, transfer.id) && reservation.kind === 'invite',
         'TRANSFER_CHANGED', 'Call ownership or target reservation changed.');
       requireValue(transfer.toUserId === actor.userId, 'DEVICE_BINDING_CHANGED', 'The target device enrollment changed.', 403);
       if (transfer.status === 'invited') {
-        exactVersion(call, expectedVersion);
+        // An explicit immutable invitation identity can authorize the initial
+        // accept without a preceding status GET. All ownership, reservation,
+        // target/enrollment and expiry checks above remain authoritative.
+        if (!(expectedVersion === undefined && expectedTransferId === transfer.id)) exactVersion(call, expectedVersion);
         Object.assign(transfer, { status: 'connecting', attemptId, readinessNonce,
           targetIdentity: operatorIdentity(actor.deviceId, attemptId), acceptedAt: this.now() });
         call.version++; call.updatedAt = this.now();
@@ -231,10 +238,10 @@ export class TransferController {
     return { ...visible(latest), join, readinessNonce: transfer.readinessNonce };
   }
 
-  async confirmReady(context, { callId, transferId, expectedVersion, readinessNonce, evidence }) {
+  async confirmReady(context, { callId, transferId, expectedVersion, readinessNonce, evidence, observedCall }) {
     const actor = await this.actor(context);
-    await this.requireRollout();
-    await this.expire(callId);
+    await this.requireRollout(context, { callId, transferId }, actor);
+    await this.expire(callId, observedCall);
     const snapshot = await this.store.get(callStoreKey(callId));
     this.requireCall(snapshot, actor);
     const transfer = this.requireTransfer(snapshot, transferId, actor, 'target');
@@ -254,7 +261,7 @@ export class TransferController {
     // This hook must verify actual client session/track/RTP evidence. A boolean
     // copied from the request body is not a production implementation.
     const proof = await this.verifyReadiness({ actor: copy(actor), call: copy(snapshot), transfer: copy(transfer),
-      observation: copy(observation), evidence });
+      observation: copy(observation), providerObservation: observation, evidence });
     const now = this.now();
     requireValue(proof?.verified === true && proof.bidirectionalAudio === true && proof.callId === callId &&
       proof.transferId === transfer.id && proof.attemptId === transfer.attemptId && proof.deviceId === actor.deviceId &&
@@ -319,7 +326,12 @@ export class TransferController {
     });
   }
 
-  async expire(callId) {
+  async expire(callId, observedCall) {
+    // The calling runtime already read this record for exact ownership/binding.
+    // Only a due mutation needs a transaction. Action transactions independently
+    // recheck expiry/current invitation, so a stale snapshot grants no authority.
+    const observed = observedCall === undefined ? await this.store.get(callStoreKey(callId)) : observedCall;
+    if (!observed?.transfer || !PENDING.has(observed.transfer.status) || observed.transfer.expiresAt > this.now()) return false;
     return this.store.transaction(async tx => {
       const call = await tx.get(callStoreKey(callId));
       if (!call?.transfer || !PENDING.has(call.transfer.status) || call.transfer.expiresAt > this.now()) return false;

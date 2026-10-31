@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { notificationText, messageNotificationPreview } from '../operator-message-preview.js';
 import { registryFixture } from './operator-r12-helpers.mjs';
+import { createAndroidPushBridge } from '../operator-android-push.js';
 
 test('customer author name and actual text replace generic message placeholders', () => {
   const data = messageNotificationPreview({ name: 'Ankit', channel_type: 'whatsapp' },
@@ -75,4 +76,24 @@ test('rich preview data does not bypass trusted-source, exact-channel or receive
   await f.request('POST', '/api/operator-android/devices/token', { fcmToken: enrollment.body.fcmToken, receiveChats: false }, enrollment.result.body.deviceToken);
   await f.bridge.publishMessage(data);
   assert.equal(f.deliveries.length, 0);
+});
+
+test('message delivery diagnostics distinguish sent, deduplicated, opted-out and failed delivery without customer data', async () => {
+  for (const scenario of ['sent', 'opted-out', 'failed']) {
+    const now = () => 1800000000000, f = registryFixture({ clock: now }), events = [];
+    const enrollment = await f.enroll('0000000000000001', { nativeBuild: 15, mediaProtocol: 'sh-room-audio-v1' });
+    if (scenario === 'opted-out') await f.registry.updateToken(enrollment.result.body.deviceToken,
+      { fcmToken: enrollment.body.fcmToken, receiveChats: false });
+    const bridge = createAndroidPushBridge({ env: f.env, deviceRegistry: f.registry, clock: now, readCall: async () => null,
+      retryDelay: async () => {}, logger: { info: (tag, value) => { assert.equal(tag, 'SH_MESSAGE_PUSH'); events.push(JSON.parse(value)); } },
+      delivery: async () => { if (scenario === 'failed') throw Error('PRIVATE_PROVIDER_ERROR'); return { ok: true }; } });
+    const value = incoming(now); value.message.author_id = [4, 'PRIVATE_CUSTOMER_NAME']; value.message.body = '<p>PRIVATE_CUSTOMER_TEXT</p>';
+    await bridge.publishMessage(value);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].outcome, scenario === 'sent' ? 'processed' : scenario === 'failed' ? 'delivery_incomplete' : 'no_eligible_devices');
+    assert.equal(events[0].sent, scenario === 'sent' ? 1 : 0); assert.equal(events[0].failed, scenario === 'failed' ? 1 : 0);
+    if (scenario === 'sent') { await bridge.publishMessage(value); assert.equal(events[1].outcome, 'already_delivered'); }
+    assert.doesNotMatch(JSON.stringify(events), /PRIVATE_|channel|sender|message_id|token|authorization/i);
+    assert.ok(events.every(row => Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= 0));
+  }
 });

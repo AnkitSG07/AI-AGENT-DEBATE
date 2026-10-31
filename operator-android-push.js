@@ -529,19 +529,27 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     return { ok: true, sent, failed };
   }
   function publishMessage({ channel = {}, message = {}, verifiedIncoming = false } = {}) {
-    if (!config.enabled) return Promise.resolve({ ok: false, skipped: 'not_configured' });
+    const started = performance.now();
+    const report = (outcome, counts = {}) => {
+      // Counts and fixed labels only: no text, names, phone/chat/message/device
+      // IDs, push tokens, credentials or arbitrary exception messages.
+      try { logger.info?.('SH_MESSAGE_PUSH', JSON.stringify({ outcome, ...counts, elapsedMs: Math.round(performance.now() - started) })); } catch { /* diagnostics only */ }
+    };
+    if (!config.enabled) { report('not_configured'); return Promise.resolve({ ok: false, skipped: 'not_configured' }); }
     const channelId = positiveId(channel.id), messageId = positiveId(message.id);
     const messageAt = odooDateMs(message.date);
     if (verifiedIncoming !== true || !channelId || !messageId || message.model !== 'discuss.channel' ||
         positiveId(message.res_id) !== channelId || !['whatsapp', 'livechat', 'chat'].includes(channel.channel_type) ||
         !messageAt || messageAt > clock() + 5000 || clock() - messageAt > MESSAGE_TTL_MS) {
+      report('not_a_recent_verified_incoming_message');
       return Promise.resolve({ ok: false, skipped: 'not_a_recent_verified_incoming_message' });
     }
     const operation = (messageQueues.get(messageId) || Promise.resolve()).catch(() => {}).then(async () => {
       const [devices, previous] = await Promise.all([listDevices(), getDeliveries({ messageId })]);
       const delivered = new Set(previous.filter(deliverySent).map(row => row.deviceId));
-      const targets = devices.filter(row => eligibleDevice(row, 'message') && messageAt >= row.createdAt - 5000 && !delivered.has(row.id));
-      let sent = 0, failed = 0, nextTarget = 0;
+      const eligible = devices.filter(row => eligibleDevice(row, 'message') && messageAt >= row.createdAt - 5000);
+      const targets = eligible.filter(row => !delivered.has(row.id));
+      let sent = 0, failed = 0, pending = 0, skipped = 0, nextTarget = 0;
       async function deliverNextMessage() {
         while (nextTarget < targets.length) {
           const snapshot = targets[nextTarget++];
@@ -555,12 +563,17 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
           const outcome = await deliverNotification({ descriptor: { messageId, channelId, deviceId: snapshot.id, event: 'message' }, data });
           if (outcome === 'sent') sent++;
           if (outcome === 'failed') failed++;
+          if (outcome === 'pending') pending++;
+          if (outcome === 'skipped') skipped++;
         }
       }
       await Promise.all(Array.from({ length: Math.min(4, targets.length) }, deliverNextMessage));
+      report(!targets.length ? eligible.length ? 'already_delivered' : 'no_eligible_devices' : failed || pending ? 'delivery_incomplete' : 'processed',
+        { devices: devices.length, eligible: eligible.length, targets: targets.length, sent, failed, pending, skipped });
       return { ok: failed === 0, sent, failed };
     });
     messageQueues.set(messageId, operation);
+    operation.catch(() => { report('storage_or_processing_failed'); });
     operation.finally(() => { if (messageQueues.get(messageId) === operation) messageQueues.delete(messageId); }).catch(() => {});
     return operation;
   }
