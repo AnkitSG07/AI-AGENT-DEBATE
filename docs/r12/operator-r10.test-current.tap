@@ -1,0 +1,1235 @@
+TAP version 13
+# Subtest: configured Firestore without an adapter never enrolls or reads a fallback registry
+ok 1 - configured Firestore without an adapter never enrolls or reads a fallback registry
+  ---
+  duration_ms: 23.491053
+  ...
+# Subtest: misspelled registry configuration fails closed and creates no local device file
+ok 2 - misspelled registry configuration fails closed and creates no local device file
+  ---
+  duration_ms: 2.539238
+  ...
+# Subtest: Firestore IAM/server-auth errors are 503, recover without reenrollment, and reveal no SDK details
+ok 3 - Firestore IAM/server-auth errors are 503, recover without reenrollment, and reveal no SDK details
+  ---
+  duration_ms: 1.384284
+  ...
+# Subtest: only deliberate registry credential errors become phone 401
+ok 4 - only deliberate registry credential errors become phone 401
+  ---
+  duration_ms: 1.00374
+  ...
+# Subtest: call-history storage authentication failures do not invalidate an enrolled phone
+ok 5 - call-history storage authentication failures do not invalidate an enrolled phone
+  ---
+  duration_ms: 1.606144
+  ...
+# Subtest: public config reports unavailable storage without exposing service credentials or enrollment code
+ok 6 - public config reports unavailable storage without exposing service credentials or enrollment code
+  ---
+  duration_ms: 1.243375
+  ...
+# Subtest: external enrollment is Odoo-independent and malformed FCM input never reaches storage
+ok 7 - external enrollment is Odoo-independent and malformed FCM input never reaches storage
+  ---
+  duration_ms: 1.416282
+  ...
+# Subtest: renewal dispatches a separate authenticated domain operation and cannot overwrite refreshed FCM tokens
+ok 8 - renewal dispatches a separate authenticated domain operation and cannot overwrite refreshed FCM tokens
+  ---
+  duration_ms: 1.703839
+  ...
+# Subtest: renewal is retry-safe and extends only the current valid device without replacing its bearer
+ok 9 - renewal is retry-safe and extends only the current valid device without replacing its bearer
+  ---
+  duration_ms: 4.630362
+  ...
+# Subtest: renewal cannot revive expired or revoked enrollment and cannot run anonymously
+ok 10 - renewal cannot revive expired or revoked enrollment and cannot run anonymously
+  ---
+  duration_ms: 4.692554
+  ...
+# Subtest: FCM server authorization failure on a test route never invalidates the enrolled phone
+ok 11 - FCM server authorization failure on a test route never invalidates the enrolled phone
+  ---
+  duration_ms: 2.037254
+  ...
+# Subtest: legacy file storage recovers from a temporary malformed read without caching failure permanently
+ok 12 - legacy file storage recovers from a temporary malformed read without caching failure permanently
+  ---
+  duration_ms: 2.883319
+  ...
+# Subtest: legacy acknowledged delivery rows still suppress duplicate notifications after upgrade
+ok 13 - legacy acknowledged delivery rows still suppress duplicate notifications after upgrade
+  ---
+  duration_ms: 4.197489
+  ...
+# Subtest: availability performs one metadata read, accepts a fresh database, and writes nothing
+ok 14 - availability performs one metadata read, accepts a fresh database, and writes nothing
+  ---
+  duration_ms: 1.791358
+  ...
+# Subtest: native protocol metadata persists without changing identity and rejects revoked credentials
+ok 15 - native protocol metadata persists without changing identity and rejects revoked credentials
+  ---
+  duration_ms: 3.815633
+  ...
+# Subtest: availability validates initialized metadata and maps SDK/auth failures to 503
+ok 16 - availability validates initialized metadata and maps SDK/auth failures to 503
+  ---
+  duration_ms: 0.736332
+  ...
+# Subtest: bootstrap registration persists separate records with hashed credentials and consumed invitation
+ok 17 - bootstrap registration persists separate records with hashed credentials and consumed invitation
+  ---
+  duration_ms: 0.994156
+  ...
+# Subtest: two instances competing for one invitation enroll only one installation
+ok 18 - two instances competing for one invitation enroll only one installation
+  ---
+  duration_ms: 6.856125
+  ...
+# Subtest: two identical concurrent requests recover the same result instead of enrolling twice
+ok 19 - two identical concurrent requests recover the same result instead of enrolling twice
+  ---
+  duration_ms: 1.354631
+  ...
+# Subtest: invitation issue works without env changes and enforces expiry and installation binding
+ok 20 - invitation issue works without env changes and enforces expiry and installation binding
+  ---
+  duration_ms: 2.323879
+  ...
+# Subtest: administrator invitation names override handset models without changing request fingerprints
+ok 21 - administrator invitation names override handset models without changing request fingerprints
+  ---
+  duration_ms: 2.62147
+  ...
+# Subtest: named invitation lost-ack recovery preserves its name and exact original request binding
+ok 22 - named invitation lost-ack recovery preserves its name and exact original request binding
+  ---
+  duration_ms: 1.335662
+  ...
+# Subtest: concurrent named invitation retries create one device with the administrator name
+ok 23 - concurrent named invitation retries create one device with the administrator name
+  ---
+  duration_ms: 0.961187
+  ...
+# Subtest: bootstrap and unlabeled legacy invitations retain handset and default name fallback
+ok 24 - bootstrap and unlabeled legacy invitations retain handset and default name fallback
+  ---
+  duration_ms: 3.690907
+  ...
+# Subtest: a fresh named invitation cannot rename an already active installation
+ok 25 - a fresh named invitation cannot rename an already active installation
+  ---
+  duration_ms: 0.849701
+  ...
+# Subtest: independent invitations cannot bypass concurrent device-cap enforcement
+ok 26 - independent invitations cannot bypass concurrent device-cap enforcement
+  ---
+  duration_ms: 0.872585
+  ...
+# Subtest: failed commit does not consume invitation or leak a success credential
+ok 27 - failed commit does not consume invitation or leak a success credential
+  ---
+  duration_ms: 0.587862
+  ...
+# Subtest: lost commit response safely recovers same bearer after backend restart
+ok 28 - lost commit response safely recovers same bearer after backend restart
+  ---
+  duration_ms: 0.799927
+  ...
+# Subtest: enrollment replay binds installation, FCM token, request and label
+ok 29 - enrollment replay binds installation, FCM token, request and label
+  ---
+  duration_ms: 1.560797
+  ...
+# Subtest: enrollment replay cannot recover after revoke, expiration, rotation or two-minute window
+ok 30 - enrollment replay cannot recover after revoke, expiration, rotation or two-minute window
+  ---
+  duration_ms: 2.658435
+  ...
+# Subtest: encrypted replay is authenticated and corrupt storage fails closed
+ok 31 - encrypted replay is authenticated and corrupt storage fails closed
+  ---
+  duration_ms: 0.629294
+  ...
+# Subtest: authentication never uses caller-supplied identity and only current unexpired bearer works
+ok 32 - authentication never uses caller-supplied identity and only current unexpired bearer works
+  ---
+  duration_ms: 0.900277
+  ...
+# Subtest: SDK auth errors become safe 503 and do not erase stored enrollment
+ok 33 - SDK auth errors become safe 503 and do not erase stored enrollment
+  ---
+  duration_ms: 0.743764
+  ...
+# Subtest: FCM token update does not extend expiry unless renewal is explicitly requested
+ok 34 - FCM token update does not extend expiry unless renewal is explicitly requested
+  ---
+  duration_ms: 1.322022
+  ...
+# Subtest: lease renewal and simultaneous FCM update preserve latest token and preferences
+ok 35 - lease renewal and simultaneous FCM update preserve latest token and preferences
+  ---
+  duration_ms: 0.848179
+  ...
+# Subtest: revocation wins races with token update or renewal and invalidates bearer immediately
+ok 36 - revocation wins races with token update or renewal and invalidates bearer immediately
+  ---
+  duration_ms: 1.158719
+  ...
+# Subtest: rotation rejects old token everywhere except bounded exact lost-response recovery
+ok 37 - rotation rejects old token everywhere except bounded exact lost-response recovery
+  ---
+  duration_ms: 1.466697
+  ...
+# Subtest: lost rotation response retries atomically; stale generation, revoke and expiry cannot recover
+ok 38 - lost rotation response retries atomically; stale generation, revoke and expiry cannot recover
+  ---
+  duration_ms: 2.237761
+  ...
+# Subtest: different concurrent rotations produce one current generation and no forked credentials
+ok 39 - different concurrent rotations produce one current generation and no forked credentials
+  ---
+  duration_ms: 1.110298
+  ...
+# Subtest: re-enrollment of expired installation retains device identity and rejects previous bearer
+ok 40 - re-enrollment of expired installation retains device identity and rejects previous bearer
+  ---
+  duration_ms: 0.782161
+  ...
+# Subtest: admin revocation applies even to expired device and releases a registration slot
+ok 41 - admin revocation applies even to expired device and releases a registration slot
+  ---
+  duration_ms: 1.007325
+  ...
+# Subtest: environment revocation blocks auth, renewal, replay and deliveries
+ok 42 - environment revocation blocks auth, renewal, replay and deliveries
+  ---
+  duration_ms: 1.28019
+  ...
+# Subtest: FCM unregistered cleanup is compare-and-set and cannot erase a newer token
+ok 43 - FCM unregistered cleanup is compare-and-set and cannot erase a newer token
+  ---
+  duration_ms: 5.671387
+  ...
+# Subtest: two workers cannot both claim an alert and sent dedup survives a new registry instance
+ok 44 - two workers cannot both claim an alert and sent dedup survives a new registry instance
+  ---
+  duration_ms: 1.518764
+  ...
+# Subtest: stale lease owner cannot finish a newer worker claim
+ok 45 - stale lease owner cannot finish a newer worker claim
+  ---
+  duration_ms: 0.905945
+  ...
+# Subtest: failed claims can retry; cancelled and expired work is never offered again
+ok 46 - failed claims can retry; cancelled and expired work is never offered again
+  ---
+  duration_ms: 0.744264
+  ...
+# Subtest: pending incoming can be cancelled and ended claim blocks a late incoming retry
+ok 47 - pending incoming can be cancelled and ended claim blocks a late incoming retry
+  ---
+  duration_ms: 1.050339
+  ...
+# Subtest: call delivery reads independent guard documents concurrently within one atomic claim
+ok 48 - call delivery reads independent guard documents concurrently within one atomic claim
+  ---
+  duration_ms: 8.953176
+  ...
+# Subtest: claims revalidate preferences and device revocation transactionally
+ok 49 - claims revalidate preferences and device revocation transactionally
+  ---
+  duration_ms: 1.060845
+  ...
+# Subtest: storage failure cannot fabricate sent acknowledgement or claim success
+ok 50 - storage failure cannot fabricate sent acknowledgement or claim success
+  ---
+  duration_ms: 0.989168
+  ...
+# Subtest: replay cleanup removes encrypted material but preserves registration and consumed-code evidence
+ok 51 - replay cleanup removes encrypted material but preserves registration and consumed-code evidence
+  ---
+  duration_ms: 1.713233
+  ...
+# Subtest: invalid or corrupt device rows cannot be treated as an empty usable registry
+ok 52 - invalid or corrupt device rows cannot be treated as an empty usable registry
+  ---
+  duration_ms: 0.804894
+  ...
+# Subtest: disabled bridge returns no Firebase config and refuses enrollment
+ok 53 - disabled bridge returns no Firebase config and refuses enrollment
+  ---
+  duration_ms: 1.432676
+  ...
+# Subtest: public config contains only public Firebase options, package and flags
+ok 54 - public config contains only public Firebase options, package and flags
+  ---
+  duration_ms: 1.241403
+  ...
+# Subtest: project mismatch fails closed
+ok 55 - project mismatch fails closed
+  ---
+  duration_ms: 0.451089
+  ...
+# Subtest: wrong enrollment code and malformed inputs are rejected
+ok 56 - wrong enrollment code and malformed inputs are rejected
+  ---
+  duration_ms: 1.141855
+  ...
+# Subtest: enrollment stores only hashed bearer and consumes code durably
+ok 57 - enrollment stores only hashed bearer and consumes code durably
+  ---
+  duration_ms: 6.688646
+  ...
+# Subtest: concurrent enrollment cannot consume one code twice
+ok 58 - concurrent enrollment cannot consume one code twice
+  ---
+  duration_ms: 1.961451
+  ...
+# Subtest: new admin code permits another device, old code remains consumed
+ok 59 - new admin code permits another device, old code remains consumed
+  ---
+  duration_ms: 4.527229
+  ...
+# Subtest: unauthenticated calls/token/unregister fail even with trusted Origin
+ok 60 - unauthenticated calls/token/unregister fail even with trusted Origin
+  ---
+  duration_ms: 1.191899
+  ...
+# Subtest: bearer serves only minimal exact incoming call without SDP/phone/raw records
+ok 61 - bearer serves only minimal exact incoming call without SDP/phone/raw records
+  ---
+  duration_ms: 1.816145
+  ...
+# Subtest: unknown and outgoing exact calls are not exposed
+ok 62 - unknown and outgoing exact calls are not exposed
+  ---
+  duration_ms: 1.596218
+  ...
+# Subtest: old/future/claimed incoming offers cannot be presented as answerable
+ok 63 - old/future/claimed incoming offers cannot be presented as answerable
+  ---
+  duration_ms: 1.761174
+  ...
+# Subtest: expired bearer cannot read or update
+ok 64 - expired bearer cannot read or update
+  ---
+  duration_ms: 1.366879
+  ...
+# Subtest: token update and receiveCalls preference require same bearer
+ok 65 - token update and receiveCalls preference require same bearer
+  ---
+  duration_ms: 5.382838
+  ...
+# Subtest: self revocation removes FCM token and denies future reads
+ok 66 - self revocation removes FCM token and denies future reads
+  ---
+  duration_ms: 3.198607
+  ...
+# Subtest: administrator revoked-ID environment denies existing device
+ok 67 - administrator revoked-ID environment denies existing device
+  ---
+  duration_ms: 2.986281
+  ...
+# Subtest: registration rate is bounded and caller-supplied proxy header does not bypass it
+ok 68 - registration rate is bounded and caller-supplied proxy header does not bypass it
+  ---
+  duration_ms: 1.423232
+  ...
+# Subtest: malformed persistent registry fails closed instead of overwriting
+ok 69 - malformed persistent registry fails closed instead of overwriting
+  ---
+  duration_ms: 1.705411
+  ...
+# Subtest: incoming data is short lived and contains only exact routing state
+ok 70 - incoming data is short lived and contains only exact routing state
+  ---
+  duration_ms: 4.62261
+  ...
+# Subtest: duplicate/parallel incoming webhook hints and restart produce one alert
+ok 71 - duplicate/parallel incoming webhook hints and restart produce one alert
+  ---
+  duration_ms: 4.271299
+  ...
+# Subtest: connected or terminal states cancel ringing only, preserving exact call ID
+ok 72 - connected or terminal states cancel ringing only, preserving exact call ID
+  ---
+  duration_ms: 4.248546
+  ...
+# Subtest: ended notification reaches opted-out device that was already ringing
+ok 73 - ended notification reaches opted-out device that was already ringing
+  ---
+  duration_ms: 4.035349
+  ...
+# Subtest: unalerted terminal rows, outgoing rows and arbitrary event ids do not push
+ok 74 - unalerted terminal rows, outgoing rows and arbitrary event ids do not push
+  ---
+  duration_ms: 1.642718
+  ...
+# Subtest: transient delivery failure retries once and later hints stay deduplicated
+ok 75 - transient delivery failure retries once and later hints stay deduplicated
+  ---
+  duration_ms: 3.417472
+  ...
+# Subtest: unregistered FCM tokens are removed without exposing secrets
+ok 76 - unregistered FCM tokens are removed without exposing secrets
+  ---
+  duration_ms: 4.26512
+  ...
+# Subtest: Firebase HTTPv1 OAuth scope, token caching, fixed hosts and Android TTL are correct
+ok 77 - Firebase HTTPv1 OAuth scope, token caching, fixed hosts and Android TTL are correct
+  ---
+  duration_ms: 6.927391
+  ...
+# Subtest: new terminal state appearing during queued incoming work prevents stale ringing
+ok 78 - new terminal state appearing during queued incoming work prevents stale ringing
+  ---
+  duration_ms: 2.114959
+  ...
+# Subtest: only explicit trusted inbound message callbacks can produce native alerts
+ok 79 - only explicit trusted inbound message callbacks can produce native alerts
+  ---
+  duration_ms: 3.157616
+  ...
+# Subtest: message payload exposes exact positive routing IDs and no content
+ok 80 - message payload exposes exact positive routing IDs and no content
+  ---
+  duration_ms: 2.576584
+  ...
+# Subtest: synthetic tests, wrong model/channel, internal groups and old messages are excluded
+ok 81 - synthetic tests, wrong model/channel, internal groups and old messages are excluded
+  ---
+  duration_ms: 1.786151
+  ...
+# Subtest: message dedupe survives concurrent worker/Zapier callbacks and server restart
+ok 82 - message dedupe survives concurrent worker/Zapier callbacks and server restart
+  ---
+  duration_ms: 3.947478
+  ...
+# Subtest: message opt-out and revoked bearer prevent additional delivery
+ok 83 - message opt-out and revoked bearer prevent additional delivery
+  ---
+  duration_ms: 3.377282
+  ...
+# Subtest: newly enrolled devices are not flooded with older message history
+ok 84 - newly enrolled devices are not flooded with older message history
+  ---
+  duration_ms: 1.405125
+  ...
+# Subtest: Odoo UTC date format is accepted without host-timezone dependency
+ok 85 - Odoo UTC date format is accepted without host-timezone dependency
+  ---
+  duration_ms: 2.822028
+  ...
+# Subtest: FCM message request uses dedicated per-channel collapse and bounded five-minute TTL
+ok 86 - FCM message request uses dedicated per-channel collapse and bounded five-minute TTL
+  ---
+  duration_ms: 3.871015
+  ...
+# Subtest: cloud test is authenticated and sends only to the authenticated installation
+ok 87 - cloud test is authenticated and sends only to the authenticated installation
+  ---
+  duration_ms: 2.603684
+  ...
+# Subtest: cloud test has a dedicated three-per-minute bound
+ok 88 - cloud test has a dedicated three-per-minute bound
+  ---
+  duration_ms: 1.510902
+  ...
+# Subtest: cloud test FCM failure is not represented as device receipt or accepted success
+ok 89 - cloud test FCM failure is not represented as device receipt or accepted success
+  ---
+  duration_ms: 1.521007
+  ...
+# Subtest: actual patched worker notifies photo-only messages then stops before AI in all modes
+ok 90 - actual patched worker notifies photo-only messages then stops before AI in all modes
+  ---
+  duration_ms: 8.231506
+  ...
+# Subtest: actual patched worker still rejects genuinely empty messages without triggering AI
+ok 91 - actual patched worker still rejects genuinely empty messages without triggering AI
+  ---
+  duration_ms: 5.520042
+  ...
+# Subtest: generated backend hooks native paths without depending on Web Push readiness
+ok 92 - generated backend hooks native paths without depending on Web Push readiness
+  ---
+  duration_ms: 6.452996
+  ...
+# Subtest: Firestore readiness works with no legacy enrollment code and advertises administrator invitations
+ok 93 - Firestore readiness works with no legacy enrollment code and advertises administrator invitations
+  ---
+  duration_ms: 2.141948
+  ...
+# Subtest: readiness failure is never overwritten by an available enrollment code
+ok 94 - readiness failure is never overwritten by an available enrollment code
+  ---
+  duration_ms: 1.497422
+  ...
+# Subtest: bridge enrollment and authentication survive backend replacement without an Odoo dependency or a local file
+ok 95 - bridge enrollment and authentication survive backend replacement without an Odoo dependency or a local file
+  ---
+  duration_ms: 3.033862
+  ...
+# Subtest: two server instances cannot consume one enrollment code for different installations
+ok 96 - two server instances cannot consume one enrollment code for different installations
+  ---
+  duration_ms: 2.241306
+  ...
+# Subtest: a lost enrollment commit response can be recovered by the exact original installation
+ok 97 - a lost enrollment commit response can be recovered by the exact original installation
+  ---
+  duration_ms: 2.454082
+  ...
+# Subtest: server storage permission outages preserve enrollment and advertise retryable availability
+ok 98 - server storage permission outages preserve enrollment and advertise retryable availability
+  ---
+  duration_ms: 2.381274
+  ...
+# Subtest: transactional delivery claims suppress simultaneous incoming notifications across server instances and restart
+ok 99 - transactional delivery claims suppress simultaneous incoming notifications across server instances and restart
+  ---
+  duration_ms: 4.162146
+  ...
+# Subtest: the actual registry deduplicates simultaneous Odoo worker and Zapier message hints across instances
+ok 100 - the actual registry deduplicates simultaneous Odoo worker and Zapier message hints across instances
+  ---
+  duration_ms: 6.418245
+  ...
+# Subtest: an ended event cancels an in-flight incoming attempt and blocks a later stale incoming hint
+ok 101 - an ended event cancels an in-flight incoming attempt and blocks a later stale incoming hint
+  ---
+  duration_ms: 6.239099
+  ...
+# Subtest: failed incoming sends remain eligible for a later terminal cancellation
+ok 102 - failed incoming sends remain eligible for a later terminal cancellation
+  ---
+  duration_ms: 4.390205
+  ...
+# Subtest: FCM acceptance followed by a receipt write failure retains the send claim and avoids immediate duplicate delivery
+ok 103 - FCM acceptance followed by a receipt write failure retains the send claim and avoids immediate duplicate delivery
+  ---
+  duration_ms: 3.721203
+  ...
+# Subtest: lost receipt commit acknowledgement does not resend a receipt that actually committed
+ok 104 - lost receipt commit acknowledgement does not resend a receipt that actually committed
+  ---
+  duration_ms: 4.351719
+  ...
+# Subtest: stale receipt ownership is not reported as a successfully persisted notification
+ok 105 - stale receipt ownership is not reported as a successfully persisted notification
+  ---
+  duration_ms: 2.235928
+  ...
+# Subtest: revocation between a send claim and dispatch prevents the FCM request
+ok 106 - revocation between a send claim and dispatch prevents the FCM request
+  ---
+  duration_ms: 2.795658
+  ...
+# Subtest: an unregistered old FCM token cannot erase a concurrently refreshed token
+ok 107 - an unregistered old FCM token cannot erase a concurrently refreshed token
+  ---
+  duration_ms: 2.598406
+  ...
+# Subtest: concurrent renewal and FCM refresh retain both changes across another backend replacement
+ok 108 - concurrent renewal and FCM refresh retain both changes across another backend replacement
+  ---
+  duration_ms: 21.331963
+  ...
+# Subtest: a slow authoritative call read cannot dispatch an alert after its payload expiry
+ok 109 - a slow authoritative call read cannot dispatch an alert after its payload expiry
+  ---
+  duration_ms: 5.483928
+  ...
+# Subtest: legacy mode does not initialize a database or inspect private credentials
+ok 110 - legacy mode does not initialize a database or inspect private credentials
+  ---
+  duration_ms: 0.579249
+  ...
+# Subtest: Firestore reuses only the server account for the exact configured project
+ok 111 - Firestore reuses only the server account for the exact configured project
+  ---
+  duration_ms: 2.692265
+  ...
+# Subtest: a possibly consumed legacy enrollment code is disabled by default
+ok 112 - a possibly consumed legacy enrollment code is disabled by default
+  ---
+  duration_ms: 1.750989
+  ...
+# Subtest: invalid account, project, namespace and endpoint settings cannot fall back to file storage
+ok 113 - invalid account, project, namespace and endpoint settings cannot fall back to file storage
+  ---
+  duration_ms: 2.390207
+  ...
+# Subtest: initialization error is sanitized and never exposes a credential
+ok 114 - initialization error is sanitized and never exposes a credential
+  ---
+  duration_ms: 1.11818
+  ...
+# Subtest: webhook authentication uses exact received bytes and rejects changed/missing/malformed signatures
+ok 115 - webhook authentication uses exact received bytes and rejects changed/missing/malformed signatures
+  ---
+  duration_ms: 1.28642
+  ...
+# Subtest: history distinguishes signaling, actual audio, and unconfirmed end intent
+ok 116 - history distinguishes signaling, actual audio, and unconfirmed end intent
+  ---
+  duration_ms: 0.57929
+  ...
+# Subtest: incomplete provider configuration never exposes a persisted native call to legacy controls
+ok 117 - incomplete provider configuration never exposes a persisted native call to legacy controls
+  ---
+  duration_ms: 1.342282
+  ...
+# Subtest: unavailable persistent storage does not fall through to a local legacy answer
+ok 118 - unavailable persistent storage does not fall through to a local legacy answer
+  ---
+  duration_ms: 0.508084
+  ...
+# Subtest: verified event correlation has stable distinct fallbacks when normalized IDs are missing
+ok 119 - verified event correlation has stable distinct fallbacks when normalized IDs are missing
+  ---
+  duration_ms: 1.63092
+  ...
+# Subtest: a verified combined SDP and ACCEPTED webhook preserves both events with independent stable IDs
+ok 120 - a verified combined SDP and ACCEPTED webhook preserves both events with independent stable IDs
+  ---
+  duration_ms: 1.229545
+  ...
+# Subtest: a durable incoming alert is delivered before slow history projection can block recovery
+ok 121 - a durable incoming alert is delivered before slow history projection can block recovery
+  ---
+  duration_ms: 22.738905
+  ...
+# Subtest: automatic pilot membership requires explicit server policy and fresh supported enrolled devices
+ok 122 - automatic pilot membership requires explicit server policy and fresh supported enrolled devices
+  ---
+  duration_ms: 1.687985
+  ...
+# Subtest: native device identity is derived from the current registry and metadata is authenticated
+ok 123 - native device identity is derived from the current registry and metadata is authenticated
+  ---
+  duration_ms: 0.972253
+  ...
+# Subtest: enrollment issuance needs existing SUDO authorization, exact origin and admin action header
+ok 124 - enrollment issuance needs existing SUDO authorization, exact origin and admin action header
+  ---
+  duration_ms: 1.331647
+  ...
+# Subtest: predictable fallback sessions cannot administer enrollment with blank profile configuration
+ok 125 - predictable fallback sessions cannot administer enrollment with blank profile configuration
+  ---
+  duration_ms: 0.160558
+  ...
+# Subtest: configuration fails closed; old transfer flags cannot enable media release
+ok 126 - configuration fails closed; old transfer flags cannot enable media release
+  ---
+  duration_ms: 0.691797
+  ...
+# Subtest: official SDK serializes incoming real SDP offer and does not claim connected audio
+ok 127 - official SDK serializes incoming real SDP offer and does not claim connected audio
+  ---
+  duration_ms: 27.792135
+  ...
+# Subtest: official SDK outgoing dial and answer use separate operations and stable request correlation
+ok 128 - official SDK outgoing dial and answer use separate operations and stable request correlation
+  ---
+  duration_ms: 4.288264
+  ...
+# Subtest: invalid/absent audio offer cannot signal a provider call
+ok 129 - invalid/absent audio offer cannot signal a provider call
+  ---
+  duration_ms: 0.831614
+  ...
+# Subtest: ambiguous outgoing failure is not retried by SDK failover and error does not expose secrets
+ok 130 - ambiguous outgoing failure is not retried by SDK failover and error does not expose secrets
+  ---
+  duration_ms: 2.28435
+  ...
+# Subtest: customer-end cleanup uses USER_INITIATED and omits unnecessary Meta token
+ok 131 - customer-end cleanup uses USER_INITIATED and omits unnecessary Meta token
+  ---
+  duration_ms: 3.548877
+  ...
+# Subtest: join tokens use official SDK, exact room, microphone-only publishing and unique device legs
+ok 132 - join tokens use official SDK, exact room, microphone-only publishing and unique device legs
+  ---
+  duration_ms: 2.160576
+  ...
+# Subtest: source detach revokes only that operator and never invokes customer disconnect
+ok 133 - source detach revokes only that operator and never invokes customer disconnect
+  ---
+  duration_ms: 1.497443
+  ...
+# Subtest: control API success and participant tracks explicitly do not establish live audio
+ok 134 - control API success and participant tracks explicitly do not establish live audio
+  ---
+  duration_ms: 3.422399
+  ...
+# Subtest: rollout fails closed even when someone sets an enabled boolean
+ok 135 - rollout fails closed even when someone sets an enabled boolean
+  ---
+  duration_ms: 1.403623
+  ...
+# Subtest: missing durable transaction store is rejected
+ok 136 - missing durable transaction store is rejected
+  ---
+  duration_ms: 0.204764
+  ...
+# Subtest: request body identity does not authenticate a device
+ok 137 - request body identity does not authenticate a device
+  ---
+  duration_ms: 3.348469
+  ...
+# Subtest: revoked devices and legacy clients cannot receive transfers
+ok 138 - revoked devices and legacy clients cannot receive transfers
+  ---
+  duration_ms: 0.396649
+  ...
+# Subtest: same user on two devices has different legs; source kept until ready
+ok 139 - same user on two devices has different legs; source kept until ready
+  ---
+  duration_ms: 2.434563
+  ...
+# Subtest: idempotent invitation and accept do not create new transfer or customer calls
+ok 140 - idempotent invitation and accept do not create new transfer or customer calls
+  ---
+  duration_ms: 1.557812
+  ...
+# Subtest: atomic reservation prevents two different calls from inviting the same target
+ok 141 - atomic reservation prevents two different calls from inviting the same target
+  ---
+  duration_ms: 1.291476
+  ...
+# Subtest: unverified client readiness leaves source owner and microphone untouched
+ok 142 - unverified client readiness leaves source owner and microphone untouched
+  ---
+  duration_ms: 1.055616
+  ...
+# Subtest: published track without received/sent audio evidence cannot commit
+ok 143 - published track without received/sent audio evidence cannot commit
+  ---
+  duration_ms: 1.345166
+  ...
+# Subtest: missing customer or target media never releases source
+ok 144 - missing customer or target media never releases source
+  ---
+  duration_ms: 1.03767
+  ...
+# Subtest: stale readiness nonce, version and old telemetry are rejected
+ok 145 - stale readiness nonce, version and old telemetry are rejected
+  ---
+  duration_ms: 1.201643
+  ...
+# Subtest: target decline keeps source, detaches only target and frees reservation
+ok 146 - target decline keeps source, detaches only target and frees reservation
+  ---
+  duration_ms: 1.655016
+  ...
+# Subtest: invitation expires during readiness I/O; late proof cannot take ownership
+ok 147 - invitation expires during readiness I/O; late proof cannot take ownership
+  ---
+  duration_ms: 1.197356
+  ...
+# Subtest: source cancellation wins against delayed readiness verification
+ok 148 - source cancellation wins against delayed readiness verification
+  ---
+  duration_ms: 1.844988
+  ...
+# Subtest: customer termination wins while readiness is in flight
+ok 149 - customer termination wins while readiness is in flight
+  ---
+  duration_ms: 3.273418
+  ...
+# Subtest: termination during token issuance prevents returning a join token
+ok 150 - termination during token issuance prevents returning a join token
+  ---
+  duration_ms: 1.071881
+  ...
+# Subtest: unsigned provider payload cannot terminate a call
+ok 151 - unsigned provider payload cannot terminate a call
+  ---
+  duration_ms: 0.285964
+  ...
+# Subtest: failed source cleanup is persisted; a restarted worker retries detach without ending customer
+ok 152 - failed source cleanup is persisted; a restarted worker retries detach without ending customer
+  ---
+  duration_ms: 2.150171
+  ...
+# Subtest: source cannot end customer after handoff commits; terminal retries are idempotent
+ok 153 - source cannot end customer after handoff commits; terminal retries are idempotent
+  ---
+  duration_ms: 2.21699
+  ...
+# Subtest: terminal call never becomes transferable on old idempotent invitation replay
+ok 154 - terminal call never becomes transferable on old idempotent invitation replay
+  ---
+  duration_ms: 1.562719
+  ...
+# Subtest: device revocation while readiness is in flight prevents ownership commit
+ok 155 - device revocation while readiness is in flight prevents ownership commit
+  ---
+  duration_ms: 1.066072
+  ...
+# Subtest: re-enrollment to another operator cannot inherit an already accepted target leg
+ok 156 - re-enrollment to another operator cannot inherit an already accepted target leg
+  ---
+  duration_ms: 0.711386
+  ...
+# Subtest: cleanup reservations cannot be mistaken for a live invite or source ownership
+ok 157 - cleanup reservations cannot be mistaken for a live invite or source ownership
+  ---
+  duration_ms: 1.910936
+  ...
+# Subtest: an operator end is immediate local intent, not a false provider-end confirmation
+ok 158 - an operator end is immediate local intent, not a false provider-end confirmation
+  ---
+  duration_ms: 1.692873
+  ...
+# Subtest: another workspace cannot read or act on a call using a valid enrolled device
+ok 159 - another workspace cannot read or act on a call using a valid enrolled device
+  ---
+  duration_ms: 0.285805
+  ...
+# Subtest: revocation during token issuance cannot return a usable new join token
+ok 160 - revocation during token issuance cannot return a usable new join token
+  ---
+  duration_ms: 0.760128
+  ...
+# Subtest: Firestore callback retries do not duplicate tokens, ownership changes or provider cleanup
+ok 161 - Firestore callback retries do not duplicate tokens, ownership changes or provider cleanup
+  ---
+  duration_ms: 2.952211
+  ...
+# Subtest: cleanup success followed by lost database acknowledgement recovers after its execution lease
+ok 162 - cleanup success followed by lost database acknowledgement recovers after its execution lease
+  ---
+  duration_ms: 2.021359
+  ...
+# Subtest: bounded transfer history preserves replay and end-call writes when the cap is reached
+ok 163 - bounded transfer history preserves replay and end-call writes when the cap is reached
+  ---
+  duration_ms: 70.065069
+  ...
+# Subtest: concurrent cleanup workers honor execution leases and ignore an older late acknowledgement
+ok 164 - concurrent cleanup workers honor execution leases and ignore an older late acknowledgement
+  ---
+  duration_ms: 1.570741
+  ...
+# Subtest: unconfigured room calling and unverified business events fail closed
+ok 165 - unconfigured room calling and unverified business events fail closed
+  ---
+  duration_ms: 0.805786
+  ...
+# Subtest: incoming route is durable and SDK accept is not Connected
+ok 166 - incoming route is durable and SDK accept is not Connected
+  ---
+  duration_ms: 10.278053
+  ...
+# Subtest: priority incoming alert uses the durable job without waiting for media or transfer housekeeping
+ok 167 - priority incoming alert uses the durable job without waiting for media or transfer housekeeping
+  ---
+  duration_ms: 1.952718
+  ...
+# Subtest: priority incoming alerts skip expired, already answered and browser-claimed calls
+ok 168 - priority incoming alerts skip expired, already answered and browser-claimed calls
+  ---
+  duration_ms: 5.511249
+  ...
+# Subtest: customer end after an incoming alert lease is claimed prevents the stale send
+ok 169 - customer end after an incoming alert lease is claimed prevents the stale send
+  ---
+  duration_ms: 2.966833
+  ...
+# Subtest: priority and ordinary recovery workers share one lease and never duplicate an incoming alert
+ok 170 - priority and ordinary recovery workers share one lease and never duplicate an incoming alert
+  ---
+  duration_ms: 5.978793
+  ...
+# Subtest: failed priority notification remains recoverable and a later terminal event suppresses its retry
+ok 171 - failed priority notification remains recoverable and a later terminal event suppresses its retry
+  ---
+  duration_ms: 2.544426
+  ...
+# Subtest: racing answers choose one enrolled device and never issue a second connector accept
+ok 172 - racing answers choose one enrolled device and never issue a second connector accept
+  ---
+  duration_ms: 3.406686
+  ...
+# Subtest: replayed accept resumes the same leg without accepting Meta again
+ok 173 - replayed accept resumes the same leg without accepting Meta again
+  ---
+  duration_ms: 3.862411
+  ...
+# Subtest: terminate before delayed incoming offer cannot resurrect ringing or issue audio
+ok 174 - terminate before delayed incoming offer cannot resurrect ringing or issue audio
+  ---
+  duration_ms: 2.436035
+  ...
+# Subtest: customer hangup during initial readiness prevents canonical connected call creation
+ok 175 - customer hangup during initial readiness prevents canonical connected call creation
+  ---
+  duration_ms: 4.737671
+  ...
+# Subtest: outgoing idempotency and unknown dial result never redial
+ok 176 - outgoing idempotency and unknown dial result never redial
+  ---
+  duration_ms: 2.522554
+  ...
+# Subtest: early outgoing answer correlates opaque session and survives lost dial acknowledgement
+ok 177 - early outgoing answer correlates opaque session and survives lost dial acknowledgement
+  ---
+  duration_ms: 7.261867
+  ...
+# Subtest: cancel before outgoing provider ID keeps reservation until late call cleanup
+ok 178 - cancel before outgoing provider ID keeps reservation until late call cleanup
+  ---
+  duration_ms: 26.665373
+  ...
+# Subtest: revocation sweeper ends active media server-side without a cooperative phone
+ok 179 - revocation sweeper ends active media server-side without a cooperative phone
+  ---
+  duration_ms: 15.852615
+  ...
+# Subtest: changed credential generation cannot confirm old initial readiness
+ok 180 - changed credential generation cannot confirm old initial readiness
+  ---
+  duration_ms: 3.92819
+  ...
+# Subtest: runtime transfer preserves source until confirmed target evidence and detaches source only
+ok 181 - runtime transfer preserves source until confirmed target evidence and detaches source only
+  ---
+  duration_ms: 22.722592
+  ...
+# Subtest: re-enrolled target cannot accept a prior transfer notification
+ok 182 - re-enrolled target cannot accept a prior transfer notification
+  ---
+  duration_ms: 17.104564
+  ...
+# Subtest: provider project changes never send an existing call to a new media project
+ok 183 - provider project changes never send an existing call to a new media project
+  ---
+  duration_ms: 1.94727
+  ...
+# Subtest: legacy and native first answers arbitrate atomically without tearing down the winner
+ok 184 - legacy and native first answers arbitrate atomically without tearing down the winner
+  ---
+  duration_ms: 5.077756
+  ...
+# Subtest: a native-owned call cannot be claimed or rejected by a browser operation
+ok 185 - a native-owned call cannot be claimed or rejected by a browser operation
+  ---
+  duration_ms: 2.626447
+  ...
+# Subtest: rejecting an unaccepted incoming call confirms only actual reject acknowledgement
+ok 186 - rejecting an unaccepted incoming call confirms only actual reject acknowledgement
+  ---
+  duration_ms: 10.192517
+  ...
+# Subtest: cancel by request ID before delayed outgoing POST prevents any dial
+ok 187 - cancel by request ID before delayed outgoing POST prevents any dial
+  ---
+  duration_ms: 0.740709
+  ...
+# Subtest: lost answer acknowledgement is not replayed after corroborated media readiness
+ok 188 - lost answer acknowledgement is not replayed after corroborated media readiness
+  ---
+  duration_ms: 11.439397
+  ...
+# Subtest: outgoing SDP and ringback evidence cannot become Connected before trusted customer acceptance
+ok 189 - outgoing SDP and ringback evidence cannot become Connected before trusted customer acceptance
+  ---
+  duration_ms: 6.123738
+  ...
+# Subtest: early ACCEPTED before call-ID correlation is durable and consumed by the eventual SDK result
+ok 190 - early ACCEPTED before call-ID correlation is durable and consumed by the eventual SDK result
+  ---
+  duration_ms: 2.349387
+  ...
+# Subtest: early ACCEPTED with opaque correlation resolves a lost dial response without redial
+ok 191 - early ACCEPTED with opaque correlation resolves a lost dial response without redial
+  ---
+  duration_ms: 2.236128
+  ...
+# Subtest: terminal before late ACCEPTED wins even when the dial response arrives afterwards
+ok 192 - terminal before late ACCEPTED wins even when the dial response arrives afterwards
+  ---
+  duration_ms: 6.608737
+  ...
+# Subtest: duplicate ACCEPTED cannot change the acceptance time or regress a connected call
+ok 193 - duplicate ACCEPTED cannot change the acceptance time or regress a connected call
+  ---
+  duration_ms: 5.119448
+  ...
+# Subtest: verified channel linkage is idempotent metadata and does not stale pending readiness
+ok 194 - verified channel linkage is idempotent metadata and does not stale pending readiness
+  ---
+  duration_ms: 4.73741
+  ...
+# Subtest: customer terminal event wins atomically against target readiness and preserves ended owner
+ok 195 - customer terminal event wins atomically against target readiness and preserves ended owner
+  ---
+  duration_ms: 9.532407
+  ...
+# Subtest: decline/expiry transfer notifications are exact and failed FCM remains pending
+ok 196 - decline/expiry transfer notifications are exact and failed FCM remains pending
+  ---
+  duration_ms: 15.659789
+  ...
+# Subtest: credential generation change during target telemetry cannot commit ownership
+ok 197 - credential generation change during target telemetry cannot commit ownership
+  ---
+  duration_ms: 7.036413
+  ...
+# Subtest: connected owner can restore its same leg beyond the original joining timeout
+ok 198 - connected owner can restore its same leg beyond the original joining timeout
+  ---
+  duration_ms: 6.652162
+  ...
+# Subtest: cancel after durable attempt but before dispatch does not call the provider
+ok 199 - cancel after durable attempt but before dispatch does not call the provider
+  ---
+  duration_ms: 2.832804
+  ...
+# Subtest: a killed operator process is cleaned after confirmed exact-leg absence and reconnect grace
+ok 200 - a killed operator process is cleaned after confirmed exact-leg absence and reconnect grace
+  ---
+  duration_ms: 15.96923
+  ...
+# Subtest: provider API outage never counts as operator disappearance and reappearance clears the grace
+ok 201 - provider API outage never counts as operator disappearance and reappearance clears the grace
+  ---
+  duration_ms: 15.736513
+  ...
+# Subtest: official room-not-found observation cannot leave a device permanently reserved
+ok 202 - official room-not-found observation cannot leave a device permanently reserved
+  ---
+  duration_ms: 21.706153
+  ...
+# Subtest: old source absence result cannot terminate a newly committed target owner
+ok 203 - old source absence result cannot terminate a newly committed target owner
+  ---
+  duration_ms: 23.802654
+  ...
+# Subtest: official SDK participant decoding corroborates exact native audio track evidence
+ok 204 - official SDK participant decoding corroborates exact native audio track evidence
+  ---
+  duration_ms: 1.875794
+  ...
+# Subtest: connected flag, old sample, wrong leg and missing decoded frames never prove readiness
+ok 205 - connected flag, old sample, wrong leg and missing decoded frames never prove readiness
+  ---
+  duration_ms: 0.675984
+  ...
+# Subtest: a real native report for a different provider participant or muted track is refused
+ok 206 - a real native report for a different provider participant or muted track is refused
+  ---
+  duration_ms: 0.196552
+  ...
+# Subtest: a config flag and successful control probe alone never enable production transfer
+ok 207 - a config flag and successful control probe alone never enable production transfer
+  ---
+  duration_ms: 0.685427
+  ...
+# Subtest: explicit pilot needs at least two exact enrolled IDs and rejects arbitrary targets
+ok 208 - explicit pilot needs at least two exact enrolled IDs and rejects arbitrary targets
+  ---
+  duration_ms: 5.417941
+  ...
+# Subtest: removing a device from the pilot or revoking it blocks an old invitation
+ok 209 - removing a device from the pilot or revoking it blocks an old invitation
+  ---
+  duration_ms: 6.220762
+  ...
+# Subtest: production evidence must bind current project and native build
+ok 210 - production evidence must bind current project and native build
+  ---
+  duration_ms: 0.288818
+  ...
+# Subtest: native route refuses cookie-only or body-provided operator identity
+ok 211 - native route refuses cookie-only or body-provided operator identity
+  ---
+  duration_ms: 1.203296
+  ...
+# Subtest: status and capability wrappers are private, secret-free and do not schedule mutation recovery
+ok 212 - status and capability wrappers are private, secret-free and do not schedule mutation recovery
+  ---
+  duration_ms: 1.022938
+  ...
+# Subtest: factory is lazy; absent get returns undefined and namespaces cannot escape
+ok 213 - factory is lazy; absent get returns undefined and namespaces cannot escape
+  ---
+  duration_ms: 0.426473
+  ...
+# Subtest: initial call and owner are created atomically and cannot overwrite a busy device
+ok 214 - initial call and owner are created atomically and cannot overwrite a busy device
+  ---
+  duration_ms: 1.418686
+  ...
+# Subtest: call-only initialization, direct call deletion and owner reservation deletion are prohibited
+ok 215 - call-only initialization, direct call deletion and owner reservation deletion are prohibited
+  ---
+  duration_ms: 0.832506
+  ...
+# Subtest: transaction returns exact callback result and staged writes do not permit late reads
+ok 216 - transaction returns exact callback result and staged writes do not permit late reads
+  ---
+  duration_ms: 0.65342
+  ...
+# Subtest: semantic call version and envelope revision are distinct during outbox bookkeeping
+ok 217 - semantic call version and envelope revision are distinct during outbox bookkeeping
+  ---
+  duration_ms: 6.2129
+  ...
+# Subtest: invitation and cleanup projections are created in the same transaction as call state
+ok 218 - invitation and cleanup projections are created in the same transaction as call state
+  ---
+  duration_ms: 2.698565
+  ...
+# Subtest: two store/controller instances cannot reserve one target for different calls
+ok 219 - two store/controller instances cannot reserve one target for different calls
+  ---
+  duration_ms: 1.577971
+  ...
+# Subtest: customer terminal state wins while readiness waits outside transaction
+ok 220 - customer terminal state wins while readiness waits outside transaction
+  ---
+  duration_ms: 3.327178
+  ...
+# Subtest: ending can become ended with confirmation, but cannot lose terminal confirmation
+ok 221 - ending can become ended with confirmation, but cannot lose terminal confirmation
+  ---
+  duration_ms: 2.844151
+  ...
+# Subtest: terminal reason cannot change and malformed confirmation timestamps are rejected
+ok 222 - terminal reason cannot change and malformed confirmation timestamps are rejected
+  ---
+  duration_ms: 2.652276
+  ...
+# Subtest: cleanup targets and accepted transfer media generation cannot be retargeted
+ok 223 - cleanup targets and accepted transfer media generation cannot be retargeted
+  ---
+  duration_ms: 4.030411
+  ...
+# Subtest: stale semantic version, historical request rewrite and completed-job resurrection fail
+ok 224 - stale semantic version, historical request rewrite and completed-job resurrection fail
+  ---
+  duration_ms: 4.183759
+  ...
+# Subtest: failed commit leaves call, reservations and projections all unchanged
+ok 225 - failed commit leaves call, reservations and projections all unchanged
+  ---
+  duration_ms: 0.818675
+  ...
+# Subtest: lost commit acknowledgement replays invitation result without a new transfer
+ok 226 - lost commit acknowledgement replays invitation result without a new transfer
+  ---
+  duration_ms: 1.825399
+  ...
+# Subtest: due discovery is a bounded indexed query and competing workers get exclusive leases
+ok 227 - due discovery is a bounded indexed query and competing workers get exclusive leases
+  ---
+  duration_ms: 1.936033
+  ...
+# Subtest: crashed worker lease is recoverable; old acknowledgement cannot release newer generation
+ok 228 - crashed worker lease is recoverable; old acknowledgement cannot release newer generation
+  ---
+  duration_ms: 1.924245
+  ...
+# Subtest: call changes preserve scanner lease while canonical outbox lease runs independently
+ok 229 - call changes preserve scanner lease while canonical outbox lease runs independently
+  ---
+  duration_ms: 4.896446
+  ...
+# Subtest: restart recovery expires unanswered invitation and releases only the target reservation
+ok 230 - restart recovery expires unanswered invitation and releases only the target reservation
+  ---
+  duration_ms: 1.925407
+  ...
+# Subtest: terminal calls remain discoverable and cleanup proceeds even with rollout off
+ok 231 - terminal calls remain discoverable and cleanup proceeds even with rollout off
+  ---
+  duration_ms: 3.388288
+  ...
+# Subtest: failed cleanup remains reserved and is retried after backoff on another worker
+ok 232 - failed cleanup remains reserved and is retried after backoff on another worker
+  ---
+  duration_ms: 6.162526
+  ...
+# Subtest: history adapters cannot delete registered devices or use unbounded recovery limits
+ok 233 - history adapters cannot delete registered devices or use unbounded recovery limits
+  ---
+  duration_ms: 0.379353
+  ...
+# Subtest: malformed envelope and SDK authentication failure remain unavailable, never empty state
+ok 234 - malformed envelope and SDK authentication failure remain unavailable, never empty state
+  ---
+  duration_ms: 0.480133
+  ...
+# Subtest: pre-media sessions and pending reservations persist private SDP without exposing it in job discovery
+ok 235 - pre-media sessions and pending reservations persist private SDP without exposing it in job discovery
+  ---
+  duration_ms: 1.218819
+  ...
+# Subtest: event marker and session state update are atomic and duplicate events cannot overwrite state
+ok 236 - event marker and session state update are atomic and duplicate events cannot overwrite state
+  ---
+  duration_ms: 5.980454
+  ...
+# Subtest: outgoing call ID binds before readiness, then pending owner promotes atomically to the actual call
+ok 237 - outgoing call ID binds before readiness, then pending owner promotes atomically to the actual call
+  ---
+  duration_ms: 1.837978
+  ...
+# Subtest: unsafe pending-to-owner promotion is rejected before connected media state
+ok 238 - unsafe pending-to-owner promotion is rejected before connected media state
+  ---
+  duration_ms: 0.786668
+  ...
+# Subtest: terminal-before-dial-result remains terminal while later provider ID can be recorded for cleanup
+ok 239 - terminal-before-dial-result remains terminal while later provider ID can be recorded for cleanup
+  ---
+  duration_ms: 1.580225
+  ...
+# Subtest: restart session recovery receives only exact session ID and cannot free a timed-out pending reservation automatically
+ok 240 - restart session recovery receives only exact session ID and cannot free a timed-out pending reservation automatically
+  ---
+  duration_ms: 1.370014
+  ...
+# Subtest: issued session operation identity and original execution deadline cannot be replaced or replayed
+ok 241 - issued session operation identity and original execution deadline cannot be replaced or replayed
+  ---
+  duration_ms: 2.4591
+  ...
+# Subtest: session job targets, completion and attempts remain durable across delayed writes
+ok 242 - session job targets, completion and attempts remain durable across delayed writes
+  ---
+  duration_ms: 4.220033
+  ...
+# Subtest: malformed session execution state is rejected and terminal confirmation cannot be removed
+ok 243 - malformed session execution state is rejected and terminal confirmation cannot be removed
+  ---
+  duration_ms: 1.130498
+  ...
+# Subtest: legacy route claims are immutable and never permit native customer-media effects
+ok 244 - legacy route claims are immutable and never permit native customer-media effects
+  ---
+  duration_ms: 2.274446
+  ...
+# Subtest: provider customer acceptance timestamp is valid, versioned and immutable once assigned
+ok 245 - provider customer acceptance timestamp is valid, versioned and immutable once assigned
+  ---
+  duration_ms: 2.080247
+  ...
+1..245
+# tests 245
+# suites 0
+# pass 245
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1438.971388

@@ -1,0 +1,250 @@
+TAP version 13
+# Subtest: report scope is isolated and immutable records reject extra private fields
+ok 1 - report scope is isolated and immutable records reject extra private fields
+  ---
+  duration_ms: 13.560452
+  ...
+# Subtest: terminal mapper excludes credentials/SDP and refuses unresolved or active calls
+ok 2 - terminal mapper excludes credentials/SDP and refuses unresolved or active calls
+  ---
+  duration_ms: 1.375283
+  ...
+# Subtest: XLSX export preserves literal text, typed dates, phone formatting and manifest coverage
+ok 3 - XLSX export preserves literal text, typed dates, phone formatting and manifest coverage
+  ---
+  duration_ms: 183.698623
+  ...
+# Subtest: exports are bounded and honestly indicate more records
+ok 4 - exports are bounded and honestly indicate more records
+  ---
+  duration_ms: 20.586589
+  ...
+# Subtest: archive unavailability never blocks local download and deletion defaults to disabled/dry-run
+ok 5 - archive unavailability never blocks local download and deletion defaults to disabled/dry-run
+  ---
+  duration_ms: 13.132046
+  ...
+# Subtest: archive acknowledgement is persisted only after both complete files match
+ok 6 - archive acknowledgement is persisted only after both complete files match
+  ---
+  duration_ms: 11.71448
+  ...
+# Subtest: replaying a purged terminal report after restart cannot recreate history or change the archived outcome
+ok 7 - replaying a purged terminal report after restart cannot recreate history or change the archived outcome
+  ---
+  duration_ms: 10.623931
+  ...
+# Subtest: a corrupt or removed durable archive stops every later delete pass
+ok 8 - a corrupt or removed durable archive stops every later delete pass
+  ---
+  duration_ms: 9.823062
+  ...
+# Subtest: partial archive upload cannot authorize deletion or corrupt download
+ok 9 - partial archive upload cannot authorize deletion or corrupt download
+  ---
+  duration_ms: 9.072066
+  ...
+# Subtest: a hanging archive times out with source records retained and download available
+ok 10 - a hanging archive times out with source records retained and download available
+  ---
+  duration_ms: 33.993984
+  ...
+# Subtest: age cutoff and collection allowlist protect recent reports and all operational/device records
+ok 11 - age cutoff and collection allowlist protect recent reports and all operational/device records
+  ---
+  duration_ms: 14.026495
+  ...
+# Subtest: changed source fingerprint after export is retained, not silently deleted
+ok 12 - changed source fingerprint after export is retained, not silently deleted
+  ---
+  duration_ms: 12.305107
+  ...
+# Subtest: competing purge workers are fenced and an expired claim cannot delete
+ok 13 - competing purge workers are fenced and an expired claim cannot delete
+  ---
+  duration_ms: 10.719442
+  ...
+# Subtest: failed and lost-ack delete commits preserve atomic cursor progress
+ok 14 - failed and lost-ack delete commits preserve atomic cursor progress
+  ---
+  duration_ms: 14.802498
+  ...
+# Subtest: partial purge checkpoints survive restart and require a fresh archive verification
+ok 15 - partial purge checkpoints survive restart and require a fresh archive verification
+  ---
+  duration_ms: 82.322335
+  ...
+# Subtest: Odoo archive uses private company-bound attachments and read-back binary context
+ok 16 - Odoo archive uses private company-bound attachments and read-back binary context
+  ---
+  duration_ms: 17.745338
+  ...
+# Subtest: Odoo attachment becoming public or moving company prevents verification
+ok 17 - Odoo attachment becoming public or moving company prevents verification
+  ---
+  duration_ms: 11.630296
+  ...
+# Subtest: HTTP handler factory denies by default before reading/exporting data
+ok 18 - HTTP handler factory denies by default before reading/exporting data
+  ---
+  duration_ms: 1.095067
+  ...
+# Subtest: authorized download survives archive failure while purge needs a distinct admin permission
+ok 19 - authorized download survives archive failure while purge needs a distinct admin permission
+  ---
+  duration_ms: 12.794104
+  ...
+# Subtest: collector projects settled calls and completed transfers once without modifying source state
+ok 20 - collector projects settled calls and completed transfers once without modifying source state
+  ---
+  duration_ms: 3.356856
+  ...
+# Subtest: collector persists deferred work and cursor, retries settlement, and ignores native-only legacy claims
+ok 21 - collector persists deferred work and cursor, retries settlement, and ignores native-only legacy claims
+  ---
+  duration_ms: 2.366105
+  ...
+# Subtest: unexpected Firestore credential/storage errors are sanitized unavailable responses
+ok 22 - unexpected Firestore credential/storage errors are sanitized unavailable responses
+  ---
+  duration_ms: 0.399313
+  ...
+# Subtest: Firestore archive cannot be read until the exact workbook and manifest are complete
+ok 23 - Firestore archive cannot be read until the exact workbook and manifest are complete
+  ---
+  duration_ms: 6.814903
+  ...
+# Subtest: competing archive instances and lost-ack retries retain one immutable bundle and exact bytes
+ok 24 - competing archive instances and lost-ack retries retain one immutable bundle and exact bytes
+  ---
+  duration_ms: 6.81295
+  ...
+# Subtest: interrupted chunk upload has no completion receipt and resumes without replacing committed chunks
+ok 25 - interrupted chunk upload has no completion receipt and resumes without replacing committed chunks
+  ---
+  duration_ms: 3.941414
+  ...
+# Subtest: archive file slots cannot be overwritten and mismatched manifest cannot complete the bundle
+ok 26 - archive file slots cannot be overwritten and mismatched manifest cannot complete the bundle
+  ---
+  duration_ms: 2.64558
+  ...
+# Subtest: complete archive deletion/corruption fails closed; replay never repairs completed bytes silently
+ok 27 - complete archive deletion/corruption fails closed; replay never repairs completed bytes silently
+  ---
+  duration_ms: 3.687427
+  ...
+# Subtest: private locators enforce tenant, exact metadata, bounded files, and XLSX/manifest-only scope
+ok 28 - private locators enforce tenant, exact metadata, bounded files, and XLSX/manifest-only scope
+  ---
+  duration_ms: 2.831145
+  ...
+# Subtest: bundle cap is enforced before a second object is committed
+ok 29 - bundle cap is enforced before a second object is committed
+  ---
+  duration_ms: 1.722098
+  ...
+# Subtest: a paused pending uploader cannot repair missing bytes after another worker completed the archive
+ok 30 - a paused pending uploader cannot repair missing bytes after another worker completed the archive
+  ---
+  duration_ms: 3.177059
+  ...
+# Subtest: retention is off by default and never reads, exports or deletes while disabled
+ok 31 - retention is off by default and never reads, exports or deletes while disabled
+  ---
+  duration_ms: 1.309996
+  ...
+# Subtest: opted-in retention archives exact old report copies, keeps recent/core data, and persists the daily due time
+ok 32 - opted-in retention archives exact old report copies, keeps recent/core data, and persists the daily due time
+  ---
+  duration_ms: 20.508133
+  ...
+# Subtest: competing retention workers produce one archive pass and serialize source deletion
+ok 33 - competing retention workers produce one archive pass and serialize source deletion
+  ---
+  duration_ms: 25.872591
+  ...
+# Subtest: partial archive failure keeps source and pending export; restart regenerates identical XLSX then completes
+ok 34 - partial archive failure keeps source and pending export; restart regenerates identical XLSX then completes
+  ---
+  duration_ms: 27.017982
+  ...
+# Subtest: a corrupted verified archive cannot delete reports; no exception or private details escape the worker
+ok 35 - a corrupted verified archive cannot delete reports; no exception or private details escape the worker
+  ---
+  duration_ms: 11.926175
+  ...
+# Subtest: bounded backlog progresses in later passes without unbounded queries
+ok 36 - bounded backlog progresses in later passes without unbounded queries
+  ---
+  duration_ms: 34.420081
+  ...
+# Subtest: expired retention worker cannot archive or purge after another worker claimed and completed the pass
+ok 37 - expired retention worker cannot archive or purge after another worker claimed and completed the pass
+  ---
+  duration_ms: 20.243104
+  ...
+# Subtest: SDK failures retain source records and return a sanitized retry result
+ok 38 - SDK failures retain source records and return a sanitized retry result
+  ---
+  duration_ms: 0.627592
+  ...
+# Subtest: runtime requires strict signed SUDO authorization and explicit strong profile configuration
+ok 39 - runtime requires strict signed SUDO authorization and explicit strong profile configuration
+  ---
+  duration_ms: 1.91173
+  ...
+# Subtest: runtime exact-origin and custom-action requirements block cross-origin mutation/download
+ok 40 - runtime exact-origin and custom-action requirements block cross-origin mutation/download
+  ---
+  duration_ms: 0.423709
+  ...
+# Subtest: runtime download is available without Odoo and archive discovery is lazy
+ok 41 - runtime download is available without Odoo and archive discovery is lazy
+  ---
+  duration_ms: 16.083941
+  ...
+# Subtest: runtime verifies the injected backend company and archives privately; real purge remains disabled
+ok 42 - runtime verifies the injected backend company and archives privately; real purge remains disabled
+  ---
+  duration_ms: 9.623805
+  ...
+# Subtest: runtime never chooses a first company/user when current-account discovery lacks UID
+ok 43 - runtime never chooses a first company/user when current-account discovery lacks UID
+  ---
+  duration_ms: 12.48864
+  ...
+# Subtest: runtime startup/30-minute collection is bounded, coalesced and does not close shared Firestore
+ok 44 - runtime startup/30-minute collection is bounded, coalesced and does not close shared Firestore
+  ---
+  duration_ms: 1.421432
+  ...
+# Subtest: runtime collection/storage failures cannot reject call hooks or leak private errors
+ok 45 - runtime collection/storage failures cannot reject call hooks or leak private errors
+  ---
+  duration_ms: 0.824685
+  ...
+# Subtest: runtime explicit Firestore archive uses only the existing client and leaves automatic retention off
+ok 46 - runtime explicit Firestore archive uses only the existing client and leaves automatic retention off
+  ---
+  duration_ms: 14.139463
+  ...
+# Subtest: runtime explicit retention opt-in runs bounded verified archive cleanup and exposes report-only counters
+ok 47 - runtime explicit retention opt-in runs bounded verified archive cleanup and exposes report-only counters
+  ---
+  duration_ms: 15.808181
+  ...
+# Subtest: unknown archive backend keeps downloads working and disables retention despite an opt-in
+ok 48 - unknown archive backend keeps downloads working and disables retention despite an opt-in
+  ---
+  duration_ms: 11.338407
+  ...
+1..48
+# tests 48
+# suites 0
+# pass 48
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 772.953612

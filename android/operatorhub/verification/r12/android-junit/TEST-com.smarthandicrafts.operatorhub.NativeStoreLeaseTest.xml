@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:33" hostname="ca82e965341e" time="0.005">
+  <properties/>
+  <testcase name="successfulRenewalPersistsExpiryAndPreservesBearerAndFcmToken" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.003"/>
+  <testcase name="anExistingApkEnrollmentWithNoGenerationMetadataCanRenewWithoutReenrollment" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="legacyCapabilityIsSkippedAndStorageErrorsDoNotClearEnrollment" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="disablingDuringInitialEnrollmentCancelsItsPendingResponse" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="aLateSuccessCannotUndoLocalDisable" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="foregroundAndStartupReserveOneAttemptAndPersistItsThrottle" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.001"/>
+  <testcase name="delayedRenewalAnd401CannotOverwriteAConcurrentNewEnrollment" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="renewedExpiryCannotBeShortenedByAnOlderTokenRefreshResponse" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="generationProtectsAnIdempotentlyReenrolledIdenticalBearer" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="oldCapabilityResponseCannotEnableOrDisableAReenrolledDevice" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <testcase name="audioDiagnosticPersistsOnlySafeCodesAndTheMatchingDeviceCanClearIt" classname="com.smarthandicrafts.operatorhub.NativeStoreLeaseTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

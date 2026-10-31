@@ -4,15 +4,20 @@ import { callStoreKey } from '../media/transfer-controller.mjs';
 import { requireValue } from '../media/errors.mjs';
 import { CallRuntime } from './call-runtime.mjs';
 import { createNativeReadinessVerifier } from './readiness.mjs';
+import { createBoundedNativeReject } from '../media/native-meta-reject.mjs';
 
 /** Root owns the bearer authenticator, persistent registry and verified webhook.
  * Construction performs no network action. verifyConfiguration() is a read-only
  * control API check; it never proves audio or enables transfer by itself. */
 export function createNativeCallRuntime({ store, env, authenticate, resolveDevice, listDevices,
-  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify,
+  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable,
   phoneNumberId, minimumNativeBuild = 10, tenantId = 'smart-handicrafts', now = Date.now,
   provider: injectedProvider } = {}) {
   const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env));
+  // Production native declines must not inherit the legacy browser adapter's
+  // unbounded HTTP lifetime. Tests can still inject an isolated provider stub.
+  const nativeReject = injectedProvider ? rejectIncoming : createBoundedNativeReject({
+    metaToken: provider.config.metaToken, apiVersion: provider.config.apiVersion });
   const verifyReadiness = createNativeReadinessVerifier({ provider, now });
   let controlVerified = false, runtime;
   const release = async () => {
@@ -66,7 +71,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
       return policy.transferEnabled ? policy.transferValidation : false;
     }, verifyReadiness: data => runtime.verifyTransferReadiness(data) });
   runtime = new CallRuntime({ store, provider, transferController: controller, authenticate, resolveDevice, listDevices,
-    capabilities: release, verifyReadiness, rejectIncoming, notify, phoneNumberId, tenantId, minimumNativeBuild, now });
+    capabilities: release, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now });
   return { runtime, provider, controller,
     verifyConfiguration: async () => {
       controlVerified = false;

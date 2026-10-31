@@ -7,6 +7,7 @@ const HASH = value => createHash('sha256').update(String(value)).digest('hex');
 const MAX_DUE = Number.MAX_SAFE_INTEGER;
 const MAX_CALL_BYTES = 512 * 1024;
 const MAX_OTHER_BYTES = 32 * 1024;
+const MAX_PENDING_ANSWER_BYTES = 256 * 1024;
 const MAX_WRITES = 450;
 const PENDING_TRANSFER = new Set(['invited', 'connecting']);
 const FINAL_TRANSFER = new Set(['completed', 'declined', 'cancelled', 'expired', 'failed']);
@@ -14,6 +15,7 @@ const clone = value => structuredClone(value);
 const isObject = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const validTime = value => Number.isSafeInteger(value) && value >= 0;
 const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 220 && !/[\u0000-\u001f\u007f]/.test(value);
+const eventIdentifier = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value);
 
 export class MediaStoreError extends MediaError {
   constructor(code, message, statusCode = 409) {
@@ -48,7 +50,7 @@ function parseKey(key) {
 function callKeyFor(id) { requireInput(identifier(id), 'An exact call ID is required.'); return `media_calls/${HASH(id)}`; }
 function reservationKeyFor(id) { requireInput(identifier(id), 'An exact device ID is required.'); return `media_reservations/${HASH(id)}`; }
 export function sessionStoreKey(id) { requireInput(identifier(id), 'An exact media session ID is required.'); return `media_sessions/${HASH(id)}`; }
-export function eventStoreKey(id) { requireInput(identifier(id), 'An exact provider event ID is required.'); return `media_events/${HASH(id)}`; }
+export function eventStoreKey(id) { requireInput(eventIdentifier(id), 'An exact private provider event key is required.'); return `media_events/${HASH(id)}`; }
 
 function readEnvelope(snapshot, key) {
   if (!snapshot.exists) return undefined;
@@ -164,8 +166,15 @@ function validateReservation(value) {
 }
 
 function validateEvent(value, key) {
-  const event = boundedValue(value, MAX_OTHER_BYTES);
-  requireInput(identifier(event.id) && eventStoreKey(event.id) === key, 'Provider-event marker must match its exact event key.');
+  const event = boundedValue(value, value?.kind === 'pending-answer' ? MAX_PENDING_ANSWER_BYTES : MAX_OTHER_BYTES);
+  requireInput(eventIdentifier(event.id) && eventStoreKey(event.id) === key, 'Provider-event marker must match its exact event key.');
+  if (event.kind === 'pending-answer') requireInput(
+    event.id === `answer:${HASH(event.providerCallId)}` &&
+    ['tenantId', 'phoneNumberId', 'providerCallId', 'providerFingerprint'].every(field => identifier(event[field])) &&
+    validTime(event.createdAt) && typeof event.answerSdp === 'string' && event.answerSdp.length < 200000 &&
+    Buffer.byteLength(event.answerSdp, 'utf8') < 240000 && /^v=0\r?\n/.test(event.answerSdp) &&
+    /(?:^|\r?\n)m=audio\s/.test(event.answerSdp),
+  'An early answer requires an exact private business/call binding and bounded audio SDP.');
   return event;
 }
 

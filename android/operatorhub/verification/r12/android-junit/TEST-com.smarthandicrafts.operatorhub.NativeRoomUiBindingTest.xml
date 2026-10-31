@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:33" hostname="ca82e965341e" time="0.0">
+  <properties/>
+  <testcase name="anotherAttemptCannotBeAdoptedBeforeOrAfterServerResponse" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="incomingScreenCanBindUsingExactProviderOrCanonicalCallId" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="tappingPreparingNotificationRebindsOnlyItsExactOutgoingAttempt" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="trustedCurrentServiceSnapshotMayRebindReopenedActivity" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="transferInvitationMustMatchBeforeServiceAttemptIsKnown" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="emptyCallIdsAreNeverAnIdentityWithoutTheExactAttempt" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="attemptIdsMustBeFullCanonicalUuidValues" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="lateClosedSnapshotFromPreviousAttemptCannotCloseNextCallScreen" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <testcase name="outgoingScreenKeepsItsAttemptFromPreparingThroughCanonicalCallAndEnd" classname="com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

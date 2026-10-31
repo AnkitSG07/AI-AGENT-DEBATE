@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:22" hostname="ca82e965341e" time="0.002">
+  <properties/>
+  <testcase name="signalingAndMediaEachRequireTheOtherBeforeConnected" classname="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" time="0.001"/>
+  <testcase name="systemAudioInterruptionRequiresFreshRecoveryButPreservesTheTimer" classname="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" time="0.0"/>
+  <testcase name="silenceIsNotAReconnectFailure" classname="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" time="0.0"/>
+  <testcase name="joinDeadlineRunsWithoutAnyStatusResponse" classname="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" time="0.0"/>
+  <testcase name="trackLossImmediatelyInvalidatesOldReadiness" classname="com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

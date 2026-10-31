@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.HubPolicyTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:21" hostname="ca82e965341e" time="0.002">
+  <properties/>
+  <testcase name="backendCallDeepLinkMatchesExactCall" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <testcase name="callAndDownloadNamesCannotInjectPaths" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.001"/>
+  <testcase name="unsafeExternalSchemesCannotLaunch" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <testcase name="activeAudioMayChangeOnlyAHubFragmentWithoutUnloadingTheDocument" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <testcase name="pushesCannotRingLateOrFarInFuture" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <testcase name="originRejectsLookalikesCredentialsAndPorts" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.001"/>
+  <testcase name="authRoutesPreserveOdooLoginVerificationAndRecoveryOnlyOnExactOrigin" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <testcase name="loginLandingRulesCannotReturnUntrustedOriginsOrInterruptVerification" classname="com.smarthandicrafts.operatorhub.HubPolicyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

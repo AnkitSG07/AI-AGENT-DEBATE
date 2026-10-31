@@ -1,0 +1,34 @@
+[
+  {
+    "name": "jdk",
+    "source": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz",
+    "expected": "8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711",
+    "algorithm": "sha256",
+    "sha256": "8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711",
+    "bytes": 193594705
+  },
+  {
+    "name": "platform",
+    "source": "https://dl.google.com/android/repository/platform-35_r02.zip",
+    "expected": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
+    "algorithm": "sha1",
+    "sha256": "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0",
+    "bytes": 64273788
+  },
+  {
+    "name": "build-tools",
+    "source": "https://dl.google.com/android/repository/build-tools_r35_linux.zip",
+    "expected": "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc",
+    "algorithm": "sha1",
+    "sha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88",
+    "bytes": 61958799
+  },
+  {
+    "name": "platform-tools",
+    "source": "https://dl.google.com/android/repository/platform-tools_r37.0.1-linux.zip",
+    "expected": "477254aa5f903c15cf51001717bdf347fb6b53e0",
+    "algorithm": "sha1",
+    "sha256": "d230f13842f60f782a8645f9c813f8f845bf36089ea7289f28c48f17979313f1",
+    "bytes": 9054187
+  }
+]

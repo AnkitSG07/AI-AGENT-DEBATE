@@ -1,0 +1,172 @@
+TAP version 13
+# Subtest: capability false preserves existing call click
+ok 1 - capability false preserves existing call click
+  ---
+  duration_ms: 289.452787
+  type: 'test'
+  ...
+# Subtest: actual R8 header routes exact phone/channel once before old handlers
+ok 2 - actual R8 header routes exact phone/channel once before old handlers
+  ---
+  duration_ms: 132.976576
+  type: 'test'
+  ...
+# Subtest: a phone in a name is never inferred when explicit phone is absent
+ok 3 - a phone in a name is never inferred when explicit phone is absent
+  ---
+  duration_ms: 154.951752
+  type: 'test'
+  ...
+# Subtest: contact drawer uses its explicit number, not a different selected chat
+ok 4 - contact drawer uses its explicit number, not a different selected chat
+  ---
+  duration_ms: 122.633972
+  type: 'test'
+  ...
+# Subtest: history callback uses exact call key and no stale selected phone
+ok 5 - history callback uses exact call key and no stale selected phone
+  ---
+  duration_ms: 136.029189
+  type: 'test'
+  ...
+# Subtest: keyed Accept and Reject preserve the exact incoming ID
+ok 6 - keyed Accept and Reject preserve the exact incoming ID
+  ---
+  duration_ms: 175.835141
+  type: 'test'
+  ...
+# Subtest: unkeyed old panel never guesses an incoming call
+ok 7 - unkeyed old panel never guesses an incoming call
+  ---
+  duration_ms: 156.239014
+  type: 'test'
+  ...
+# Subtest: native active call opens rather than placing another call
+ok 8 - native active call opens rather than placing another call
+  ---
+  duration_ms: 121.912991
+  type: 'test'
+  ...
+# Subtest: manual dial uses the explicit input and unrelated tools remain untouched
+ok 9 - manual dial uses the explicit input and unrelated tools remain untouched
+  ---
+  duration_ms: 167.587948
+  type: 'test'
+  ...
+# Subtest: untrusted synthetic click does not trigger native media entry
+ok 10 - untrusted synthetic click does not trigger native media entry
+  ---
+  duration_ms: 67.62711
+  type: 'test'
+  ...
+# Subtest: bridge is disabled outside the exact Hub page
+ok 11 - bridge is disabled outside the exact Hub page
+  ---
+  duration_ms: 118.375787
+  type: 'test'
+  ...
+# Subtest: stale keyed End preserves its original ID instead of the new active call
+ok 12 - stale keyed End preserves its original ID instead of the new active call
+  ---
+  duration_ms: 118.820839
+  type: 'test'
+  ...
+# Subtest: local release closes only the exact keyed old call panel and banner
+ok 13 - local release closes only the exact keyed old call panel and banner
+  ---
+  duration_ms: 72.00023
+  type: 'test'
+  ...
+# Subtest: release of a different call leaves current panels and unrelated chat alone
+ok 14 - release of a different call leaves current panels and unrelated chat alone
+  ---
+  duration_ms: 84.449454
+  type: 'test'
+  ...
+# Subtest: keyed panel Accept and Decline route the displayed call without opening a chooser
+ok 15 - keyed panel Accept and Decline route the displayed call without opening a chooser
+  ---
+  duration_ms: 221.813082
+  type: 'test'
+  ...
+# Subtest: an outgoing attempt without a provider ID reopens the native call instead of starting another
+ok 16 - an outgoing attempt without a provider ID reopens the native call instead of starting another
+  ---
+  duration_ms: 177.737639
+  type: 'test'
+  ...
+# Subtest: native transfer capability enables the exact current call while legacy transfer endpoints remain blocked
+ok 17 - native transfer capability enables the exact current call while legacy transfer endpoints remain blocked
+  ---
+  duration_ms: 143.985586
+  type: 'test'
+  ...
+# Subtest: a different call panel cannot transfer the active native call
+ok 18 - a different call panel cannot transfer the active native call
+  ---
+  duration_ms: 101.396077
+  type: 'test'
+  ...
+# Subtest: native capability revocation disables transfer immediately
+ok 19 - native capability revocation disables transfer immediately
+  ---
+  duration_ms: 95.935941
+  type: 'test'
+  ...
+# Subtest: a generic event row ID cannot answer, reject, or end the newer native call
+ok 20 - a generic event row ID cannot answer, reject, or end the newer native call
+  ---
+  duration_ms: 187.45245
+  type: 'test'
+  ...
+# Subtest: an explicit opaque provider ID is preserved even when it begins with session:
+ok 21 - an explicit opaque provider ID is preserved even when it begins with session:
+  ---
+  duration_ms: 138.979524
+  type: 'test'
+  ...
+# Subtest: event-only call history opens the dialer without submitting the row ID to the call API
+ok 22 - event-only call history opens the dialer without submitting the row ID to the call API
+  ---
+  duration_ms: 138.020123
+  type: 'test'
+  ...
+# Subtest: history with an explicit customer phone starts directly without a redundant call lookup
+ok 23 - history with an explicit customer phone starts directly without a redundant call lookup
+  ---
+  duration_ms: 168.825066
+  type: 'test'
+  ...
+# Subtest: return-to-call banner opens the early native attempt before it has a provider ID
+ok 24 - return-to-call banner opens the early native attempt before it has a provider ID
+  ---
+  duration_ms: 136.381128
+  type: 'test'
+  ...
+# Subtest: an old same-call End keeps its captured attempt and ownership leg instead of adopting the new ones
+ok 25 - an old same-call End keeps its captured attempt and ownership leg instead of adopting the new ones
+  ---
+  duration_ms: 129.768194
+  type: 'test'
+  ...
+# Subtest: a delayed close from the first A leg does not hide the call after A to B to A transfer
+ok 26 - a delayed close from the first A leg does not hide the call after A to B to A transfer
+  ---
+  duration_ms: 229.73004
+  type: 'test'
+  ...
+# Subtest: an old transfer control stays disabled after the same call returns on a new attempt
+ok 27 - an old transfer control stays disabled after the same call returns on a new attempt
+  ---
+  duration_ms: 102.461316
+  type: 'test'
+  ...
+1..27
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4318.582983

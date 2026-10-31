@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:22" hostname="ca82e965341e" time="0.001">
+  <properties/>
+  <testcase name="requestIdentifiersCannotBecomeJavascript" classname="com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest" time="0.0"/>
+  <testcase name="acceptsOnlyBoundedCallHistoryShapes" classname="com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest" time="0.001"/>
+  <testcase name="rejectsMutationsSecretsAndOtherRoutes" classname="com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest" time="0.0"/>
+  <testcase name="rejectsUrlTraversalAmbiguityAndUnboundedReads" classname="com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

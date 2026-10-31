@@ -57,6 +57,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const persistenceExpected = env.SH_ANDROID_REGISTRY_BACKEND === 'firestore' || !!env.LIVEKIT_URL;
   const workerId = `render_${randomUUID()}`;
   const publishedStates = new Map();
+  const historyWork = new Map();
   const blocked = new Set(String(env.SH_ANDROID_REVOKED_DEVICE_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   const roomCallingRequested = () => env.SH_NATIVE_CALLS_ENABLED === 'true' && !!appSecret;
   const normalize = row => row ? { deviceId: row.id, userId: `native:${row.id}`, tenantId: 'smart-handicrafts',
@@ -118,7 +119,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     }
     if (mediaStore && phoneNumberId) {
       bundle = runtimeFactory({ store: mediaStore, env, authenticate, resolveDevice, listDevices,
-        capabilities: policy, rejectIncoming, phoneNumberId, minimumNativeBuild: 10, now,
+        capabilities: policy, rejectIncoming, onWorkAvailable: id => queueRecovery(id), phoneNumberId, minimumNativeBuild: 10, now,
         notify: async event => pushBridge.publishRoomEvent({ ...event, stillCurrent: async () => {
           const current = await bundle.runtime.locate(event.session.id);
           if (!current) return false;
@@ -144,6 +145,20 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
       }
     }
   }
+  function queueHistoryProjection(id) {
+    const pending = historyWork.get(id);
+    if (pending) { pending.dirty = true; return; }
+    const state = { dirty: true };
+    historyWork.set(id, state);
+    void (async () => {
+      try {
+        // Coalesce per call, preserving projection order without placing file,
+        // Odoo or report I/O on the authoritative media cleanup path.
+        while (state.dirty) { state.dirty = false; await publishCurrentState(id); }
+      } catch { logger.warn?.('Native call history projection will retry.'); }
+      finally { historyWork.delete(id); }
+    })();
+  }
   async function recoverSession(id) {
     // A committed, still-ringing incoming alert must not wait for compatibility
     // history I/O or active-call/transfer housekeeping. The runtime claims the
@@ -152,9 +167,9 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     await bundle.runtime.dispatchIncomingAlert(id);
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.
-    await publishCurrentState(id).catch(() => logger.warn?.('Native call history projection will retry.'));
+    queueHistoryProjection(id);
     const result = await bundle.runtime.recoverSession(id);
-    await publishCurrentState(id).catch(() => logger.warn?.('Native call history projection will retry.'));
+    queueHistoryProjection(id);
     return result;
   }
   const queueRecovery = id => setImmediate(() => { recoverSession(id).catch(() => {}); });

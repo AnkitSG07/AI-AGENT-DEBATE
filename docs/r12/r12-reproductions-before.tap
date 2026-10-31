@@ -1,0 +1,177 @@
+TAP version 13
+# Subtest: lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice
+not ok 1 - lost incoming Accept acknowledgement resumes the exact existing leg without accepting twice
+  ---
+  duration_ms: 15.468682
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:14:1'
+  failureType: 'testCodeFailure'
+  error: 'The existing provider operation is still being reconciled.'
+  code: 'CALL_OPERATION_PENDING'
+  name: 'MediaError'
+  stack: |-
+    requireValue (file:///workspace/scratch/aa73a01fba65/work/backend/media/errors.mjs:12:25)
+    file:///workspace/scratch/aa73a01fba65/work/backend/call-runtime/call-runtime.mjs:382:9
+    async file:///workspace/scratch/aa73a01fba65/work/backend/media-store/firestore-media-store.mjs:337:22
+    async FirestoreFake2.runTransaction (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12-helpers.mjs:158:22)
+    async guarded (file:///workspace/scratch/aa73a01fba65/work/backend/media-store/firestore-media-store.mjs:305:18)
+    async CallRuntime.accept (file:///workspace/scratch/aa73a01fba65/work/backend/call-runtime/call-runtime.mjs:372:22)
+    async TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:20:19)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async startSubtest (node:internal/test_runner/harness:214:3)
+  ...
+# Subtest: an outgoing SDP answer received before the dial response is retained and connected once
+not ok 2 - an outgoing SDP answer received before the dial response is retained and connected once
+  ---
+  duration_ms: 4.653427
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:28:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:40:12)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: a delayed verified incoming offer retains its original bounded ringing lifetime
+not ok 3 - a delayed verified incoming offer retains its original bounded ringing lifetime
+  ---
+  duration_ms: 4.209889
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:49:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 1800000090000
+    - 1800000001000
+              ^
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1800000001000
+  actual: 1800000090000
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:54:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: claiming an incoming call durably cancels other-device ringing before provider answer completes
+not ok 4 - claiming an incoming call durably cancels other-device ringing before provider answer completes
+  ---
+  duration_ms: 3.746932
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:60:1'
+  failureType: 'testCodeFailure'
+  error: 'false == true'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:73:12)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: failed FCM delivery does not keep a settled pre-media call device busy
+not ok 5 - failed FCM delivery does not keep a settled pre-media call device busy
+  ---
+  duration_ms: 26.312668
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:78:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + {
+    +   callId: 'call-in-1',
+    +   deviceId: 'a',
+    +   identity: 'sh-op-ca978112ca1bbdcafac231b3-394d153c010a996a042e6a78',
+    +   kind: 'cleanup',
+    +   sessionId: 'call-in-1'
+    + }
+    - undefined
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  actual:
+    callId: 'call-in-1'
+    sessionId: 'call-in-1'
+    deviceId: 'a'
+    kind: 'cleanup'
+    identity: 'sh-op-ca978112ca1bbdcafac231b3-394d153c010a996a042e6a78'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:88:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: connected customer cleanup starts before a stalled notification delivery
+not ok 6 - connected customer cleanup starts before a stalled notification delivery
+  ---
+  duration_ms: 13.273553
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:93:1'
+  failureType: 'testCodeFailure'
+  error: 'false == true'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:102:16)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: an End intent bound to an earlier operator leg cannot terminate the current leg
+not ok 7 - an End intent bound to an earlier operator leg cannot terminate the current leg
+  ---
+  duration_ms: 9.278964
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:107:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: [Function (anonymous)]
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:110:3)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: an uncertain outgoing Connect response is not blindly replayed by recovery
+not ok 8 - an uncertain outgoing Connect response is not blindly replayed by recovery
+  ---
+  duration_ms: 7.956791
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:116:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    2 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-r12.test.mjs:124:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 0
+# fail 8
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 111.534411

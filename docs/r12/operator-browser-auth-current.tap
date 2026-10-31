@@ -1,0 +1,120 @@
+TAP version 13
+# Subtest: issuer requires a verified allowed Render profile, exact origin, and action header
+ok 1 - issuer requires a verified allowed Render profile, exact origin, and action header
+  ---
+  duration_ms: 7.614262
+  ...
+# Subtest: issuer creates server identity, short fixed-purpose scope and bounded absolute lease
+ok 2 - issuer creates server identity, short fixed-purpose scope and bounded absolute lease
+  ---
+  duration_ms: 1.037509
+  ...
+# Subtest: fresh grant cannot outlive the verified profile expiry or two hours
+ok 3 - fresh grant cannot outlive the verified profile expiry or two hours
+  ---
+  duration_ms: 0.686739
+  ...
+# Subtest: reconnect recovers expired short access only under a current matching profile and original absolute lease
+ok 4 - reconnect recovers expired short access only under a current matching profile and original absolute lease
+  ---
+  duration_ms: 1.515608
+  ...
+# Subtest: refresh preserves the grant and actor and never enlarges caller-supplied scopes or absolute expiry
+ok 5 - refresh preserves the grant and actor and never enlarges caller-supplied scopes or absolute expiry
+  ---
+  duration_ms: 1.510441
+  ...
+# Subtest: refresh and call controls reject expired access, wrong/missing origin, native and profile token confusion
+ok 6 - refresh and call controls reject expired access, wrong/missing origin, native and profile token confusion
+  ---
+  duration_ms: 1.251066
+  ...
+# Subtest: signature, audience, issuer, role, identity and scope validation are independent
+ok 7 - signature, audience, issuer, role, identity and scope validation are independent
+  ---
+  duration_ms: 2.248615
+  ...
+# Subtest: all legacy call, lock, presence, transfer and exact push helper routes require authority
+ok 8 - all legacy call, lock, presence, transfer and exact push helper routes require authority
+  ---
+  duration_ms: 2.45428
+  ...
+# Subtest: public config exposes only auth capability markers; authenticated desktop reaches operational config
+ok 9 - public config exposes only auth capability markers; authenticated desktop reaches operational config
+  ---
+  duration_ms: 1.216494
+  ...
+# Subtest: derived actor replaces every legacy caller alias and transfer source, preserving chosen target
+ok 10 - derived actor replaces every legacy caller alias and transfer source, preserving chosen target
+  ---
+  duration_ms: 1.077688
+  ...
+# Subtest: call event streaming requires header authority and rejects URL credentials
+ok 11 - call event streaming requires header authority and rejects URL credentials
+  ---
+  duration_ms: 0.657475
+  ...
+# Subtest: native authenticated history projection keeps useful IDs but strips nested SDP, raw payloads, joins and credentials
+ok 12 - native authenticated history projection keeps useful IDs but strips nested SDP, raw payloads, joins and credentials
+  ---
+  duration_ms: 1.272988
+  ...
+# Subtest: native history authorization never permits legacy writes, diagnostics, push registration or query-token streams
+ok 13 - native history authorization never permits legacy writes, diagnostics, push registration or query-token streams
+  ---
+  duration_ms: 0.680439
+  ...
+# Subtest: native storage faults remain retryable 503; deliberate revocation, expiry or identity mismatch are 401
+ok 14 - native storage faults remain retryable 503; deliberate revocation, expiry or identity mismatch are 401
+  ---
+  duration_ms: 0.979944
+  ...
+# Subtest: missing/weak browser secret never crashes startup or breaks valid native history
+ok 15 - missing/weak browser secret never crashes startup or breaks valid native history
+  ---
+  duration_ms: 0.73516
+  ...
+# Subtest: push helpers allow only authenticated browser or permitted same-origin profile with write CSRF checks
+ok 16 - push helpers allow only authenticated browser or permitted same-origin profile with write CSRF checks
+  ---
+  duration_ms: 0.66077
+  ...
+# Subtest: bounded login limiter counts failed attempts and passwords require a configured constant-length comparison
+ok 17 - bounded login limiter counts failed attempts and passwords require a configured constant-length comparison
+  ---
+  duration_ms: 0.616324
+  ...
+# Subtest: popup route validates allowlisted exact origins/state and emits nonce CSP with no query credentials
+ok 18 - popup route validates allowlisted exact origins/state and emits nonce CSP with no query credentials
+  ---
+  duration_ms: 11.13872
+  ...
+# Subtest: popup ignores wrong source/origin/state; only exact opener context reaches issuer without URL/storage tokens
+ok 19 - popup ignores wrong source/origin/state; only exact opener context reaches issuer without URL/storage tokens
+  ---
+  duration_ms: 3.090113
+  ...
+# Subtest: popup delivery validates response and sends capability only to exact opener target
+ok 20 - popup delivery validates response and sends capability only to exact opener target
+  ---
+  duration_ms: 3.135009
+  ...
+# Subtest: popup clears password before async profile login and never forwards it to opener
+ok 21 - popup clears password before async profile login and never forwards it to opener
+  ---
+  duration_ms: 2.114526
+  ...
+# Subtest: absolute-expired popup identity changes only after explicit new-session click
+ok 22 - absolute-expired popup identity changes only after explicit new-session click
+  ---
+  duration_ms: 1.729745
+  ...
+1..22
+# tests 22
+# suites 0
+# pass 22
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.586617

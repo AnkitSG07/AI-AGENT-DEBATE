@@ -7,10 +7,16 @@
   "scripts": {
     "start": "node server.js",
     "check:no-duplicate-odoo": "node scripts/check-no-duplicate-odoo.mjs",
-    "test:operator-storage": "node --test tests/operator-r10.test.mjs"
+    "test:operator-storage": "node scripts/test-operator.mjs",
+    "test:operator-r12": "node tests/operator-r12.test.mjs",
+    "test:operator-r12:emulator": "node tests/operator-r12-emulator.test.mjs",
+    "test:operator-reporting": "node reporting/test/operator-reporting.test.mjs",
+    "test:operator-call-auth": "node operator-browser-auth.test.mjs",
+    "test:operator-r13": "node scripts/verify-r13.mjs",
+    "test:operator-r13:media": "node scripts/verify-r13.mjs media"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   },
   "dependencies": {
     "@google-cloud/firestore": "8.7.1",

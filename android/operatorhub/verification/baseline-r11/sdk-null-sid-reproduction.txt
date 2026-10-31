@@ -1,0 +1,6 @@
+sid=null: NullPointerException
+  at livekit.LivekitRtc$TrackPermission.setParticipantSid(LivekitRtc.java:33333)
+  at livekit.LivekitRtc$TrackPermission.access$65100(LivekitRtc.java:33286)
+  at livekit.LivekitRtc$TrackPermission$Builder.setParticipantSid(LivekitRtc.java:33661)
+  at io.livekit.android.room.participant.ParticipantTrackPermission.toProto$livekit_android_sdk_release(LocalParticipant.kt:1911)
+sid=empty: OK identity=sh-customer-offline-test,sidLength=0,allTracks=true

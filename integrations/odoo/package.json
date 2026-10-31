@@ -1,0 +1,13 @@
+{
+  "name": "sh-operator-hub-ui-verification",
+  "private": true,
+  "version": "13.0.0",
+  "description": "Offline verification of the real Odoo embed and native Hub bridge",
+  "scripts": {
+    "test": "node --test tests/native-embed-r12.test.cjs tests/hub-ui-r12.test.cjs tests/transport-r12.test.cjs tests/notification-setup-r12.test.cjs tests/preservation-r12.test.cjs",
+    "test:legacy": "node tests/legacy-hub-r12.test.cjs && node tests/frontend-transfer-r9.test.cjs && node tests/android-transfer-guard.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

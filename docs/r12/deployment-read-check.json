@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-29T19:26:10.380920+00:00",
+  "publicReadOnly": true,
+  "checks": [
+    {
+      "url": "https://ai-agent-debate.onrender.com/api/operator-app/version",
+      "status": 404,
+      "errorType": "HTTPError"
+    },
+    {
+      "url": "https://www.smarthandicrafts.com/livechat-api-test",
+      "status": 403,
+      "errorType": "HTTPError"
+    },
+    {
+      "url": "https://github.com/AnkitSG07/AI-AGENT-DEBATE",
+      "operation": "read public main SHA",
+      "exitCode": 0,
+      "main": "8b863b7638acfa8c981c67ca536a0c0c83a46b94"
+    }
+  ]
+}

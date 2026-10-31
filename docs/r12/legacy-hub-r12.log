@@ -1,0 +1,15 @@
+PASS outgoing uses one real offer and request ID; final remote answer once; RTC controls Connected
+PASS cancel during microphone permission stops late stream and never posts an outgoing call
+PASS cancel before provider ID retains its exact guard until the late call is ended, then allows the next incoming call
+PASS incoming remains in same Hub and preserves another customer draft
+PASS declining a normal incoming call targets its exact ID without opening microphone
+PASS failed connection state overrides stale connected ICE and stops local media
+PASS provider cancellation before ID completes without a fabricated call or error
+PASS normal incoming cancel during microphone permission stops late tracks and releases ownership
+PASS retrying the same incoming call waits for its earlier delayed lock release
+PASS lost normal accept response ends the captured accepted call before releasing its lock
+PASS incoming and outgoing deep links focus/prefill only without microphone, calls, or chat jumps
+PASS recovery is status-only even for a real ringing call; ambiguous IDs and modes fail closed
+PASS presence respects shared manual availability and never claims push subscription
+PASS only explicit availability changes sync the paired base preference; closing does not persist Offline
+PASS phone and channel link parsing rejects text and numeric coercions while preserving normal formatting

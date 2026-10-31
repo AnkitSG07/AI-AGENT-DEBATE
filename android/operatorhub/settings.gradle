@@ -1,0 +1,11 @@
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google(); mavenCentral()
+        // Pinned audio routing dependency required by the official LiveKit SDK.
+        maven { url 'https://jitpack.io'; content { includeGroup 'com.github.davidliu' } }
+    }
+}
+rootProject.name = 'SmartHandicraftsOperatorHub'
+include ':app'

@@ -1,0 +1,106 @@
+TAP version 13
+# Subtest: all production inline scripts parse and full embed initializes with synthetic state
+ok 1 - all production inline scripts parse and full embed initializes with synthetic state
+  ---
+  duration_ms: 521.325747
+  type: 'test'
+  ...
+# Subtest: 390px inbox is a single app surface with modern Chats heading and hidden Odoo host chrome
+ok 2 - 390px inbox is a single app surface with modern Chats heading and hidden Odoo host chrome
+  ---
+  duration_ms: 293.354772
+  type: 'test'
+  ...
+# Subtest: desktop renders inbox and selected chat as two non-overlapping panels
+ok 3 - desktop renders inbox and selected chat as two non-overlapping panels
+  ---
+  duration_ms: 449.366819
+  type: 'test'
+  ...
+# Subtest: mobile composer stays within resized viewport and keeps the draft when keyboard space is reduced
+ok 4 - mobile composer stays within resized viewport and keeps the draft when keyboard space is reduced
+  ---
+  duration_ms: 466.650176
+  type: 'test'
+  ...
+# Subtest: late message response for chat A cannot replace selected chat B
+ok 5 - late message response for chat A cannot replace selected chat B
+  ---
+  duration_ms: 406.885747
+  type: 'test'
+  ...
+# Subtest: drafts are kept independently when switching chats and refreshing messages
+ok 6 - drafts are kept independently when switching chats and refreshing messages
+  ---
+  duration_ms: 471.605992
+  type: 'test'
+  ...
+# Subtest: failed thread refresh keeps the rendered messages and photo instead of blanking the conversation
+ok 7 - failed thread refresh keeps the rendered messages and photo instead of blanking the conversation
+  ---
+  duration_ms: 368.1049
+  type: 'test'
+  ...
+# Subtest: reading an older message keeps its visible anchor when a new message and missed call arrive
+ok 8 - reading an older message keeps its visible anchor when a new message and missed call arrive
+  ---
+  duration_ms: 402.397631
+  type: 'test'
+  ...
+# Subtest: sent/received photos and photo albums have no extra frame and survive 100 missed-call refreshes
+ok 9 - sent/received photos and photo albums have no extra frame and survive 100 missed-call refreshes
+  ---
+  duration_ms: 573.432374
+  type: 'test'
+  ...
+# Subtest: tapping the actual chat name opens contact info with customer and sales tools
+ok 10 - tapping the actual chat name opens contact info with customer and sales tools
+  ---
+  duration_ms: 632.907731
+  type: 'test'
+  ...
+# Subtest: labels are created with a chosen colour, confirmed by Odoo mock, then applied without replacing unrelated labels
+ok 11 - labels are created with a chosen colour, confirmed by Odoo mock, then applied without replacing unrelated labels
+  ---
+  duration_ms: 714.403739
+  type: 'test'
+  ...
+# Subtest: read-only Odoo label permissions disable create/edit/apply instead of pretending a local save succeeded
+ok 12 - read-only Odoo label permissions disable create/edit/apply instead of pretending a local save succeeded
+  ---
+  duration_ms: 357.362178
+  type: 'test'
+  ...
+# Subtest: system dark mode changes live without reloading images or losing a draft
+ok 13 - system dark mode changes live without reloading images or losing a draft
+  ---
+  duration_ms: 485.237078
+  type: 'test'
+  ...
+# Subtest: missed-call page filters real rendered history rows and preserves them on unchanged refresh
+ok 14 - missed-call page filters real rendered history rows and preserves them on unchanged refresh
+  ---
+  duration_ms: 345.868508
+  type: 'test'
+  ...
+# Subtest: mail folder, camera picker and conversation menus render clean text and SVG icons
+ok 15 - mail folder, camera picker and conversation menus render clean text and SVG icons
+  ---
+  duration_ms: 370.227941
+  type: 'test'
+  ...
+# Subtest: touch chrome suppresses selection, message long press exposes Copy, and desktop message selection remains available
+ok 16 - touch chrome suppresses selection, message long press exposes Copy, and desktop message selection remains available
+  ---
+  duration_ms: 1271.087129
+  type: 'test'
+  ...
+1..16
+# tests 16
+# suites 0
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 8565.144863

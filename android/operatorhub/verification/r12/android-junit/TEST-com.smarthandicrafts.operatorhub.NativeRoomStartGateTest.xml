@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:33" hostname="ca82e965341e" time="0.001">
+  <properties/>
+  <testcase name="oldPermissionResultCannotAuthorizeADifferentIncomingCall" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.0"/>
+  <testcase name="delayedStartWaitingForResumeCannotUseNewIntentFields" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.0"/>
+  <testcase name="unrelatedPermissionCallbackCannotConsumeTheCallPrompt" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.0"/>
+  <testcase name="declineOrDestructionInvalidatesPendingPermissionButDoesNotRelabelIt" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.0"/>
+  <testcase name="permissionAndResumeCallbacksMayStartAnAttemptOnlyOnce" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.0"/>
+  <testcase name="aLateAcceptCapabilityResultCannotStartTheNewIntentCall" classname="com.smarthandicrafts.operatorhub.NativeRoomStartGateTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,440 @@
+TAP version 13
+# Subtest: capability false preserves existing call click
+ok 1 - capability false preserves existing call click
+  ---
+  duration_ms: 536.745226
+  type: 'test'
+  ...
+# Subtest: actual R8 header routes exact phone/channel once before old handlers
+ok 2 - actual R8 header routes exact phone/channel once before old handlers
+  ---
+  duration_ms: 152.049926
+  type: 'test'
+  ...
+# Subtest: a phone in a name is never inferred when explicit phone is absent
+ok 3 - a phone in a name is never inferred when explicit phone is absent
+  ---
+  duration_ms: 190.20559
+  type: 'test'
+  ...
+# Subtest: contact drawer uses its explicit number, not a different selected chat
+ok 4 - contact drawer uses its explicit number, not a different selected chat
+  ---
+  duration_ms: 173.682344
+  type: 'test'
+  ...
+# Subtest: history callback uses exact call key and no stale selected phone
+not ok 5 - history callback uses exact call key and no stale selected phone
+  ---
+  duration_ms: 137.349298
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:39:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+        action: 'callback',
+    +   callId: 'session:wa:history-1',
+    -   callId: 'wa:history-1',
+        type: 'native-call'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    type: 'native-call'
+    action: 'callback'
+    callId: 'wa:history-1'
+  actual:
+    type: 'native-call'
+    action: 'callback'
+    callId: 'session:wa:history-1'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:41:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: keyed Accept and Reject preserve the exact incoming ID
+not ok 6 - keyed Accept and Reject preserve the exact incoming ID
+  ---
+  duration_ms: 204.74531
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:43:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'accept',
+    +     'session:wa:incoming-1'
+    -     'wa:incoming-1'
+        ],
+        [
+          'reject',
+    +     'session:wa:incoming-1'
+    -     'wa:incoming-1'
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'accept'
+      1: 'wa:incoming-1'
+    1:
+      0: 'reject'
+      1: 'wa:incoming-1'
+  actual:
+    0:
+      0: 'accept'
+      1: 'session:wa:incoming-1'
+    1:
+      0: 'reject'
+      1: 'session:wa:incoming-1'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:45:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: unkeyed old panel never guesses an incoming call
+ok 7 - unkeyed old panel never guesses an incoming call
+  ---
+  duration_ms: 130.318453
+  type: 'test'
+  ...
+# Subtest: native active call opens rather than placing another call
+ok 8 - native active call opens rather than placing another call
+  ---
+  duration_ms: 153.505596
+  type: 'test'
+  ...
+# Subtest: manual dial uses the explicit input and unrelated tools remain untouched
+ok 9 - manual dial uses the explicit input and unrelated tools remain untouched
+  ---
+  duration_ms: 208.002653
+  type: 'test'
+  ...
+# Subtest: untrusted synthetic click does not trigger native media entry
+ok 10 - untrusted synthetic click does not trigger native media entry
+  ---
+  duration_ms: 114.987094
+  type: 'test'
+  ...
+# Subtest: bridge is disabled outside the exact Hub page
+ok 11 - bridge is disabled outside the exact Hub page
+  ---
+  duration_ms: 147.854442
+  type: 'test'
+  ...
+# Subtest: stale keyed End preserves its original ID instead of the new active call
+ok 12 - stale keyed End preserves its original ID instead of the new active call
+  ---
+  duration_ms: 182.333693
+  type: 'test'
+  ...
+# Subtest: local release closes only the exact keyed old call panel and banner
+not ok 13 - local release closes only the exact keyed old call panel and banner
+  ---
+  duration_ms: 99.313351
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:69:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        true,
+    +   false,
+    -   true,
+        0
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: true
+    1: true
+    2: 0
+  actual:
+    0: true
+    1: false
+    2: 0
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:75:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: release of a different call leaves current panels and unrelated chat alone
+ok 14 - release of a different call leaves current panels and unrelated chat alone
+  ---
+  duration_ms: 101.904655
+  type: 'test'
+  ...
+# Subtest: keyed panel Accept and Decline route the displayed call without opening a chooser
+not ok 15 - keyed panel Accept and Decline route the displayed call without opening a chooser
+  ---
+  duration_ms: 241.99829
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:82:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+    +     'incoming',
+    +     undefined
+    -     'accept',
+    -     'wa:displayed'
+        ],
+        [
+    +     'incoming',
+    +     undefined
+    -     'reject',
+    -     'wa:displayed'
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'accept'
+      1: 'wa:displayed'
+    1:
+      0: 'reject'
+      1: 'wa:displayed'
+  actual:
+    0:
+      0: 'incoming'
+    1:
+      0: 'incoming'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:90:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: an outgoing attempt without a provider ID reopens the native call instead of starting another
+not ok 16 - an outgoing attempt without a provider ID reopens the native call instead of starting another
+  ---
+  duration_ms: 253.715503
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:94:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        {
+    +     action: 'start',
+    +     channelId: 101,
+    +     displayName: 'Synthetic Customer',
+    +     phone: '919999000001',
+    -     action: 'current',
+          type: 'native-call'
+        },
+        {
+    +     action: 'dial',
+    -     action: 'current',
+          type: 'native-call'
+        }
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      type: 'native-call'
+      action: 'current'
+    1:
+      type: 'native-call'
+      action: 'current'
+  actual:
+    0:
+      type: 'native-call'
+      action: 'start'
+      phone: '919999000001'
+      channelId: 101
+      displayName: 'Synthetic Customer'
+    1:
+      type: 'native-call'
+      action: 'dial'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:98:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: native transfer capability enables the exact current call while legacy transfer endpoints remain blocked
+not ok 17 - native transfer capability enables the exact current call while legacy transfer endpoints remain blocked
+  ---
+  duration_ms: 104.176056
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:102:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:109:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a different call panel cannot transfer the active native call
+ok 18 - a different call panel cannot transfer the active native call
+  ---
+  duration_ms: 145.479429
+  type: 'test'
+  ...
+# Subtest: native capability revocation disables transfer immediately
+not ok 19 - native capability revocation disables transfer immediately
+  ---
+  duration_ms: 120.855559
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:127:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:134:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a generic event row ID cannot answer, reject, or end the newer native call
+not ok 20 - a generic event row ID cannot answer, reject, or end the newer native call
+  ---
+  duration_ms: 272.998954
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:139:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    +   'incoming',
+    +   'incoming',
+    +   'end'
+    -   'unavailable',
+    -   'unavailable',
+    -   'unavailable'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'unavailable'
+    1: 'unavailable'
+    2: 'unavailable'
+  actual:
+    0: 'incoming'
+    1: 'incoming'
+    2: 'end'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:146:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: an explicit opaque provider ID is preserved even when it begins with session:
+not ok 21 - an explicit opaque provider ID is preserved even when it begins with session:
+  ---
+  duration_ms: 172.473344
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:150:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   action: 'incoming',
+    -   action: 'accept',
+    -   callId: 'session:opaque-provider',
+        type: 'native-call'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    type: 'native-call'
+    action: 'accept'
+    callId: 'session:opaque-provider'
+  actual:
+    type: 'native-call'
+    action: 'incoming'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:156:10)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: event-only call history opens the dialer without submitting the row ID to the call API
+not ok 22 - event-only call history opens the dialer without submitting the row ID to the call API
+  ---
+  duration_ms: 168.194232
+  type: 'test'
+  location: '/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:159:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   action: 'callback',
+    +   callId: 'event:log-row-9',
+    -   action: 'dial',
+        type: 'native-call'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    type: 'native-call'
+    action: 'dial'
+  actual:
+    type: 'native-call'
+    action: 'callback'
+    callId: 'event:log-row-9'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/workspace/scratch/aa73a01fba65/work/operator-android/test-native-room-bridge.cjs:161:53)
+    async Test.run (node:internal/test_runner/test:1409:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..22
+# tests 22
+# suites 0
+# pass 12
+# fail 10
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4792.334005
