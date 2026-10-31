@@ -45,6 +45,21 @@ final class NativeRoomCleanupProcessor {
                 }
                 String id = record.optString("callId"), transferId = record.optString("transferId");
                 if (!HubPolicy.validCallId(id)) { queue.remove(key, requestId); continue; }
+                String expectedLeg = record.optString("ownerLegId");
+                if ("end".equals(record.optString("intent")) && transferId.isEmpty() && !expectedLeg.isEmpty()) {
+                    // Current server validates ownership + immutable leg atomically.
+                    // A status GET here added a full phone/server/database round trip.
+                    if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); continue; }
+                    try {
+                        api.request("/calls/" + encode(id) + "/end", "POST",
+                            new JSONObject().put("requestId", requestId).put("expectedOwnerLegId", expectedLeg), credential.bearer);
+                        queue.remove(key, requestId); continue;
+                    } catch (NativeApi.ApiException error) {
+                        // R13 servers require the older versioned contract. Keep
+                        // compatibility while the backend/APK rollout overlaps.
+                        if (!"STALE_CALL_VERSION".equals(error.errorCode)) throw error;
+                    }
+                }
                 JSONObject call = api.request("/calls/" + encode(id) + "/status", "GET", null, credential.bearer).getJSONObject("call");
                 if (!DeviceLeasePolicy.sameIdentity(credential, device.current())) { queue.remove(key, requestId); continue; }
                 JSONObject transfer = call.optJSONObject("transfer");
@@ -54,7 +69,6 @@ final class NativeRoomCleanupProcessor {
                 NativeRoomPolicy.Cleanup action = "decline".equals(record.optString("intent"))
                     ? NativeRoomPolicy.declineAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target)
                     : NativeRoomPolicy.cleanupAction(credential.deviceId, NativeRoomJson.text(call,"ownerDeviceId"), call.optString("phase"), transferId, transferKey, transferStatus, target);
-                String expectedLeg = record.optString("ownerLegId");
                 // Never adopt a newly observed owner leg for an old queued End (A -> B -> A).
                 if (action == NativeRoomPolicy.Cleanup.END && !expectedLeg.isEmpty() && !expectedLeg.equals(NativeRoomJson.text(call,"ownerLegId"))) action = NativeRoomPolicy.Cleanup.NONE;
                 if (action == NativeRoomPolicy.Cleanup.END && !transferId.isEmpty() && expectedLeg.isEmpty() && !transferId.equals(transferKey)) action = NativeRoomPolicy.Cleanup.NONE;

@@ -95,7 +95,7 @@ export class TransferController {
     const actor = await this.authenticate(context);
     requireValue(actor?.authenticated === true && actor.canCall === true && actor.deviceId && actor.userId && actor.tenantId,
       'UNAUTHENTICATED_DEVICE', 'A signed-in, enrolled operator device is required.', 401);
-    const registered = await this.resolveDevice(actor.deviceId);
+    const registered = await this.resolveDevice(actor.deviceId, context);
     requireValue(registered && registered.revoked !== true && registered.deviceId === actor.deviceId &&
       registered.userId === actor.userId && registered.tenantId === actor.tenantId,
       'DEVICE_BINDING_INVALID', 'This device is not enrolled for the authenticated operator.', 403);
@@ -151,9 +151,10 @@ export class TransferController {
     await this.expire(callId);
     const transferId = `tr_${randomUUID()}`;
     return this.store.transaction(async tx => {
-      const call = await tx.get(callStoreKey(callId));
-      const targetReservation = await tx.get(deviceReservationKey(toDeviceId));
-      const sourceReservation = await tx.get(deviceReservationKey(actor.deviceId));
+      const [call, targetReservation, sourceReservation] = await Promise.all([
+        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(toDeviceId)),
+        tx.get(deviceReservationKey(actor.deviceId))
+      ]);
       this.requireCall(call, actor);
       const replay = call.requests[`${actor.deviceId}:${requestId}`];
       if (replay) {
@@ -194,8 +195,9 @@ export class TransferController {
     const attemptId = `leg_${randomUUID()}`;
     const readinessNonce = randomUUID();
     const prepared = await this.store.transaction(async tx => {
-      const call = await tx.get(callStoreKey(callId));
-      const reservation = await tx.get(deviceReservationKey(actor.deviceId));
+      const [call, reservation] = await Promise.all([
+        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(actor.deviceId))
+      ]);
       this.requireCall(call, actor);
       const transfer = this.requireTransfer(call, transferId, actor, 'target');
       if (['completed', 'completing'].includes(transfer.status)) return { result: visible(call, transfer) };
@@ -264,9 +266,10 @@ export class TransferController {
     // Revocation during a slow provider/telemetry check must be observed before commit.
     await this.recheckActor(context, actor);
     return this.store.transaction(async tx => {
-      const call = await tx.get(callStoreKey(callId));
-      const destination = await tx.get(deviceReservationKey(actor.deviceId));
-      const source = await tx.get(deviceReservationKey(transfer.fromDeviceId));
+      const [call, destination, source] = await Promise.all([
+        tx.get(callStoreKey(callId)), tx.get(deviceReservationKey(actor.deviceId)),
+        tx.get(deviceReservationKey(transfer.fromDeviceId))
+      ]);
       this.requireCall(call, actor); this.requireActive(call);
       const current = this.requireTransfer(call, transferId, actor, 'target');
       // Terminal events, cancellation, expiry or another commit during I/O win.

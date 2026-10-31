@@ -10,10 +10,10 @@ import { createBoundedNativeReject } from '../media/native-meta-reject.mjs';
  * Construction performs no network action. verifyConfiguration() is a read-only
  * control API check; it never proves audio or enables transfer by itself. */
 export function createNativeCallRuntime({ store, env, authenticate, resolveDevice, listDevices,
-  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable,
+  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable, onTiming,
   phoneNumberId, minimumNativeBuild = 10, tenantId = 'smart-handicrafts', now = Date.now,
   provider: injectedProvider } = {}) {
-  const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env));
+  const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env), { onTiming });
   // Production native declines must not inherit the legacy browser adapter's
   // unbounded HTTP lifetime. Tests can still inject an isolated provider stub.
   const nativeReject = injectedProvider ? rejectIncoming : createBoundedNativeReject({

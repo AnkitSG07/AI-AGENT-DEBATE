@@ -69,12 +69,17 @@ public class NativeRoomCleanupProcessorTest {
         assertEquals(1,posts.size()); assertEquals("leg-A1",posts.get(0).getString("expectedOwnerLegId")); assertEquals(REQUEST,posts.get(0).getString("requestId"));
     }
     @Test public void oldAEndCannotEndTheSameCallTransferredBackToANewLeg() throws Exception {
-        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-A1", "end", "").toString()); AtomicInteger writes = new AtomicInteger();
-        new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> { if (!method.equals("GET")) writes.incrementAndGet(); return status(ID,"leg-A2","connected",null); }).runPass(NOW);
-        assertEquals(0,writes.get()); assertTrue(q.records.isEmpty());
+        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-A1", "end", "").toString()); AtomicInteger attempts = new AtomicInteger();
+        new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> {
+            assertEquals("POST",method); assertEquals("leg-A1",body.getString("expectedOwnerLegId")); attempts.incrementAndGet();
+            throw new NativeApi.ApiException(409,"owner changed",new JSONObject().put("code","CALL_LEG_CHANGED"));
+        }).runPass(NOW);
+        // The current server rejects the exact obsolete leg atomically. It must
+        // never be refreshed to adopt A2, or retried as an unscoped End.
+        assertEquals(1,attempts.get()); assertTrue(q.records.isEmpty());
     }
     @Test public void statusCompletingAfterReenrollmentCannotAuthorizeAWrite() throws Exception {
-        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-A1", "end", "").toString()); AtomicInteger writes = new AtomicInteger();
+        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-A1", "end", "T1").toString()); AtomicInteger writes = new AtomicInteger();
         new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> {
             if (!method.equals("GET")) writes.incrementAndGet();
             d.credential = new DeviceLeasePolicy.Credential(ID,TOKEN,NOW + 1000000,2);
@@ -100,8 +105,14 @@ public class NativeRoomCleanupProcessorTest {
             posts.incrementAndGet(); throw new NativeApi.ApiException(409,"version changed",new JSONObject().put("code","VERSION_CONFLICT"));
         };
         assertTrue(new NativeRoomCleanupProcessor(q,d,conflict).runPass(NOW));
-        new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> { if (method.equals("POST")) posts.incrementAndGet(); return status("B","leg-B","connected",null); }).runPass(NOW + 1000);
-        assertEquals(1,posts.get()); assertTrue(q.records.isEmpty());
+        new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> {
+            assertEquals("POST",method); posts.incrementAndGet();
+            assertEquals("leg-A1",body.getString("expectedOwnerLegId")); assertEquals(REQUEST,body.getString("requestId"));
+            // Atomic exact-leg End now goes straight to the server. A changed
+            // owner rejects it; the client never adopts B's observed leg.
+            throw new NativeApi.ApiException(403,"owner changed",new JSONObject().put("code","NOT_CALL_OWNER"));
+        }).runPass(NOW + 1000);
+        assertEquals(2,posts.get()); assertTrue(q.records.isEmpty());
     }
     @Test public void ambiguousLegacyEndIsDroppedWhenServerRequiresItsOriginalLeg() throws Exception {
         Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("", "end", "").toString());
@@ -134,5 +145,27 @@ public class NativeRoomCleanupProcessorTest {
     @Test public void oldOrExpiredQueueEntriesAreBoundedAndDoNotSendAnything() throws Exception {
         Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg", "end", "").put("createdAt",NOW-NativeRoomCleanupProcessor.MAX_AGE_MS-1).toString());
         new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> { throw new AssertionError("must not send expired cleanup"); }).runPass(NOW); assertTrue(q.records.isEmpty());
+    }
+    @Test public void exactLegEndPostsImmediatelyWithoutAStatusGet() throws Exception {
+        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-now", "end", "").toString());
+        AtomicInteger posts = new AtomicInteger();
+        assertFalse(new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> {
+            assertEquals("POST",method); assertEquals("/calls/"+CALL+"/end",path);
+            assertFalse(body.has("version")); assertEquals("leg-now",body.getString("expectedOwnerLegId"));
+            assertEquals(REQUEST,body.getString("requestId")); posts.incrementAndGet(); return new JSONObject().put("ok",true);
+        }).runPass(NOW));
+        assertEquals(1,posts.get()); assertTrue(q.records.isEmpty());
+    }
+    @Test public void olderBackendFallsBackToItsVersionedContractWithTheSameLegAndRequestId() throws Exception {
+        Queue q = new Queue(); Device d = new Device(); q.records.put("q", record("leg-now", "end", "").toString());
+        List<String> methods = new ArrayList<>();
+        assertFalse(new NativeRoomCleanupProcessor(q,d,(path,method,body,bearer) -> {
+            methods.add(method);
+            if (method.equals("GET")) return status(ID,"leg-now","connected",null);
+            assertEquals(REQUEST,body.getString("requestId")); assertEquals("leg-now",body.getString("expectedOwnerLegId"));
+            if (!body.has("version")) throw new NativeApi.ApiException(409,"version required",new JSONObject().put("code","STALE_CALL_VERSION"));
+            assertEquals(7,body.getLong("version")); return new JSONObject().put("ok",true);
+        }).runPass(NOW));
+        assertEquals(Arrays.asList("POST","GET","POST"),methods); assertTrue(q.records.isEmpty());
     }
 }

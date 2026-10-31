@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit;
 public final class NativeRoomCleanup {
     private static final NativeRoomDrainGate GATE = new NativeRoomDrainGate();
     private static final Object LOCK = new Object();
+    // End/Decline cannot queue behind Hub history, enrollment or contact loads.
+    private static final java.util.concurrent.ExecutorService CONTROL_IO = java.util.concurrent.Executors.newSingleThreadExecutor();
     public static void enqueueOutgoingCancellation(Context context, DeviceLeasePolicy.Credential credential, String requestId) {
         if (requestId == null || !requestId.matches("[A-Za-z0-9_-]{16,100}")) return;
         enqueueRecord(context, credential, "outgoing:" + requestId, "", "", requestId, "end", "");
@@ -51,7 +53,7 @@ public final class NativeRoomCleanup {
                 // Duplicate taps and late ACKs retain the same idempotency key and retry age.
                 if (!prefs(app).contains(key) && !prefs(app).edit().putString(key, record.toString()).commit()) throw new IllegalStateException();
             }
-            schedule(app); drain(app);
+            drain(app); schedule(app);
         } catch (Exception ignored) { store.problemIfMatches(credential, "Local audio stopped; reopen the app to check server call cleanup."); }
     }
     static void schedule(Context context) {
@@ -66,7 +68,7 @@ public final class NativeRoomCleanup {
     public static void drain(Context context) {
         Context app = context.getApplicationContext();
         if (!hasRecords(app) || !GATE.request()) return;
-        HubApplication.IO.execute(() -> {
+        CONTROL_IO.execute(() -> {
             boolean pending = runOwned(app);
             // The OS retry is sufficient beyond a short immediate retry; no background polling loop.
             if (pending) schedule(app);

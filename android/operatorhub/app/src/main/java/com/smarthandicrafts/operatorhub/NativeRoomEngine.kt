@@ -45,6 +45,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var muted = false
     private var mutePending = false
     private var focusLost = false
+    private var startupEvidenceSent = false
     private val routeListener = object : AudioDeviceChangeListener {
         override fun invoke(audioDevices: List<AudioDevice>, selectedAudioDevice: AudioDevice?) {
             scope.launch {
@@ -119,7 +120,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 setupStage = NativeRoomAudioSetup.Stage.CUSTOMER_SUBSCRIPTION
                 subscribeCustomer()
                 setupStage = NativeRoomAudioSetup.Stage.AUDIO_ACTIVE
-                launch { while (isActive && !closed) { sample(); delay(1000) } }
+                launch { while (isActive && !closed) { sample(); delay(if (startupEvidenceSent) 1000 else 500) } }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
         }
@@ -258,6 +259,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 .put("iceState", "succeeded").put("dtlsState", "connected")
                 .put("customerMuted", customerMuted)
             if (mutedTransport) evidence.put("readinessMode", "customer-muted-transport").put("customerTrackSubscribed", true)
+            startupEvidenceSent = true
             listener.onEvidence(evidence)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { previous = null /* No guessed readiness on a missing/unsupported stat. */ }

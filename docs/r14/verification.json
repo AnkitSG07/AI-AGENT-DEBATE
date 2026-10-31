@@ -1,0 +1,39 @@
+{
+  "release": "SH Chat R14 call latency fix",
+  "baselineCommit": "be45a0c457262df9fa864ffa2c32dc8630379ac0",
+  "backend": {
+    "pass": 623,
+    "fail": 0,
+    "runtimeAndBackendTestInputsMatch": true
+  },
+  "firestoreEmulator": {
+    "pass": 10,
+    "fail": 0
+  },
+  "androidJvm": {
+    "suites": 23,
+    "tests": 207,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "androidReleaseLint": "passed",
+  "androidAssembly": "passed",
+  "browser": "blocked before application assertions: sandbox denies local Unix socket creation",
+  "androidOsNative": "not executed on this host",
+  "physicalPhoneAcceptance": "not measured; actual Meta/FCM/LiveKit Cloud and handset timing still need retest",
+  "apk": {
+    "filename": "SH-Chat-1.0-r14-CALL-LATENCY-FIX-SIGNED.apk",
+    "bytes": 59516505,
+    "sha256": "b06c040bbd6327ccce21af248080dd761e6ec9c4a6849bc571ec79c125642e09",
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "package": "com.smarthandicrafts.operatorhub",
+    "versionCode": 14,
+    "versionName": "1.0-r14",
+    "zipIntegrity": "passed",
+    "cryptographicSignature": "passed",
+    "r13FreshReleaseSignerMatches": true
+  },
+  "signingKeyPublished": false,
+  "hostingPlanOrBillingChanged": false
+}

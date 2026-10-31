@@ -410,9 +410,9 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         return current?.state === 'claimed' && !deliverySent(current) ? 'pending' : 'skipped';
       }
       const validDevice = async () => {
-        const device = await getDevice(descriptor.deviceId);
+        const [device, current] = await Promise.all([getDevice(descriptor.deviceId), stillCurrent()]);
         if (!eligibleDevice(device, descriptor.event) || clock() >= Number(data.expires_at_ms)) return null;
-        if (!await stillCurrent() || clock() >= Number(data.expires_at_ms) ||
+        if (!current || clock() >= Number(data.expires_at_ms) ||
             (claim.claimUntilMs && clock() >= claim.claimUntilMs)) return null;
         return device;
       };
@@ -496,6 +496,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   // Called only by the authenticated, durable room-call coordinator. FCM wakes
   // an enrolled client; the client rechecks server state before any call action.
   async function publishRoomEvent({ session, event, transferId = '', toDeviceId = '', expiresAtMs, stillCurrent = async () => true } = {}) {
+    const started = performance.now();
     configured();
     const id = callIdValue(session?.id), isTransfer = event === 'transfer-incoming' || event === 'transfer-ended';
     if (!id || !['incoming', 'ended', 'transfer-incoming', 'transfer-ended'].includes(event) ||
@@ -504,7 +505,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     // Transfers use a separate bounded deduplication key; the real call and
     // transfer IDs stay in the signed-in client payload, never in credentials.
     const scopeId = isTransfer ? `transfer_${HASH(JSON.stringify([id, transferId]))}` : id;
-    const rows = await listDevices();
+    const rows = toDeviceId ? [await getDevice(toDeviceId)].filter(Boolean) : await listDevices();
     const targets = rows.filter(row => eligibleDevice(row, deliveryEvent) &&
       row.mediaProtocol === 'sh-room-audio-v1' && row.nativeBuild >= 10 &&
       (!toDeviceId || row.id === toDeviceId));
@@ -522,6 +523,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       if (outcome === 'sent') sent++;
       if (outcome === 'failed' || outcome === 'pending') failed++;
     }));
+    logger.info?.('SH_CALL_PUSH_TIMING', JSON.stringify({ event, elapsedMs: Math.round(performance.now() - started), sent, failed }));
     if (failed) throw fail(503, 'Native call alerts will retry after notification delivery recovers.');
     return { ok: true, sent, failed };
   }

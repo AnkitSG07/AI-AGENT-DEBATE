@@ -58,6 +58,10 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const workerId = `render_${randomUUID()}`;
   const publishedStates = new Map();
   const historyWork = new Map();
+  // Reuse only the row returned by the immediately preceding authentication
+  // of this request. Every recheck authenticates again and replaces it. There
+  // is no cross-request or time-based credential/revocation cache.
+  const authenticatedRows = new WeakMap();
   const blocked = new Set(String(env.SH_ANDROID_REVOKED_DEVICE_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   const roomCallingRequested = () => env.SH_NATIVE_CALLS_ENABLED === 'true' && !!appSecret;
   const normalize = row => row ? { deviceId: row.id, userId: `native:${row.id}`, tenantId: 'smart-handicrafts',
@@ -70,6 +74,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     error?.registryError && error.status < 500 ? error.message : 'Device storage is temporarily unavailable.',
     error?.registryError && error.status < 500 ? error.status : 503);
   async function authenticate(req) {
+    authenticatedRows.delete(req);
     if (!registry) throw unavailable();
     const bearer = String(req.headers?.authorization || '');
     if (!/^Bearer [A-Za-z0-9_.-]{45,240}$/.test(bearer)) throw new MediaError('DEVICE_AUTH_REQUIRED', 'Enroll this device in App settings first.', 401);
@@ -85,10 +90,14 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
         if (row.nativeBuild !== numeric || row.mediaProtocol !== protocol)
           row = await registry.updateNativeClient(raw, { nativeBuild: numeric, mediaProtocol: protocol });
       }
-      return normalize(row);
+      const current = normalize(row);
+      authenticatedRows.set(req, current);
+      return current;
     } catch (error) { if (error instanceof MediaError) throw error; throw mapRegistryError(error); }
   }
-  async function resolveDevice(id) {
+  async function resolveDevice(id, req) {
+    const authenticated = req && authenticatedRows.get(req);
+    if (authenticated?.deviceId === id) return { ...authenticated };
     try { return normalize(await registry.getDevice(id)); }
     catch (error) { throw mapRegistryError(error); }
   }
@@ -119,6 +128,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     }
     if (mediaStore && phoneNumberId) {
       bundle = runtimeFactory({ store: mediaStore, env, authenticate, resolveDevice, listDevices,
+        onTiming: value => logger.info?.('SH_CALL_PROVIDER_TIMING', JSON.stringify(value)),
         capabilities: policy, rejectIncoming, onWorkAvailable: id => queueRecovery(id), phoneNumberId, minimumNativeBuild: 10, now,
         notify: async event => pushBridge.publishRoomEvent({ ...event, stillCurrent: async () => {
           const current = await bundle.runtime.locate(event.session.id);
@@ -164,7 +174,10 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     // history I/O or active-call/transfer housekeeping. The runtime claims the
     // same durable outbox job; fresh state and per-device delivery claims still
     // suppress stale, answered and duplicate alerts across workers.
-    await bundle.runtime.dispatchIncomingAlert(id);
+    // Terminal work takes the cleanup lane immediately, skipping no-op alert
+    // claims. Setup signaling and transfer push have independent durable leases.
+    if (bundle.runtime.dispatchRealtimeWork) await bundle.runtime.dispatchRealtimeWork(id);
+    else await bundle.runtime.dispatchIncomingAlert(id);
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.
     queueHistoryProjection(id);
@@ -202,7 +215,8 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     verifyWebhook: req => verifyMetaWebhook(req, appSecret),
     async verifyConfiguration() { return verifyConfiguration(); },
     mount(app) {
-      if (bundle) mountNativeCallRoutes(app, { runtime: bundle.runtime, scheduleRecovery: queueRecovery });
+      if (bundle) mountNativeCallRoutes(app, { runtime: bundle.runtime, scheduleRecovery: queueRecovery,
+        onTiming: value => { if (value.action !== 'status' || value.elapsedMs >= 750) logger.info?.('SH_CALL_TIMING', JSON.stringify(value)); } });
       else app.get('/api/operator-android/capabilities', async (req, res) => {
         try { await authenticate(req); res.set('Cache-Control', 'no-store').json({ ok: true,
           capabilities: { protocol: 'sh-room-audio-v1', minimumNativeBuild: 10, nativeRoomCalls: false,
@@ -259,6 +273,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
         if (offer && !roomCallingRequested() && !await bundle.runtime.locate(row.call_id)) continue;
         const types = terminal ? ['terminate'] : [...(offer ? ['incoming'] : []), ...(answer ? ['connect'] : []), ...(accepted ? ['accepted'] : [])];
         for (const type of types) {
+        const receivedAt = now(), started = performance.now();
         const result = await bundle.runtime.ingestVerifiedMetaEvent({ verified: true,
           eventId: createHash('sha256').update(JSON.stringify([type, row.id || [row.call_id, row.event, row.status,
             row.timestamp, createHash('sha256').update(String(session.sdp || '')).digest('hex')]])).digest('hex'),
@@ -268,6 +283,11 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
           customerPhone: row.customer_phone, customerName: row.customer_name,
           channelId: Number.isSafeInteger(Number(row.odoo_channel_id)) && Number(row.odoo_channel_id) > 0 ? Number(row.odoo_channel_id) : undefined,
           occurredAtMs: Number(row.timestamp) * 1000 });
+        const timestamp = Number(row.timestamp) * 1000;
+        logger.info?.('SH_CALL_WEBHOOK_TIMING', JSON.stringify({ event: type,
+          elapsedMs: Math.round(performance.now() - started),
+          ...(Number.isFinite(timestamp) && timestamp > 0 ? { providerAgeAtReceiveMs: Math.max(0, receivedAt - timestamp) } : {}),
+          handled: result.handled === true }));
         if (result.handled) handled++;
         if (result.sessionId) queueRecovery(result.sessionId);
         }

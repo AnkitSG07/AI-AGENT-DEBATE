@@ -134,7 +134,7 @@ export class CallRuntime {
     const value = await this.authenticate(context);
     requireValue(value?.authenticated === true && value.canCall === true && value.tenantId === this.tenantId,
       'UNAUTHENTICATED_DEVICE', 'An enrolled operator bearer credential is required.', 401);
-    const registered = await this.resolveDevice(identifier(value.deviceId));
+    const registered = await this.resolveDevice(identifier(value.deviceId), context);
     requireValue(registered && registered.revoked !== true && registered.deviceId === value.deviceId &&
       registered.userId === value.userId && registered.tenantId === this.tenantId &&
       Number.isSafeInteger(value.credentialGeneration) && value.credentialGeneration >= 1 &&
@@ -291,18 +291,22 @@ export class CallRuntime {
     const session = await this.locate(id); this.requireSession(session);
     const call = session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
     requireValue(call?.active && call.owner.deviceId === actor.deviceId, 'NOT_CALL_OWNER', 'Only the current operator can choose a transfer target.', 403);
-    const rows = await this.listDevices?.({ tenantId: this.tenantId, limit: 16 });
+    const [rows, policy] = await Promise.all([
+      this.listDevices?.({ tenantId: this.tenantId, limit: 16 }), this.capabilityProvider()
+    ]);
     requireValue(Array.isArray(rows) && rows.length <= 16, 'DEVICE_LIST_UNAVAILABLE', 'The bounded device list is unavailable.', 503);
-    const result = [];
-    for (const row of rows) {
-      if (row.deviceId === actor.deviceId || row.revoked || row.tenantId !== this.tenantId || row.mediaProtocol !== 'sh-room-audio-v1' ||
-        row.nativeBuild < this.minimumNativeBuild || row.credentialExpiresAt <= this.now() || row.receiveCalls === false) continue;
+    const candidates = rows.filter(row => row.deviceId !== actor.deviceId && !row.revoked && row.tenantId === this.tenantId &&
+      row.mediaProtocol === 'sh-room-audio-v1' && row.nativeBuild >= this.minimumNativeBuild &&
+      row.credentialExpiresAt > this.now() && row.receiveCalls !== false &&
+      (policy.mode !== 'pilot' || policy.pilotDeviceIds?.includes(actor.deviceId) && policy.pilotDeviceIds?.includes(row.deviceId)));
+    // This bounded list is a UI hint. The actual invite still transactionally
+    // authorizes its one target and reservation. Independent rows need not
+    // serially wait for each other or reread the entire pilot registry.
+    const result = await Promise.all(candidates.map(async row => {
       const reservation = await this.store.get(deviceReservationKey(row.deviceId));
-      const policy = await this.capabilityProvider();
-      if (policy.mode === 'pilot' && (!policy.pilotDeviceIds?.includes(actor.deviceId) || !policy.pilotDeviceIds?.includes(row.deviceId))) continue;
-      result.push({ deviceId: row.deviceId, label: String(row.label || 'Operator device').slice(0, 120), available: !reservation,
-        nativeBuild: row.nativeBuild, mediaProtocol: row.mediaProtocol });
-    }
+      return { deviceId: row.deviceId, label: String(row.label || 'Operator device').slice(0, 120), available: !reservation,
+        nativeBuild: row.nativeBuild, mediaProtocol: row.mediaProtocol };
+    }));
     return { devices: result };
   }
 
@@ -452,8 +456,9 @@ export class CallRuntime {
     if (!snapshot.owner) await this.requireEnabled();
     const legId = `leg_${randomUUID()}`, readinessNonce = randomUUID();
     const prepared = await this.#claimAnswer(snapshot.id, () => this.store.transaction(async tx => {
-      const session = await tx.get(sessionKey(snapshot.id));
-      const reservation = await tx.get(deviceReservationKey(actor.deviceId));
+      const [session, reservation] = await Promise.all([
+        tx.get(sessionKey(snapshot.id)), tx.get(deviceReservationKey(actor.deviceId))
+      ]);
       this.requireSession(session);
       requireValue(!session.terminal && session.deadlineAt > this.now(), 'CALL_ENDED', 'This call is no longer answerable.');
       requireValue(session.routeChoice !== 'legacy', 'CALL_ANSWERED_ELSEWHERE', 'The browser operator already claimed this call.');
@@ -503,7 +508,6 @@ export class CallRuntime {
       }
     }
     const current = await this.store.get(sessionKey(prepared.session.id));
-    await this.recheck(context, actor);
     return this.join(context, current, actor);
   }
 
@@ -529,9 +533,10 @@ export class CallRuntime {
     const id = outgoingSessionId(this.tenantId, actor.deviceId, requestId);
     const legId = `leg_${randomUUID()}`, nonce = randomUUID();
     const prepared = await this.store.transaction(async tx => {
-      const existing = await tx.get(sessionKey(id));
-      const reservation = await tx.get(deviceReservationKey(actor.deviceId));
-      const cancelled = await tx.get(eventKey(outgoingCancelId(this.tenantId, actor.deviceId, requestId)));
+      const [existing, reservation, cancelled] = await Promise.all([
+        tx.get(sessionKey(id)), tx.get(deviceReservationKey(actor.deviceId)),
+        tx.get(eventKey(outgoingCancelId(this.tenantId, actor.deviceId, requestId)))
+      ]);
       if (existing) {
         requireValue(existing.customerPhone === to && sameBinding(actor, existing.owner), 'REQUEST_ID_CONFLICT',
           'This request ID belongs to another destination or enrollment.');
@@ -722,9 +727,10 @@ export class CallRuntime {
       'MEDIA_NOT_VERIFIED', 'Fresh corroborated audio progress is required.');
     await this.recheck(context, actor);
     await this.store.transaction(async tx => {
-      const session = await tx.get(sessionKey(snapshot.id));
-      const reservation = await tx.get(deviceReservationKey(actor.deviceId));
-      const existing = await tx.get(callStoreKey(snapshot.providerCallId));
+      const [session, reservation, existing] = await Promise.all([
+        tx.get(sessionKey(snapshot.id)), tx.get(deviceReservationKey(actor.deviceId)),
+        tx.get(callStoreKey(snapshot.providerCallId))
+      ]);
       requireValue(!session.terminal && session.version === snapshot.version && session.deadlineAt > this.now() &&
         (session.direction !== 'outgoing' || Number.isFinite(session.customerAcceptedAt)) &&
         this.now() - proof.observedAt <= 5000 && sameBinding(actor, session.owner) && session.readinessNonce === readinessNonce &&
@@ -781,7 +787,11 @@ export class CallRuntime {
           'CALL_LEG_REQUIRED', 'Update SH Chat to end a call that has transferred back to this device.');
       }
       if (session.terminal && (!call || !call.active)) return;
-      exact(call?.version || session.version, version);
+      // A local End already bound to this exact immutable owner leg does not
+      // need an extra GET merely to echo a changing UI version. Ownership,
+      // enrollment and leg identity remain checked in this same transaction.
+      // Versioned clients and all unowned Reject actions retain exact CAS.
+      if (version !== undefined || !expectedOwnerLegId || reject) exact(call?.version || session.version, version);
       requireValue(!reject || !call && session.direction === 'incoming' && session.phase === 'ringing' && !session.owner,
         'CALL_ALREADY_ANSWERED', 'This call has already started answering.');
       const now = this.now();
@@ -908,8 +918,9 @@ export class CallRuntime {
     const binding = session.transferBindings?.[data.transfer.id];
     requireValue(sameBinding(data.actor, binding), 'DEVICE_BINDING_CHANGED', 'This readiness belongs to an earlier device enrollment.', 403);
     const result = await this.verifyReadiness(data);
-    const current = await this.resolveDevice(data.actor.deviceId);
-    const latest = await this.store.get(sessionKey(session.id));
+    const [current, latest] = await Promise.all([
+      this.resolveDevice(data.actor.deviceId), this.store.get(sessionKey(session.id))
+    ]);
     requireValue(!latest.terminal && current && !current.revoked && current.credentialExpiresAt > this.now() &&
       sameBinding(current, binding), 'DEVICE_BINDING_CHANGED', 'The device enrollment changed while audio was being verified.', 403);
     return result;
@@ -1042,8 +1053,8 @@ export class CallRuntime {
     return this.drainSessionOutbox(id, { limit: 1, endedOnly: true });
   }
 
-  async dispatchCriticalCleanup(id) {
-    const session = await this.store.get(sessionKey(id));
+  async dispatchCriticalCleanup(id, observedSession) {
+    const session = observedSession || await this.store.get(sessionKey(id));
     if (!session || session.routeChoice === 'legacy') return;
     if (session.providerCallId && this.transferController)
       await this.transferController.drainOutbox(session.providerCallId, { limit: 2 });
@@ -1052,7 +1063,33 @@ export class CallRuntime {
     await this.releasePreMediaReservation(id);
   }
 
-  async drainSessionOutbox(id, { limit, incomingOnly = false, endedOnly = false, mediaCleanupOnly = false }) {
+  async dispatchRealtimeWork(id) {
+    const session = await this.store.get(sessionKey(id));
+    if (!session || session.routeChoice === 'legacy') return;
+    if (session.terminal) return this.dispatchCriticalCleanup(id, session);
+    const work = [this.dispatchSetupSignals(id, session)];
+    if (!session.owner && session.phase === 'ringing' &&
+        session.outbox.some(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())))
+      work.push(this.dispatchIncomingAlert(id));
+    return Promise.all(work);
+  }
+
+  async dispatchSetupSignals(id, observedSession) {
+    const session = observedSession || await this.store.get(sessionKey(id));
+    if (!session || session.terminal || session.routeChoice === 'legacy') return [];
+    // The immutable outbox snapshot only selects which lanes to wake. Each lane
+    // still claims/rechecks the authoritative job in the normal transaction.
+    // A slow FCM send never holds an outgoing SDP answer behind it.
+    const work = [];
+    if (session.outbox.some(item => item.kind === 'connect' && isDue(item, this.now())))
+      work.push(this.drainSessionOutbox(id, { limit: 1, connectOnly: true }));
+    if (session.outbox.some(item => item.kind === 'notify' && item.event === 'transfer-incoming' && isDue(item, this.now())))
+      work.push(this.drainSessionOutbox(id, { limit: 1, transferIncomingOnly: true }));
+    return Promise.all(work);
+  }
+
+  async drainSessionOutbox(id, { limit, incomingOnly = false, endedOnly = false, mediaCleanupOnly = false,
+    connectOnly = false, transferIncomingOnly = false }) {
     requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
     const effects = [];
     for (let index = 0; index < limit; index++) {
@@ -1076,7 +1113,9 @@ export class CallRuntime {
             delete item.leaseId; delete item.leaseUntil; changed = true;
           }
         }
-        const selected = incomingOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())) :
+        const selected = connectOnly ? current.outbox.find(item => item.kind === 'connect' && isDue(item, this.now())) :
+          transferIncomingOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'transfer-incoming' && isDue(item, this.now())) :
+          incomingOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())) :
           endedOnly ? current.outbox.find(item => item.kind === 'notify' && item.event === 'ended' && isDue(item, this.now())) :
           mediaCleanupOnly ? current.outbox.find(item => ['terminate', 'reject'].includes(item.kind) && isDue(item, this.now())) ||
             current.outbox.find(item => item.kind === 'detach' && isDue(item, this.now())) :
@@ -1165,9 +1204,15 @@ export class CallRuntime {
   async recoverSession(id, { limit = 4 } = {}) {
     requireValue(Number.isInteger(limit) && limit >= 1 && limit <= 8, 'INVALID_INPUT', 'Recovery must be bounded.', 400);
     let session = await this.store.get(sessionKey(id)); if (!session) return { recovered: false };
+    // Complete a saved SDP answer or send a transfer invite before presence,
+    // expiry sweeps and compatibility housekeeping. Preserve one-shot leases.
+    const setup = this.dispatchSetupSignals(id, session);
+    // Install a rejection handler immediately while critical cleanup runs.
+    const setupResult = setup.catch(() => []);
     // Stop customer/operator media before waiting on FCM, history or presence
     // checks. The same durable cleanup leases are shared with every worker.
-    await this.dispatchCriticalCleanup(id);
+    await this.dispatchCriticalCleanup(id, session);
+    await setupResult;
     // Notification delivery must not delay revocation, expiration or a newly
     // committed terminal cleanup either. Its own durable lease still dedupes it.
     const cancellation = this.dispatchRingCancellation(id).catch(() => []);

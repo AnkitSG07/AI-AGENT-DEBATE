@@ -29,6 +29,8 @@ public final class NativeApi {
     private static JSONObject request(String base, String path, String method, JSONObject data, String bearer, int connectMs, int readMs, int maxBytes, boolean requireHistoryProjection) throws Exception {
         if (!path.startsWith("/") || path.contains("..")) throw new Exception("Invalid request path");
         HttpsURLConnection c = connections.open(new URL(base + path));
+        long started = android.os.SystemClock.elapsedRealtime();
+        int observedStatus = 0;
         c.setConnectTimeout(connectMs); c.setReadTimeout(readMs); c.setInstanceFollowRedirects(false);
         c.setRequestMethod(method); c.setRequestProperty("Accept", "application/json");
         if (bearer != null && !bearer.isEmpty()) {
@@ -44,6 +46,7 @@ public final class NativeApi {
                 try (java.io.OutputStream out = c.getOutputStream()) { out.write(bytes); }
             }
             int status = c.getResponseCode();
+            observedStatus = status;
             if (requireHistoryProjection && status >= 200 && status < 300 && !"sh-call-history-v1".equals(c.getHeaderField("X-SH-Call-History")))
                 throw new ApiException(503, "Call history needs the updated backend.");
             InputStream in = status >= 200 && status < 300 ? c.getInputStream() : c.getErrorStream();
@@ -65,7 +68,17 @@ public final class NativeApi {
                 throw new ApiException(status, "The native service did not confirm the request (" + status + ").", result);
             }
             return result;
-        } finally { c.disconnect(); }
+        } finally {
+            c.disconnect();
+            if (path.startsWith("/calls/")) {
+                String action = path.endsWith("/status") ? "status" : path.endsWith("/end") ? "end"
+                    : path.endsWith("/ready") ? "ready" : path.endsWith("/accept") ? "accept"
+                    : path.endsWith("/cancel") ? "cancel" : path.endsWith("/transfers") ? "transfer-invite"
+                    : path.endsWith("/outgoing") ? "outgoing" : "call-control";
+                // Fixed stage names only: never log paths, tokens or customer details.
+                android.util.Log.i("SHCallTiming", action + " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - started) + " status=" + observedStatus);
+            }
+        }
     }
     public static final class ApiException extends Exception {
         public final int status;

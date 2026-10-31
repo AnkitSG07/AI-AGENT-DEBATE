@@ -15,6 +15,7 @@ const groups = {
     'reporting/test/operator-reporting.test.mjs', 'operator-browser-auth.test.mjs',
     'tests/operator-call-security.test.mjs', 'tests/operator-ai-r13.test.mjs',
     'tests/operator-call-permission.test.mjs',
+    'tests/operator-call-latency.test.mjs',
     'tests/simulator-media-r13/provider-revocation.test.mjs',
     'tests/simulator-media-r13/answer-contention.test.mjs',
     'tests/simulator-media-r13/startup-audio-readiness.test.mjs',

@@ -57,9 +57,10 @@ function audioSdp(sdp, type) {
  * These low-level methods MUST remain behind authenticated application control.
  */
 export class LiveKitWhatsAppProvider {
-  constructor(config, { clients, now = Date.now, timeoutMs = 15000 } = {}) {
+  constructor(config, { clients, now = Date.now, timeoutMs = 15000, onTiming = () => {} } = {}) {
     this.config = config;
     this.now = now;
+    this.onTiming = onTiming;
     const options = { requestTimeout: timeoutMs / 1000, failover: false };
     this.connector = clients?.connector || new ConnectorClient(config.origin, config.apiKey, config.apiSecret, options);
     this.rooms = clients?.rooms || new RoomServiceClient(config.origin, config.apiKey, config.apiSecret, options);
@@ -67,8 +68,10 @@ export class LiveKitWhatsAppProvider {
   }
 
   async run(method, operation) {
+    const started = performance.now();
+    let ok = false;
     try {
-      return await operation();
+      const result = await operation(); ok = true; return result;
     } catch (error) {
       if (error instanceof MediaError) throw error;
       const providerCode = /^[a-z_]{1,50}$/.test(error?.code || '') ? error.code : '';
@@ -77,6 +80,8 @@ export class LiveKitWhatsAppProvider {
       throw new MediaError(outcomeUnknown ? 'MEDIA_REQUEST_UNCERTAIN' : 'MEDIA_PROVIDER_ERROR',
         `Media request ${method} did not return a confirmed result.`, error.status === 404 ? 404 : 502,
         { providerCode, operation: method, outcomeUnknown });
+    } finally {
+      try { this.onTiming({ stage: method, elapsedMs: Math.round(performance.now() - started), ok }); } catch { /* telemetry never controls media */ }
     }
   }
 
