@@ -5,6 +5,7 @@ import {
   createHash, createCipheriv, createDecipheriv, hkdfSync,
   randomBytes, randomUUID, timingSafeEqual
 } from 'node:crypto';
+import { createAppMessageState } from './operator-app-message-state.js';
 
 export const FIRESTORE_REGISTRY_VERSION = '2026-10-29-firestore-registry-r10';
 export const DEVICE_TOKEN_TTL_MS = 30 * 86400000;
@@ -113,6 +114,8 @@ export function createFirestoreDeviceRegistry({
   const collections = Object.fromEntries(['devices', 'installations', 'credentials', 'enrollments', 'rotations', 'deliveries', 'metadata']
     .map(name => [name, firestore.collection(`${collectionPrefix}_${name}`)]));
   const gate = collections.metadata.doc('registry');
+  const appMessages = createAppMessageState({ firestore, collectionPrefix, clock,
+    makeError: (status, code) => new RegistryError(status, status < 500 ? 'The SH Chat message state request is invalid.' : 'SH Chat message state is temporarily unavailable.', code) });
 
   async function guarded(operation, stage) {
     const started = performance.now(); let ok = false;
@@ -409,6 +412,15 @@ export function createFirestoreDeviceRegistry({
     if (!ID_PATTERN.test(deviceId || '')) throw badInput('A valid device ID is required.');
     return guarded(async () => deviceRow(await collections.devices.doc(deviceId).get()));
   }
+  const observeAppMessages = input => guarded(() => appMessages.observe(input));
+  const listAppMessageState = channelIds => guarded(() => appMessages.list(channelIds));
+  async function changeAppMessageState(rawToken, input) {
+    const digest = bearerDigest(rawToken);
+    return guarded(() => appMessages.change(input, async tx => {
+      const { row, index } = await readCredential(tx, digest);
+      validateCurrent(row, index, digest, nowMs());
+    }));
+  }
   async function clearFcmToken(deviceId, expectedFcmToken) {
     if (!ID_PATTERN.test(deviceId || '') || !fcmToken(expectedFcmToken)) throw badInput('A valid device and Firebase token are required.');
     return guarded(() => firestore.runTransaction(async tx => {
@@ -518,6 +530,7 @@ export function createFirestoreDeviceRegistry({
     version: FIRESTORE_REGISTRY_VERSION, collectionPrefix,
     checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateNativeClient, updateToken, renewLease,
     rotateCredential, revoke, revokeDevice, listDevices, getDevice, clearFcmToken,
-    getDeliveries, claimDelivery, finishDelivery, pruneExpiredRecoveries
+    getDeliveries, claimDelivery, finishDelivery, pruneExpiredRecoveries,
+    observeAppMessages, listAppMessageState, changeAppMessageState
   });
 }

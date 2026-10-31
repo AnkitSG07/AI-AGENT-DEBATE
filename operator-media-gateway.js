@@ -65,6 +65,9 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const authenticatedRows = new WeakMap();
   const blocked = new Set(String(env.SH_ANDROID_REVOKED_DEVICE_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   const roomCallingRequested = () => env.SH_NATIVE_CALLS_ENABLED === 'true' && !!appSecret;
+  // Room control does not depend on enumerating the transfer pilot. Keep that
+  // durable registry read on transfer/capability paths where its IDs are used.
+  const roomPolicy = async () => ({ roomCalling: roomCallingRequested() });
   const normalize = row => row ? { deviceId: row.id, userId: `native:${row.id}`, tenantId: 'smart-handicrafts',
     credentialGeneration: row.credentialGeneration, credentialExpiresAt: row.tokenExpiresAt,
     nativeBuild: Number.isSafeInteger(row.nativeBuild) ? row.nativeBuild : 0,
@@ -132,7 +135,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
       bundle = runtimeFactory({ store: mediaStore, env, authenticate, resolveDevice, listDevices,
         onRuntimeTiming: value => logger.info?.('SH_CALL_RUNTIME_TIMING', JSON.stringify(value)),
         onTiming: value => logger.info?.('SH_CALL_PROVIDER_TIMING', JSON.stringify(value)),
-        capabilities: policy, rejectIncoming, onWorkAvailable: id => queueRecovery(id), phoneNumberId, minimumNativeBuild: 10, now,
+        capabilities: policy, roomCapabilities: roomPolicy, rejectIncoming, onWorkAvailable: id => queueRecovery(id), phoneNumberId, minimumNativeBuild: 10, now,
         notify: async event => pushBridge.publishRoomEvent({ ...event, stillCurrent: async () => {
           const current = await bundle.runtime.locate(event.session.id);
           if (!current) return false;

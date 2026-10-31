@@ -284,6 +284,13 @@ public final class NativeStore {
     }
     public long lastTestReceived() { return prefs.getLong("last_test_received", 0); }
     public String lastTestId() { return prefs.getString("last_test_id", ""); }
+    public void messageReceived() { prefs.edit().putLong("last_message_received_at", System.currentTimeMillis()).apply(); }
+    public void messageOutcome(String code) {
+        if (code == null || !code.matches("[a-z_]{1,48}")) return;
+        prefs.edit().putString("last_message_outcome", code).putLong("last_message_outcome_at", System.currentTimeMillis()).apply();
+    }
+    public long lastMessageReceivedAt() { return prefs.getLong("last_message_received_at", 0); }
+    public String lastMessageOutcome() { return prefs.getString("last_message_outcome", ""); }
 
     /** Serialised deduplication, with terminal tombstones retained for 24 hours. */
     public boolean incoming(String id, long issued, long expiry) {

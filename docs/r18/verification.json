@@ -1,0 +1,45 @@
+{
+  "release": "R18",
+  "android": {
+    "versionCode": 18,
+    "versionName": "1.0-r18",
+    "package": "com.smarthandicrafts.operatorhub",
+    "tests": 255,
+    "suites": 29,
+    "failures": 0,
+    "lint": "passed",
+    "cleanAssembly": "passed",
+    "signatureVerified": true,
+    "alignment16KiB": true,
+    "apkSha256": "ed7624d092fd61d543484f63bade6ee8ebab80e4143631f202711d17e28bbe7a",
+    "apkBytes": 60413529,
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "suppliedLogoPixelExact": true
+  },
+  "backend": {
+    "unitAndHttpPass": 746,
+    "failures": 0,
+    "sourceChangedDuringRun": []
+  },
+  "firestoreEmulator": {
+    "pass": 13,
+    "failures": 0,
+    "sourceChangedDuringRun": []
+  },
+  "browserAutomation": {
+    "status": "blocked_before_browser_launch",
+    "cases": 128,
+    "reason": "Required Playwright Chromium headless executable is unavailable; no cases exercised application assertions."
+  },
+  "physicalPhone": {
+    "callsUnder2Seconds": "not_verified",
+    "transfersUnder5Seconds": "not_verified",
+    "messageFcmReceipt": "not_verified"
+  },
+  "hosting": {
+    "currentCompute": "Render Free, Oregon",
+    "firestoreLocation": "asia-south1",
+    "proposedCompute": "Singapore 0.5c-512mb, $7/month; not provisioned or activated"
+  },
+  "liveCustomerActions": false
+}

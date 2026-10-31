@@ -35,6 +35,10 @@ public final class MessageAlerts {
     private static final String COUNT = "sh_message_count", TITLE = "sh_message_title", PREVIEW = "sh_message_preview";
     private static final int ID = 300, SUMMARY_ID = 301, HISTORY_LIMIT = 8, CHAT_LIMIT = 24;
     private static final Object LOCK = new Object();
+    static void createChannel(Context context) {
+        NotificationManager nm = manager(context);
+        if (nm != null) nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Customer messages", NotificationManager.IMPORTANCE_HIGH));
+    }
 
     public static void show(Context context, int channel, boolean test) {
         if (!test) { show(context, channel, 0, java.util.Collections.emptyMap()); return; }
@@ -226,6 +230,12 @@ public final class MessageAlerts {
     static String tag(int channel) { return "message:" + channel; }
     private static NotificationManager manager(Context context) { return context.getSystemService(NotificationManager.class); }
     static void delivery(String code) { android.util.Log.i("SHMessageDelivery", code); }
+    static String blockingReason(Context context) {
+        NotificationManager nm = manager(context);
+        if (!permitted(context, nm)) return "blocked_permission";
+        NotificationChannel channel = nm.getNotificationChannel(CHANNEL);
+        return channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE ? "blocked_channel" : "not_posted";
+    }
     private static boolean permitted(Context context, NotificationManager manager) {
         return manager != null && (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) && manager.areNotificationsEnabled();
     }

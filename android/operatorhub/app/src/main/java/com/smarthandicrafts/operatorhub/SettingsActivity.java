@@ -36,6 +36,10 @@ public final class SettingsActivity extends Activity {
             if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 31);
             else openNotificationSettings();
         }));
+        panel.addView(NativeUi.button(this, "Message notification settings", v -> {
+            startActivity(new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())
+                .putExtra(Settings.EXTRA_CHANNEL_ID, MessageAlerts.CHANNEL));
+        }));
         panel.addView(NativeUi.button(this, "Incoming-call screen settings", v -> {
             if (Build.VERSION.SDK_INT >= 34) startActivity(new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + getPackageName())));
             else openNotificationSettings();
@@ -92,10 +96,17 @@ public final class SettingsActivity extends Activity {
         long received = new NativeStore(this).lastTestReceived();
         String lastReceipt = received > 0 ? "\nLast Firebase test received: " + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(new java.util.Date(received)) : "\nNo Firebase test has been received on this installation yet.";
         NativeStore store = new NativeStore(this);
+        android.app.NotificationChannel messages = nm.getNotificationChannel(MessageAlerts.CHANNEL);
+        String messageChannel = messages == null ? "Message channel: created when the first message arrives" : messages.getImportance() == NotificationManager.IMPORTANCE_NONE
+            ? "Message channel: blocked; open Message notification settings" : messages.getImportance() < NotificationManager.IMPORTANCE_HIGH
+            ? "Message channel: allowed; quiet or no pop-up" : "Message channel: alerting";
+        String messageReceipt = store.lastMessageReceivedAt() > 0 ? "Last message push received: "
+            + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(new java.util.Date(store.lastMessageReceivedAt()))
+            + "\nMessage delivery result: " + store.lastMessageOutcome().replace('_', ' ') : "No message push has reached this installation yet.";
         String audio = store.audioFailureCode().isEmpty() ? "" : "\nLast call audio problem: " + store.audioFailureCode()
             + "\n" + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(new java.util.Date(store.audioFailureAt()));
         String calling = store.nativeRoomCalls() ? "Native calls: enabled by server" : "Native calls: not yet confirmed; use Check background alerts";
-        status.setText(heading + "\n\n" + client + "\n" + permission + "\n" + channel + "\n" + full + "\n" + calling + lastReceipt + audio); enroll.setEnabled(serverReady && !refreshing);
+        status.setText(heading + "\n\n" + client + "\n" + permission + "\n" + channel + "\n" + messageChannel + "\n" + messageReceipt + "\n" + full + "\n" + calling + lastReceipt + audio); enroll.setEnabled(serverReady && !refreshing);
     }
     private void enrollDevice() {
         String enrollmentCode = code.getText().toString().trim();

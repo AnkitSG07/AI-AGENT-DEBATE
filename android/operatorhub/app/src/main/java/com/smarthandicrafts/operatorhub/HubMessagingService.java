@@ -35,6 +35,8 @@ public final class HubMessagingService extends FirebaseMessagingService {
             return;
         }
         if ("sh_operator_message".equals(d.get("type"))) {
+            new NativeStore(context).messageReceived();
+            messageStatus(context, "received");
             try {
                 long channel = Long.parseLong(d.get("channel_id")), id = Long.parseLong(d.get("message_id"));
                 long issued = Long.parseLong(d.get("issued_at_ms")), expiry = Long.parseLong(d.get("expires_at_ms"));
@@ -44,14 +46,14 @@ public final class HubMessagingService extends FirebaseMessagingService {
                     boolean posted = false;
                     try { posted = MessageAlerts.show(context, (int)channel, id, d, credential); }
                     catch (RuntimeException richFailure) {
-                        MessageAlerts.delivery("rich_render_failed");
+                        messageStatus(context, "rich_render_failed");
                         try { posted = MessageAlerts.fallback(context, (int)channel, id, d, credential); }
-                        catch (RuntimeException fallbackFailure) { MessageAlerts.delivery("fallback_render_failed"); }
+                        catch (RuntimeException fallbackFailure) { messageStatus(context, "fallback_render_failed"); }
                     }
-                    if (posted) MessageAlerts.delivery("posted");
-                    else { store.unpostedMessage(channel, id, credential); MessageAlerts.delivery("not_posted"); }
-                } else MessageAlerts.delivery("rejected_envelope_or_duplicate");
-            } catch (Exception ignored) { MessageAlerts.delivery("invalid_envelope"); }
+                    if (posted) messageStatus(context, "posted");
+                    else { store.unpostedMessage(channel, id, credential); messageStatus(context, MessageAlerts.blockingReason(context)); }
+                } else messageStatus(context, "rejected_envelope_or_duplicate");
+            } catch (Exception ignored) { messageStatus(context, "invalid_envelope"); }
             return;
         }
         if ("sh_operator_test".equals(d.get("type"))) {
@@ -77,5 +79,8 @@ public final class HubMessagingService extends FirebaseMessagingService {
             long issued = Long.parseLong(d.get("issued_at_ms")), expiry = Long.parseLong(d.get("expires_at_ms"));
             if (store.incoming(id, issued, expiry)) CallAlerts.show(context, id, expiry);
         } catch (Exception ignored) { }
+    }
+    private static void messageStatus(Context context, String code) {
+        MessageAlerts.delivery(code); new NativeStore(context).messageOutcome(code);
     }
 }

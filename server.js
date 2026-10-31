@@ -21154,10 +21154,15 @@ async function aiModeProcessWorkerMessage({ uid, userContext, channel, messages,
   return { ok: true, decision };
 }
 
+function nativeMessageBackgroundEnabled() {
+  try { return androidPushBridge.status().enabled === true; } catch { return false; }
+}
+
 async function aiModeBackgroundTick() {
-  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
+  const nativeMessageEnabled = nativeMessageBackgroundEnabled();
+  const aiProcessingEnabled = AI_MODE_BACKGROUND_WORKER_ENABLED && !!aiModeGlobalState && ["manual", "assist", "chat", "zapier"].includes(aiModeGlobalState.mode);
+  if (!aiProcessingEnabled && !nativeMessageEnabled) return;
   if (!odooConfigured) return;
-  if (!aiModeGlobalState || !["manual", "assist", "chat", "zapier"].includes(aiModeGlobalState.mode)) return;
   if (aiModeBackgroundState.running) return;
 
   aiModeBackgroundState.running = true;
@@ -21165,7 +21170,7 @@ async function aiModeBackgroundTick() {
   aiModeBackgroundState.last_tick_at = now();
 
   try {
-    await aiModeBackgroundLoadProcessedIds();
+    if (aiProcessingEnabled) await aiModeBackgroundLoadProcessedIds();
     const userContext = await aiModeGetOdooUserContext();
     const uid = userContext.uid;
 
@@ -21182,6 +21187,14 @@ async function aiModeBackgroundTick() {
     }
 
     aiModeBackgroundState.recent_message_found_count = Array.isArray(recentMessages) ? recentMessages.length : 0;
+
+    // Native notifications do not inherit AI processed/boot/cooldown eligibility.
+    const nativeCandidateChannelIds = nativeMessageEnabled ? (recentMessages || []).filter(message => {
+      const at = aiModeParseOdooDateMs(message?.date);
+      return message?.model === "discuss.channel" && Number(message.res_id) > 0 && at > 0 && at <= Date.now() + 5000 && Date.now() - at <= 5 * 60000 &&
+        !aiModeIsOwnOdooMessageForWorker(message, userContext) && !aiModeIsLikelySmartHandicraftsOutbound(message) &&
+        (aiModeMessagePlainText(message) || aiModeHasWorkerAttachments(message));
+    }).map(message => Number(message.res_id)) : [];
 
     const latestCandidateByChannel = new Map();
     let recentCandidateMessageCount = 0;
@@ -21258,7 +21271,7 @@ async function aiModeBackgroundTick() {
       if (recentCandidateDebug.length < 8) recentCandidateDebug.push(debugBase);
     }
 
-    if (prebootProcessedIds.length) {
+    if (aiProcessingEnabled && prebootProcessedIds.length) {
       await aiModeBackgroundRememberProcessedIds(prebootProcessedIds);
       aiModeBackgroundState.preboot_marked_processed_count += prebootProcessedIds.length;
     }
@@ -21282,7 +21295,7 @@ async function aiModeBackgroundTick() {
     // Odoo may not promote old WhatsApp discuss.channel rows until an operator opens the UI,
     // so channel-order scans can miss old customers. Active memory keeps their channel IDs known.
     let activeMemoryChannelIds = [];
-    try {
+    if (aiProcessingEnabled) try {
       activeMemoryChannelIds = await aiModeFetchActiveMemoryChannelIds(uid);
       aiModeBackgroundState.active_memory_channel_scan_count += 1;
       aiModeBackgroundState.active_memory_channel_count = activeMemoryChannelIds.length;
@@ -21292,6 +21305,7 @@ async function aiModeBackgroundTick() {
     }
 
     const candidateChannelIds = Array.from(new Set([
+      ...nativeCandidateChannelIds,
       ...recentCandidateChannelIds,
       ...activeMemoryChannelIds
     ].map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
@@ -21306,13 +21320,43 @@ async function aiModeBackgroundTick() {
     }
 
     for (const channel of channels || []) {
-      if (!channel?.id || !["whatsapp", "livechat"].includes(channel.channel_type)) continue;
+      if (!channel?.id || !["whatsapp", "livechat", "chat"].includes(channel.channel_type)) continue;
 
       const messages = await aiModeFetchWorkerMessages(uid, channel.id).catch((error) => {
         console.warn(`AI Mode worker message fetch failed for channel ${channel.id}:`, error?.message || error);
         return [];
       });
       if (!messages.length) continue;
+
+      // SH Chat notification/read state is independent of the AI debounce,
+      // processed-message journal and Odoo website seen flags. Observe every
+      // fresh genuine inbound record, including bursts later superseded for AI.
+      const appIncomingMessages = messages.filter(message => !aiModeIsOwnOdooMessageForWorker(message, userContext) &&
+          !aiModeIsLikelySmartHandicraftsOutbound(message) &&
+          (aiModeMessagePlainText(message) || aiModeHasWorkerAttachments(message)));
+      if (nativeMessageEnabled) {
+        void androidPushBridge.observeIncomingMessages({ channel, verifiedIncoming: true, seedExisting: true,
+          messages: appIncomingMessages.slice(0, 50) });
+        // Notification eligibility is separate from AI debounce/processed/boot
+        // eligibility. Durable per-device claims deduplicate repeated scans.
+        const freshAppMessages = appIncomingMessages.slice(0, 50).filter(message => {
+          const at = aiModeParseOdooDateMs(message.date);
+          return at > 0 && at <= Date.now() + 5000 && Date.now() - at <= 5 * 60000;
+        });
+        let nextAppMessage = 0;
+        await Promise.all(Array.from({ length: Math.min(4, freshAppMessages.length) }, async () => {
+          while (nextAppMessage < freshAppMessages.length) {
+            const message = freshAppMessages[nextAppMessage++];
+            await androidPushBridge.publishMessage({ channel, message, verifiedIncoming: true });
+          }
+        }));
+      }
+      if (channel.channel_type === "chat" || !aiProcessingEnabled) {
+        // Internal/direct Odoo messages may notify operators, but must never
+        // enter the customer AI reply workflow. Freshness/durable FCM dedupe
+        // remain enforced by the same native bridge.
+        continue;
+      }
 
       const prebootChannelMessageIds = (messages || [])
         .filter((message) => message?.id && aiModeIsPreBootWorkerMessage(message))
@@ -21371,14 +21415,14 @@ async function aiModeBackgroundTick() {
 }
 
 function startAiModeBackgroundWorker() {
-  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) {
+  if (!AI_MODE_BACKGROUND_WORKER_ENABLED && !nativeMessageBackgroundEnabled()) {
     console.warn("AI Mode background worker disabled by env.");
     return;
   }
   // Final startup guard: if any old Render env/state tries to start in chat/assist,
   // force it back to manual unless hidden Gemini mode is explicitly allowed.
   const safeStartupMode = aiModeNormalizeOperationalMode(aiModeGlobalState.mode);
-  if (aiModeGlobalState.mode !== safeStartupMode) {
+  if (AI_MODE_BACKGROUND_WORKER_ENABLED && aiModeGlobalState.mode !== safeStartupMode) {
     console.warn(`AI Mode startup corrected from ${aiModeGlobalState.mode} to ${safeStartupMode}`);
     aiModeGlobalState.mode = safeStartupMode;
     aiModeGlobalState.updated_at = now();

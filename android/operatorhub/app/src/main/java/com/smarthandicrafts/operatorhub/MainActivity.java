@@ -63,6 +63,8 @@ public final class MainActivity extends Activity {
     private Button retryPage, switchAccount;
     private TextView title;
     private boolean hubReady, visible;
+    private boolean messageWindowFocused;
+    private volatile long messageReadEpoch;
     private boolean bridgeSupported;
     private String startupScript = "";
     private final HubLaunchState launch = new HubLaunchState();
@@ -92,6 +94,11 @@ public final class MainActivity extends Activity {
     // History polling cannot occupy the executor used to answer or finish calls.
     private final ThreadPoolExecutor hubReadIO = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
         new ArrayBlockingQueue<>(4), new ThreadPoolExecutor.AbortPolicy());
+    // Message polling and unread acknowledgements cannot queue ahead of call controls.
+    private final ThreadPoolExecutor messageStateIO = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
+        new ArrayBlockingQueue<>(4), new ThreadPoolExecutor.AbortPolicy());
+    interface MessageStateRequester { JSONObject request(String operation, JSONObject body, String bearer) throws Exception; }
+    private MessageStateRequester messageStateRequester = NativeApi::appMessageState;
     private final BroadcastReceiver nativeRoomReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             try {
@@ -146,6 +153,7 @@ public final class MainActivity extends Activity {
         web.loadUrl(changeAccount ? HubPolicy.SWITCH_ACCOUNT_URL : HubPolicy.LOGIN_URL);
     }
     private void showLoading(String message) {
+        messageReadEpoch++;
         if (loadingTimeout != null) startupHandler.removeCallbacks(loadingTimeout);
         if (loadingProbe != null) startupHandler.removeCallbacks(loadingProbe);
         loadingTitle.setText("SH Chat"); loadingMessage.setText(message);
@@ -175,6 +183,7 @@ public final class MainActivity extends Activity {
         startupHandler.postDelayed(loadingProbe, 500);
     }
     private void showLoadingFailure(String message, boolean blockReveal) {
+        messageReadEpoch++;
         if (loadingTimeout != null) startupHandler.removeCallbacks(loadingTimeout);
         if (loadingProbe != null) startupHandler.removeCallbacks(loadingProbe);
         if (blockReveal) launch.failed();
@@ -263,6 +272,7 @@ public final class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, Bitmap icon) {
+                messageReadEpoch++;
                 operatorAuthWindow.close();
                 hubReady = false;
                 launch.navigation(url);
@@ -352,6 +362,7 @@ public final class MainActivity extends Activity {
         if ("ready".equals(type)) { hubReady = true; publishedNativeCapabilities = ""; launch.hubReady(); inspectPageForReveal(); dispatchPending(); refreshNativeCallCapabilities(); }
         else if ("request-settings".equals(type)) startActivity(new Intent(this, SettingsActivity.class));
         else if ("hub-call-read".equals(type)) readHubCallHistory(obj);
+        else if ("appMessageState".equals(type)) appMessageState(obj);
         else if ("native-call".equals(type) && hubReady) {
             if (!activeCall.isEmpty() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Finish the current browser call before starting a native call."); return; }
             if (!new NativeStore(this).nativeRoomCalls() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Native calling is not enabled. Check App settings and the server connection."); return; }
@@ -472,6 +483,72 @@ public final class MainActivity extends Activity {
             web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sh-native-call-read',{detail:" + detail + "}));", null);
         } catch (Exception ignored) { }
     }
+    private boolean mayReadAppMessages(long pageGeneration) {
+        return visible && messageWindowFocused && hubReady && web != null && !isFinishing() && !isDestroyed()
+            && pageGeneration == launch.generation() && launch.isPrepared() && !launch.isAuthFlow()
+            && HubPolicy.trustedHubPage(web.getUrl()) && loadingCover != null && loadingCover.getVisibility() != View.VISIBLE;
+    }
+    private void appMessageState(JSONObject request) {
+        String requestId = request.optString("requestId"), operation = request.optString("operation");
+        if (!NativeHubReadPolicy.validRequestId(requestId)) return;
+        final long pageGeneration = launch.generation(), readEpoch = messageReadEpoch;
+        final JSONObject data;
+        try { data = NativeApi.appMessageStateInput(operation, request); }
+        catch (Exception ignored) {
+            replyAppMessageState(requestId, 400, null, pageGeneration, null); return;
+        }
+        if (!hubReady || ("read".equals(operation) && !mayReadAppMessages(pageGeneration))) {
+            replyAppMessageState(requestId, 409, null, pageGeneration, null); return;
+        }
+        NativeStore store = new NativeStore(this);
+        DeviceLeasePolicy.Credential credential = store.credential();
+        if (!DeviceLeasePolicy.valid(credential, System.currentTimeMillis())) {
+            replyAppMessageState(requestId, 401, null, pageGeneration, null); return;
+        }
+        try {
+            messageStateIO.execute(() -> {
+                JSONObject body = null; int status = 200; String code = "";
+                try {
+                    if (!store.matchesCredential(credential) || !DeviceLeasePolicy.valid(store.credential(), System.currentTimeMillis()))
+                        throw new NativeApi.ApiException(401, "Device enrollment changed.");
+                    // A queued read belongs to the foreground page that observed it.
+                    // Navigation, pause, loss of window focus or destruction cancels that grant.
+                    if ("read".equals(operation) && messageReadEpoch != readEpoch)
+                        throw new NativeApi.ApiException(409, "The chat is no longer visible.");
+                    body = messageStateRequester.request(operation, data, credential.bearer);
+                } catch (Exception failure) {
+                    status = failure instanceof NativeApi.ApiException ? ((NativeApi.ApiException) failure).status : 503;
+                    if (status == 409 && failure instanceof NativeApi.ApiException
+                        && "APP_MESSAGE_STATE_CHANGED".equals(((NativeApi.ApiException) failure).errorCode)) code = "APP_MESSAGE_STATE_CHANGED";
+                    if (status == 401) store.clearEnrollmentIfMatches(credential, "Message authorization expired. Check App settings.");
+                }
+                final JSONObject result = body; final int resultStatus = status; final String resultCode = code;
+                runOnUiThread(() -> replyAppMessageState(requestId, resultStatus, result, pageGeneration, credential, resultCode));
+            });
+        } catch (RejectedExecutionException busy) {
+            replyAppMessageState(requestId, 429, null, pageGeneration, credential);
+        }
+    }
+    private void replyAppMessageState(String requestId, int status, JSONObject body, long pageGeneration,
+                                      DeviceLeasePolicy.Credential credential) {
+        replyAppMessageState(requestId, status, body, pageGeneration, credential, "");
+    }
+    private void replyAppMessageState(String requestId, int status, JSONObject body, long pageGeneration,
+                                      DeviceLeasePolicy.Credential credential, String code) {
+        if (isFinishing() || isDestroyed() || web == null || pageGeneration != launch.generation() || !HubPolicy.trustedHubPage(web.getUrl())) return;
+        try {
+            if (credential != null && (!new NativeStore(this).matchesCredential(credential)
+                || !DeviceLeasePolicy.valid(new NativeStore(this).credential(), System.currentTimeMillis()))) {
+                status = 401; body = null;
+            }
+            boolean ok = status >= 200 && status < 300 && body != null;
+            JSONObject failure = new JSONObject().put("ok", false).put("error", "Message state is temporarily unavailable.");
+            if (status == 409 && "APP_MESSAGE_STATE_CHANGED".equals(code)) failure.put("code", "APP_MESSAGE_STATE_CHANGED");
+            JSONObject detail = new JSONObject().put("requestId", requestId).put("ok", ok).put("status", status)
+                .put("body", ok ? body : failure);
+            web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sh-native-message-state',{detail:" + detail + "}));", null);
+        } catch (Exception ignored) { }
+    }
     private boolean nativeCapabilityLoading;
     private void refreshNativeCallCapabilities() {
         NativeStore store = new NativeStore(this);
@@ -490,6 +567,7 @@ public final class MainActivity extends Activity {
             JSONObject value = new JSONObject().put("nativeRoomCalls", (new NativeStore(this).nativeRoomCalls() && activeCall.isEmpty()) || NativeRoomCallService.isRunning())
                 .put("protocol", NativeRoomPolicy.PROTOCOL).put("nativeBuild", BuildConfig.VERSION_CODE)
                 .put("callHistoryProxy", true)
+                .put("appMessageState", true)
                 .put("activeCall", NativeRoomCallService.isRunning());
             JSONObject call = NativeRoomCallService.snapshot();
             if (call != null && !call.optBoolean("closed")) value.put("activeCallId", call.optString("callId"))
@@ -602,7 +680,11 @@ public final class MainActivity extends Activity {
         refreshNativeCallCapabilities();
         NativeRoomCleanup.drain(this);
     }
-    @Override protected void onPause() { visible = false; CookieManager.getInstance().flush(); if (web != null && activeCall.isEmpty()) web.onPause(); super.onPause(); }
+    @Override protected void onPause() { visible = false; messageWindowFocused = false; messageReadEpoch++; CookieManager.getInstance().flush(); if (web != null && activeCall.isEmpty()) web.onPause(); super.onPause(); }
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus); messageWindowFocused = hasFocus;
+        if (!hasFocus) messageReadEpoch++;
+    }
     @Override public void onConfigurationChanged(Configuration config) { super.onConfigurationChanged(config); updateTheme(); }
     @Override public void onBackPressed() { if (!activeCall.isEmpty()) moveTaskToBack(true); else if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed(); }
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
@@ -629,8 +711,10 @@ public final class MainActivity extends Activity {
         }
     }
     @Override protected void onDestroy() {
+        messageReadEpoch++;
         operatorAuthWindow.close();
         hubReadIO.shutdownNow();
+        messageStateIO.shutdownNow();
         if (nativeRoomReceiverRegistered) unregisterReceiver(nativeRoomReceiver);
         intentGeneration++;
         startupHandler.removeCallbacksAndMessages(null);

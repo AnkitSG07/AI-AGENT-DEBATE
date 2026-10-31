@@ -3375,6 +3375,12 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   }
 
   function channelUnreadCount(channel) {
+    // Native SH Chat has its own team read cursor. Odoo's computed counter
+    // must never clear it when somebody opens the conversation on the website.
+    if (hasHubNativeBridge()) {
+      const row = appUnreadRuntime.channels.get(Number(channel?.id));
+      return row ? row.unreadCount : 0;
+    }
     const candidates = [
       "message_unread_counter",
       "unread_counter",
@@ -6992,6 +6998,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function tryMarkChannelRead(channelId) {
+    if (hasHubNativeBridge()) return false;
     if (!channelId) return false;
     const methods = ["mark_as_read", "channel_seen", "set_channel_seen"];
     for (const method of methods) {
@@ -7005,6 +7012,27 @@ Once received, our team will prepare the quotation accordingly.`
 
   async function tryMarkChannelUnread(channelId) {
     if (!channelId) return false;
+    if (hasHubNativeBridge()) {
+      const id = Number(channelId), previous = appUnreadRuntime.readRequests.get(id);
+      const intent = (appUnreadRuntime.intents.get(id) || 0) + 1; appUnreadRuntime.intents.set(id, intent);
+      appUnreadRuntime.manualUnread.add(id);
+      appUnreadRuntime.acknowledged.delete(id); appUnreadRuntime.lastReadAttempts.delete(id);
+      const pending = (async () => {
+        // An earlier visible-read acknowledgement must settle before the later
+        // explicit Mark as unread command, even on a slow mobile connection.
+        if (previous) await previous.catch(() => {});
+        appUnreadRuntime.acknowledged.delete(id); appUnreadRuntime.lastReadAttempts.delete(id);
+        const body = await requestAppMessageMutation("unread", { channelId: id },
+          () => !state.destroyed && appUnreadRuntime.intents.get(id) === intent && appUnreadRuntime.manualUnread.has(id));
+        if (!body) return false;
+        applyAppMessageState(body); return true;
+      })().catch(error => { if (appUnreadRuntime.intents.get(id) === intent) appUnreadRuntime.manualUnread.delete(id); throw error; }).finally(() => {
+        if (appUnreadRuntime.readRequests.get(id) === pending) appUnreadRuntime.readRequests.delete(id);
+        queueVisibleAppMessageRead();
+      });
+      appUnreadRuntime.readRequests.set(id, pending);
+      return pending;
+    }
     const methods = ["mark_as_unread", "channel_unseen", "set_channel_unseen"];
     for (const method of methods) {
       try {
@@ -7987,6 +8015,7 @@ Once received, our team will prepare the quotation accordingly.`
       await loadInboxMessagePreviews(state.channels);
       if (state.destroyed) return;
       applyFiltersAndRender();
+      refreshAppMessageStates().catch(() => {});
       refreshHubLabelsInBackground();
 
       // Global AI Mode scans the entire inbox and handles new customer messages
@@ -8081,6 +8110,7 @@ Once received, our team will prepare the quotation accordingly.`
       const activity = formatInboxActivity(latest?.date || channelLastActivity(channel));
       const waOpen = type === "whatsapp" ? isWhatsappWindowOpen(channel) : null;
       const unreadCount = channelUnreadCount(channel);
+      const unreadPending = hasHubNativeBridge() && !appUnreadRuntime.channels.has(Number(channel.id));
 
       return `
         <button
@@ -8098,7 +8128,7 @@ Once received, our team will prepare the quotation accordingly.`
               <div class="sh-op-list-right">
                 <time>${escapeHtml(activity)}</time>
                 ${hubChannelIsFavorite(channel) ? `<span class="sh-op-list-favorite" aria-label="Favorite conversation"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 3 2.8 5.7 6.3.9-4.6 4.5 1.1 6.3L12 17.4l-5.6 3 1.1-6.3L3 9.6l6.2-.9z"/></svg></span>` : ""}
-                ${unreadCount ? `<span class="sh-op-unread-badge">${unreadCount}</span>` : ""}
+                ${unreadPending ? '<span class="sh-op-unread-badge" title="Syncing app unread state" aria-label="App unread state is syncing">…</span>' : unreadCount ? `<span class="sh-op-unread-badge">${unreadCount}</span>` : ""}
               </div>
             </div>
 
@@ -8132,6 +8162,7 @@ Once received, our team will prepare the quotation accordingly.`
     const id = Number(channelId);
     const channel = state.channels.find(item => Number(item.id) === id);
     if (!channel || state.destroyed) return;
+    beginAppMessageView(id);
     const changed = Number(state.selectedChannelId) !== id;
     closeChatActions();
     closeWorkspaceTools();
@@ -8168,9 +8199,11 @@ Once received, our team will prepare the quotation accordingly.`
     if (state.destroyed || state.selectionEpoch !== epoch || Number(state.selectedChannelId) !== id) return;
     const suggestion = state.aiSuggestionsByChannel?.[String(id)];
     if (getAiMode() === "assist" && suggestion) showAiModePanel(suggestion, { title: "Saved AI Assist Suggestion" });
-    const current = state.channels.find(item => Number(item.id) === id);
-    if (current) current._uiUnreadCount = 0;
-    tryMarkChannelRead(id).catch(() => {});
+    if (!hasHubNativeBridge()) {
+      const current = state.channels.find(item => Number(item.id) === id);
+      if (current) current._uiUnreadCount = 0;
+      tryMarkChannelRead(id).catch(() => {});
+    }
     applyFiltersAndRender();
   }
 
@@ -8277,6 +8310,185 @@ Once received, our team will prepare the quotation accordingly.`
   // Android owns device credentials and FCM. This bridge exposes only lifecycle
   // hints and navigation; a notification never answers or rejects a call.
   const hubNativeRuntime = { ready: false, timer: null, callId: "", lastState: "", openId: "", openPromise: null, chatId: 0, chatPromise: null };
+  const appUnreadRuntime = { channels: new Map(), pending: new Map(), lists: new Map(), readRequests: new Map(),
+    acknowledged: new Map(), lastReadAttempts: new Map(), intents: new Map(), manualUnread: new Set(), sequence: 0, frame: null, lastApplied: new Map() };
+
+  function appMessageStateAvailable() {
+    return !state.destroyed && !!state.session?.uid && hasHubNativeBridge() && window.SHNativeCapabilities?.appMessageState === true;
+  }
+
+  function beginAppMessageView(channelId) {
+    const id = Number(channelId);
+    appUnreadRuntime.intents.set(id, (appUnreadRuntime.intents.get(id) || 0) + 1);
+    appUnreadRuntime.manualUnread.delete(id);
+    appUnreadRuntime.acknowledged.delete(id); appUnreadRuntime.lastReadAttempts.delete(id);
+  }
+
+  function appMessageRequestId() {
+    const crypto = globalThis.crypto;
+    if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+    if (typeof crypto?.getRandomValues !== "function") throw new Error("Secure app unread sync is unavailable.");
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+  }
+
+  function requestAppMessageState(operation, values = {}) {
+    if (!appMessageStateAvailable()) return Promise.reject(new Error("Update SH Chat to sync app unread state."));
+    if (!["list", "read", "unread"].includes(operation) || appUnreadRuntime.pending.size >= 8)
+      return Promise.reject(new Error("App unread sync is busy. Please retry."));
+    let requestId;
+    try { requestId = appMessageRequestId(); } catch (error) { return Promise.reject(error); }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        appUnreadRuntime.pending.delete(requestId); reject(new Error("App unread sync timed out."));
+      }, 15000);
+      appUnreadRuntime.pending.set(requestId, { resolve, reject, timer });
+      if (!postHubNativeMessage({ ...values, type: "appMessageState", requestId, operation })) {
+        clearTimeout(timer); appUnreadRuntime.pending.delete(requestId); reject(new Error("App unread sync is unavailable."));
+      }
+    });
+  }
+
+  function receiveAppMessageState(event) {
+    if (!hasHubNativeBridge()) return;
+    const detail = event.detail, pending = appUnreadRuntime.pending.get(detail?.requestId);
+    if (!pending) return;
+    appUnreadRuntime.pending.delete(detail.requestId); clearTimeout(pending.timer);
+    if (detail.ok === true && Number(detail.status) === 200 && detail.body?.ok === true) pending.resolve(detail.body);
+    else {
+      const error = new Error("App unread state could not be synced."); error.status = Number(detail.status) || 503;
+      if (detail.body?.code === "APP_MESSAGE_STATE_CHANGED") error.code = "APP_MESSAGE_STATE_CHANGED";
+      pending.reject(error);
+    }
+  }
+
+  async function requestAppMessageMutation(operation, values, isCurrent) {
+    const id = Number(values.channelId);
+    let refresh = !appUnreadRuntime.channels.has(id);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!isCurrent()) return null;
+      if (refresh) {
+        const body = await requestAppMessageState("list", { channelIds: [id] });
+        applyAppMessageState(body);
+      }
+      const snapshot = appUnreadRuntime.channels.get(id);
+      if (!snapshot || !Number.isSafeInteger(snapshot.stateVersion) || snapshot.stateVersion < 0) throw new Error("App unread state is not confirmed yet.");
+      if (!isCurrent()) return null;
+      try { return await requestAppMessageState(operation, { ...values, expectedStateVersion: snapshot.stateVersion }); }
+      catch (error) {
+        if (error.code !== "APP_MESSAGE_STATE_CHANGED" || attempt === 2) throw error;
+        refresh = true;
+      }
+    }
+    return null;
+  }
+
+  function applyAppMessageState(body, sequence = ++appUnreadRuntime.sequence) {
+    if (state.destroyed || !hasHubNativeBridge() || !body || body.ok !== true) return false;
+    const rows = [...(Array.isArray(body.channels) ? body.channels : []), ...(body.state ? [body.state] : [])];
+    let changed = false;
+    for (const row of rows.slice(0, 100)) {
+      const id = Number(row?.channelId), latest = Number(row?.latestMessageId), read = Number(row?.readThroughMessageId), count = Number(row?.unreadCount);
+      const version = Number(row?.stateVersion);
+      const current = appUnreadRuntime.channels.get(id);
+      if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(latest) || latest < 0 ||
+          !Number.isSafeInteger(read) || read < 0 || !Number.isSafeInteger(count) || count < 0 ||
+          !Number.isSafeInteger(version) || version < 0 ||
+          (current && (latest < current.latestMessageId || read < current.readThroughMessageId)) ||
+          (current && (version < current.stateVersion || (version === current.stateVersion &&
+            (latest !== current.latestMessageId || read !== current.readThroughMessageId || count !== current.unreadCount))))) continue;
+      appUnreadRuntime.lastApplied.set(id, Math.max(sequence, appUnreadRuntime.lastApplied.get(id) || 0));
+      appUnreadRuntime.channels.set(id, { channelId: id, latestMessageId: latest, readThroughMessageId: read, unreadCount: count, stateVersion: version });
+      changed = true;
+    }
+    if (changed) { applyFiltersAndRender(); queueVisibleAppMessageRead(); }
+    return changed;
+  }
+
+  async function refreshAppMessageStates() {
+    if (!appMessageStateAvailable()) return false;
+    const ids = [...new Set((state.channels || []).map(row => Number(row.id)).filter(id => Number.isSafeInteger(id) && id > 0))];
+    for (let start = 0; start < ids.length; start += 100) {
+      const channelIds = ids.slice(start, start + 100), key = channelIds.join(",");
+      let pending = appUnreadRuntime.lists.get(key);
+      if (!pending) {
+        const sequence = ++appUnreadRuntime.sequence;
+        pending = requestAppMessageState("list", { channelIds }).then(body => applyAppMessageState(body, sequence))
+          .finally(() => { if (appUnreadRuntime.lists.get(key) === pending) appUnreadRuntime.lists.delete(key); });
+        appUnreadRuntime.lists.set(key, pending);
+      }
+      await pending;
+      if (state.destroyed) return false;
+    }
+    return true;
+  }
+
+  function visibleAppMessageCursor() {
+    const id = Number(state.selectedChannelId);
+    if (!appMessageStateAvailable() || document.hidden || document.visibilityState !== "visible" ||
+        (typeof document.hasFocus === "function" && !document.hasFocus()) || state.isLoadingMessages ||
+        !Number.isSafeInteger(id) || id <= 0 || appUnreadRuntime.manualUnread.has(id) ||
+        !appLayout.classList.contains("has-selected-chat") || chatPanel.classList.contains("is-hidden") ||
+        messageThread.dataset.channelId !== String(id) || appRoot.classList.contains("sh-call-modal-visible") ||
+        hubScreenStack.some(entry => hubScreenVisible(entry.panel))) return null;
+    const area = messageThread.getBoundingClientRect();
+    if (area.width <= 0 || area.height <= 0) return null;
+    const viewport = window.visualViewport;
+    const visible = { top: Math.max(area.top, viewport?.offsetTop || 0), left: Math.max(area.left, viewport?.offsetLeft || 0),
+      bottom: Math.min(area.bottom, (viewport?.offsetTop || 0) + (viewport?.height || window.innerHeight || 0)),
+      right: Math.min(area.right, (viewport?.offsetLeft || 0) + (viewport?.width || window.innerWidth || 0)) };
+    if (visible.bottom <= visible.top || visible.right <= visible.left) return null;
+    const displayed = new Set((state.messages || []).filter(row => !row.res_id || Number(row.res_id) === id).map(row => Number(row.id)));
+    let throughMessageId = 0;
+    for (const node of messageThread.querySelectorAll("[data-message-id]")) {
+      const message = Number(node.dataset.messageId), rect = node.getBoundingClientRect();
+      if (!Number.isSafeInteger(message) || !displayed.has(message) || rect.bottom <= visible.top || rect.top >= visible.bottom ||
+          rect.right <= visible.left || rect.left >= visible.right) continue;
+      if (typeof document.elementFromPoint === "function") {
+        const x = (Math.max(rect.left, visible.left) + Math.min(rect.right, visible.right)) / 2;
+        const y = (Math.max(rect.top, visible.top) + Math.min(rect.bottom, visible.bottom)) / 2;
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || (hit !== node && !node.contains?.(hit))) continue;
+      }
+      throughMessageId = Math.max(throughMessageId, message);
+    }
+    return throughMessageId ? { channelId: id, throughMessageId, epoch: state.selectionEpoch } : null;
+  }
+
+  function queueVisibleAppMessageRead() {
+    if (!appMessageStateAvailable() || appUnreadRuntime.frame !== null) return;
+    appUnreadRuntime.frame = requestAnimationFrame(() => {
+      appUnreadRuntime.frame = null;
+      const cursor = visibleAppMessageCursor();
+      const previous = cursor && appUnreadRuntime.lastReadAttempts.get(cursor.channelId);
+      const knownLatest = cursor ? appUnreadRuntime.channels.get(cursor.channelId)?.latestMessageId || 0 : 0;
+      if (!cursor || cursor.throughMessageId <= (appUnreadRuntime.acknowledged.get(cursor.channelId) || 0) ||
+          appUnreadRuntime.readRequests.has(cursor.channelId) ||
+          (previous && cursor.throughMessageId <= previous.requestedThrough && knownLatest <= previous.observedLatest)) return;
+      const sequence = ++appUnreadRuntime.sequence;
+      const intent = appUnreadRuntime.intents.get(cursor.channelId) || 0;
+      const pending = requestAppMessageMutation("read", { channelId: cursor.channelId, throughMessageId: cursor.throughMessageId }, () => {
+        const visible = visibleAppMessageCursor();
+        return !!visible && visible.channelId === cursor.channelId && visible.epoch === cursor.epoch && visible.throughMessageId >= cursor.throughMessageId &&
+          (appUnreadRuntime.intents.get(cursor.channelId) || 0) === intent;
+      })
+        .then(body => {
+          if (state.destroyed) return;
+          const confirmed = body?.state || body?.channels?.find(row => Number(row.channelId) === cursor.channelId);
+          const through = Number(confirmed?.readThroughMessageId), observedLatest = Number(confirmed?.latestMessageId);
+          if (Number(confirmed?.channelId) !== cursor.channelId || !Number.isSafeInteger(through) || through < 0 ||
+              !Number.isSafeInteger(observedLatest) || observedLatest < 0) return;
+          appUnreadRuntime.acknowledged.set(cursor.channelId, Math.max(through, appUnreadRuntime.acknowledged.get(cursor.channelId) || 0));
+          appUnreadRuntime.lastReadAttempts.set(cursor.channelId, { requestedThrough: cursor.throughMessageId, observedLatest });
+          applyAppMessageState(body, sequence);
+        }).catch(() => {}).finally(() => {
+          if (appUnreadRuntime.readRequests.get(cursor.channelId) === pending) appUnreadRuntime.readRequests.delete(cursor.channelId);
+        });
+      appUnreadRuntime.readRequests.set(cursor.channelId, pending);
+    });
+  }
 
   function hasHubNativeBridge() {
     try {
@@ -8391,11 +8603,16 @@ Once received, our team will prepare the quotation accordingly.`
   function setupHubNativeBridge() {
     if (!hasHubNativeBridge()) return;
     const signal = state.lifecycleController.signal;
+    window.addEventListener("sh-native-message-state", receiveAppMessageState, { signal });
+    window.addEventListener("sh-native-message-changed", () => { refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead(); }, { signal });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead(); } }, { signal });
+    messageThread?.addEventListener("scroll", queueVisibleAppMessageRead, { signal, passive: true });
     window.addEventListener("sh-native-call-closed", event => {
       if (hubNativeRuntime.ready && hasHubNativeBridge()) closeReleasedNativeCallUi(event.detail);
     }, { signal });
     window.addEventListener("sh-native-capabilities", () => {
       if (!hubNativeRuntime.ready || state.destroyed || !hasHubNativeBridge()) return;
+      refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead();
       const native = hubNativeRoomCapabilities();
       if (native) stopWhatsappRingtone();
       if (native?.activeCall) {
@@ -8431,6 +8648,10 @@ Once received, our team will prepare the quotation accordingly.`
         .finally(() => { if (hubNativeRuntime.chatPromise === request) { hubNativeRuntime.chatPromise = null; hubNativeRuntime.chatId = 0; } });
     }, { signal });
     signal.addEventListener("abort", () => {
+      if (appUnreadRuntime.frame !== null) cancelAnimationFrame(appUnreadRuntime.frame);
+      appUnreadRuntime.frame = null;
+      for (const pending of appUnreadRuntime.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("App unread sync stopped.")); }
+      appUnreadRuntime.pending.clear();
       stopHubNativeCallState(); hubNativeRuntime.ready = false;
       hubNativeRuntime.openId = ""; hubNativeRuntime.openPromise = null;
       hubNativeRuntime.chatId = 0; hubNativeRuntime.chatPromise = null;
@@ -10811,6 +11032,7 @@ Once received, our team will prepare the quotation accordingly.`
     if (changed || scrollToBottom) restoreThreadPosition(position, scrollToBottom || position.nearBottom);
     if (messageThread.dataset.channelId !== channelId) messageThread.dataset.channelId = channelId;
     if (changed) renderConversationCollection();
+    queueVisibleAppMessageRead();
   }
 
   function loadMessages(channelId, { scrollToBottom = false, force = false } = {}) {
@@ -13832,7 +14054,7 @@ Once received, our team will prepare the quotation accordingly.`
         if (liveChannel) liveChannel._uiUnreadCount = Math.max(1, channelUnreadCount(liveChannel));
         applyFiltersAndRender();
         hidePanel(channelActionPanel);
-        showOperatorToast(marked ? "Chat marked unread in Odoo" : "Unread marker shown locally");
+        showOperatorToast(marked ? hasHubNativeBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
       } else if (action === "openchat") {
         hidePanel(channelActionPanel);
         await selectActionChannel(channel.id);
@@ -13887,7 +14109,7 @@ Once received, our team will prepare the quotation accordingly.`
         const channel = state.channels.find(item => item.id === state.selectedChannelId);
         if (channel) channel._uiUnreadCount = Math.max(1, channelUnreadCount(channel));
         applyFiltersAndRender();
-        showOperatorToast(marked ? "Chat marked unread in Odoo" : "Unread marker shown locally");
+        showOperatorToast(marked ? hasHubNativeBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
       } else if (action === "edit") {
         const edited = await editMessageBody(message);
         if (edited) {

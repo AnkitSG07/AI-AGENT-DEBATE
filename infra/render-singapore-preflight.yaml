@@ -1,0 +1,478 @@
+# Prepared migration only. Creating this resource requires approval for $7/month compute.
+# Start in read-only preflight; do not route call/message traffic here yet.
+# Values resolve inside Render from the existing service; no secret values are stored here.
+services:
+  - type: web
+    name: sh-chat-singapore
+    runtime: node
+    repo: https://github.com/AnkitSG07/AI-AGENT-DEBATE
+    branch: main
+    region: singapore
+    plan: 0.5c-512mb
+    numInstances: 1
+    buildCommand: npm install
+    startCommand: node scripts/hosting-preflight.mjs
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: AI_MODE_BACKGROUND_CHANNEL_LIMIT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_CHANNEL_LIMIT
+      - key: AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_CUSTOMER_SETTLE_MS
+      - key: AI_MODE_BACKGROUND_INTERVAL_MS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_INTERVAL_MS
+      - key: AI_MODE_BACKGROUND_MESSAGE_LIMIT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_MESSAGE_LIMIT
+      - key: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_RECENT_MESSAGE_LIMIT
+      - key: AI_MODE_BACKGROUND_WORKER_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_BACKGROUND_WORKER_ENABLED
+      - key: AI_MODE_FAST_LOCAL_FIRST
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_FAST_LOCAL_FIRST
+      - key: AI_MODE_GLOBAL_DEFAULT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_GLOBAL_DEFAULT
+      - key: AI_MODE_HANDOVER_WAIT_MS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODE_HANDOVER_WAIT_MS
+      - key: AI_MODEL_OPENROUTER_TIMEOUT_MS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODEL_OPENROUTER_TIMEOUT_MS
+      - key: AI_MODEL_TIMEOUT_MS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: AI_MODEL_TIMEOUT_MS
+      - key: APP_URL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: APP_URL
+      - key: FEDEX_MODE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_MODE
+      - key: FEDEX_SANDBOX_ACCOUNT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_SANDBOX_ACCOUNT
+      - key: FEDEX_SHIPPING_CLIENT_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_SHIPPING_CLIENT_ID
+      - key: FEDEX_SHIPPING_CLIENT_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_SHIPPING_CLIENT_SECRET
+      - key: FEDEX_TRACKING_CLIENT_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_TRACKING_CLIENT_ID
+      - key: FEDEX_TRACKING_CLIENT_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: FEDEX_TRACKING_CLIENT_SECRET
+      - key: GEMINI_API_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GEMINI_API_KEY
+      - key: GOOGLE_CONTACTS_ACCOUNT_EMAIL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GOOGLE_CONTACTS_ACCOUNT_EMAIL
+      - key: GOOGLE_CONTACTS_CLIENT_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GOOGLE_CONTACTS_CLIENT_ID
+      - key: GOOGLE_CONTACTS_CLIENT_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GOOGLE_CONTACTS_CLIENT_SECRET
+      - key: GOOGLE_CONTACTS_REDIRECT_URI
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GOOGLE_CONTACTS_REDIRECT_URI
+      - key: GOOGLE_CONTACTS_REFRESH_TOKEN
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: GOOGLE_CONTACTS_REFRESH_TOKEN
+      - key: INTERNAL_CONTROL_WHATSAPP
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: INTERNAL_CONTROL_WHATSAPP
+      - key: LIVEKIT_API_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: LIVEKIT_API_KEY
+      - key: LIVEKIT_API_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: LIVEKIT_API_SECRET
+      - key: LIVEKIT_URL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: LIVEKIT_URL
+      - key: META_WHATSAPP_ACCESS_TOKEN
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: META_WHATSAPP_ACCESS_TOKEN
+      - key: META_WHATSAPP_APP_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: META_WHATSAPP_APP_SECRET
+      - key: NODE_ENV
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: NODE_ENV
+      - key: ODOO_API_KEY_OR_PASSWORD
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_API_KEY_OR_PASSWORD
+      - key: ODOO_DB
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_DB
+      - key: ODOO_URL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_URL
+      - key: ODOO_USERNAME
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_USERNAME
+      - key: ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_WHATSAPP_WEBHOOK_FORWARD_ALL_FIELDS
+      - key: ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_WHATSAPP_WEBHOOK_FORWARD_ENABLED
+      - key: ODOO_WHATSAPP_WEBHOOK_URL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ODOO_WHATSAPP_WEBHOOK_URL
+      - key: OPENAI_API_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: OPENAI_API_KEY
+      - key: OPENROUTER_API_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: OPENROUTER_API_KEY
+      - key: OPERATOR_HUB_URL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: OPERATOR_HUB_URL
+      - key: OR_MODEL_LLAMA
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: OR_MODEL_LLAMA
+      - key: OR_MODEL_MISTRAL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: OR_MODEL_MISTRAL
+      - key: PROFILE_PASS_ACCOUNTS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: PROFILE_PASS_ACCOUNTS
+      - key: PROFILE_PASS_SMART_HANDICRAFTS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: PROFILE_PASS_SMART_HANDICRAFTS
+      - key: PROFILE_PASS_SUDO
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: PROFILE_PASS_SUDO
+      - key: PROFILE_SESSION_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: PROFILE_SESSION_SECRET
+      - key: SH_ANDROID_DEVICES_PATH
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_DEVICES_PATH
+      - key: SH_ANDROID_ENROLLMENT_CODE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_ENROLLMENT_CODE
+      - key: SH_ANDROID_FIREBASE_API_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_FIREBASE_API_KEY
+      - key: SH_ANDROID_FIREBASE_APP_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_FIREBASE_APP_ID
+      - key: SH_ANDROID_FIREBASE_PROJECT_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_FIREBASE_PROJECT_ID
+      - key: SH_ANDROID_FIREBASE_SENDER_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_FIREBASE_SENDER_ID
+      - key: SH_ANDROID_FIREBASE_SERVICE_ACCOUNT_JSON
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_FIREBASE_SERVICE_ACCOUNT_JSON
+      - key: SH_ANDROID_PACKAGE_NAME
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_PACKAGE_NAME
+      - key: SH_ANDROID_PUSH_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_PUSH_ENABLED
+      - key: SH_ANDROID_REGISTRY_BACKEND
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_ANDROID_REGISTRY_BACKEND
+      - key: SH_FIRESTORE_ALLOW_BOOTSTRAP_ENROLLMENT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_FIRESTORE_ALLOW_BOOTSTRAP_ENROLLMENT
+      - key: SH_NATIVE_CALLS_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_NATIVE_CALLS_ENABLED
+      - key: SH_NATIVE_PILOT_USE_ENROLLED_DEVICES
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_NATIVE_PILOT_USE_ENROLLED_DEVICES
+      - key: SH_NATIVE_TRANSFER_PILOT_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_NATIVE_TRANSFER_PILOT_ENABLED
+      - key: SH_OPERATOR_ARCHIVE_BACKEND
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_OPERATOR_ARCHIVE_BACKEND
+      - key: SH_OPERATOR_FIRESTORE_DATABASE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_OPERATOR_FIRESTORE_DATABASE
+      - key: SH_OPERATOR_FIRESTORE_PREFIX
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_OPERATOR_FIRESTORE_PREFIX
+      - key: SH_OPERATOR_REPORT_RETENTION_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SH_OPERATOR_REPORT_RETENTION_ENABLED
+      - key: SHIP_FROM_CITY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_CITY
+      - key: SHIP_FROM_COMPANY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_COMPANY
+      - key: SHIP_FROM_COUNTRY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_COUNTRY
+      - key: SHIP_FROM_EMAIL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_EMAIL
+      - key: SHIP_FROM_LINE1
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_LINE1
+      - key: SHIP_FROM_LINE2
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_LINE2
+      - key: SHIP_FROM_NAME
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_NAME
+      - key: SHIP_FROM_PHONE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_PHONE
+      - key: SHIP_FROM_PIN
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_PIN
+      - key: SHIP_FROM_STATE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: SHIP_FROM_STATE
+      - key: TRAINING_ADMIN_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: TRAINING_ADMIN_KEY
+      - key: WEB_PUSH_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WEB_PUSH_ENABLED
+      - key: WEB_PUSH_PRIVATE_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WEB_PUSH_PRIVATE_KEY
+      - key: WEB_PUSH_PUBLIC_KEY
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WEB_PUSH_PUBLIC_KEY
+      - key: WEB_PUSH_SUBJECT
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WEB_PUSH_SUBJECT
+      - key: WHATSAPP_CALL_PRE_ACCEPT_ENABLED
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WHATSAPP_CALL_PRE_ACCEPT_ENABLED
+      - key: WHATSAPP_GRAPH_API_VERSION
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WHATSAPP_GRAPH_API_VERSION
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WHATSAPP_PHONE_NUMBER_ID
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+      - key: ZOHO_MAIL_ACCOUNT_EMAIL
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_ACCOUNT_EMAIL
+      - key: ZOHO_MAIL_ACCOUNTS_BASE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_ACCOUNTS_BASE
+      - key: ZOHO_MAIL_API_BASE
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_API_BASE
+      - key: ZOHO_MAIL_CLIENT_ID
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_CLIENT_ID
+      - key: ZOHO_MAIL_CLIENT_SECRET
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_CLIENT_SECRET
+      - key: ZOHO_MAIL_FROM_ADDRESS
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_FROM_ADDRESS
+      - key: ZOHO_MAIL_REDIRECT_URI
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_REDIRECT_URI
+      - key: ZOHO_MAIL_REFRESH_TOKEN
+        fromService:
+          name: AI-AGENT-DEBATE
+          type: web
+          envVarKey: ZOHO_MAIL_REFRESH_TOKEN
+

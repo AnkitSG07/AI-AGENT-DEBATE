@@ -85,7 +85,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   const path = resolve(devicesPath || env.SH_ANDROID_DEVICES_PATH || './android-operator-devices.json');
   let registry = null, loading = null, serial = Promise.resolve();
   let accessToken = '', accessExpiresAt = 0, accessPromise = null;
-  const rates = new Map(), callQueues = new Map(), messageQueues = new Map();
+  const rates = new Map(), callQueues = new Map(), messageQueues = new Map(), appMessageQueues = new Map();
   let sentCount = 0, failedCount = 0;
 
   async function registryCall(method, ...args) {
@@ -327,6 +327,17 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         return { ok: true, revoked: true };
       });
     }));
+    app.post(`${PREFIX}/messages/state`, route(async req => {
+      await authenticated(req);
+      return { ok: true, channels: await registryCall('listAppMessageState', req.body?.channelIds) };
+    }));
+    for (const action of ['read', 'unread']) app.post(`${PREFIX}/messages/${action}`, route(async req => {
+      await authenticated(req);
+      const state = await registryCall('changeAppMessageState', String(req.headers.authorization).slice(7),
+        { channelId: req.body?.channelId, expectedStateVersion: req.body?.expectedStateVersion,
+          ...(action === 'read' ? { throughMessageId: req.body?.throughMessageId } : { unread: true }) });
+      return { ok: true, channels: [state], state };
+    }));
     app.post(`${PREFIX}/devices/test`, route(async req => {
       const device = await authenticated(req);
       limited(`test:${device.id}`, 3);
@@ -533,6 +544,33 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     if (failed) throw fail(503, 'Native call alerts will retry after notification delivery recovers.');
     return { ok: true, sent, failed };
   }
+  async function observeIncomingMessages({ channel = {}, messages = [], verifiedIncoming = false, seedExisting = false } = {}) {
+    const channelId = positiveId(channel.id);
+    if (verifiedIncoming !== true || !channelId || !['whatsapp', 'livechat', 'chat'].includes(channel.channel_type) || !Array.isArray(messages)) return;
+    const ids = messages.slice(0, 100).filter(message => {
+      const at = odooDateMs(message?.date);
+      return positiveId(message?.id) && message?.model === 'discuss.channel' && positiveId(message?.res_id) === channelId &&
+        at > 0 && at <= clock() + 5000 && (seedExisting === true || clock() - at <= MESSAGE_TTL_MS);
+    }).map(message => Number(message.id));
+    if (!ids.length || !useExternalRegistry || typeof deviceRegistry?.observeAppMessages !== 'function') return;
+    let queued = appMessageQueues.get(channelId);
+    if (queued) {
+      ids.forEach(id => queued.ids.add(id));
+      while (queued.ids.size > 100) queued.ids.delete(Math.min(...queued.ids));
+      return queued.promise;
+    }
+    if (appMessageQueues.size >= 1000) { logger.warn?.('SH_APP_MESSAGE_STATE busy'); return; }
+    queued = { ids: new Set(ids), promise: null };
+    appMessageQueues.set(channelId, queued);
+    queued.promise = Promise.resolve().then(async () => {
+      while (queued.ids.size) {
+        const messageIds = [...queued.ids]; queued.ids.clear();
+        await registryCall('observeAppMessages', { channelId: Number(channelId), messageIds });
+      }
+    }).catch(() => { logger.warn?.('SH_APP_MESSAGE_STATE unavailable'); })
+      .finally(() => { if (appMessageQueues.get(channelId) === queued) appMessageQueues.delete(channelId); });
+    return queued.promise;
+  }
   function publishMessage({ channel = {}, message = {}, verifiedIncoming = false } = {}) {
     const started = performance.now();
     const report = (outcome, counts = {}) => {
@@ -550,6 +588,9 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       return Promise.resolve({ ok: false, skipped: 'not_a_recent_verified_incoming_message' });
     }
     const operation = (messageQueues.get(messageId) || Promise.resolve()).catch(() => {}).then(async () => {
+      // Unread persistence is separately retried by the trusted worker. A slow
+      // ledger transaction must not delay Firebase delivery to the phone.
+      void observeIncomingMessages({ channel, messages: [message], verifiedIncoming });
       const [devices, previous] = await Promise.all([listDevices(), getDeliveries({ messageId })]);
       const delivered = new Set(previous.filter(deliverySent).map(row => row.deviceId));
       const eligible = devices.filter(row => eligibleDevice(row, 'message') && messageAt >= row.createdAt - 5000);
@@ -582,5 +623,5 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     operation.finally(() => { if (messageQueues.get(messageId) === operation) messageQueues.delete(messageId); }).catch(() => {});
     return operation;
   }
-  return { registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
+  return { registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, observeIncomingMessages, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
 }

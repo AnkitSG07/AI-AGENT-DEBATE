@@ -99,7 +99,7 @@ export class CallRuntime {
   #answerClaims = new Map();
 
   constructor({ store, provider, transferController, authenticate, resolveDevice, listDevices,
-    capabilities = async () => ({ roomCalling: false, transferEnabled: false }), verifyReadiness,
+    capabilities = async () => ({ roomCalling: false, transferEnabled: false }), roomCapabilities, verifyReadiness,
     rejectIncoming, notify = async () => {}, onWorkAvailable = () => {}, phoneNumberId, tenantId = 'smart-handicrafts',
     minimumNativeBuild = 1, operatorAbsentGraceMs = 45000, now = Date.now, onRuntimeTiming = () => {} }) {
     requireValue(store?.durable === true && provider && typeof authenticate === 'function' && typeof resolveDevice === 'function',
@@ -109,7 +109,7 @@ export class CallRuntime {
     requireValue(Number.isSafeInteger(operatorAbsentGraceMs) && operatorAbsentGraceMs >= 30000 && operatorAbsentGraceMs <= 120000,
       'CALL_RUNTIME_CONFIG', 'The operator reconnect grace must be between 30 and 120 seconds.', 503);
     Object.assign(this, { store, provider, transferController, authenticate, resolveDevice, listDevices,
-      capabilityProvider: capabilities, verifyReadiness, rejectIncoming, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now, onRuntimeTiming });
+      capabilityProvider: capabilities, roomCapabilityProvider: roomCapabilities, verifyReadiness, rejectIncoming, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, operatorAbsentGraceMs, now, onRuntimeTiming });
   }
 
   async timed(stage, operation) {
@@ -173,7 +173,12 @@ export class CallRuntime {
   }
 
   async requireEnabled({ transfer = false } = {}) {
-    const value = await this.timed('action-policy', () => this.capabilityProvider());
+    // Starting ordinary room calls needs the server's room-control gate only.
+    // Full transfer policy still reads current pilot enrollment for both legs.
+    // Older integrations without this narrow gate retain their original policy.
+    const policy = !transfer && typeof this.roomCapabilityProvider === 'function'
+      ? this.roomCapabilityProvider : this.capabilityProvider;
+    const value = await this.timed('action-policy', () => policy());
     requireValue(value?.roomCalling === true && (!transfer || value.transferEnabled === true),
       transfer ? 'TRANSFER_MEDIA_NOT_VALIDATED' : 'ROOM_CALLING_NOT_ENABLED',
       transfer ? 'This release has not enabled verified audio handoff.' : 'Native room calling is not enabled for this release.', 501);
@@ -191,6 +196,21 @@ export class CallRuntime {
     if (direct) return direct;
     const route = await this.store.get(eventKey(routeId(id)));
     return route?.sessionId ? this.store.get(sessionKey(route.sessionId)) : undefined;
+  }
+
+  async authenticatedSession(context, id, options) {
+    // Locating a session is only a server-side hint, never authority to answer,
+    // join, end or transfer it. Fetch it while checking the request credential;
+    // the action's transaction and later fresh checks remain authoritative.
+    // Consume lookup failures immediately, but await authentication first so a
+    // rejected actor receives neither lookup details nor lookup-dependent delay.
+    const authentication = this.actor(context, options);
+    const lookup = Promise.resolve().then(() => this.locate(id)).then(
+      value => ({ ok: true, value }), error => ({ ok: false, error })
+    );
+    const actor = await authentication, located = await lookup;
+    if (!located.ok) throw located.error;
+    return [actor, located.value];
   }
 
   async isMediaAnchored(id) {
@@ -460,8 +480,8 @@ export class CallRuntime {
   }
 
   async accept(context, id, { requestId }) {
-    const actor = await this.actor(context); request(requestId);
-    let snapshot = await this.locate(id); this.requireSession(snapshot);
+    const [actor, located] = await this.authenticatedSession(context, id); request(requestId);
+    let snapshot = located; this.requireSession(snapshot);
     if (snapshot.direction === 'incoming' && sameBinding(actor, snapshot.owner) && snapshot.operations.accept?.status === 'uncertain') {
       await this.reconcileIncomingAcceptance(snapshot.id);
       snapshot = await this.locate(id); this.requireSession(snapshot);
@@ -717,8 +737,7 @@ export class CallRuntime {
   }
 
   async ready(context, id, { version, readinessNonce, evidence }) {
-    const actor = await this.actor(context);
-    const snapshot = await this.locate(id); this.requireSession(snapshot);
+    const [actor, snapshot] = await this.authenticatedSession(context, id); this.requireSession(snapshot);
     if (snapshot.phase === 'connected' && !snapshot.terminal) {
       const call = await this.store.get(callStoreKey(snapshot.providerCallId));
       requireValue(call?.active && call.owner.deviceId === actor.deviceId && call.owner.userId === actor.userId &&
@@ -782,9 +801,9 @@ export class CallRuntime {
   }
 
   async end(context, id, { version, requestId, reject = false, expectedOwnerLegId }) {
-    const actor = await this.actor(context, { media: false }); request(requestId);
+    const [actor, snapshot] = await this.authenticatedSession(context, id, { media: false }); request(requestId);
     if (expectedOwnerLegId !== undefined) identifier(expectedOwnerLegId, 'operator leg');
-    const snapshot = await this.locate(id); this.requireSession(snapshot);
+    this.requireSession(snapshot);
     const committed = await this.store.transaction(async tx => {
       const [session, observedCall] = await readTransactionRecords(tx, [
         sessionKey(snapshot.id), snapshot.providerCallId ? callStoreKey(snapshot.providerCallId) : null
@@ -843,13 +862,13 @@ export class CallRuntime {
   }
 
   async transfer(context, id, action, body = {}) {
-    const actor = await this.actor(context);
+    const [actor, session] = await this.authenticatedSession(context, id);
     // The controller's rollout gate checks room/pilot policy once for each
     // authority-changing action. Do not repeat the full device-list policy here.
     if (!['decline', 'cancel'].includes(action) && !this.transferController?.enforcesRuntimeCapabilities)
       await this.requireEnabled({ transfer: true });
     requireValue(this.transferController, 'TRANSFER_MEDIA_NOT_VALIDATED', 'The transfer controller is not installed.', 501);
-    const session = await this.locate(id); this.requireSession(session);
+    this.requireSession(session);
     requireValue(session.providerCallId && !session.terminal, 'CALL_ENDED', 'This call is no longer active.');
     const callId = session.providerCallId;
     let result;
@@ -862,9 +881,15 @@ export class CallRuntime {
         target.mediaProtocol === 'sh-room-audio-v1' && target.nativeBuild >= this.minimumNativeBuild &&
         target.credentialExpiresAt > this.now() && Number.isSafeInteger(target.credentialGeneration),
         'TARGET_UNAVAILABLE', 'The destination enrollment is not ready for native room calls.');
-      await this.recheck(context, actor);
+      // Injected controllers that do not implement the binding constraint keep
+      // the runtime's original fresh pre-invite check.
+      if (!this.transferController.validatesExpectedSourceBinding) await this.recheck(context, actor);
       result = await this.timed('transfer-invite-controller', () => this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
-        expectedVersion: body.version, requestId: request(body.requestId), observedCall: currentCall }));
+        expectedVersion: body.version, requestId: request(body.requestId), observedCall: currentCall,
+        // The controller freshly authenticates immediately on entry. Bind that
+        // read to this preflight instead of doing the same auth twice in a row.
+        expectedSourceBinding: { deviceId: actor.deviceId, userId: actor.userId, tenantId: actor.tenantId,
+          credentialGeneration: actor.credentialGeneration } }));
       await this.store.transaction(async tx => {
         const current = await tx.get(sessionKey(session.id));
         current.transferBindings ||= {};

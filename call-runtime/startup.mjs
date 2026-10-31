@@ -10,7 +10,7 @@ import { createBoundedNativeReject } from '../media/native-meta-reject.mjs';
  * Construction performs no network action. verifyConfiguration() is a read-only
  * control API check; it never proves audio or enables transfer by itself. */
 export function createNativeCallRuntime({ store, env, authenticate, resolveDevice, listDevices,
-  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), rejectIncoming, notify, onWorkAvailable, onTiming, onRuntimeTiming,
+  capabilities = async () => ({ roomCalling: false, transferEnabled: false }), roomCapabilities, rejectIncoming, notify, onWorkAvailable, onTiming, onRuntimeTiming,
   phoneNumberId, minimumNativeBuild = 10, tenantId = 'smart-handicrafts', now = Date.now,
   provider: injectedProvider } = {}) {
   const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env), { onTiming });
@@ -34,6 +34,10 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
       transferEnabled: controlVerified && requested?.roomCalling === true && requested?.transferEnabled === true && (transferValidated || pilotAllowed),
       reason: !controlVerified ? 'Media control configuration has not passed its read-only startup check.' : requested?.reason || '' };
   };
+  const roomRelease = typeof roomCapabilities === 'function' ? async () => {
+    const requested = await roomCapabilities();
+    return { roomCalling: controlVerified && requested?.roomCalling === true };
+  } : undefined;
   // Explicit, bounded pilot authority is separate from production evidence.
   // No fabricated live-test ID or request-supplied mode bypasses the guard.
   class RuntimeTransferController extends TransferController {
@@ -64,7 +68,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
       return policy.transferEnabled ? policy.transferValidation : false;
     }, verifyReadiness: data => runtime.verifyTransferReadiness(data) });
   runtime = new CallRuntime({ store, provider, transferController: controller, authenticate, resolveDevice, listDevices,
-    capabilities: release, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now, onRuntimeTiming });
+    capabilities: release, roomCapabilities: roomRelease, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now, onRuntimeTiming });
   return { runtime, provider, controller,
     verifyConfiguration: async () => {
       controlVerified = false;

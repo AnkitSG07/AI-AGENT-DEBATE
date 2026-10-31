@@ -12,7 +12,7 @@ public final class HubApplication extends Application {
     public static final ExecutorService IO = Executors.newFixedThreadPool(3);
     private boolean leaseCheckRunning;
     @Override public void onCreate() {
-        super.onCreate(); CallAlerts.createChannels(this);
+        super.onCreate(); CallAlerts.createChannels(this); MessageAlerts.createChannel(this);
         NativeStore store = new NativeStore(this);
         try {
             if (!store.config().isEmpty()) {

@@ -1,6 +1,7 @@
 package com.smarthandicrafts.operatorhub;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URL;
@@ -22,6 +23,50 @@ public final class NativeApi {
     public static JSONObject hubRead(String path, String bearer) throws Exception {
         if (!NativeHubReadPolicy.allowedPath(path)) throw new Exception("Unsupported Hub call read.");
         return request("https://ai-agent-debate.onrender.com", path, "GET", null, bearer, 4000, 8000, 512 * 1024, true);
+    }
+    /** Fixed message-state routes only. Neither arbitrary native URLs nor raw server data reach the Hub. */
+    public static JSONObject appMessageState(String operation, JSONObject input, String bearer) throws Exception {
+        if (bearer == null || bearer.isEmpty()) throw new ApiException(401, "Device authorization is required.");
+        JSONObject data = appMessageStateInput(operation, input);
+        String path = "list".equals(operation) ? "/messages/state" : "read".equals(operation) ? "/messages/read" : "/messages/unread";
+        JSONObject response = request(path, "POST", data, bearer, 4000, 8000);
+        JSONArray channels = response.optJSONArray("channels");
+        if (channels == null || channels.length() > 100) throw new Exception("Message state is temporarily unavailable.");
+        JSONArray projected = new JSONArray();
+        for (int i = 0; i < channels.length(); i++) projected.put(appMessageChannel(channels.getJSONObject(i)));
+        JSONObject result = new JSONObject().put("ok", true).put("channels", projected);
+        if (response.has("state")) result.put("state", appMessageChannel(response.getJSONObject("state")));
+        return result;
+    }
+    static JSONObject appMessageStateInput(String operation, JSONObject input) throws Exception {
+        if (input == null) throw new Exception("Invalid message-state request.");
+        JSONObject data = new JSONObject();
+        if ("list".equals(operation)) {
+            JSONArray ids = input.optJSONArray("channelIds");
+            if (ids == null || ids.length() > 100) throw new Exception("Invalid message-state request.");
+            JSONArray checked = new JSONArray();
+            for (int i = 0; i < ids.length(); i++) checked.put(messageInteger(ids.get(i), false));
+            return data.put("channelIds", checked);
+        }
+        if (!"read".equals(operation) && !"unread".equals(operation)) throw new Exception("Invalid message-state request.");
+        data.put("channelId", messageInteger(input.opt("channelId"), false));
+        data.put("expectedStateVersion", messageInteger(input.opt("expectedStateVersion"), true));
+        if ("read".equals(operation)) data.put("throughMessageId", messageInteger(input.opt("throughMessageId"), false));
+        return data;
+    }
+    private static JSONObject appMessageChannel(JSONObject value) throws Exception {
+        return new JSONObject().put("channelId", messageInteger(value.opt("channelId"), false))
+            .put("stateVersion", messageInteger(value.opt("stateVersion"), true))
+            .put("latestMessageId", messageInteger(value.opt("latestMessageId"), true))
+            .put("readThroughMessageId", messageInteger(value.opt("readThroughMessageId"), true))
+            .put("unreadCount", messageInteger(value.opt("unreadCount"), true));
+    }
+    private static long messageInteger(Object value, boolean zeroAllowed) throws Exception {
+        if (!(value instanceof Number)) throw new Exception("Invalid message-state data.");
+        double number = ((Number)value).doubleValue();
+        if (!Double.isFinite(number) || number != Math.floor(number) || number < (zeroAllowed ? 0 : 1) || number > 9007199254740991L)
+            throw new Exception("Invalid message-state data.");
+        return ((Number)value).longValue();
     }
     private static JSONObject request(String path, String method, JSONObject data, String bearer, int connectMs, int readMs) throws Exception {
         return request(HubPolicy.API_BASE, path, method, data, bearer, connectMs, readMs, 65536, false);

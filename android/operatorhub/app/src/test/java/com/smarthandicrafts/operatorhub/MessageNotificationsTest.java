@@ -57,6 +57,7 @@ public class MessageNotificationsTest {
     @Test public void senderTextPrivacyAndExactChatSurviveAndroidNotificationSerialization() {
         post(73, 801, "Ankit Garia", "Is the 3W kit available? 👋");
         Notification n = notification(73); assertNotNull(n);
+        assertTrue(store.lastMessageReceivedAt() > 0); assertEquals("posted", store.lastMessageOutcome());
         NotificationCompat.MessagingStyle style = style(73); assertNotNull(style);
         assertFalse(style.isGroupConversation()); assertEquals(1, style.getMessages().size());
         assertEquals("Ankit Garia", style.getMessages().get(0).getPerson().getName().toString());
@@ -199,9 +200,18 @@ public class MessageNotificationsTest {
         Map<String, String> incoming = data(73, 801, "Ankit", "Please show after permission");
         Shadows.shadowOf(app).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
         HubMessagingService.dispatchData(app, incoming); assertNull(notification(73));
+        assertEquals("blocked_permission", store.lastMessageOutcome()); assertTrue(store.lastMessageReceivedAt() > 0);
         Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
         HubMessagingService.dispatchData(app, incoming); assertNotNull(notification(73)); assertNotNull(summary());
         assertEquals(1, notification(73).number);
+        assertEquals("posted", store.lastMessageOutcome());
+    }
+    @Test public void startupKeepsAnInspectableBlockedMessageChannelAndDeliveryDiagnosesTheBlock() {
+        manager.createNotificationChannel(new NotificationChannel(MessageAlerts.CHANNEL, "Customer messages", NotificationManager.IMPORTANCE_NONE));
+        MessageAlerts.createChannel(app); assertNotNull(manager.getNotificationChannel(MessageAlerts.CHANNEL));
+        post(73, 801, "Ankit", "Channel remains blocked");
+        assertNull(notification(73)); assertEquals("blocked_channel", store.lastMessageOutcome());
+        assertEquals(NotificationManager.IMPORTANCE_NONE, manager.getNotificationChannel(MessageAlerts.CHANNEL).getImportance());
     }
     @Test public void rollbackRemovesOnlyTheUnpostedIdAndCannotChangeAReplacementEnrollment() {
         long now = System.currentTimeMillis(); DeviceLeasePolicy.Credential credential = store.credential();

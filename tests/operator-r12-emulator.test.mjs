@@ -130,3 +130,19 @@ test('official Firestore explicit media read batch uses one SDK getAll and prese
   assert.equal(calls, 1); assert.equal(recordReads, 2);
   await assert.rejects(() => store.transaction(async tx => { tx.create(a, { id: 'batch-a', replaced: true }); }), { code: 'RECORD_ALREADY_EXISTS' });
 });
+
+test('official Firestore app-only unread persists IDs and rejects stale read after manual unread', async () => {
+  const h = registryFixture({ db }), enrolled = await h.enroll(randomUUID().replaceAll('-', ''));
+  const channelId = Number.parseInt(randomUUID().slice(0, 7), 16) + 1000;
+  const token = enrolled.result.body.deviceToken;
+  await h.registry.observeAppMessages({ channelId, messageIds: [10, 11] });
+  const first = (await h.registry.listAppMessageState([channelId]))[0];
+  assert.equal(first.unreadCount, 2); assert.equal(first.stateVersion, 1);
+  const manual = await h.registry.changeAppMessageState(token, { channelId, unread: true, expectedStateVersion: first.stateVersion });
+  await assert.rejects(() => h.registry.changeAppMessageState(token, { channelId, throughMessageId: 11, expectedStateVersion: first.stateVersion }), { status: 409 });
+  await h.registry.observeAppMessages({ channelId, messageIds: [12] });
+  const current = (await h.registry.listAppMessageState([channelId]))[0];
+  assert.ok(current.stateVersion > manual.stateVersion);
+  const viewed = await h.registry.changeAppMessageState(token, { channelId, throughMessageId: 11, expectedStateVersion: current.stateVersion });
+  assert.equal(viewed.unreadCount, 1); assert.equal(viewed.readThroughMessageId, 11);
+});

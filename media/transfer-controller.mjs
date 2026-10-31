@@ -80,6 +80,8 @@ export function newBridgedCall({ callId, roomName, customerIdentity, tenantId, o
  * exist. This module does not invent bidirectional audio evidence.
  */
 export class TransferController {
+  get validatesExpectedSourceBinding() { return true; }
+
   constructor({ store, provider, authenticate, resolveDevice, rolloutGuard = async () => false,
     verifyReadiness, verifyProviderEvent, now = Date.now, invitationMs = 60000, evidenceMaxAgeMs = 5000 }) {
     requireValue(store?.durable === true && typeof store.transaction === 'function' && typeof store.get === 'function',
@@ -139,8 +141,17 @@ export class TransferController {
     return transfer;
   }
 
-  async invite(context, { callId, toDeviceId, expectedVersion, requestId, observedCall }) {
+  async invite(context, { callId, toDeviceId, expectedVersion, requestId, observedCall, expectedSourceBinding }) {
     const actor = await this.actor(context);
+    // Runtime callers supply their server-created preflight binding. This is
+    // an additional constraint on fresh authentication, never a substitute for
+    // it. Standalone integrations without a credential generation keep their
+    // existing contract by omitting this optional constraint.
+    if (expectedSourceBinding !== undefined) requireValue(expectedSourceBinding &&
+      actor.deviceId === expectedSourceBinding.deviceId && actor.userId === expectedSourceBinding.userId &&
+      actor.tenantId === expectedSourceBinding.tenantId && Number.isSafeInteger(actor.credentialGeneration) &&
+      actor.credentialGeneration >= 1 && actor.credentialGeneration === expectedSourceBinding.credentialGeneration,
+      'DEVICE_BINDING_CHANGED', 'The enrolled credential changed while preparing this transfer.', 403);
     await this.requireRollout(context, { callId, toDeviceId }, actor);
     identifier(callId, 'call ID'); identifier(toDeviceId, 'target device');
     requireValue(typeof requestId === 'string' && /^[A-Za-z0-9_-]{8,120}$/.test(requestId),
