@@ -2,7 +2,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
-const { context, deferred, source } = require('./production-functions.cjs');
+const { context: productionContext, deferred, source } = require('./production-functions.cjs');
+function context(names, values = {}) {
+  return productionContext([...names, 'hasAppMessageStateBridge'], {
+    hasHubNativeBridge: () => true, ...values,
+    window: { SHNativeCapabilities: { appMessageState: true }, ...values.window }
+  });
+}
 
 function runtime() {
   return { channels: new Map(), pending: new Map(), lists: new Map(), readRequests: new Map(), acknowledged: new Map(), lastReadAttempts: new Map(), intents: new Map(),
@@ -28,6 +34,32 @@ test('the ordinary website retains its Odoo unread contract and native mode neve
   assert.equal(await c.tryMarkChannelRead(73), true); assert.equal(calls, 1);
   c.hasHubNativeBridge = () => true;
   assert.equal(await c.tryMarkChannelRead(73), false); assert.equal(calls, 1);
+});
+
+test('R17 and unknown native capabilities retain legacy counters and Odoo read/unread instead of invoking unsupported app state', async () => {
+  for (const capabilities of [undefined, {}, { appMessageState: false }, { nativeRoomCalls: true }]) {
+    let calls = 0, nativeRequests = 0; const r = runtime(); r.channels.set(73, record());
+    const c = productionContext(['hasAppMessageStateBridge', 'appMessageStateAvailable', 'channelUnreadCount', 'tryMarkChannelRead', 'tryMarkChannelUnread', 'applyAppMessageState', 'beginAppMessageView'], {
+      hasHubNativeBridge: () => true, window: { SHNativeCapabilities: capabilities }, state: { destroyed: false, session: { uid: 1 } }, appUnreadRuntime: r,
+      callKw: async () => { calls++; return true; }, requestAppMessageState: async () => { nativeRequests++; throw Error('Unsupported legacy request'); }
+    });
+    assert.equal(c.hasAppMessageStateBridge(), false); assert.equal(c.appMessageStateAvailable(), false);
+    assert.equal(c.channelUnreadCount({ id: 73, message_unread_counter: 4 }), 4);
+    assert.equal(c.channelUnreadCount({ id: 74, _uiUnreadCount: 2 }), 2);
+    assert.equal(await c.tryMarkChannelRead(73), true); assert.equal(await c.tryMarkChannelUnread(73), true);
+    assert.equal(calls, 2); assert.equal(nativeRequests, 0);
+    assert.equal(c.applyAppMessageState({ ok: true, channels: [record({ unreadCount: 0, stateVersion: 2 })] }), false);
+    c.beginAppMessageView(73); assert.equal(r.intents.has(73), false);
+    assert.equal(r.channels.get(73).unreadCount, 3, 'unsupported app-state responses must not overwrite known legacy data');
+  }
+});
+
+test('the new unread contract requires both a native bridge and explicit appMessageState capability', () => {
+  const c = productionContext(['hasAppMessageStateBridge'], { hasHubNativeBridge: () => true, window: { SHNativeCapabilities: { appMessageState: true } } });
+  assert.equal(c.hasAppMessageStateBridge(), true);
+  c.hasHubNativeBridge = () => false; assert.equal(c.hasAppMessageStateBridge(), false);
+  assert.match(source, /const unreadPending = hasAppMessageStateBridge\(\)/);
+  assert.match(source, /if \(!hasAppMessageStateBridge\(\)\) \{\s+const current = state.channels.find/);
 });
 
 test('late list/read responses cannot roll back newer incoming messages or app read cursors', () => {

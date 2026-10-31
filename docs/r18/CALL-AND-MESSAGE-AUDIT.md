@@ -32,7 +32,9 @@ The last observed R17 message events were accepted by FCM for two phones each wi
 
 ## Validation and limits
 
-746 backend/HTTP checks, 13 official Firestore-emulator checks and 255 Android JVM tests in 29 suites passed. Clean release lint and assembly passed. APK signature, existing release certificate, 16 KiB alignment, version 18 and exact supplied-logo pixels were verified. Full browser regression launch was blocked because the expected Chromium executable is absent; all 128 affected browser cases failed their startup hook before application assertions. The focused unread frontend logic suite passed 20 tests and the live Odoo source is verified separately during publication.
+748 backend/HTTP checks, 13 official Firestore-emulator checks and 255 Android JVM tests in 29 suites passed. Clean release lint and assembly passed. APK signature, existing release certificate, 16 KiB alignment, version 18 and exact supplied-logo pixels were verified. Full browser regression launch was blocked because the expected Chromium executable is absent; all 128 affected browser cases failed their startup hook before application assertions. The focused unread frontend logic suite passed 22 tests and the live Odoo source is verified separately during publication.
+
+R17 and older clients retain their existing unread behavior until they install R18; the new ledger activates only with an explicit native capability.
 
 Actual handset FCM receipt and the requested two-second calls / five-second transfers are not claimed as achieved. The proposed Singapore service starts in an isolated read-only preflight, then requires controlled worker/routing cutover. No hosting resource, billing plan, database location, Meta callback or LiveKit project is changed by the migration draft.
 

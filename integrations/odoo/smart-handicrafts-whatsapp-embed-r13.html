@@ -3377,7 +3377,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   function channelUnreadCount(channel) {
     // Native SH Chat has its own team read cursor. Odoo's computed counter
     // must never clear it when somebody opens the conversation on the website.
-    if (hasHubNativeBridge()) {
+    if (hasAppMessageStateBridge()) {
       const row = appUnreadRuntime.channels.get(Number(channel?.id));
       return row ? row.unreadCount : 0;
     }
@@ -6998,7 +6998,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function tryMarkChannelRead(channelId) {
-    if (hasHubNativeBridge()) return false;
+    if (hasAppMessageStateBridge()) return false;
     if (!channelId) return false;
     const methods = ["mark_as_read", "channel_seen", "set_channel_seen"];
     for (const method of methods) {
@@ -7012,7 +7012,7 @@ Once received, our team will prepare the quotation accordingly.`
 
   async function tryMarkChannelUnread(channelId) {
     if (!channelId) return false;
-    if (hasHubNativeBridge()) {
+    if (hasAppMessageStateBridge()) {
       const id = Number(channelId), previous = appUnreadRuntime.readRequests.get(id);
       const intent = (appUnreadRuntime.intents.get(id) || 0) + 1; appUnreadRuntime.intents.set(id, intent);
       appUnreadRuntime.manualUnread.add(id);
@@ -8110,7 +8110,7 @@ Once received, our team will prepare the quotation accordingly.`
       const activity = formatInboxActivity(latest?.date || channelLastActivity(channel));
       const waOpen = type === "whatsapp" ? isWhatsappWindowOpen(channel) : null;
       const unreadCount = channelUnreadCount(channel);
-      const unreadPending = hasHubNativeBridge() && !appUnreadRuntime.channels.has(Number(channel.id));
+      const unreadPending = hasAppMessageStateBridge() && !appUnreadRuntime.channels.has(Number(channel.id));
 
       return `
         <button
@@ -8199,7 +8199,7 @@ Once received, our team will prepare the quotation accordingly.`
     if (state.destroyed || state.selectionEpoch !== epoch || Number(state.selectedChannelId) !== id) return;
     const suggestion = state.aiSuggestionsByChannel?.[String(id)];
     if (getAiMode() === "assist" && suggestion) showAiModePanel(suggestion, { title: "Saved AI Assist Suggestion" });
-    if (!hasHubNativeBridge()) {
+    if (!hasAppMessageStateBridge()) {
       const current = state.channels.find(item => Number(item.id) === id);
       if (current) current._uiUnreadCount = 0;
       tryMarkChannelRead(id).catch(() => {});
@@ -8313,11 +8313,16 @@ Once received, our team will prepare the quotation accordingly.`
   const appUnreadRuntime = { channels: new Map(), pending: new Map(), lists: new Map(), readRequests: new Map(),
     acknowledged: new Map(), lastReadAttempts: new Map(), intents: new Map(), manualUnread: new Set(), sequence: 0, frame: null, lastApplied: new Map() };
 
+  function hasAppMessageStateBridge() {
+    return hasHubNativeBridge() && window.SHNativeCapabilities?.appMessageState === true;
+  }
+
   function appMessageStateAvailable() {
-    return !state.destroyed && !!state.session?.uid && hasHubNativeBridge() && window.SHNativeCapabilities?.appMessageState === true;
+    return !state.destroyed && !!state.session?.uid && hasAppMessageStateBridge();
   }
 
   function beginAppMessageView(channelId) {
+    if (!hasAppMessageStateBridge()) return;
     const id = Number(channelId);
     appUnreadRuntime.intents.set(id, (appUnreadRuntime.intents.get(id) || 0) + 1);
     appUnreadRuntime.manualUnread.delete(id);
@@ -8352,7 +8357,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   function receiveAppMessageState(event) {
-    if (!hasHubNativeBridge()) return;
+    if (!hasAppMessageStateBridge()) return;
     const detail = event.detail, pending = appUnreadRuntime.pending.get(detail?.requestId);
     if (!pending) return;
     appUnreadRuntime.pending.delete(detail.requestId); clearTimeout(pending.timer);
@@ -8386,7 +8391,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   function applyAppMessageState(body, sequence = ++appUnreadRuntime.sequence) {
-    if (state.destroyed || !hasHubNativeBridge() || !body || body.ok !== true) return false;
+    if (state.destroyed || !hasAppMessageStateBridge() || !body || body.ok !== true) return false;
     const rows = [...(Array.isArray(body.channels) ? body.channels : []), ...(body.state ? [body.state] : [])];
     let changed = false;
     for (const row of rows.slice(0, 100)) {
@@ -14054,7 +14059,7 @@ Once received, our team will prepare the quotation accordingly.`
         if (liveChannel) liveChannel._uiUnreadCount = Math.max(1, channelUnreadCount(liveChannel));
         applyFiltersAndRender();
         hidePanel(channelActionPanel);
-        showOperatorToast(marked ? hasHubNativeBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
+        showOperatorToast(marked ? hasAppMessageStateBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
       } else if (action === "openchat") {
         hidePanel(channelActionPanel);
         await selectActionChannel(channel.id);
@@ -14109,7 +14114,7 @@ Once received, our team will prepare the quotation accordingly.`
         const channel = state.channels.find(item => item.id === state.selectedChannelId);
         if (channel) channel._uiUnreadCount = Math.max(1, channelUnreadCount(channel));
         applyFiltersAndRender();
-        showOperatorToast(marked ? hasHubNativeBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
+        showOperatorToast(marked ? hasAppMessageStateBridge() ? "Chat marked unread for the app team" : "Chat marked unread in Odoo" : "Unread marker shown locally");
       } else if (action === "edit") {
         const edited = await editMessageBody(message);
         if (edited) {
