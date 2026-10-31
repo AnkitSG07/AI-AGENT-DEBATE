@@ -514,6 +514,7 @@ public final class MainActivity extends Activity {
         if (web == null) return;
         dispatchPending();
         if (channel > 0) {
+            MessageAlerts.opened(this, intent);
             pendingChannel = channel;
             ensureHubPage(); dispatchPending();
             return;

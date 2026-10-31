@@ -1,0 +1,220 @@
+{
+  "release": "SH Chat R15 message notifications",
+  "baselineCommit": "d58368d128f782f119d9789fb9ba9ecf3ab385e7",
+  "backend": {
+    "pass": 632,
+    "fail": 0,
+    "runtimeAndTestInputsUnchangedDuringRun": true,
+    "reportSha256": "2104e7d0381c339c4f07ba6441473b30c6c1ba07be6b024aa18641be1ff71d52",
+    "newMessagePreviewTests": 9,
+    "r14CallLatencyRegressions": 10
+  },
+  "androidJvm": {
+    "suites": 25,
+    "tests": 225,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suiteResults": [
+      {
+        "name": "com.smarthandicrafts.operatorhub.DeviceLeasePolicyTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubLaunchStateTest",
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.HubPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationDataTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.MessageNotificationsTest",
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeApiHistoryBoundaryTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallCloseQueueTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionStateTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeCallPermissionUiTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeHubReadPolicyTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeOperatorAuthPolicyTest",
+        "tests": 8,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCallHealthTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCapabilityCacheTest",
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomCleanupProcessorTest",
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomControlTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDisposalTest",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomDrainGateTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomLifecycleRegressionTest",
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomPolicyTest",
+        "tests": 23,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomStartGateTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomUiBindingTest",
+        "tests": 9,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeRoomWaitingCallTest",
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "com.smarthandicrafts.operatorhub.NativeStoreLeaseTest",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ]
+  },
+  "androidReleaseLint": "passed",
+  "androidAssembly": "passed",
+  "androidApisExercisedByNewNotificationTests": [
+    26,
+    28,
+    35
+  ],
+  "physicalPhoneAndActualFcmAcceptance": "not executed on this host; requires updated handset retest",
+  "browserAndNativeOsAcceptance": "not executed for this message-rendering change; prior host socket restriction persists",
+  "apk": {
+    "filename": "SH-Chat-1.0-r15-MESSAGE-NOTIFICATIONS-SIGNED.apk",
+    "bytes": 59516505,
+    "sha256": "1f2f6e640734f97468cc58eaf5d7ba33f11581491840babf900ce5e7975c4a8a",
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "package": "com.smarthandicrafts.operatorhub",
+    "versionCode": 15,
+    "versionName": "1.0-r15",
+    "zipIntegrity": "passed",
+    "zipAlignment16KiB": "passed",
+    "cryptographicSignature": "passed",
+    "r13R14FreshReleaseSignerMatches": true
+  },
+  "signingKeyPublished": false,
+  "hostingPlanOrBillingChanged": false
+}

@@ -34,7 +34,9 @@ public final class HubMessagingService extends FirebaseMessagingService {
                 long channel = Long.parseLong(d.get("channel_id")), id = Long.parseLong(d.get("message_id"));
                 long issued = Long.parseLong(d.get("issued_at_ms")), expiry = Long.parseLong(d.get("expires_at_ms"));
                 String expected = HubPolicy.HUB_URL + "?channel_id=" + channel + "&channel=" + channel;
-                if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && new NativeStore(context).receiveMessage(channel, id, issued, expiry)) MessageAlerts.show(context, (int)channel, false);
+                NativeStore store = new NativeStore(context); DeviceLeasePolicy.Credential credential = store.credential();
+                if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && store.receiveMessage(channel, id, issued, expiry, credential))
+                    MessageAlerts.show(context, (int)channel, id, d, credential);
             } catch (Exception ignored) { }
             return;
         }

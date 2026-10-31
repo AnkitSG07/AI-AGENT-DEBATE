@@ -2,14 +2,19 @@ package com.smarthandicrafts.operatorhub;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.UUID;
 
 /** Native-only state. Backup and device transfer are disabled in the manifest. */
 public final class NativeStore {
     private static final Object EVENT_LOCK = new Object();
+    private final Context appContext;
     private final SharedPreferences prefs;
-    public NativeStore(Context context) { prefs = context.getApplicationContext().getSharedPreferences("native_private", Context.MODE_PRIVATE); }
+    public NativeStore(Context context) {
+        appContext = context.getApplicationContext();
+        prefs = appContext.getSharedPreferences("native_private", Context.MODE_PRIVATE);
+    }
     public String installationId() {
         synchronized (EVENT_LOCK) {
         String id = prefs.getString("installation_id", "");
@@ -28,6 +33,14 @@ public final class NativeStore {
     }
     public boolean matchesCredential(DeviceLeasePolicy.Credential expected) {
         synchronized (EVENT_LOCK) { return DeviceLeasePolicy.sameIdentity(credential(), expected); }
+    }
+    /** Publish previews atomically with enrollment changes, including logout cleanup. */
+    public boolean withMessageCredential(DeviceLeasePolicy.Credential expected, Runnable operation) {
+        synchronized (EVENT_LOCK) {
+            DeviceLeasePolicy.Credential current = credential();
+            if (!DeviceLeasePolicy.sameIdentity(current, expected) || !DeviceLeasePolicy.valid(current, System.currentTimeMillis())) return false;
+            operation.run(); return true;
+        }
     }
     public void watchCredential(SharedPreferences.OnSharedPreferenceChangeListener listener) { prefs.registerOnSharedPreferenceChangeListener(listener); }
     public void unwatchCredential(SharedPreferences.OnSharedPreferenceChangeListener listener) { prefs.unregisterOnSharedPreferenceChangeListener(listener); }
@@ -59,8 +72,10 @@ public final class NativeStore {
             long generation = prefs.getLong("enrollment_generation", 0);
             DeviceLeasePolicy.Credential candidate = new DeviceLeasePolicy.Credential(id, bearer, expiry, generation);
             if (generation != expectedGeneration || !DeviceLeasePolicy.valid(candidate, System.currentTimeMillis())) return false;
-            return prefs.edit().putString("device_id", id).putString("device_token", bearer).putLong("device_expires", expiry)
+            boolean saved = prefs.edit().putString("device_id", id).putString("device_token", bearer).putLong("device_expires", expiry)
                 .putLong("enrollment_generation", generation + 1).remove("lease_last_attempt").putString("last_problem", "").commit();
+            if (saved) clearMessageStateLocked();
+            return saved;
         }
     }
     public void clearEnrollment() {
@@ -75,6 +90,14 @@ public final class NativeStore {
         prefs.edit().remove("device_id").remove("device_token").remove("device_expires").remove("lease_last_attempt")
             .putLong("enrollment_generation", prefs.getLong("enrollment_generation", 0) + 1)
             .putString("last_problem", problem == null ? "" : problem).commit();
+        clearMessageStateLocked();
+    }
+    private void clearMessageStateLocked() {
+        SharedPreferences.Editor edit = prefs.edit();
+        for (String key : prefs.getAll().keySet())
+            if (key.startsWith("message:") || key.startsWith("message_time:") || key.startsWith("message_seen:") || key.startsWith("message_floor:")) edit.remove(key);
+        edit.commit();
+        MessageAlerts.clearAll(appContext);
     }
     public boolean clearEnrollmentIfMatches(DeviceLeasePolicy.Credential expected, String problem) {
         synchronized (EVENT_LOCK) {
@@ -212,16 +235,35 @@ public final class NativeStore {
     }
     private static String roomKey(String callId, String transferId) { return "room_alert:" + (transferId.isEmpty() ? "call:" + callId : "transfer:" + transferId); }
     public boolean receiveMessage(long channel, long message, long issued, long expiry) {
+        return receiveMessage(channel, message, issued, expiry, null);
+    }
+    public boolean receiveMessage(long channel, long message, long issued, long expiry, DeviceLeasePolicy.Credential expected) {
         synchronized (EVENT_LOCK) {
         long now = System.currentTimeMillis();
-        if (!enrolled() || channel <= 0 || message <= 0 || issued <= 0 || issued > now + 30000 || expiry <= now || expiry - issued > 300000) return false;
+        if (expected != null && !DeviceLeasePolicy.sameIdentity(credential(), expected)) return false;
+        if (!enrolled() || channel <= 0 || message <= 0 || issued <= 0 || issued > now + 30000 || expiry <= now || expiry <= issued || expiry - issued > 300000) return false;
         String key = "message:" + channel;
-        if (prefs.getLong(key, 0) >= message) return false;
-        SharedPreferences.Editor edit = prefs.edit().putLong(key, message).putLong("message_time:" + channel, now);
+        String seenKey = "message_seen:" + channel;
+        java.util.TreeSet<Long> seen = new java.util.TreeSet<>();
+        try {
+            JSONArray ids = new JSONArray(prefs.getString(seenKey, "[]"));
+            for (int i = 0; i < ids.length(); i++) if (ids.optLong(i) > 0) seen.add(ids.optLong(i));
+        } catch (Exception ignored) { }
+        long highWater = prefs.getLong(key, 0);
+        long migrationFloor = prefs.getLong("message_floor:" + channel, prefs.contains(seenKey) ? 0 : highWater);
+        // Preserve the old APK's deduplication boundary on the first upgraded delivery.
+        // Later fresh out-of-order FCM messages are accepted once within a bounded window.
+        if (seen.contains(message) || message <= migrationFloor ||
+            (seen.size() >= 32 && message < seen.first())) return false;
+        seen.add(message); while (seen.size() > 32) seen.pollFirst();
+        SharedPreferences.Editor edit = prefs.edit().putLong(key, Math.max(highWater, message))
+            .putString(seenKey, new JSONArray(seen).toString()).putLong("message_floor:" + channel, migrationFloor).putLong("message_time:" + channel, now);
         java.util.ArrayList<String> keys = new java.util.ArrayList<>();
-        for (String candidate : prefs.getAll().keySet()) if (candidate.startsWith("message:")) keys.add(candidate);
+        for (String candidate : prefs.getAll().keySet()) if (candidate.startsWith("message:") && !candidate.equals(key)) keys.add(candidate);
         keys.sort(java.util.Comparator.comparingLong(k -> prefs.getLong("message_time:" + k.substring(8), 0)));
-        for (int i = 0; i < Math.max(0, keys.size() - 127); i++) { String old = keys.get(i); edit.remove(old).remove("message_time:" + old.substring(8)); }
+        for (int i = 0; i < Math.max(0, keys.size() - 127); i++) {
+            String old = keys.get(i); edit.remove(old).remove("message_time:" + old.substring(8)).remove("message_seen:" + old.substring(8)).remove("message_floor:" + old.substring(8));
+        }
         edit.apply();
         return true;
             }

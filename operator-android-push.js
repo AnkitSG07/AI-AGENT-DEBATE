@@ -3,8 +3,9 @@
 import { createHash, createPrivateKey, createSign, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { messageNotificationPreview } from './operator-message-preview.js';
 
-export const ANDROID_PUSH_VERSION = '2026-10-29-android-push-r10';
+export const ANDROID_PUSH_VERSION = '2026-10-31-android-push-r15-message-previews';
 const PREFIX = '/api/operator-android';
 const HUB = 'https://www.smarthandicrafts.com/livechat-api-test';
 const OAUTH = 'https://oauth2.googleapis.com/token';
@@ -547,6 +548,10 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
           if (clock() >= messageAt + MESSAGE_TTL_MS) break;
           const data = { type: 'sh_operator_message', channel_id: channelId, message_id: messageId,
             issued_at_ms: String(clock()), expires_at_ms: String(messageAt + MESSAGE_TTL_MS), hub_url: messageHubUrl(channelId) };
+          // Existing R13/R14 devices retain their ID-only envelope. New clients
+          // explicitly support the requested sender/text conversation previews.
+          if (snapshot.nativeBuild >= 15) Object.assign(data, messageNotificationPreview(channel, message),
+            { message_at_ms: String(messageAt), preview_protocol: 'sh-message-preview-v1' });
           const outcome = await deliverNotification({ descriptor: { messageId, channelId, deviceId: snapshot.id, event: 'message' }, data });
           if (outcome === 'sent') sent++;
           if (outcome === 'failed') failed++;
