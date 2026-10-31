@@ -1,0 +1,152 @@
+name: SH Chat R13 verification
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, 'sh-chat-*']
+permissions:
+  contents: read
+concurrency:
+  group: sh-chat-verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend-and-hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Install pinned browser test tool
+        run: |
+          npm install --prefix "$RUNNER_TEMP/sh-r13-playwright" --no-save --ignore-scripts playwright@1.62.1
+          "$RUNNER_TEMP/sh-r13-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          node -e 'const fs=require("fs"),p=require(process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright");fs.appendFileSync(process.env.GITHUB_ENV,"SH_PLAYWRIGHT_MODULE="+process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright\nSH_TEST_CHROMIUM="+p.chromium.executablePath()+"\n")'
+      - run: node scripts/verify-r13.mjs unit http browser
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r13-backend-hub-evidence
+          retention-days: 30
+          path: |
+            verification/r13/current/
+            integrations/odoo/tests/r13/workflow-evidence/
+            integrations/odoo/tests/ui-r12-evidence/
+  real-audio-and-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci --ignore-scripts
+      - name: Prepare checksum-verified local services and pinned browser
+        run: |
+          python tests/simulator-media-r13/prepare-tools.py
+          npm install --prefix "$RUNNER_TEMP/sh-r13-playwright" --no-save --ignore-scripts playwright@1.62.1
+          "$RUNNER_TEMP/sh-r13-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          node -e 'const fs=require("fs"),path=require("path"),p=require(process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright");fs.appendFileSync(process.env.GITHUB_ENV,"SH_PLAYWRIGHT_MODULE="+process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright\nSH_TEST_CHROMIUM="+p.chromium.executablePath()+"\nSH_TEST_JAVA="+process.env.JAVA_HOME+"/bin/java\nSH_FIRESTORE_EMULATOR_JAR="+path.resolve("../tooling/r13-media/cloud-firestore-emulator-v1.19.8.jar")+"\n")'
+      - run: node scripts/run-firestore-r13.mjs
+        env:
+          SH_VERIFY_OUTPUT: verification/r13/firestore
+      - run: node scripts/verify-r13.mjs media
+        env:
+          SH_R13_REAL_MEDIA_TESTS: '1'
+          SH_VERIFY_OUTPUT: verification/r13/media
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r13-real-audio-storage-evidence
+          retention-days: 30
+          path: |
+            verification/r13/firestore/
+            verification/r13/media/
+            tests/simulator-media-r13/evidence/
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci --ignore-scripts
+      - name: Prepare isolated native audio fixture before building the test APK
+        run: |
+          python tests/simulator-media-r13/prepare-tools.py
+          npm install --prefix "$RUNNER_TEMP/sh-r13-playwright" --no-save --ignore-scripts playwright@1.62.1
+          "$RUNNER_TEMP/sh-r13-playwright/node_modules/.bin/playwright" install --with-deps chromium
+          node -e 'const fs=require("fs"),p=require(process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright");fs.appendFileSync(process.env.GITHUB_ENV,"SH_PLAYWRIGHT_MODULE="+process.env.RUNNER_TEMP+"/sh-r13-playwright/node_modules/playwright\nSH_TEST_CHROMIUM="+p.chromium.executablePath()+"\nSH_NATIVE_MEDIA_OUTPUT="+process.env.RUNNER_TEMP+"/sh-native-media\n")'
+          SH_NATIVE_MEDIA_OUTPUT="$RUNNER_TEMP/sh-native-media" python tests/simulator-media-r13/prepare-native-tls.py
+      - name: Build release candidate and run Android unit tests
+        working-directory: android/operatorhub
+        run: bash gradlew --no-daemon --max-workers=2 :app:testReleaseUnitTest :app:lintVitalRelease :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Enable the runner's hardware virtualization
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [[ ! -c /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            echo 'Accessible KVM is required; refusing software-emulated Android CI.' >&2
+            exit 2
+          fi
+          # Linux KVM API: GET_API_VERSION (0xAE00), CREATE_VM (0xAE01).
+          # Create/close an empty VM before the action can fall back to software emulation.
+          timeout --kill-after=5s 15s python3 - <<'PY'
+          import fcntl
+          import os
+          import sys
+
+          kvm_fd = None
+          vm_fd = None
+          try:
+              kvm_fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+              if fcntl.ioctl(kvm_fd, 0xAE00, 0) != 12:
+                  raise RuntimeError('KVM API version 12 is required.')
+              vm_fd = fcntl.ioctl(kvm_fd, 0xAE01, 0)
+              if vm_fd < 0:
+                  raise RuntimeError('KVM did not return a virtual machine descriptor.')
+          except (OSError, RuntimeError) as error:
+              print(f'Usable KVM is required; refusing software emulation: {error}', file=sys.stderr)
+              sys.exit(2)
+          finally:
+              if vm_fd is not None and vm_fd >= 0:
+                  os.close(vm_fd)
+              if kvm_fd is not None:
+                  os.close(kvm_fd)
+          print('KVM API v12: empty VM created and closed successfully.')
+          PY
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: bash scripts/run-android-instrumentation-r13.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: r13-android-candidate-and-tests
+          retention-days: 30
+          path: |
+            android/operatorhub/app/build/reports/
+            android/operatorhub/app/build/test-results/
+            android/operatorhub/app/build/outputs/androidTest-results/
+            android/operatorhub/app/build/outputs/apk/
+            android/operatorhub/build/reports/system-simulation/
+            android/operatorhub/build/reports/native-media-simulation/
+            android/operatorhub/build/reports/instrumentation-suites/

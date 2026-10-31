@@ -1,0 +1,17 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=SH Chat, OU=Internal Android, O=Smart Handicrafts, C=IN
+Signer #1 certificate SHA-256 digest: c1ca4799a7c1ff26ed2e188f3622d6b3b6144450ba656fde6f438629e75c4382
+Signer #1 certificate SHA-1 digest: 2bc95d000c08ab5ae1bf4925c51eaf02d5c560f5
+Signer #1 certificate MD5 digest: 4c5a2d4d3873fd149fc6226e49057b0c
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: 6386811188a2256199f40ada13c4b03008b7c73e9f43510848e3a21ba54139c4
+Signer #1 public key SHA-1 digest: 0f6c43d38a3d5dcc4cbfe9d3a6d04f7fdeb98a2e
+Signer #1 public key MD5 digest: 6629f2e31c139deca464c9f7a1a32e05

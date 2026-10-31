@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:22" hostname="ca82e965341e" time="0.033">
+  <properties/>
+  <testcase name="compatibilityPermissionSerializesExactCustomerWithoutNullFields" classname="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" time="0.019"/>
+  <testcase name="retainedDiagnosticsContainOnlyStageAndClassifiedReason" classname="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" time="0.001"/>
+  <testcase name="pinnedSdkIdentityOnlyNullSidReproducesThePreMicrophoneCrash" classname="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" time="0.0"/>
+  <testcase name="serializedPolicyStillExcludesEveryOtherParticipant" classname="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" time="0.013"/>
+  <testcase name="missingCustomerIdentityCannotFallBackToAnUnrestrictedPermission" classname="com.smarthandicrafts.operatorhub.NativeRoomAudioSetupTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,180 @@
+TAP version 13
+# Subtest: closed WhatsApp window blocks both free text and attachments before any Odoo operation
+ok 1 - closed WhatsApp window blocks both free text and attachments before any Odoo operation
+  ---
+  duration_ms: 7.411464
+  ...
+# Subtest: reply window uses strict expiry and explicit inactive flag, leaving Live Chat comments available
+ok 2 - reply window uses strict expiry and explicit inactive flag, leaving Live Chat comments available
+  ---
+  duration_ms: 4.565418
+  ...
+# Subtest: attachment upload spanning window expiry must not post a WhatsApp message
+ok 3 - attachment upload spanning window expiry must not post a WhatsApp message
+  ---
+  duration_ms: 3.483372
+  ...
+# Subtest: fresh inbox closure of the original channel during upload must stop the attachment send
+ok 4 - fresh inbox closure of the original channel during upload must stop the attachment send
+  ---
+  duration_ms: 4.574823
+  ...
+# Subtest: two overlapping attachment actions share a single upload attempt and cannot double-send
+ok 5 - two overlapping attachment actions share a single upload attempt and cannot double-send
+  ---
+  duration_ms: 6.434279
+  ...
+# Subtest: failed attachment upload keeps the draft and never posts a message
+ok 6 - failed attachment upload keeps the draft and never posts a message
+  ---
+  duration_ms: 6.173766
+  ...
+# Subtest: closing the workspace while upload is pending prevents a late message send
+ok 7 - closing the workspace while upload is pending prevents a late message send
+  ---
+  duration_ms: 3.61331
+  ...
+# Subtest: upload failure after switching chats cannot replace the other conversation warning
+ok 8 - upload failure after switching chats cannot replace the other conversation warning
+  ---
+  duration_ms: 4.167933
+  ...
+# Subtest: window expiry between files stops the remaining uploads as well as the final send
+ok 9 - window expiry between files stops the remaining uploads as well as the final send
+  ---
+  duration_ms: 3.512545
+  ...
+# Subtest: switching conversations during upload cannot send to the new selected customer or clear its draft
+ok 10 - switching conversations during upload cannot send to the new selected customer or clear its draft
+  ---
+  duration_ms: 3.576871
+  ...
+# Subtest: channel template fallback advances only after an exact missing-method RPC error
+ok 11 - channel template fallback advances only after an exact missing-method RPC error
+  ---
+  duration_ms: 5.142946
+  ...
+# Subtest: channel template network failure cannot trigger a second send route
+ok 12 - channel template network failure cannot trigger a second send route
+  ---
+  duration_ms: 4.158804
+  ...
+# Subtest: channel template validation failure cannot trigger a second send route
+ok 13 - channel template validation failure cannot trigger a second send route
+  ---
+  duration_ms: 3.928743
+  ...
+# Subtest: channel template unrelated-attribute failure cannot trigger a second send route
+ok 14 - channel template unrelated-attribute failure cannot trigger a second send route
+  ---
+  duration_ms: 3.81959
+  ...
+# Subtest: partner template fallback advances only after an exact missing-method RPC error
+ok 15 - partner template fallback advances only after an exact missing-method RPC error
+  ---
+  duration_ms: 4.104715
+  ...
+# Subtest: partner template network failure cannot trigger a second send route
+ok 16 - partner template network failure cannot trigger a second send route
+  ---
+  duration_ms: 3.457404
+  ...
+# Subtest: partner template validation failure cannot trigger a second send route
+ok 17 - partner template validation failure cannot trigger a second send route
+  ---
+  duration_ms: 3.512245
+  ...
+# Subtest: partner template unrelated-attribute failure cannot trigger a second send route
+ok 18 - partner template unrelated-attribute failure cannot trigger a second send route
+  ---
+  duration_ms: 3.466697
+  ...
+# Subtest: template success cannot reopen the local reply window
+ok 19 - template success cannot reopen the local reply window
+  ---
+  duration_ms: 3.432827
+  ...
+# Subtest: channel template generic fallback is reached once only after all four methods are absent
+ok 20 - channel template generic fallback is reached once only after all four methods are absent
+  ---
+  duration_ms: 3.544784
+  ...
+# Subtest: template list excludes draft, rejected, unknown and missing approval statuses
+ok 21 - template list excludes draft, rejected, unknown and missing approval statuses
+  ---
+  duration_ms: 3.653745
+  ...
+# Subtest: channel template revalidates exact approval and cannot send a stale or unknown template
+ok 22 - channel template revalidates exact approval and cannot send a stale or unknown template
+  ---
+  duration_ms: 8.603284
+  ...
+# Subtest: partner template revalidates exact approval and cannot send a stale or unknown template
+ok 23 - partner template revalidates exact approval and cannot send a stale or unknown template
+  ---
+  duration_ms: 8.09576
+  ...
+# Subtest: template approval read failure cannot fall through to a generic send route
+ok 24 - template approval read failure cannot fall through to a generic send route
+  ---
+  duration_ms: 3.978062
+  ...
+# Subtest: asynchronous template approval lookup preserves the originally chosen conversation
+ok 25 - asynchronous template approval lookup preserves the originally chosen conversation
+  ---
+  duration_ms: 4.548713
+  ...
+# Subtest: new customer is immediately available to draft quotation and follow-up even when persistent channel linkage is denied
+ok 26 - new customer is immediately available to draft quotation and follow-up even when persistent channel linkage is denied
+  ---
+  duration_ms: 11.138117
+  ...
+# Subtest: new customer creation remains bound to the original form conversation after a chat switch
+ok 27 - new customer creation remains bound to the original form conversation after a chat switch
+  ---
+  duration_ms: 5.726873
+  ...
+# Subtest: read-only or absent channel relation retains honest temporary linkage without an invalid Odoo write
+ok 28 - read-only or absent channel relation retains honest temporary linkage without an invalid Odoo write
+  ---
+  duration_ms: 4.511665
+  ...
+# Subtest: server-background mode disables both browser automatic scanners before they process any message
+ok 29 - server-background mode disables both browser automatic scanners before they process any message
+  ---
+  duration_ms: 4.873966
+  ...
+# Subtest: startup OFF and a later explicit ON serialize in order and mark existing inbox history
+ok 30 - startup OFF and a later explicit ON serialize in order and mark existing inbox history
+  ---
+  duration_ms: 10.361299
+  ...
+# Subtest: failed default OFF response leaves a visible unconfirmed state rather than claiming server OFF
+ok 31 - failed default OFF response leaves a visible unconfirmed state rather than claiming server OFF
+  ---
+  duration_ms: 5.829596
+  ...
+# Subtest: malformed AI toggle acknowledgement must not be reported as confirmed
+ok 32 - malformed AI toggle acknowledgement must not be reported as confirmed
+  ---
+  duration_ms: 4.830392
+  ...
+# Subtest: wrong mode and incomplete AI acknowledgements cannot confirm the requested setting
+ok 33 - wrong mode and incomplete AI acknowledgements cannot confirm the requested setting
+  ---
+  duration_ms: 20.875289
+  ...
+# Subtest: opening another app explicitly requests the same global manual mode, not only a local switch reset
+ok 34 - opening another app explicitly requests the same global manual mode, not only a local switch reset
+  ---
+  duration_ms: 5.747533
+  ...
+1..34
+# tests 34
+# suites 0
+# pass 34
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 233.153247

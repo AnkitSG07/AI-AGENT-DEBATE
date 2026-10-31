@@ -1,0 +1,3 @@
+node_modules/
+tests/ui-r12-evidence/
+tests/*-results.json

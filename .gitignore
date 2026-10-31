@@ -1,6 +1,34 @@
-node_modules/
+node_modules
 .env
 .DS_Store
 
 # FedEx locally stored manifests and label PDFs
 fedex-data/
+
+# Reproducible local simulator output, never production inputs.
+verification/r13/current/
+integrations/odoo/tests/r13/workflow-evidence/
+integrations/odoo/tests/ui-r12-evidence/
+integrations/odoo/tests/*-results.json
+tests/simulator-media-r13/evidence/
+__pycache__/
+
+# Android machines, build output and private signing material stay outside Git.
+android/**/.gradle/
+android/**/build/
+android/**/local.properties
+*.apk
+*.jks
+*.keystore
+
+# Fresh execution logs are delivered in the verification archive.
+verification/r13/*
+!verification/r13/release-summary.json
+verification/recovery-current/
+android/operatorhub/verification/r12/call-320x480-large-font.png
+android/operatorhub/verification/r13/
+
+# Final resumed execution evidence is packaged separately.
+verification/completion-current/
+android/**/build
+android/**/build.recovered-source-copy/

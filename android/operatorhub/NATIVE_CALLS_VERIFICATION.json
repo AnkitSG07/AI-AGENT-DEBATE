@@ -1,0 +1,368 @@
+{
+  "release": "1.0-r13",
+  "versionCode": 13,
+  "packageName": "com.smarthandicrafts.operatorhub",
+  "createdAtUtc": "2026-10-30T09:17:40.358738+00:00",
+  "status": "unsigned_candidate_requires_original_signing_key",
+  "apk": {
+    "file": "SH-Chat-1.0-r13-unsigned.apk",
+    "bytes": 59485790,
+    "sha256": "2196a8427237d889774f92d3622c5887f7fd85913ca1991ebd485a9ebd0deade",
+    "zipalignExitCode": 0,
+    "apksignerExitCode": 1,
+    "badgingExitCode": 0,
+    "fixtureAssetsPresent": false,
+    "fixtureActivityPresent": false,
+    "signed": false,
+    "installable": false,
+    "zipAlignment16KiBPassed": true,
+    "minSdk": 26,
+    "targetSdk": 35,
+    "compileSdk": 35,
+    "testCaPresent": false,
+    "nativeMediaFixtureHostnamePresent": false,
+    "identity": {
+      "packageName": "com.smarthandicrafts.operatorhub",
+      "versionCode": 13,
+      "versionName": "1.0-r13",
+      "debuggable": false,
+      "signed": false
+    },
+    "testOnlySymbolsPresent": false,
+    "permissionWorkflowIncluded": true,
+    "nativeLibraryAlignmentEvidence": "../../verification/recovery-current/android/completion/native-library-alignment.json",
+    "inspected64BitElf16KiBAlignmentPassed": true,
+    "runtime16KiBPageSizeTested": false
+  },
+  "requiredOriginalCertificateSha256": "c1ca4799a7c1ff26ed2e188f3622d6b3b6144450ba656fde6f438629e75c4382",
+  "baselineR11": {
+    "sha256": "30d6eef46dcb4553d9b7f9792af6e8f15c76b3ede8d4e8c1d7841154c3b7f5a4",
+    "signatureVerified": true,
+    "purpose": "Original update identity only; not an R12 signature"
+  },
+  "unitTests": {
+    "tests": 205,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "suites": 23,
+    "variant": "release",
+    "evidence": "../../verification/recovery-current/android/junit-current",
+    "origin": "Fresh final-source release execution; all 107 tracked inputs match the current source; 19 new explicit call-permission cases included.",
+    "recoveryEvidence": "../../verification/recovery-current/android/build-current.json"
+  },
+  "build": {
+    "releaseAssembled": true,
+    "releaseVitalLintPassed": true,
+    "tasks": [
+      ":app:testReleaseUnitTest",
+      ":app:lintVitalRelease",
+      ":app:assembleRelease",
+      ":app:assembleDebug",
+      ":app:assembleDebugAndroidTest"
+    ],
+    "javaMajor": 17,
+    "gradle": "8.11.1",
+    "androidBuildTools": "35.0.0",
+    "liveKitAndroid": "2.29.2",
+    "workManager": "2.10.1",
+    "robolectric": "4.14.1",
+    "log": "../../verification/recovery-current/android/fresh-build.log",
+    "debugSimulationAssembled": true,
+    "instrumentationAssembled": true,
+    "audit": "../../verification/recovery-current/android/build-current.json",
+    "logSha256": "2813043f23137fe4268cc9dd1306b3cea24a06e72450dac091bc971d3156b143",
+    "sourceInputsCount": 107,
+    "allInputsTrackedAndHashMatched": true
+  },
+  "sourceCodeHashAlgorithm": "SHA256 of sorted compact JSON mapping relative Android input paths to SHA256",
+  "uiCheck": {
+    "type": "Robolectric native graphics render",
+    "widthDp": 320,
+    "heightDp": 480,
+    "fontScale": 1.8,
+    "endVisible": true,
+    "visuallyInspected": true,
+    "evidence": "../../verification/recovery-current/android/call-320x480-large-font-current.png",
+    "scope": "Preserved native-graphics image from the prior corrected 186-case build, previously inspected. The corresponding viewport assertions also passed in the final 205-case JVM suite; no new physical-phone visual claim.",
+    "evidenceBuild": "historical corrected-notification 186-case build",
+    "finalBuildVisualInspection": false
+  },
+  "physicalVerification": {
+    "whatsAppAudio": "not_tested",
+    "twoPhoneTransfer": "not_tested",
+    "fcmTiming": "not_tested",
+    "lockedBackground": "not_tested",
+    "bluetoothAndNetworkSwitch": "not_tested",
+    "headsetWatchCarAnswerEnd": "not_implemented_core_telecom_callbacks_missing"
+  },
+  "productionMutationsByAndroidTests": false,
+  "customerCallsOrLivePushTests": false,
+  "currentDeployedOdooEmbedAuthenticated": "not_verified",
+  "backendRequirement": {
+    "protectedHistoryMarker": "X-SH-Call-History: sh-call-history-v1",
+    "mediaProtocol": "sh-room-audio-v1",
+    "rollout": "matching protected R13 backend and profile-auth Hub before business integrations",
+    "authPopup": {
+      "origin": "https://ai-agent-debate.onrender.com",
+      "paths": [
+        "/operator-auth",
+        "/operator-auth.html"
+      ],
+      "posts": [
+        "/api/profile-login",
+        "/api/operator-browser-auth/token"
+      ],
+      "nativeBridgeInPopup": false
+    }
+  },
+  "limitations": [
+    "Release is unsigned until original key is supplied. The separate debug simulation key cannot update the production package.",
+    "CallStyle is implemented; Core-Telecom and headset hardware answer/end are not implemented.",
+    "Local simulations do not establish phone audio quality, notification latency or continuity.",
+    "Final OS instrumentation only partially completed: 4 pass, 2 fail, 6 incomplete; native media2 not executed. Two instrumented failures remain unresolved; compilation does not close those gates.",
+    "Explicit permission Check is a point-in-time provider result; permanent status is not freshly rechecked before every later Call tap."
+  ],
+  "historicalEvidence": "verification/baseline-r11",
+  "publicFirebaseClientConfigRetained": true,
+  "exclusions": [
+    "signing keys/passwords",
+    "Firebase Admin service-account private keys",
+    "server secrets",
+    "enrollment codes",
+    "local.properties",
+    "build outputs",
+    "dependency caches",
+    "APK binaries from source archive"
+  ],
+  "simulatorArtifacts": [
+    {
+      "file": "SH-Chat-R13-Local-Simulator.apk",
+      "bytes": 61364688,
+      "sha256": "f4b226a9b7b40e6dafdb4de30a7429f0974bf0c4338dbbead75e00eac385e0bd",
+      "zipalignExitCode": 0,
+      "apksignerExitCode": 0,
+      "badgingExitCode": 0,
+      "fixtureAssetsPresent": true,
+      "fixtureActivityPresent": true,
+      "testCaPresent": false,
+      "identity": {
+        "packageName": "com.smarthandicrafts.operatorhub.simulation",
+        "versionCode": 13,
+        "versionName": "1.0-r13-simulation",
+        "debuggable": true,
+        "signed": true
+      },
+      "testOnlySymbolsPresent": true,
+      "currentBuildPath": "android/operatorhub/app/build/outputs/apk/debug/app-debug.apk",
+      "zipAlignment16KiBPassed": true
+    },
+    {
+      "file": "SH-Chat-R13-Instrumentation.apk",
+      "bytes": 379371,
+      "sha256": "f7f5e7112514fd008d8007aaae076b2c132f616dada9c298c6f25dbb3be81171",
+      "zipalignExitCode": 0,
+      "apksignerExitCode": 0,
+      "badgingExitCode": 0,
+      "fixtureAssetsPresent": false,
+      "fixtureActivityPresent": true,
+      "testCaPresent": true,
+      "identity": {
+        "packageName": "com.smarthandicrafts.operatorhub.simulation.test",
+        "versionCode": null,
+        "versionName": "",
+        "debuggable": true,
+        "signed": true
+      },
+      "testOnlySymbolsPresent": true,
+      "currentBuildPath": "android/operatorhub/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk",
+      "zipAlignment16KiBPassed": true
+    }
+  ],
+  "androidSystem": {
+    "status": "final_apk_partial_infrastructure_abort",
+    "instrumentationCasesCompiled": 12,
+    "currentTestApkCasesTotal": 14,
+    "bootedApi": 35,
+    "osVersion": "15",
+    "qemu": true,
+    "hardwareAcceleration": false,
+    "earlierAttempt": {
+      "testsCompleted": 0,
+      "status": "system_wide_startup_anr",
+      "bootDurationMs": 456830,
+      "evidence": "verification/r13/recovered-system/initial-os-run"
+    },
+    "evidence": "../../verification/recovery-current/android/completion/system-final-retry",
+    "transportFixtures": true,
+    "productionTraffic": false,
+    "currentAttempt": {
+      "status": "partial_infrastructure_abort",
+      "testClass": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+      "plannedCases": 12,
+      "completedCases": 6,
+      "passed": 4,
+      "failed": 2,
+      "incomplete": 6,
+      "nativeMediaCasesExecuted": 0,
+      "hardwareAcceleration": false,
+      "actualGuestRamMiB": 2560,
+      "requestedGuestRamMiB": 1536,
+      "lowerRamRequestApplied": false,
+      "sourceCodeHash": "b1cdc80876b94beab71ecc369fc1e8c536ac9f8ddc6ead16b1c218af9b4dba53",
+      "audit": "../../verification/recovery-current/android/completion/system-final-retry/run-audit.json",
+      "instrumentation": "../../verification/recovery-current/android/completion/system-final-retry/instrumentation.txt",
+      "instrumentationSha256": "927b6657cb55250c538e106fd82cae7f9feb31643bf268da7ffb8c9efe6b30ab",
+      "startedAtUtc": "2026-10-30T10:30:27.636073+00:00",
+      "completedAtUtc": "2026-10-30T10:34:51.188756+00:00",
+      "cases": [
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "answerPendingIntentOpensCorrectCallAndTerminalWinsDuringPermissionPrompt",
+          "code": -2,
+          "passed": false,
+          "failureSummary": "java.lang.NullPointerException: Current state was null unexpectedly. Last stage = STARTED"
+        },
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "terminalBeforeIncomingCannotResurrectNotification",
+          "code": 0,
+          "passed": true,
+          "failureSummary": null
+        },
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "expiredAndMisdirectedEnvelopesDoNotRing",
+          "code": 0,
+          "passed": true,
+          "failureSummary": null
+        },
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "realWebViewPopupConnectsThroughExactOpenerWithoutNativeCredential",
+          "code": -2,
+          "passed": false,
+          "failureSummary": "java.lang.AssertionError: Expected Hub WebView initial page did not occur: pageReady=false,progress=10,url=,startedAt=0,finishedAt=0,popup=false,popupUrl=,tokenRequests=0,blockedRequests=0,result=,console=,error=,renderer="
+        },
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "messageEnvelopeCreatesPrivateConversationNotification",
+          "code": 0,
+          "passed": true,
+          "failureSummary": null
+        },
+        {
+          "class": "com.smarthandicrafts.operatorhub.NativeSystemInstrumentationTest",
+          "test": "deliveredIncomingEnvelopeCreatesRealCallStyleActions",
+          "code": 0,
+          "passed": true,
+          "failureSummary": null
+        }
+      ],
+      "pendingTests": [
+        "realDeclinePendingIntentStopsAlertAndQueuesExactRejectWithoutMicrophone",
+        "dismissSilencesWithoutRejectingCustomer",
+        "oldEnrollmentActionCannotDeclineNewRegistrationAlert",
+        "popupRejectsNonGesture",
+        "delayedQuotationNavigationPreservesUserOpenedBlankWindow",
+        "nativeCallScreenDeclaresPortraitAndEndFitsViewport"
+      ],
+      "installedApkSha256": {
+        "application": "f4b226a9b7b40e6dafdb4de30a7429f0974bf0c4338dbbead75e00eac385e0bd",
+        "instrumentation": "f7f5e7112514fd008d8007aaae076b2c132f616dada9c298c6f25dbb3be81171"
+      },
+      "installedApkEvidenceTiming": "Verified on-device SHA-256 immediately after preceding completed setup attempt; same installed/AOT APKs reused without reinstall for this retry. Post-OOM device unavailable.",
+      "hostOomBefore": {
+        "oom": 11,
+        "oom_kill": 3
+      },
+      "hostOomAfter": {
+        "oom": 12,
+        "oom_kill": 4
+      },
+      "emulatorExited": true,
+      "kernelVictimRecordAvailable": false,
+      "compatibilityOrStorageChecksChanged": false,
+      "assertionsOrDeadlinesChanged": false,
+      "productionTraffic": false
+    },
+    "preFixAttempt": {
+      "status": "executed_before_notification_fix",
+      "testsExecuted": 12,
+      "passed": 5,
+      "failed": 7,
+      "skipped": 0,
+      "notificationFailures": 5,
+      "webViewInitialPageFailures": 2,
+      "apkSha256": "a81623fd98da5b11dfd4e42c2cc5e06ac9123e6d2756b6ae3b9eee42c57f5f55",
+      "evidence": "../../verification/recovery-current/android/system-tuned"
+    },
+    "finalBuildStartupAbort": {
+      "completedCases": 0,
+      "status": "process_startup_anr_before_junit",
+      "audit": "../../verification/recovery-current/android/completion/system-final/run-audit.json",
+      "hostOomCountersUnchanged": true
+    },
+    "historicalCorrectedNotificationAttempt": {
+      "completedCases": 12,
+      "passed": 8,
+      "failed": 4,
+      "evidence": "../../verification/recovery-current/android/completion/prior-system-fixed",
+      "scope": "Pre-permission-workflow source and older fixtures; not the final current build"
+    }
+  },
+  "sourceCodeHash": "b1cdc80876b94beab71ecc369fc1e8c536ac9f8ddc6ead16b1c218af9b4dba53",
+  "sourceChangedDuringBuild": false,
+  "nativeSdkMedia": {
+    "status": "not_run_due_to_shared_host_memory_exhaustion",
+    "cases": 2,
+    "engine": "Actual production NativeRoomEngine + pinned LiveKit Android SDK",
+    "fixture": "Local-only SFU and generated customer tone; test-only pinned CA/DNS Room override",
+    "productionCodeTrustOverride": false,
+    "claimsMetaOrFcm": false,
+    "claimsPhysicalMicrophoneOrSpeaker": false,
+    "fixturePreflight": "../../verification/recovery-current/media/native-fixture-preflight.json",
+    "microphoneScope": "Native SDK microphone-track RTP carries simulator silence; no physical microphone or spoken audio acceptance.",
+    "executedCases": 0,
+    "passed": 0,
+    "failed": 0,
+    "incomplete": 2,
+    "reason": "Emulator disappeared during OS retry with new host OOM event; same host did not have safe reserve for another emulator plus native SFU/Chromium fixture.",
+    "caseNames": [
+      "actualNativeEnginePublishesReceivesMutesAndRedials",
+      "actualInitiallyMutedCustomerUsesTransportThenProvesAudioAfterUnmute"
+    ]
+  },
+  "r13AdditionalCallFixes": [
+    "Explicit corroborated muted-customer transport readiness without fabricated received PCM",
+    "Unmute requires fresh decoded-audio evidence before recovered-audio UI",
+    "Muted-only destination cannot commit a transfer; original operator stays connected",
+    "End current and answer validates waiting call before ending exact current attempt",
+    "Waiting answer waits for service destruction and durable device reservation release",
+    "Incoming DEVICE_BUSY retries one exact answer request for at most15seconds/alert expiry; terminal event stops retry",
+    "Waiting transfer answer requires availability of the exact live invitation reservation",
+    "Incoming CallStyle retains its full-screen PendingIntent when special access is denied, allowing Android to enforce the heads-up fallback",
+    "Explicit exact-number Request/Check call-permission UI with durable per-enrollment request IDs, sent-versus-permission distinction, no automatic resend/dial, strict status projection and temporary expiry."
+  ],
+  "recoveryVerification": {
+    "currentSourceMatchesSuccessfulBuild": true,
+    "evidence": "../../verification/recovery-current/android/build-current.json",
+    "nativeBridge": {
+      "tests": 27,
+      "passed": 27,
+      "failures": 0,
+      "scope": "Actual injected browser bridge in Chromium with synthetic HTML/provider requests",
+      "evidence": "../../verification/recovery-current/android/native-room-bridge.tap"
+    },
+    "releaseArtifactHashCorrected": true,
+    "previousRecordedSha256": "1a342738496c0024e72ae9429f9b0b39a55125306a4f5f7f9de130ab4c9ce4e7",
+    "actualApkSha256": "2196a8427237d889774f92d3622c5887f7fd85913ca1991ebd485a9ebd0deade",
+    "historicalRecoveredBuildEvidence": "../../verification/recovery-current/android/build-recovery.json",
+    "historicalRecoveredUnitTests": 185,
+    "previousRecoveredApkSha256": "46afcdd3dfbe8df54840b0e0292cfa40426d496a8efd5763a35deb6983d638ba",
+    "previous186TestCandidateSha256": "9beb320681f4037e122fb37b6443683f84adcc8c23e6b88291d6987b8924341a",
+    "currentCandidateRebuiltForCallPermission": true
+  },
+  "verificationStatus": "final_unit_build_passed_os_partial_native_not_run",
+  "updatedAtUtc": "2026-10-30T10:40:00.223234+00:00"
+}

@@ -1,0 +1,30 @@
+{
+  "unsigned-signature": {
+    "returncode": 1,
+    "expected_success": false,
+    "expectation_met": true
+  },
+  "zip-alignment": {
+    "returncode": 0,
+    "expected_success": true,
+    "expectation_met": true
+  },
+  "apk-badging": {
+    "returncode": 0,
+    "expected_success": true,
+    "expectation_met": true
+  },
+  "baseline-r11-signature": {
+    "returncode": 0,
+    "expected_success": true,
+    "expectation_met": true
+  },
+  "unit_tests": {
+    "tests": 147,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "apk_sha256": "f78e82079781a28d16f125038198b98d0b3d78468dd28c8e94ef6e11a7dab5cd",
+  "apk_bytes": 59469402
+}

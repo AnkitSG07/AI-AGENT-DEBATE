@@ -1,0 +1,218 @@
+TAP version 13
+# Subtest: actual push handlers are never entered for anonymous or native control requests
+ok 1 - actual push handlers are never entered for anonymous or native control requests
+  ---
+  duration_ms: 11.658351
+  ...
+# Subtest: actual subscribe uses the signed actor instead of submitted device and lock identities
+ok 2 - actual subscribe uses the signed actor instead of submitted device and lock identities
+  ---
+  duration_ms: 7.312783
+  ...
+# Subtest: an authenticated current subscription owner can update keys and remove its exact endpoint
+ok 3 - an authenticated current subscription owner can update keys and remove its exact endpoint
+  ---
+  duration_ms: 5.572317
+  ...
+# Subtest: endpoint-only unsubscribe by another authenticated operator is denied without a storage write
+not ok 4 - endpoint-only unsubscribe by another authenticated operator is denied without a storage write
+  ---
+  duration_ms: 5.986642
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:193:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 403
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 403
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:197:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: subscribe takeover with endpoint but unrelated valid subscription keys is denied atomically
+not ok 5 - subscribe takeover with endpoint but unrelated valid subscription keys is denied atomically
+  ---
+  duration_ms: 6.216264
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:200:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 403
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 403
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:205:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: both subscription auth and public-key proofs are required for subscribe and unsubscribe migration
+not ok 6 - both subscription auth and public-key proofs are required for subscribe and unsubscribe migration
+  ---
+  duration_ms: 5.718019
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:208:1'
+  failureType: 'testCodeFailure'
+  error: 'false == true'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:224:12)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: same-browser key possession permits reauthentication migration and then denies the previous actor endpoint-only access
+not ok 7 - same-browser key possession permits reauthentication migration and then denies the previous actor endpoint-only access
+  ---
+  duration_ms: 3.75017
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:229:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 403
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 403
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:236:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: an unbound legacy subscription can migrate only with both exact existing keys, including equivalent base64 encodings
+ok 8 - an unbound legacy subscription can migrate only with both exact existing keys, including equivalent base64 encodings
+  ---
+  duration_ms: 4.890524
+  ...
+# Subtest: unsubscribe migration proof is bound to the exact endpoint selected for removal
+not ok 9 - unsubscribe migration proof is bound to the exact endpoint selected for removal
+  ---
+  duration_ms: 3.596341
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:249:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 403
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 403
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:255:10)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: ownership helper rejects native or absent actors even when subscription keys match
+ok 10 - ownership helper rejects native or absent actors even when subscription keys match
+  ---
+  duration_ms: 4.749645
+  ...
+# Subtest: actual SSE handler independently refuses missing, non-browser, expired and invalid authorization
+not ok 11 - actual SSE handler independently refuses missing, non-browser, expired and invalid authorization
+  ---
+  duration_ms: 5.113605
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:266:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 401
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 401
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:271:12)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: SSE uses the signed browser actor and cannot substitute another operator presence via query aliases
+ok 12 - SSE uses the signed browser actor and cannot substitute another operator presence via query aliases
+  ---
+  duration_ms: 4.020973
+  ...
+# Subtest: SSE refuses wrong origin, wrong presence source and HEAD without leaving stream resources
+ok 13 - SSE refuses wrong origin, wrong presence source and HEAD without leaving stream resources
+  ---
+  duration_ms: 3.21781
+  ...
+# Subtest: SSE expires at its exact opening capability deadline and clears heartbeat, timeout and client map
+not ok 14 - SSE expires at its exact opening capability deadline and clears heartbeat, timeout and client map
+  ---
+  duration_ms: 4.000012
+  location: 'file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:300:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///workspace/scratch/aa73a01fba65/work/backend/tests/operator-call-security.test.mjs:305:24)
+    async Test.run (node:internal/test_runner/test:632:9)
+    async Test.processPendingSubtests (node:internal/test_runner/test:374:7)
+  ...
+# Subtest: replaced SSE stream closes once and delayed old cleanup cannot close the newer client
+ok 15 - replaced SSE stream closes once and delayed old cleanup cannot close the newer client
+  ---
+  duration_ms: 4.026461
+  ...
+# Subtest: SSE abort, response close and response error each release every owned resource
+ok 16 - SSE abort, response close and response error each release every owned resource
+  ---
+  duration_ms: 9.479847
+  ...
+# Subtest: SSE heartbeat closes a stream whose canonical browser presence has expired
+ok 17 - SSE heartbeat closes a stream whose canonical browser presence has expired
+  ---
+  duration_ms: 3.32561
+  ...
+# Subtest: SSE backpressure on ready, heartbeat or a hint closes rather than growing a response buffer
+ok 18 - SSE backpressure on ready, heartbeat or a hint closes rather than growing a response buffer
+  ---
+  duration_ms: 9.411719
+  ...
+# Subtest: actual SSE hints deduplicate IDs and never include raw events, SDP, customer details or credentials
+ok 19 - actual SSE hints deduplicate IDs and never include raw events, SDP, customer details or credentials
+  ---
+  duration_ms: 3.202987
+  ...
+# Subtest: authenticated native history is explicitly version-marked and projects out SDP, tokens and raw provider data
+ok 20 - authenticated native history is explicitly version-marked and projects out SDP, tokens and raw provider data
+  ---
+  duration_ms: 2.707611
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 13
+# fail 7
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 127.807835

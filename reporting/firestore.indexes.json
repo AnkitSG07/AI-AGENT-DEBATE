@@ -1,0 +1,17 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "sh_operator_reports_calls", "fieldPath": "data", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_activity", "fieldPath": "data", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_exports", "fieldPath": "rows", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_exports", "fieldPath": "archive", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_archive_chunks", "fieldPath": "bytes", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_archive_objects", "fieldPath": "chunks", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_archive_objects", "fieldPath": "workbook", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_archive_bundles", "fieldPath": "files", "indexes": [] },
+    { "collectionGroup": "sh_operator_reports_retention", "fieldPath": "lastRun", "indexes": [] },
+    { "collectionGroup": "sh_operator_media_sessions", "fieldPath": "data.terminal.endedAt", "indexes": [
+      { "order": "ASCENDING", "queryScope": "COLLECTION" }
+    ] }
+  ]
+}

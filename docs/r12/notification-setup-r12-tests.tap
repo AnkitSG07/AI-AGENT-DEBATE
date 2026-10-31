@@ -1,0 +1,70 @@
+TAP version 13
+# Subtest: signed-out notification setup shows its operator login without private call polling
+ok 1 - signed-out notification setup shows its operator login without private call polling
+  ---
+  duration_ms: 283.486858
+  type: 'test'
+  ...
+# Subtest: notification permission is not requested before operator authorization
+ok 2 - notification permission is not requested before operator authorization
+  ---
+  duration_ms: 239.21381
+  type: 'test'
+  ...
+# Subtest: profile sign-in clears its password and does not send a notification automatically
+ok 3 - profile sign-in clears its password and does not send a notification automatically
+  ---
+  duration_ms: 268.775009
+  type: 'test'
+  ...
+# Subtest: subscription reset sends ownership proof and waits for the server before removing local delivery
+ok 4 - subscription reset sends ownership proof and waits for the server before removing local delivery
+  ---
+  duration_ms: 199.595668
+  type: 'test'
+  ...
+# Subtest: failed unsubscribe preserves the local subscription and reports failure
+ok 5 - failed unsubscribe preserves the local subscription and reports failure
+  ---
+  duration_ms: 164.050209
+  type: 'test'
+  ...
+# Subtest: test controls never replay a rejected POST or claim notification delivery
+ok 6 - test controls never replay a rejected POST or claim notification delivery
+  ---
+  duration_ms: 164.149737
+  type: 'test'
+  ...
+# Subtest: accepted notification tests still ask the operator to verify the receiving device
+ok 7 - accepted notification tests still ask the operator to verify the receiving device
+  ---
+  duration_ms: 143.751994
+  type: 'test'
+  ...
+# Subtest: notification helper rejects cross-origin and call-control paths before the network
+ok 8 - notification helper rejects cross-origin and call-control paths before the network
+  ---
+  duration_ms: 232.908233
+  type: 'test'
+  ...
+# Subtest: server error text cannot inject markup into the notification status
+ok 9 - server error text cannot inject markup into the notification status
+  ---
+  duration_ms: 153.497088
+  type: 'test'
+  ...
+# Subtest: enable does not report a successful registration after a malformed HTTP 200 acknowledgement
+ok 10 - enable does not report a successful registration after a malformed HTTP 200 acknowledgement
+  ---
+  duration_ms: 160.932014
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2494.135511

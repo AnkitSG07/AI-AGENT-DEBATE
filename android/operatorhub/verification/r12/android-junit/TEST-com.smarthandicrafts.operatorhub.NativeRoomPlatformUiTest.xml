@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-29T19:29:22" hostname="ca82e965341e" time="10.519">
+  <properties/>
+  <testcase name="visualCancelDoesNotAbortExplicitResumeBecauseOfAnOldAlertTombstone" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="5.204"/>
+  <testcase name="terminalNotificationWhilePermissionIsOpenCannotStartAudioLater" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.221"/>
+  <testcase name="permissionResultCannotStartUnderAReplacementEnrollment" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.163"/>
+  <testcase name="endRemainsVisibleOnSmallScreenWithLargeSystemFont" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.214"/>
+  <testcase name="benignLeaseRenewalDuringPermissionPromptRetainsTheAuthorizedStart" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.17"/>
+  <testcase name="nativeNotificationsUseCallStyleAndRetainExactLegPendingIntent" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="4.198"/>
+  <testcase name="localEndReturnsToExactSourceChatWithoutWaitingForServer" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.108"/>
+  <testcase name="differentIncomingIntentResetsOldActiveControlsWithoutEndingTheActiveCall" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.152"/>
+  <testcase name="resumeContinuationCannotStartUnderAReplacementEnrollment" classname="com.smarthandicrafts.operatorhub.NativeRoomPlatformUiTest" time="0.088"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@70214552], context=[android.app.ContextImpl@f545517], intentFilter=[android.content.IntentFilter@c38f113]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@6db4b324], context=[android.app.ContextImpl@27a6f68b], intentFilter=[android.content.IntentFilter@21b3927e]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@6db4b324], context=[android.app.ContextImpl@27a6f68b], intentFilter=[android.content.IntentFilter@21b3927e]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@b26e195], context=[android.app.ContextImpl@264568dd], intentFilter=[android.content.IntentFilter@4c5e10e2]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@1c2a4a74], context=[android.app.ContextImpl@1df59775], intentFilter=[android.content.IntentFilter@3223fd09]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallService$alertReceiver$1@6dfd8cd0], context=[android.app.ContextImpl@1a21f706], intentFilter=[android.content.IntentFilter@5448c934]], Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@51a6b26a], context=[android.app.ContextImpl@1a21f706], intentFilter=[android.content.IntentFilter@50bc3f82]]]
+Intent = Intent { act=com.smarthandicrafts.operatorhub.ROOM_CALL_CHANGED pkg=com.smarthandicrafts.operatorhub (has extras) }; Matching wrappers: [Wrapper[receiver=[com.smarthandicrafts.operatorhub.NativeRoomCallActivity$1@239d01ac], context=[android.app.ContextImpl@520784ea], intentFilter=[android.content.IntentFilter@2c34c7b9]]]
+]]></system-err>
+</testsuite>
