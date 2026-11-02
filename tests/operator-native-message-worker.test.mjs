@@ -66,3 +66,57 @@ test('both disabled leaves the worker stopped without an Odoo scan', async () =>
   await f.context.aiModeBackgroundTick(); f.context.startAiModeBackgroundWorker();
   assert.equal(f.state.timer, undefined); assert.deepEqual(f.events, []); assert.deepEqual(f.queried, []);
 });
+
+function webhookFollowupFixture(forwardResult) {
+  const events = [], warnings = [];
+  const context = {
+    forwardWhatsappWebhookToOdoo: async (req, body) => {
+      events.push(['forward', req, body]);
+      return await forwardResult;
+    },
+    nativeMessageWorker: { wake() { events.push(['wake']); } },
+    recordWebhookDebugEvent: async (req, body, result) => { events.push(['record', req, body, result]); },
+    console: { warn: (...args) => { warnings.push(args); } }
+  };
+  vm.createContext(context);
+  vm.runInContext(['whatsappWebhookPayloadFields', 'queueWhatsappWebhookFollowup'].map(extract).join('\n'), context);
+  return { context, events, warnings };
+}
+const flushFollowup = () => new Promise(resolve => setImmediate(resolve));
+
+test('deferred call-only webhook forwarding records its result without waking message discovery', async () => {
+  const f = webhookFollowupFixture({ ok: true, status: 200 });
+  const req = { headers: {} }, body = { entry: [{ changes: [{ field: 'calls' }] }] };
+  assert.equal(f.context.queueWhatsappWebhookFollowup(req, body, { received: 1 }), undefined);
+  assert.deepEqual(f.events, [], 'forwarding must remain off the synchronous webhook acknowledgement path');
+  await flushFollowup();
+  assert.deepEqual(f.events.map(row => row[0]), ['forward', 'record']);
+  assert.equal(f.events[1][1], req);
+  assert.equal(f.events[1][2], body);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.events[1][3])), {
+    received: 1, odoo_forward: { ok: true, status: 200 }, router_mode: true
+  });
+  assert.deepEqual(f.warnings, []);
+});
+
+test('deferred message webhook wakes discovery only after successful Odoo forwarding', async () => {
+  let completeForward;
+  const forward = new Promise(resolve => { completeForward = resolve; });
+  const f = webhookFollowupFixture(forward);
+  f.context.queueWhatsappWebhookFollowup({}, { entry: [{ changes: [{ field: 'messages' }] }] }, { received: 0 });
+  await flushFollowup();
+  assert.deepEqual(f.events.map(row => row[0]), ['forward']);
+  completeForward({ ok: true, status: 200 });
+  await flushFollowup();
+  assert.deepEqual(f.events.map(row => row[0]), ['forward', 'wake', 'record']);
+  assert.deepEqual(f.warnings, []);
+});
+
+test('failed deferred message forwarding is recorded without waking discovery', async () => {
+  const f = webhookFollowupFixture({ ok: false, status: 503 });
+  f.context.queueWhatsappWebhookFollowup({}, { entry: [{ changes: [{ field: 'messages' }] }] }, { received: 0 });
+  await flushFollowup();
+  assert.deepEqual(f.events.map(row => row[0]), ['forward', 'record']);
+  assert.equal(f.events[1][3].odoo_forward.status, 503);
+  assert.deepEqual(f.warnings, []);
+});

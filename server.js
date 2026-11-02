@@ -23932,6 +23932,7 @@ function whatsappCallOwnOutgoingClaim(payload = {}, body = {}, rows = []) {
 
 function queueWhatsappWebhookFollowup(req, body, callResult) {
   Promise.resolve().then(async () => {
+    const fields = whatsappWebhookPayloadFields(body);
     const forwardResult = await forwardWhatsappWebhookToOdoo(req, body);
     // Odoo now owns the exact message ID/chat mapping. Wake discovery immediately
     // after its verified webhook commit; do not wait for the AI timer.

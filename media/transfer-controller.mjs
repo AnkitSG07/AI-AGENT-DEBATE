@@ -422,7 +422,7 @@ export class TransferController {
     const results = [];
     for (let i = 0; i < limit; i++) {
       const leaseId = randomUUID();
-      const job = await this.store.transaction(async tx => {
+      const claimed = await this.store.transaction(async tx => {
         const call = await tx.get(callStoreKey(callId));
         if (!call) return null;
         const now = this.now();
@@ -433,16 +433,29 @@ export class TransferController {
         if (!pending) return null;
         Object.assign(pending, { status: 'running', leaseId, leaseUntil: now + 45000, attempts: pending.attempts + 1 });
         tx.set(callStoreKey(callId), call);
-        return copy(pending);
+        return { job: copy(pending), confirmedCustomer: !call.active && !!call.terminal?.confirmedAt &&
+          pending.kind === 'terminate' && pending.callId === call.id
+          ? { roomName: call.roomName, customerIdentity: call.customerIdentity } : null };
       });
+      const job = claimed?.job;
       if (!job) break;
       let succeeded = false;
       try {
         if (job.kind === 'detach') await this.provider.detachOperator(job);
-        else if (job.kind === 'terminate') await this.provider.terminateCustomer(job);
+        else if (job.kind === 'terminate') await this.provider.terminateCustomer(claimed.confirmedCustomer
+          ? { ...job, reason: 'USER_INITIATED' } : job);
         else fail('INVALID_CLEANUP_JOB', 'Unknown cleanup operation.');
         succeeded = true;
-      } catch { /* Persist retry state, without leaking provider credentials/errors. */ }
+      } catch {
+        // Imported and newly ended calls can receive a repeated-disconnect
+        // error from the connector after Meta has already confirmed End. Do
+        // not retry forever if the exact customer is independently absent.
+        // A local End intent or failed/ambiguous lookup cannot authorize this.
+        if (claimed.confirmedCustomer && typeof this.provider.confirmCustomerAbsent === 'function') {
+          try { succeeded = await this.provider.confirmCustomerAbsent(claimed.confirmedCustomer) === true; }
+          catch { /* Keep the exact cleanup pending on unknown provider state. */ }
+        }
+      }
       await this.store.transaction(async tx => {
         const call = await tx.get(callStoreKey(callId));
         const current = call?.outbox.find(item => item.id === job.id);

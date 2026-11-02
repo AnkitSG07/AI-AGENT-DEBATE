@@ -144,6 +144,22 @@ export class LiveKitWhatsAppProvider {
     }
   }
 
+  // A verified Meta terminal event proves the phone call ended, but not that
+  // LiveKit removed its connector participant. A failed disconnect may only be
+  // settled after a fresh lookup proves that exact customer is absent. Joining
+  // and disconnected participant rows still count as present.
+  async confirmCustomerAbsent({ roomName, customerIdentity: identity }) {
+    identifier(roomName, 'room'); identifier(identity, 'customer identity');
+    try {
+      const rows = await this.run('ListParticipants', () => this.rooms.listParticipants(roomName));
+      requireValue(Array.isArray(rows), 'MEDIA_PROVIDER_ERROR', 'Participant absence could not be verified.', 502);
+      return !rows.some(row => row?.identity === identity);
+    } catch (error) {
+      if (error.providerCode === 'not_found') return true;
+      throw error;
+    }
+  }
+
   async issueOperatorJoin({ roomName, deviceId, legId, ttlSeconds = 90 }) {
     identifier(roomName, 'room');
     requireValue(Number.isInteger(ttlSeconds) && ttlSeconds >= 15 && ttlSeconds <= 120,
