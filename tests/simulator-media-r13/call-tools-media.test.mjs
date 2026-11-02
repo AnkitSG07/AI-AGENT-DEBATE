@@ -67,8 +67,17 @@ test('hold music, private handover privacy, conference, and continuous recorded 
         }, { publishTo, subscribeTo });
       }
       async function hears(page, identity, audible, label) {
-        await until(async () => { const sample = await page.evaluate(id => window.peerSnapshot(id), identity);
-          return audible ? sample.rms > .001 && sample.frames > 2000 : sample.rms < .0001; }, label);
+        try {
+          await until(async () => { const sample = await page.evaluate(id => window.peerSnapshot(id), identity);
+            return audible ? sample.rms > .001 && sample.frames > 2000 : sample.rms < .0001; }, label);
+        } catch (error) {
+          // Synthetic local identities only; no tokens or customer data.
+          console.error(JSON.stringify({ label, sample: await page.evaluate(id => window.peerSnapshot(id), identity),
+            publications: await page.evaluate(() => [...room.remoteParticipants.values()].map(p => ({ identity: p.identity,
+              tracks: [...p.trackPublications.values()].map(t => ({ sid: t.trackSid, subscribed: t.isSubscribed,
+                desired: t.isDesired, allowed: t.isSubscriptionAllowed, muted: t.isMuted, status: t.subscriptionStatus })) }))) }));
+          throw error;
+        }
       }
       const customer = await peer('customer', 440), a = await peer('A', 660);
       await route(a, ['customer', mediaIdentity], ['customer']);

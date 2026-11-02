@@ -9,12 +9,16 @@ const mark = (type, data={}) => events.push({at:performance.now(),type,...data})
 async function attachRemote(track, publication, participant) {
   if (track.kind !== LK.Track.Kind.Audio) return;
   const element = track.attach(); element.volume=0; document.body.appendChild(element); await element.play();
+  // A replaced publication can finish attaching after it has been removed.
+  if (publication.track !== track) { element.remove(); return; }
   const source = context.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
   const analyser = context.createAnalyser(); analyser.fftSize = 4096;
   const processor = context.createScriptProcessor(1024,1,1), quiet = context.createGain(); quiet.gain.value=0;
   const row = {track, publication, participant, element, source, analyser, processor, quiet, frames:0};
   processor.onaudioprocess = event => { row.frames += event.inputBuffer.length; };
   source.connect(analyser); analyser.connect(processor); processor.connect(quiet); quiet.connect(context.destination);
+  const old = tracks.get(participant.identity);
+  if (old) { old.source.disconnect(); old.processor.disconnect(); old.element.remove(); }
   tracks.set(participant.identity,row); mark('track-subscribed',{identity:participant.identity,sid:publication.trackSid});
 }
 window.joinPeer = async ({url, token, frequency=440}) => {
@@ -23,7 +27,7 @@ window.joinPeer = async ({url, token, frequency=440}) => {
   room = new LK.Room({adaptiveStream:false,dynacast:false,disconnectOnPageLeave:true,
     publishDefaults:{audioBitrate:64000,dtx:false,red:false,stopMicTrackOnMute:false}});
   room.on(LK.RoomEvent.TrackSubscribed,attachRemote);
-  room.on(LK.RoomEvent.TrackUnsubscribed,(track,pub,part)=>{const row=tracks.get(part.identity);if(row){row.source.disconnect();row.processor.disconnect();row.element.remove();tracks.delete(part.identity);}mark('track-unsubscribed',{identity:part.identity});});
+  room.on(LK.RoomEvent.TrackUnsubscribed,(track,pub,part)=>{const row=tracks.get(part.identity);if(row?.track===track){row.source.disconnect();row.processor.disconnect();row.element.remove();tracks.delete(part.identity);}mark('track-unsubscribed',{identity:part.identity,sid:pub.trackSid});});
   room.on(LK.RoomEvent.ParticipantDisconnected,p=>mark('participant-disconnected',{identity:p.identity}));
   room.on(LK.RoomEvent.ConnectionStateChanged,s=>mark('connection', {state:s}));
   room.on(LK.RoomEvent.Disconnected,r=>mark('disconnected',{reason:r}));

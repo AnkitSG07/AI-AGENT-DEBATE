@@ -28,10 +28,11 @@ public final class NativeCallIconButton extends Button {
         float density = getResources().getDisplayMetrics().density;
         float x = getWidth() / 2f, y = 36 * density, radius = 31 * density;
         boolean red = icon.equals("end") || icon.equals("decline");
-        paint.setStyle(Paint.Style.FILL); paint.setColor(red ? Color.rgb(222, 26, 38)
+        int circleColor = red ? Color.rgb(222, 26, 38)
             : icon.equals("accept") ? Color.rgb(0, 151, 116)
-            : active ? Color.WHITE : Color.argb(isPressed() || isFocused() ? 105 : 45, 255, 255, 255));
-        paint.setAlpha(isEnabled() ? 255 : 90); canvas.drawCircle(x, y, radius, paint);
+            : active ? Color.WHITE : Color.argb(isPressed() || isFocused() ? 105 : 45, 255, 255, 255);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(circleColor);
+        paint.setAlpha(Math.round(Color.alpha(circleColor) * (isEnabled() ? 1f : .4f))); canvas.drawCircle(x, y, radius, paint);
         paint.setColor(active && !red ? Color.rgb(33, 52, 68) : Color.WHITE);
         paint.setAlpha(isEnabled() ? 255 : 100); paint.setStrokeWidth(2.2f);
         paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND); paint.setStyle(Paint.Style.STROKE);
