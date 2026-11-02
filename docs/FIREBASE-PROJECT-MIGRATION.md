@@ -61,7 +61,7 @@ node scripts/migrate-sh-firestore.mjs verify-source \
 
 The database defaults to `(default)` and may be selected explicitly with `--database`. Export supports `--prefix` when the deployment uses a different private namespace. An existing export file is never overwritten.
 
-Each scan discovers child collections in waves of at most eight document parents, including missing parents. This bounds concurrent reads while avoiding one serial discovery round trip per document. Document, collection, byte, depth and time limits remain global; failed waves drain their started reads before returning, and inventories are sorted before hashing.
+Each scan uses one read-only task queue for parent discovery and collection document listing, in waves of at most 32 tasks. Root collections can therefore list documents concurrently, and missing parents still have their child collections discovered. Document, collection, byte, depth and time limits remain global; failed waves drain their started reads before returning, and inventories are sorted before hashing.
 
 Import is create-only, in batches of at most 100 documents and conservatively less than the Firestore commit byte limit. The default scan limits are 20,000 document paths (including missing parents), 500 collections, 64 MiB of encoded document data and ten minutes per pass. Exceeding a bound fails closed.
 

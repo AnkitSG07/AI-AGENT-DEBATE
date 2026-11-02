@@ -139,16 +139,18 @@ class ReorderedProject extends FakeProject {
   constructor(source, reverse = false) {
     super(source.identity); this.docs = source.docs; this.reverse = reverse;
     this.active = 0; this.maximumActive = 0; this.pending = []; this.completed = []; this.calls = [];
+    this.activeByKind = { collections: 0, documents: 0 }; this.maximumByKind = { collections: 0, documents: 0 };
   }
   async readDelay(kind, path) {
     this.calls.push([kind, path]); this.active++; this.maximumActive = Math.max(this.maximumActive, this.active);
+    this.activeByKind[kind]++; this.maximumByKind[kind] = Math.max(this.maximumByKind[kind], this.activeByKind[kind]);
     await new Promise(resolve => {
-      this.pending.push({ key: kind + ':' + path, resolve });
+      this.pending.push({ key: kind + ':' + path, kind, resolve });
       if (!this.flush) this.flush = setImmediate(() => {
         this.flush = null;
         const batch = this.pending.splice(0).sort((a, b) => a.key.localeCompare(b.key));
         if (this.reverse) batch.reverse();
-        for (const item of batch) { this.active--; this.completed.push(item.key); item.resolve(); }
+        for (const item of batch) { this.active--; this.activeByKind[item.kind]--; this.completed.push(item.key); item.resolve(); }
       });
     });
   }
@@ -159,9 +161,9 @@ class ReorderedProject extends FakeProject {
     await this.readDelay('documents', collection); yield* super.listDocuments(collection);
   }
 }
-test('parent discovery is bounded to eight concurrent reads and hashes are independent of completion order', async () => {
+test('parent discovery is bounded to 32 concurrent reads and hashes are independent of completion order', async () => {
   const { source } = fixture();
-  for (let index = 0; index < 24; index++) {
+  for (let index = 0; index < 48; index++) {
     const parent = 'sh_operator_probe/' + String(index).padStart(2, '0');
     if (index % 3) source.seed(parent, { index });
     // Every third parent is missing but still owns a child collection.
@@ -170,10 +172,10 @@ test('parent discovery is bounded to eight concurrent reads and hashes are indep
   const expected = await scanNamespace(source), forward = new ReorderedProject(source), reverse = new ReorderedProject(source, true);
   const first = await scanNamespace(forward), second = await scanNamespace(reverse);
   assert.deepEqual(first, expected); assert.deepEqual(second, expected);
-  assert.equal(forward.maximumActive, 8); assert.equal(reverse.maximumActive, 8);
+  assert.equal(forward.maximumActive, 32); assert.equal(reverse.maximumActive, 32);
   assert.notDeepEqual(forward.completed, reverse.completed);
-  assert.equal(first.documents.length, 48); // Eight fixture docs, 16 parents, 24 descendants.
-  assert.equal(first.collections.filter(path => path.endsWith('/children')).length, 24);
+  assert.equal(first.documents.length, 88); // Eight fixture docs, 32 parents, 48 descendants.
+  assert.equal(first.collections.filter(path => path.endsWith('/children')).length, 48);
   assert.equal(forward.active, 0); assert.equal(reverse.active, 0);
   assert.ok(!forward.calls.some(([, path]) => path.startsWith('other_application')));
 });
@@ -183,10 +185,27 @@ test('concurrent traversal shares global bounds, drains failed waves and admits 
   const delayed = new ReorderedProject(source, true);
   await assert.rejects(scanNamespace(delayed, 'sh_operator', { maxDocuments: 17 }), { migrationCode: 'DOCUMENT_LIMIT' });
   assert.equal(delayed.active, 0, 'all started reads are drained before the rejection');
-  assert.ok(delayed.maximumActive <= 8);
+  assert.ok(delayed.maximumActive <= 32);
   assert.equal(delayed.calls.filter(([kind, path]) => kind === 'collections' && path.endsWith('/children/record')).length, 0,
     'a failed wave must not begin the next breadth-first level');
   assert.equal(delayed.commits, 0);
+});
+test('root collection documents and parent discovery share the same 32-read ceiling', async () => {
+  const source = new FakeProject();
+  for (let index = 0; index < 48; index++) {
+    const parent = 'sh_operator_root_' + String(index).padStart(2, '0') + '/record';
+    source.seed(parent, { index }); source.seed(parent + '/children/nested', { index, nested: true });
+  }
+  const expected = await scanNamespace(source), forward = new ReorderedProject(source), reverse = new ReorderedProject(source, true);
+  assert.deepEqual(await scanNamespace(forward), expected); assert.deepEqual(await scanNamespace(reverse), expected);
+  assert.equal(expected.documents.length, 96); assert.equal(expected.collections.length, 96);
+  for (const observed of [forward, reverse]) {
+    assert.equal(observed.maximumActive, 32);
+    assert.equal(observed.maximumByKind.documents, 32, 'root collection document reads must run concurrently');
+    assert.equal(observed.maximumByKind.collections, 32);
+    assert.equal(observed.active, 0); assert.deepEqual(observed.activeByKind, { collections: 0, documents: 0 });
+    assert.equal(observed.commits, 0);
+  }
 });
 test('the wire codec honors the official oneof discriminator and rejects malformed types', () => {
   const document = { name: root(sourceIdentity) + 'sh_operator_test/types', createTime: clock, updateTime: clock,

@@ -137,12 +137,13 @@ export async function scanNamespace(transport, prefix = 'sh_operator', options =
   const guard = () => requireValue(Date.now() - started <= limits.maxDurationMs, 'SCAN_TIME_LIMIT');
   // Each parent requires ListCollectionIds even when it has no children. Keep
   // that discovery (including absent parents) complete without serializing one
-  // network round trip per document. Fixed waves bound concurrent read streams;
-  // all counters below remain global and are checked before another path queues.
-  const concurrency = 8;
-  let parents = [{ parent: '', depth: 0 }], stopped = false;
+  // network round trip per document. Collection listing uses the same bounded
+  // task queue, so enumerating the root does not serialize every collection's
+  // document pages. All counters remain global and checked before work queues.
+  const concurrency = 32;
+  let tasks = [{ kind: 'parent', parent: '', depth: 0 }], stopped = false;
   const check = () => { requireValue(!stopped, 'SCAN_WAVE_STOPPED'); guard(); };
-  const walkParent = async ({ parent, depth }, next) => {
+  const discoverParent = async ({ parent, depth }, next) => {
     check(); requireValue(depth <= 12, 'SUBCOLLECTION_DEPTH_LIMIT');
     for await (const name of transport.listCollections(parent)) {
       check(); requireValue(typeof name === 'string' && pathValid(name) && !name.includes('/'), 'INVALID_COLLECTION');
@@ -150,37 +151,42 @@ export async function scanNamespace(transport, prefix = 'sh_operator', options =
       if (!parent && !name.startsWith(prefix + '_')) continue;
       requireValue(!collections.has(collection), 'DUPLICATE_COLLECTION'); collections.add(collection);
       requireValue(collections.size <= limits.maxCollections, 'COLLECTION_LIMIT');
-      for await (const raw of transport.listDocuments(collection)) {
-        check(); const base = rootName(transport.identity) + '/';
-        requireValue(typeof raw.name === 'string' && raw.name.startsWith(base), 'FOREIGN_DOCUMENT');
-        const path = raw.name.slice(base.length);
-        requireValue(documentPath(path) && path.split('/').slice(0, -1).join('/') === collection && !seen.has(path), 'INVALID_DOCUMENT'); seen.add(path);
-        requireValue(seen.size <= limits.maxDocuments, 'DOCUMENT_LIMIT');
-        // showMissing includes non-existing parents which contain subcollections.
-        if (raw.createTime) {
-          const document = encodeDocument(raw, transport.identity, prefix); bytes += Buffer.byteLength(JSON.stringify(document));
-          requireValue(bytes <= limits.maxBytes, 'EXPORT_BYTE_LIMIT'); documents.push(document);
-        }
-        next.push({ parent: path, depth: depth + 1 });
-      }
+      next.push({ kind: 'collection', collection, depth });
     }
     // Empty iterators must still honor the duration bound after their RPC.
     check();
   };
-  while (parents.length) {
+  const listCollection = async ({ collection, depth }, next) => {
+    check();
+    for await (const raw of transport.listDocuments(collection)) {
+      check(); const base = rootName(transport.identity) + '/';
+      requireValue(typeof raw.name === 'string' && raw.name.startsWith(base), 'FOREIGN_DOCUMENT');
+      const path = raw.name.slice(base.length);
+      requireValue(documentPath(path) && path.split('/').slice(0, -1).join('/') === collection && !seen.has(path), 'INVALID_DOCUMENT'); seen.add(path);
+      requireValue(seen.size <= limits.maxDocuments, 'DOCUMENT_LIMIT');
+      // showMissing includes non-existing parents which contain subcollections.
+      if (raw.createTime) {
+        const document = encodeDocument(raw, transport.identity, prefix); bytes += Buffer.byteLength(JSON.stringify(document));
+        requireValue(bytes <= limits.maxBytes, 'EXPORT_BYTE_LIMIT'); documents.push(document);
+      }
+      next.push({ kind: 'parent', parent: path, depth: depth + 1 });
+    }
+    check();
+  };
+  while (tasks.length) {
     const next = [];
-    for (let offset = 0; offset < parents.length; offset += concurrency) {
-      let firstError;
+    for (let offset = 0; offset < tasks.length; offset += concurrency) {
+      let firstError, failed = false;
       // A rejected read must not leave other workers running after this scan
       // returns. Stop admitting further work, drain this bounded wave, then
       // propagate the original failure rather than a sibling's stop marker.
-      await Promise.allSettled(parents.slice(offset, offset + concurrency).map(async item => {
-        try { await walkParent(item, next); }
-        catch (error) { if (!firstError) firstError = error; stopped = true; }
+      await Promise.allSettled(tasks.slice(offset, offset + concurrency).map(async item => {
+        try { await (item.kind === 'parent' ? discoverParent(item, next) : listCollection(item, next)); }
+        catch (error) { if (!failed) { firstError = error; failed = true; } stopped = true; }
       }));
-      if (firstError) throw firstError;
+      if (failed) throw firstError;
     }
-    parents = next;
+    tasks = next;
   }
   guard(); documents.sort((a, b) => compare(a.path, b.path));
   const collectionNames = [...collections].sort(compare);
