@@ -1,6 +1,6 @@
 # SH Chat R20 — quota and call-path fixes
 
-The existing Firebase architecture is retained following the user's clarification. A subsequent request asks for a new Firebase project; creation and migration have not completed and no old data has been deleted.
+The existing Firebase architecture is retained following the user's clarification. On 2 November 2026, SH Chat was moved to the new Spark project `sh-chat-896e0`. Its default Firestore database is in `us-west1`, alongside the existing free Render service in Oregon. The source project is preserved.
 
 ## Confirmed defects and fixes
 
@@ -15,8 +15,18 @@ The existing Firebase architecture is retained following the user's clarificatio
 
 ## Verification and limits
 
-815 backend/private-HTTP/VM checks pass with no source changes during the frozen run. The Android clean test execution reported 279 tests across 32 suites with zero failures/errors/skips; lint and device harness compile succeeded. Final APK manifest/Dex identity is separately verified before signing.
+815 backend/private-HTTP/VM checks pass with no source changes during the frozen run. The Android build for the new Firebase project passed 279 tests across 32 suites with zero failures/errors/skips; lint reported zero errors and 87 warnings. Signature, package/version, bundled Firebase settings, 16 KiB alignment and the supplied logo's pixels were verified in the signed APK. The migration suite passes 13 tests, including bounded concurrent discovery, orphan parents, deterministic hashes and failure draining.
 
-Host ICU reproduced the old unsupported regex; the fixed production formatter has no regex dependency. Browser UI execution is not a pass: the available vendor browser crashes before test setup, and the Playwright browser download was unavailable. No actual handset push delivery, live two-phone audio test, 2-second call latency or 5-second transfer latency is established by these local results. Remaining provider and inter-region database latency still requires measurement.
+Host ICU reproduced the old unsupported regex; the fixed production formatter has no regex dependency. The local browser test runner could not start its vendor browser. Separately, the connected Odoo website editor published the merged embed, and its three saved script payloads and thirteen styles were read back and verified. The live Calls panel opened without the temporary-history warning. This does not establish handset push delivery, live two-phone audio, a 2-second call cap or a 5-second transfer cap.
 
-The live Odoo page currently requires sign-in (403 observed), so the tested embed cannot yet be installed through that session. The new Firebase account is signed in and the SH Chat project form is prepared, but accepting Firebase terms requires the user's confirmation. No new project credentials or production cutover have been applied.
+## Completed project move
+
+The maintenance export contained 362 documents in 17 collections. Two stable source passes, destination import verification and a final source verification matched the complete value hashes. Device and active-credential bindings passed; no held reservations or unsettled sessions were present. All 16 single-field index configurations match the source and are ready; there are no scoped TTL policies or composite indexes.
+
+Only the five Firebase Render settings were merged. Public client configuration returned HTTP 200 with the new project and Android application ID. Deployment `dep-dbk5nklg1s2s739cm5ig`, commit `80d673d443262b79c5edc4470c6cd01f04756139`, became live at 09:46:43 UTC. Startup confirmed `us-west1`; sampled new-instance database reads were 22–97 ms and transactions 75–301 ms. These startup samples are not end-to-end call measurements. The requested five-second heartbeat remains enabled and returned HTTP 200; the free plan still has platform cold-start and availability limits.
+
+Render briefly resumed its prior deployment before the full deployment applied the new settings. A separate stable source snapshot was therefore compared after cutover. There were no added or removed documents and no changed canonical business state. Thirteen existing documents contained only retry counters/times, derived job projections or reporting collector bookkeeping. Four pending termination jobs retained the same exact IDs, targets, status and recorded outcome; no newer provider acknowledgement or cleanup completion was lost. Both source snapshots are preserved, and stale worker leases/counters were not replayed over the live target.
+
+The published Odoo merge preserves the live HTML and styles and replaces the three scripts with the tested R20 payloads. The merged artifact passed 100 frontend VM checks, 15 legacy-call checks, 14 transfer checks and all script syntax checks. The editor trimmed one trailing newline when saving; all script/style payloads matched on read-back.
+
+Old FCM tokens belong to the source project. Each phone must install the new R20 APK, refresh App settings, restart when the project-change notice appears and enroll again using its administrator's code. Re-enrollment, notification permission, real message previews and actual call/audio timings still need to be confirmed on the phones.

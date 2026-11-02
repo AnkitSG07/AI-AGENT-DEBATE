@@ -14,6 +14,58 @@
     "skipped": 0
   },
   "physical_phone_verified": false,
-  "new_firebase_project_created": false,
-  "odoo_embed_installed": false
+  "new_firebase_project_created": true,
+  "odoo_embed_installed": true,
+  "firebase": {
+    "project": "sh-chat-896e0",
+    "location": "us-west1",
+    "plan": "Spark",
+    "exported_documents": 362,
+    "collections": 17,
+    "stable_source_passes": 2,
+    "import_value_hash_verified": true,
+    "source_verified_before_activation": true,
+    "single_field_configurations_ready": 16,
+    "scoped_ttl_policies": 0,
+    "scoped_composite_indexes": 0,
+    "post_cutover_source_review": {
+      "reviewed": true,
+      "documents_added": 0,
+      "documents_removed": 0,
+      "bookkeeping_only_changed_documents": 13,
+      "canonical_business_state_changed": false,
+      "newer_recorded_provider_acknowledgement": false,
+      "reconciliation_needed": false,
+      "target_overwritten": false
+    }
+  },
+  "render": {
+    "plan": "free",
+    "deploy": "dep-dbk5nklg1s2s739cm5ig",
+    "commit": "80d673d443262b79c5edc4470c6cd01f04756139",
+    "live_at_utc": "2026-11-02T09:46:43Z",
+    "public_client_configuration_verified": true,
+    "heartbeat_interval_ms": 5000,
+    "heartbeat_http_status": 200,
+    "sample_database_read_ms": [
+      22,
+      97
+    ],
+    "sample_database_transaction_ms": [
+      75,
+      301
+    ]
+  },
+  "migration_tests": {
+    "passed": 13,
+    "failed": 0
+  },
+  "published_embed": {
+    "script_payloads_verified": 3,
+    "style_payloads_verified": 13,
+    "frontend_vm_pass": 100,
+    "legacy_call_vm_pass": 15,
+    "transfer_vm_pass": 14,
+    "calls_panel_temporary_warning": false
+  }
 }

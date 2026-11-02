@@ -1,0 +1,30 @@
+{
+  "sha256": "e3b86f30011032e7abd6902c85ea97da3cc8c6a4840a29d187ec988563aa14a6",
+  "bytes": 60413529,
+  "package": "com.smarthandicrafts.operatorhub",
+  "versionCode": 20,
+  "versionName": "1.0-r20",
+  "firebaseProject": "sh-chat-896e0",
+  "senderId": "788764965455",
+  "androidAppId": "1:788764965455:android:4e49d55d9e66b68091083a",
+  "bundledPublicConfigVerified": true,
+  "signingCertificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+  "signatureVerified": true,
+  "zipalign16KiBVerified": true,
+  "logoSourceSha256": "21e40476d3aa1c07b864f61da738174040c36255bf9f21dfc56c59fde0d369d6",
+  "logoPixelIdenticalEntries": [
+    "res/N0.png"
+  ],
+  "tests": {
+    "suites": 32,
+    "tests": 279,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 87
+  },
+  "physicalHandsetTestPerformed": false
+}
