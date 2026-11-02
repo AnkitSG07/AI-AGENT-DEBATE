@@ -1,0 +1,48 @@
+{
+  "release": "r22",
+  "testedCommit": "4a3983b9efc89c54fb69cde61b2ae9756980cb21",
+  "testedTree": "01a987c7fc1c9ac874bab44b849c3c4557df0557",
+  "backend": {
+    "ok": true,
+    "pass": 992,
+    "fail": 0,
+    "started": "2026-11-02T13:39:35.514Z",
+    "completed": "2026-11-02T13:40:50.023Z",
+    "changedDuringRun": []
+  },
+  "media": {
+    "passed": true,
+    "phases": [
+      {
+        "name": "hold preparation",
+        "elapsedMs": 44
+      },
+      {
+        "name": "audio worker memory",
+        "residentKiB": 102400
+      },
+      {
+        "name": "recorded duration",
+        "seconds": 32.5975625,
+        "parts": 2,
+        "customerPrivateAmplitude": 0.10485755744278775,
+        "privateOperatorAmplitude": 6.5728918374046684e-06
+      }
+    ]
+  },
+  "android": {
+    "suites": 36,
+    "tests": 304,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 102
+  },
+  "physicalHandsetTestPerformed": false,
+  "productionCustomerActions": false,
+  "isolatedRenderDeploy": "dep-dbk952mgekts73cten0g",
+  "githubActions": "Blocked before execution: account locked due to a billing issue. Equivalent backend/browser and real-media checks passed in an isolated free Render Docker build."
+}
