@@ -135,16 +135,23 @@ export async function scanNamespace(transport, prefix = 'sh_operator', options =
   requireValue(identityValid(transport.identity) && prefixValid(prefix), 'INVALID_SCOPE');
   const limits = limitsOf(options), started = Date.now(), collections = new Set(), documents = [], seen = new Set(); let bytes = 0;
   const guard = () => requireValue(Date.now() - started <= limits.maxDurationMs, 'SCAN_TIME_LIMIT');
-  const walk = async (parent, depth) => {
-    guard(); requireValue(depth <= 12, 'SUBCOLLECTION_DEPTH_LIMIT');
+  // Each parent requires ListCollectionIds even when it has no children. Keep
+  // that discovery (including absent parents) complete without serializing one
+  // network round trip per document. Fixed waves bound concurrent read streams;
+  // all counters below remain global and are checked before another path queues.
+  const concurrency = 8;
+  let parents = [{ parent: '', depth: 0 }], stopped = false;
+  const check = () => { requireValue(!stopped, 'SCAN_WAVE_STOPPED'); guard(); };
+  const walkParent = async ({ parent, depth }, next) => {
+    check(); requireValue(depth <= 12, 'SUBCOLLECTION_DEPTH_LIMIT');
     for await (const name of transport.listCollections(parent)) {
-      guard(); requireValue(typeof name === 'string' && pathValid(name) && !name.includes('/'), 'INVALID_COLLECTION');
+      check(); requireValue(typeof name === 'string' && pathValid(name) && !name.includes('/'), 'INVALID_COLLECTION');
       const collection = parent ? parent + '/' + name : name;
       if (!parent && !name.startsWith(prefix + '_')) continue;
       requireValue(!collections.has(collection), 'DUPLICATE_COLLECTION'); collections.add(collection);
       requireValue(collections.size <= limits.maxCollections, 'COLLECTION_LIMIT');
       for await (const raw of transport.listDocuments(collection)) {
-        guard(); const base = rootName(transport.identity) + '/';
+        check(); const base = rootName(transport.identity) + '/';
         requireValue(typeof raw.name === 'string' && raw.name.startsWith(base), 'FOREIGN_DOCUMENT');
         const path = raw.name.slice(base.length);
         requireValue(documentPath(path) && path.split('/').slice(0, -1).join('/') === collection && !seen.has(path), 'INVALID_DOCUMENT'); seen.add(path);
@@ -154,11 +161,28 @@ export async function scanNamespace(transport, prefix = 'sh_operator', options =
           const document = encodeDocument(raw, transport.identity, prefix); bytes += Buffer.byteLength(JSON.stringify(document));
           requireValue(bytes <= limits.maxBytes, 'EXPORT_BYTE_LIMIT'); documents.push(document);
         }
-        await walk(path, depth + 1);
+        next.push({ parent: path, depth: depth + 1 });
       }
     }
+    // Empty iterators must still honor the duration bound after their RPC.
+    check();
   };
-  await walk('', 0); documents.sort((a, b) => compare(a.path, b.path));
+  while (parents.length) {
+    const next = [];
+    for (let offset = 0; offset < parents.length; offset += concurrency) {
+      let firstError;
+      // A rejected read must not leave other workers running after this scan
+      // returns. Stop admitting further work, drain this bounded wave, then
+      // propagate the original failure rather than a sibling's stop marker.
+      await Promise.allSettled(parents.slice(offset, offset + concurrency).map(async item => {
+        try { await walkParent(item, next); }
+        catch (error) { if (!firstError) firstError = error; stopped = true; }
+      }));
+      if (firstError) throw firstError;
+    }
+    parents = next;
+  }
+  guard(); documents.sort((a, b) => compare(a.path, b.path));
   const collectionNames = [...collections].sort(compare);
   return { collections: collectionNames, documents, bytes,
     dataHash: digest(documents.map(row => [row.path, row.hash])),
