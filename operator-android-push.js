@@ -5,7 +5,7 @@ import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { messageNotificationPreview } from './operator-message-preview.js';
 
-export const ANDROID_PUSH_VERSION = '2026-10-31-android-push-r19-acceptance-diagnostics';
+export const ANDROID_PUSH_VERSION = '2026-11-02-android-push-r20-idle-quota-and-preview-fix';
 const PREFIX = '/api/operator-android';
 const HUB = 'https://www.smarthandicrafts.com/livechat-api-test';
 const OAUTH = 'https://oauth2.googleapis.com/token';
@@ -86,6 +86,11 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   let registry = null, loading = null, serial = Promise.resolve();
   let accessToken = '', accessExpiresAt = 0, accessPromise = null;
   const rates = new Map(), callQueues = new Map(), messageQueues = new Map(), appMessageQueues = new Map();
+  // Positive acknowledgements only: repeated Odoo scans of the same trusted
+  // IDs need not read Firestore again. Never remember a failed write, infer
+  // unseen IDs from a high watermark, or cache authorization/delivery claims.
+  const observedMessageIds = new Map();
+  const OBSERVED_TTL_MS = 10 * 60000, MAX_OBSERVED_CHANNELS = 1000;
   let sentCount = 0, failedCount = 0;
 
   async function registryCall(method, ...args) {
@@ -547,12 +552,16 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   async function observeIncomingMessages({ channel = {}, messages = [], verifiedIncoming = false, seedExisting = false } = {}) {
     const channelId = positiveId(channel.id);
     if (verifiedIncoming !== true || !channelId || !['whatsapp', 'livechat', 'chat'].includes(channel.channel_type) || !Array.isArray(messages)) return;
-    const ids = messages.slice(0, 100).filter(message => {
+    let ids = messages.slice(0, 100).filter(message => {
       const at = odooDateMs(message?.date);
       return positiveId(message?.id) && message?.model === 'discuss.channel' && positiveId(message?.res_id) === channelId &&
         at > 0 && at <= clock() + 5000 && (seedExisting === true || clock() - at <= MESSAGE_TTL_MS);
     }).map(message => Number(message.id));
     if (!ids.length || !useExternalRegistry || typeof deviceRegistry?.observeAppMessages !== 'function') return;
+    const known = observedMessageIds.get(channelId), at = clock();
+    if (known && at >= known.at && at - known.at < OBSERVED_TTL_MS) ids = ids.filter(id => !known.ids.has(id));
+    else observedMessageIds.delete(channelId);
+    if (!ids.length) return;
     let queued = appMessageQueues.get(channelId);
     if (queued) {
       ids.forEach(id => queued.ids.add(id));
@@ -566,6 +575,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       while (queued.ids.size) {
         const messageIds = [...queued.ids]; queued.ids.clear();
         await registryCall('observeAppMessages', { channelId: Number(channelId), messageIds });
+        const previous = observedMessageIds.get(channelId), savedAt = clock();
+        const committed = previous && savedAt >= previous.at && savedAt - previous.at < OBSERVED_TTL_MS ? previous.ids : new Set();
+        messageIds.forEach(id => committed.add(id));
+        while (committed.size > 512) committed.delete(committed.values().next().value);
+        observedMessageIds.delete(channelId);
+        observedMessageIds.set(channelId, { ids: committed, at: savedAt });
+        while (observedMessageIds.size > MAX_OBSERVED_CHANNELS) observedMessageIds.delete(observedMessageIds.keys().next().value);
       }
     }).catch(() => { logger.warn?.('SH_APP_MESSAGE_STATE unavailable'); })
       .finally(() => { if (appMessageQueues.get(channelId) === queued) appMessageQueues.delete(channelId); });

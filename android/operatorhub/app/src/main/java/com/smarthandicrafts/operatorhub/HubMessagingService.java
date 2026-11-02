@@ -43,15 +43,20 @@ public final class HubMessagingService extends FirebaseMessagingService {
                 String expected = HubPolicy.HUB_URL + "?channel_id=" + channel + "&channel=" + channel;
                 NativeStore store = new NativeStore(context); DeviceLeasePolicy.Credential credential = store.credential();
                 if (channel <= Integer.MAX_VALUE && expected.equals(d.get("hub_url")) && store.receiveMessage(channel, id, issued, expiry, credential)) {
-                    boolean posted = false;
+                    MessageAlerts.changed(context, (int)channel, id, credential);
+                    boolean posted = false; String failure = "";
                     try { posted = MessageAlerts.show(context, (int)channel, id, d, credential); }
                     catch (RuntimeException renderFailure) {
-                        messageStatus(context, "render_failed");
+                        failure = messageFailure("render", renderFailure);
+                        messageStatus(context, failure);
                         try { posted = MessageAlerts.fallback(context, (int)channel, id, d, credential); }
-                        catch (RuntimeException fallbackFailure) { messageStatus(context, "fallback_render_failed"); }
+                        catch (RuntimeException fallbackFailure) { failure = messageFailure("fallback", fallbackFailure); }
                     }
                     if (posted) messageStatus(context, "posted");
-                    else { store.unpostedMessage(channel, id, credential); messageStatus(context, MessageAlerts.blockingReason(context)); }
+                    else {
+                        store.unpostedMessage(channel, id, credential);
+                        messageStatus(context, failure.isEmpty() ? MessageAlerts.blockingReason(context) : failure);
+                    }
                 } else messageStatus(context, "rejected_envelope_or_duplicate");
             } catch (Exception ignored) { messageStatus(context, "invalid_envelope"); }
             return;
@@ -82,5 +87,12 @@ public final class HubMessagingService extends FirebaseMessagingService {
     }
     private static void messageStatus(Context context, String code) {
         MessageAlerts.delivery(code); new NativeStore(context).messageOutcome(code);
+    }
+    // Only fixed labels cross into diagnostics. Exception messages/stack traces
+    // can contain customer text, identifiers or Android PendingIntent details.
+    private static String messageFailure(String stage, RuntimeException failure) {
+        String kind = failure instanceof java.util.regex.PatternSyntaxException ? "pattern" :
+            failure instanceof SecurityException ? "security" : failure instanceof IllegalArgumentException ? "argument" : "runtime";
+        return stage + "_failed_" + kind;
     }
 }

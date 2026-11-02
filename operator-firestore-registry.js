@@ -414,6 +414,7 @@ export function createFirestoreDeviceRegistry({
   }
   const observeAppMessages = input => guarded(() => appMessages.observe(input));
   const listAppMessageState = channelIds => guarded(() => appMessages.list(channelIds));
+  const closeAppMessageState = () => appMessages.close();
   async function changeAppMessageState(rawToken, input) {
     const digest = bearerDigest(rawToken);
     return guarded(() => appMessages.change(input, async tx => {
@@ -528,7 +529,7 @@ export function createFirestoreDeviceRegistry({
 
   return Object.freeze({
     version: FIRESTORE_REGISTRY_VERSION, collectionPrefix,
-    checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateNativeClient, updateToken, renewLease,
+    checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateNativeClient, updateToken, renewLease, closeAppMessageState,
     rotateCredential, revoke, revokeDevice, listDevices, getDevice, clearFcmToken,
     getDeliveries, claimDelivery, finishDelivery, pruneExpiredRecoveries,
     observeAppMessages, listAppMessageState, changeAppMessageState

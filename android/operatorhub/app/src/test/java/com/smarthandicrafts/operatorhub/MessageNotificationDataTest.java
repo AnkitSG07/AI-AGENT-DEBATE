@@ -14,6 +14,18 @@ public class MessageNotificationDataTest {
     @Test public void hiddenControlsAndWhitespaceCannotSpoofSenderLayout() {
         assertEquals("Ankit Garia test", MessageNotificationData.clean(" Ankit\nGaria\u202e\u0000test ", 80));
     }
+    @Test public void unicodeSpaceSeparatorsAndC1ControlsCollapseWithoutRegexFlags() {
+        assertEquals("Ankit Garia test", MessageNotificationData.clean("\u00a0Ankit\u0085\u2007Garia\u202f\u2066test\u2069 ", 80));
+        assertEquals("👨‍👩‍👧‍👦 नमस्ते", MessageNotificationData.clean("👨‍👩‍👧‍👦\u3000नमस्ते", 80));
+        assertEquals("a b", MessageNotificationData.clean("a\ud800b", 80));
+    }
+    @Test public void emptyLimitsAndInputBoundsNeverSplitSurrogatePairs() {
+        assertEquals("", MessageNotificationData.clean("anything", 0));
+        assertEquals("…", MessageNotificationData.clean("😀😀", 1));
+        assertEquals("a…", MessageNotificationData.clean("a b", 2));
+        String value = MessageNotificationData.clean("x".repeat(4095) + "😀tail", 5000);
+        assertEquals(4095, value.length()); assertTrue(value.chars().allMatch(c -> c == 'x'));
+    }
     @Test public void malformedDatesFallBackToNowAndUnversionedTextIsNotUsed() {
         Map<String, String> data = new HashMap<>(); data.put("sender_name", "Ignored"); data.put("message_preview", "Ignored");
         data.put("message_at_ms", "not-a-date");

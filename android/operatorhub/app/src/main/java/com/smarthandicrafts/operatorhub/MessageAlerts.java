@@ -20,10 +20,21 @@ import java.util.Map;
 
 /** Standalone sender/text alerts: posting never depends on inventory, grouping or launcher services. */
 public final class MessageAlerts {
+    static final String CHANGED = "com.smarthandicrafts.operatorhub.MESSAGE_CHANGED";
     static final String CHANNEL = "sh_messages_v1", SUMMARY = "message:summary";
     static final String GENERATION = "sh_message_generation", LATEST_ID = "sh_message_latest_id";
     private static final int ID = 300;
     private static final Object LOCK = new Object();
+
+    /** A validated FCM hint invalidates foreground state even if alerts are disabled. */
+    static void changed(Context context, int channel, long message, DeviceLeasePolicy.Credential credential) {
+        if (channel <= 0 || message <= 0 || !new NativeStore(context).matchesCredential(credential)) return;
+        try {
+            context.sendBroadcast(new Intent(CHANGED).setPackage(context.getPackageName())
+                .putExtra("channel_id", channel).putExtra("message_id", message)
+                .putExtra("enrollment_generation", credential.generation));
+        } catch (RuntimeException ignored) { /* A foreground hint cannot block posting. */ }
+    }
 
     static void createChannel(Context context) {
         NotificationManager nm = manager(context);
@@ -57,7 +68,8 @@ public final class MessageAlerts {
         createChannel(context);
         NotificationChannel systemChannel = nm.getNotificationChannel(CHANNEL);
         if (systemChannel == null || systemChannel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
-        MessageNotificationData preview = MessageNotificationData.from(data, System.currentTimeMillis());
+        MessageNotificationData preview = expanded ? MessageNotificationData.from(data, System.currentTimeMillis())
+            : MessageNotificationData.fallback(data, System.currentTimeMillis());
         String title = preview.group ? preview.conversation : preview.sender;
         String text = preview.group ? preview.sender + ": " + preview.preview : preview.preview;
         NativeStore store = new NativeStore(context);

@@ -1,10 +1,12 @@
+import { createAppMessageSubscriptions } from './operator-app-message-subscriptions.js';
+
 // Team-wide SH Chat read state. Odoo website read flags never enter this ledger.
 const positive = value => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : 0;
 const copy = value => structuredClone(value);
 const MAX_PENDING = 10000, MAX_RECENT = 512;
 const stateError = (status, code) => Object.assign(new Error('SH Chat message state is temporarily unavailable.'), { status, code, registryError: true });
 
-export function createAppMessageState({ firestore, collectionPrefix, clock = Date.now, makeError = stateError }) {
+export function createAppMessageState({ firestore, collectionPrefix, clock = Date.now, makeError = stateError, subscriptionOptions = {} }) {
   const error = makeError;
   const collection = firestore.collection(`${collectionPrefix}_app_messages`);
   const blank = channelId => ({ schema: 1, stateVersion: 0, channelId, latestMessageId: 0, readThroughMessageId: 0,
@@ -26,9 +28,14 @@ export function createAppMessageState({ firestore, collectionPrefix, clock = Dat
   const projection = value => ({ channelId: value.channelId, stateVersion: value.stateVersion, latestMessageId: value.latestMessageId,
     readThroughMessageId: value.readThroughMessageId,
     unreadCount: Math.max(value.pendingIds.length, value.overflow || value.manualUnread ? 1 : 0) });
+  const subscriptions = createAppMessageSubscriptions({ collection, clock, makeError, ...subscriptionOptions,
+    project: (snapshot, channelId) => projection(row(snapshot, channelId)) });
+  let closed = false;
+  const assertOpen = () => { if (closed) throw error(503, 'APP_MESSAGE_STATE_UNAVAILABLE'); };
+  const publishCommitted = value => { subscriptions.committed(value); return value; };
   const id = value => { const result = positive(value); if (!result || result > 2147483647) throw error(400, 'INVALID_CHANNEL_ID'); return result; };
   const observe = async ({ channelId, messageIds }) => {
-    channelId = id(channelId);
+    assertOpen(); channelId = id(channelId);
     if (!Array.isArray(messageIds) || messageIds.length > 100 || !messageIds.every(positive)) throw error(400, 'INVALID_MESSAGE_IDS');
     return firestore.runTransaction(async tx => {
       const ref = collection.doc(String(channelId)), value = row(await tx.get(ref), channelId);
@@ -44,12 +51,14 @@ export function createAppMessageState({ firestore, collectionPrefix, clock = Dat
       value.pendingIds = [...pending].sort((a,b) => a-b);
       if (value.pendingIds.length > MAX_PENDING) { value.pendingIds = value.pendingIds.slice(-MAX_PENDING); value.overflow = true; }
       value.updatedAt = clock(); value.stateVersion++; tx.set(ref, value); return projection(value);
-    });
+    }).then(publishCommitted);
   };
   const list = async channelIds => {
+    assertOpen();
     if (!Array.isArray(channelIds) || channelIds.length > 100) throw error(400, 'INVALID_CHANNEL_IDS');
     const ids = [...new Set(channelIds.map(id))];
     if (!ids.length) return [];
+    if (subscriptions.supported) return Promise.all(ids.map(value => subscriptions.get(value)));
     return firestore.runTransaction(async tx => {
       const refs = ids.map(value => collection.doc(String(value)));
       const snapshots = typeof tx.getAll === 'function' ? await tx.getAll(...refs) : await Promise.all(refs.map(ref => tx.get(ref)));
@@ -58,7 +67,7 @@ export function createAppMessageState({ firestore, collectionPrefix, clock = Dat
   };
   // Authorization callback runs within this same transaction before its writes.
   const change = async ({ channelId, throughMessageId, unread = false, expectedStateVersion }, authorize) => {
-    channelId = id(channelId);
+    assertOpen(); channelId = id(channelId);
     if (!unread && !positive(throughMessageId)) throw error(400, 'INVALID_MESSAGE_ID');
     if (!Number.isSafeInteger(expectedStateVersion) || expectedStateVersion < 0) throw error(400, 'INVALID_STATE_VERSION');
     return firestore.runTransaction(async tx => {
@@ -74,7 +83,8 @@ export function createAppMessageState({ firestore, collectionPrefix, clock = Dat
         value.manualUnread = false;
       }
       value.updatedAt = clock(); value.stateVersion++; tx.set(ref, value); return projection(value);
-    });
+    }).then(publishCommitted);
   };
-  return { observe, list, change };
+  const close = () => { closed = true; subscriptions.close(); };
+  return { observe, list, change, close };
 }

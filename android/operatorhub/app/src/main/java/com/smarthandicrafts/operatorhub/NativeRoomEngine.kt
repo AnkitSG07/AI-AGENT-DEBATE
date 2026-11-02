@@ -322,13 +322,11 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         // waiting for its transport lock and must not hold the End button/UI thread.
         val silenced = immediatelySilenced || silenceForClose()
         val tracks = room.localParticipant.trackPublications.values.mapNotNull { it.track }
-        // Preserve the prior fail-closed stop path if immediate ADM muting is
-        // unavailable. The ordinary successful close never waits on RTC here.
-        if (!silenced) tracks.forEach { track -> runCatching { track.stop() } }
         scope.cancel()
-        NativeRoomDisposal.enqueue {
+        NativeRoomDisposal.releaseRoom(silenced,
+            stopTracks = { tracks.forEach { track -> runCatching { track.stop() } } }
+        ) {
             runCatching { detachedCustomerTrack?.removeSink(sink) }
-            if (silenced) tracks.forEach { track -> runCatching { track.stop() } }
             room.release()
         }
     }

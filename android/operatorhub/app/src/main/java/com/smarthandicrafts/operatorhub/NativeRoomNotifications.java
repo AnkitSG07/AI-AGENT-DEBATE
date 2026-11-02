@@ -63,6 +63,7 @@ public final class NativeRoomNotifications {
         return current.generation == intent.getLongExtra("enrollment_generation", -1) && current.deviceId.equals(intent.getStringExtra("enrolled_device_id"));
     }
     public static void show(Context context, String id, String transfer, long expiry) {
+        changed(context, id, transfer, "incoming");
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if ((Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             || !manager.areNotificationsEnabled()) return;
@@ -109,7 +110,13 @@ public final class NativeRoomNotifications {
     }
     private static void cancel(Context context, String id, String transfer, boolean terminal) {
         context.getSystemService(NotificationManager.class).cancel(key(id, transfer), 101);
-        context.sendBroadcast(new Intent(CHANGED).setPackage(context.getPackageName()).putExtra("call_id", id).putExtra("transfer_id", transfer).putExtra("alert_terminal", terminal));
+        changed(context, id, transfer, terminal ? "ended" : "");
+    }
+    private static void changed(Context context, String id, String transfer, String event) {
+        try { context.sendBroadcast(new Intent(CHANGED).setPackage(context.getPackageName()).putExtra("call_id", id)
+            .putExtra("transfer_id", transfer).putExtra("event", event).putExtra("alert_terminal", "ended".equals(event))
+            .putExtra("enrollment_generation", new NativeStore(context).credential().generation)); }
+        catch (RuntimeException ignored) { /* A foreground refresh hint cannot prevent the native call alert. */ }
     }
     private NativeRoomNotifications() { }
 }

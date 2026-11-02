@@ -1,0 +1,19 @@
+{
+  "release": "r20",
+  "backend": {
+    "ok": true,
+    "pass": 815,
+    "fail": 0,
+    "changedDuringRun": []
+  },
+  "android_jvm": {
+    "tests": 279,
+    "suites": 32,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "physical_phone_verified": false,
+  "new_firebase_project_created": false,
+  "odoo_embed_installed": false
+}

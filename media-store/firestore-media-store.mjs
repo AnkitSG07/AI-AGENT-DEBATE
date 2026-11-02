@@ -196,6 +196,8 @@ function validateSession(value, key, before) {
       ['pending', 'running', 'done'].includes(job.status) && Number.isSafeInteger(job.attempts) &&
       job.attempts >= 0 && validTime(job.notBefore), 'Invalid session cleanup job.');
     if (job.status === 'running') requireInput(identifier(job.leaseId) && validTime(job.leaseUntil), 'A running session job requires an exact execution lease.');
+    if (job.notificationExpiresAtMs !== undefined)
+      requireInput(job.kind === 'notify' && validTime(job.notificationExpiresAtMs), 'Only notification jobs have a bounded delivery deadline.');
     jobIds.add(job.id);
   }
   if (session.providerCallId !== undefined && session.providerCallId !== null && session.providerCallId !== '') requireInput(identifier(session.providerCallId), 'Invalid provider call binding.');
@@ -253,6 +255,8 @@ function validateSession(value, key, before) {
     for (const field of ['id', 'kind', 'identity', 'roomName', 'deviceId', 'callId', 'transferId', 'toDeviceId', 'event', 'revokeBeforeMs']) {
       if (next[field] !== prior[field]) fail('CLEANUP_TARGET_IMMUTABLE', 'A persisted session job cannot be retargeted.');
     }
+    if (prior.notificationExpiresAtMs !== undefined && next.notificationExpiresAtMs !== prior.notificationExpiresAtMs)
+      fail('CLEANUP_TARGET_IMMUTABLE', 'A notification delivery deadline cannot be extended or removed.');
     if (next.reason !== prior.reason && !(prior.kind === 'terminate' && prior.status === 'pending' &&
         prior.reason === 'BUSINESS_INITIATED' && next.reason === 'USER_INITIATED' && session.terminal?.confirmedAt !== undefined)) {
       fail('CLEANUP_TARGET_IMMUTABLE', 'A session termination reason can change only after verified customer termination.');

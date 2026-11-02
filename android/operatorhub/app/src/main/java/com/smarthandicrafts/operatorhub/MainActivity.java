@@ -90,6 +90,9 @@ public final class MainActivity extends Activity {
     private Uri cameraOutput;
     private boolean nativeRoomReceiverRegistered;
     private String publishedNativeCapabilities = "";
+    private long pendingHintGeneration = -1;
+    private final java.util.LinkedHashSet<Integer> pendingMessageHints = new java.util.LinkedHashSet<>();
+    private final java.util.LinkedHashMap<String, String> pendingCallHints = new java.util.LinkedHashMap<>();
     private final NativeCallCloseQueue pendingNativeCloses = new NativeCallCloseQueue();
     // History polling cannot occupy the executor used to answer or finish calls.
     private final ThreadPoolExecutor hubReadIO = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
@@ -101,6 +104,22 @@ public final class MainActivity extends Activity {
     private MessageStateRequester messageStateRequester = NativeApi::appMessageState;
     private final BroadcastReceiver nativeRoomReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
+            NativeStore hintStore = new NativeStore(context);
+            DeviceLeasePolicy.Credential hintCredential = hintStore.credential();
+            if (DeviceLeasePolicy.valid(hintCredential, System.currentTimeMillis()) &&
+                intent.getLongExtra("enrollment_generation", -1) == hintCredential.generation) {
+                if (pendingHintGeneration != hintCredential.generation) { pendingMessageHints.clear(); pendingCallHints.clear(); }
+                pendingHintGeneration = hintCredential.generation;
+                if (MessageAlerts.CHANGED.equals(intent.getAction())) {
+                    int channel = intent.getIntExtra("channel_id", 0);
+                    if (channel > 0) pendingMessageHints.add(channel);
+                    while (pendingMessageHints.size() > 32) pendingMessageHints.remove(pendingMessageHints.iterator().next());
+                } else {
+                    String id = intent.getStringExtra("call_id"), event = intent.getStringExtra("event");
+                    if (HubPolicy.validCallId(id) && ("incoming".equals(event) || "ended".equals(event) || "".equals(event))) pendingCallHints.put(id, event);
+                    while (pendingCallHints.size() > 16) pendingCallHints.remove(pendingCallHints.keySet().iterator().next());
+                }
+            }
             try {
                 JSONObject call = new JSONObject(intent.getStringExtra("snapshot"));
                 if (call.optBoolean("closed")) rememberNativeClose(call.optString("callId"), call.optString("providerCallId"), call.optString("clientAttemptId"), call.optString("ownerLegId"));
@@ -123,7 +142,8 @@ public final class MainActivity extends Activity {
         web = new WebView(this); pageFrame.addView(web, new FrameLayout.LayoutParams(-1, -1));
         createLoadingCover(); setContentView(shell);
         updateTheme(); configureWebView();
-        ContextCompat.registerReceiver(this, nativeRoomReceiver, new IntentFilter(NativeRoomNotifications.CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
+        IntentFilter nativeEvents = new IntentFilter(NativeRoomNotifications.CHANGED); nativeEvents.addAction(MessageAlerts.CHANGED);
+        ContextCompat.registerReceiver(this, nativeRoomReceiver, nativeEvents, ContextCompat.RECEIVER_NOT_EXPORTED);
         nativeRoomReceiverRegistered = true;
         // Let Odoo choose the logged-in redirect or its real authentication form.
         // Opening the protected Hub first used to expose its 403/404 page on a new install.
@@ -568,6 +588,7 @@ public final class MainActivity extends Activity {
                 .put("protocol", NativeRoomPolicy.PROTOCOL).put("nativeBuild", BuildConfig.VERSION_CODE)
                 .put("callHistoryProxy", true)
                 .put("appMessageState", true)
+                .put("callChangeHints", true)
                 .put("activeCall", NativeRoomCallService.isRunning());
             JSONObject call = NativeRoomCallService.snapshot();
             if (call != null && !call.optBoolean("closed")) value.put("activeCallId", call.optString("callId"))
@@ -634,6 +655,19 @@ public final class MainActivity extends Activity {
     }
     private void dispatchPending() {
         if (!hubReady || web == null || !HubPolicy.trustedHubPage(web.getUrl()) || !launch.isPrepared() || loadingCover.getVisibility() == View.VISIBLE) return;
+        DeviceLeasePolicy.Credential hintCredential = new NativeStore(this).credential();
+        if (pendingHintGeneration != hintCredential.generation || !DeviceLeasePolicy.valid(hintCredential, System.currentTimeMillis())) {
+            pendingMessageHints.clear(); pendingCallHints.clear();
+        } else if (visible) {
+            try {
+                for (int channel : pendingMessageHints) web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sh-native-message-changed',{detail:{channelId:" + channel + "}}));", null);
+                for (java.util.Map.Entry<String, String> hint : pendingCallHints.entrySet()) {
+                    JSONObject detail = new JSONObject().put("callId", hint.getKey()).put("event", hint.getValue());
+                    web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sh-native-call-changed',{detail:" + detail + "}));", null);
+                }
+            } catch (Exception ignored) { }
+            pendingMessageHints.clear(); pendingCallHints.clear();
+        }
         for (NativeCallCloseQueue.Closed closed : pendingNativeCloses.drain()) {
             try {
                 JSONObject detail = new JSONObject().put("localReleased", true);
@@ -679,6 +713,7 @@ public final class MainActivity extends Activity {
         ((HubApplication)getApplication()).maybeRenewDeviceLease();
         refreshNativeCallCapabilities();
         NativeRoomCleanup.drain(this);
+        dispatchPending();
     }
     @Override protected void onPause() { visible = false; messageWindowFocused = false; messageReadEpoch++; CookieManager.getInstance().flush(); if (web != null && activeCall.isEmpty()) web.onPause(); super.onPause(); }
     @Override public void onWindowFocusChanged(boolean hasFocus) {

@@ -5,7 +5,7 @@ const { webcrypto } = require('node:crypto');
 const { context: productionContext, deferred, source } = require('./production-functions.cjs');
 function context(names, values = {}) {
   return productionContext([...names, 'hasAppMessageStateBridge'], {
-    hasHubNativeBridge: () => true, ...values,
+    hasHubNativeBridge: () => true, queueAppMessageCursorRepair() {}, ...values,
     window: { SHNativeCapabilities: { appMessageState: true }, ...values.window }
   });
 }
@@ -208,15 +208,17 @@ test('an offscreen thread, an unfocused page and a covering DOM overlay cannot a
 });
 
 test('a worker-lagged read stores only the confirmed cursor and retries when a fresh list observes the message', async () => {
-  const f = viewFixture(); let frame, calls = 0;
+  const f = viewFixture(); let frame, calls = 0, repairs = 0;
   f.r.channels.set(73, record({ latestMessageId: 800, readThroughMessageId: 799, unreadCount: 1 }));
   const c = context(['visibleAppMessageCursor', 'queueVisibleAppMessageRead', 'applyAppMessageState', 'requestAppMessageMutation'], { ...f.c,
     state: { ...f.c.state, destroyed: false }, hasHubNativeBridge: () => true, applyFiltersAndRender() {},
+    queueAppMessageCursorRepair: (cursor, intent) => { repairs++; assert.equal(cursor.throughMessageId, 801); assert.equal(intent, 0); },
     requestAnimationFrame: fn => { frame = fn; return 1; }, requestAppMessageState: async () => {
       calls++; return { ok: true, state: record({ latestMessageId: calls === 1 ? 800 : 801, readThroughMessageId: calls === 1 ? 800 : 801, unreadCount: 0, stateVersion: calls === 1 ? 2 : 4 }) };
     } });
   c.queueVisibleAppMessageRead(); frame(); await f.r.readRequests.get(73);
   assert.equal(f.r.acknowledged.get(73), 800, 'requesting 801 is not proof that the backend confirmed 801');
+  assert.equal(repairs, 1, 'a clamped visible read schedules bounded ingestion repair instead of waiting five minutes');
   frame(); assert.equal(calls, 1, 'no hot retry loop while the ingestion worker has not observed a newer message');
   c.applyAppMessageState({ ok: true, channels: [record({ latestMessageId: 801, readThroughMessageId: 800, unreadCount: 1, stateVersion: 3 })] });
   frame(); await f.r.readRequests.get(73);

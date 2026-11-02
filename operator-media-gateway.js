@@ -6,6 +6,7 @@ import { createNativeCallRuntime } from './call-runtime/startup.mjs';
 import { mountNativeCallRoutes } from './call-runtime/routes.mjs';
 import { sessionKey, eventKey } from './call-runtime/call-runtime.mjs';
 import { MediaError } from './media/errors.mjs';
+import { createRecoveryCadence } from './operator-recovery-cadence.js';
 
 export function verifyMetaWebhook(req, secret) {
   if (typeof secret !== 'string' || !secret.trim()) return false;
@@ -59,6 +60,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   const publishedStates = new Map();
   const historyWork = new Map();
   const housekeepingWork = new Map();
+  const recoveryCadence = createRecoveryCadence({ now });
   // Reuse only the row returned by the immediately preceding authentication
   // of this request. Every recheck authenticates again and replaces it. There
   // is no cross-request or time-based credential/revocation cache.
@@ -211,12 +213,18 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     })();
     return state.promise;
   }
-  const queueRecovery = id => setImmediate(() => { recoverSession(id).catch(() => {}); });
+  const queueRecovery = id => {
+    recoveryCadence.wake();
+    return setImmediate(() => { recoverSession(id).catch(() => {}); });
+  };
   async function runRecovery() {
     if (!bundle || work) return work;
+    const ticket = recoveryCadence.begin();
+    if (!ticket) return;
     work = recoverMediaWork({ store: mediaStore, controller: bundle.controller, workerId,
       recoverSession, limit: 16, drainLimit: 1 })
-      .catch(() => logger.warn?.('Native call recovery will retry.'))
+      .then(results => { recoveryCadence.finish(ticket, { count: results.length }); return results; })
+      .catch(() => { recoveryCadence.finish(ticket, { failed: true }); logger.warn?.('Native call recovery will retry.'); })
       .finally(() => { work = null; });
     return work;
   }

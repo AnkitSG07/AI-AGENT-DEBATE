@@ -202,6 +202,24 @@ public class MessageNotificationsTest {
         assertEquals(801, notification(73).extras.getLong(MessageAlerts.LATEST_ID));
         assertEquals("posted", store.lastMessageOutcome());
     }
+    @Test @Config(sdk = 35) public void validatedPushInvalidatesOnlyItsChatEvenWhenPhoneAlertsAreDenied() {
+        Shadows.shadowOf(app).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS);
+        post(73, 801, "PRIVATE_SENDER", "PRIVATE_MESSAGE");
+        Intent hint = Shadows.shadowOf(app).getBroadcastIntents().stream().filter(i -> MessageAlerts.CHANGED.equals(i.getAction())).findFirst().orElse(null);
+        assertNotNull(hint); assertEquals(app.getPackageName(), hint.getPackage());
+        assertEquals(73, hint.getIntExtra("channel_id", 0)); assertEquals(801, hint.getLongExtra("message_id", 0));
+        assertEquals(store.credential().generation, hint.getLongExtra("enrollment_generation", -1));
+        assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("channel_id", "message_id", "enrollment_generation")), hint.getExtras().keySet());
+        assertFalse(hint.toUri(0).contains("PRIVATE_"));
+        assertEquals("blocked_permission", store.lastMessageOutcome());
+    }
+    @Test public void rejectedReplayAndWrongHubCannotEmitForegroundMessageHints() {
+        Map<String, String> incoming = data(73, 801, "Ankit", "Message"); incoming.put("hub_url", "https://untrusted.example/");
+        HubMessagingService.dispatchData(app, incoming);
+        assertEquals(0, Shadows.shadowOf(app).getBroadcastIntents().stream().filter(i -> MessageAlerts.CHANGED.equals(i.getAction())).count());
+        post(73, 801, "Ankit", "Message"); post(73, 801, "Ankit", "Replay");
+        assertEquals(1, Shadows.shadowOf(app).getBroadcastIntents().stream().filter(i -> MessageAlerts.CHANGED.equals(i.getAction())).count());
+    }
     @Test public void startupKeepsAnInspectableBlockedMessageChannelAndDeliveryDiagnosesTheBlock() {
         manager.createNotificationChannel(new NotificationChannel(MessageAlerts.CHANNEL, "Customer messages", NotificationManager.IMPORTANCE_NONE));
         MessageAlerts.createChannel(app); assertNotNull(manager.getNotificationChannel(MessageAlerts.CHANNEL));
@@ -254,11 +272,32 @@ public class MessageNotificationsTest {
         assertNull(shown.extras.getString(Notification.EXTRA_TEMPLATE)); assertNull(shown.getGroup());
         assertFalse(store.receiveMessage(73, 801, System.currentTimeMillis(), System.currentTimeMillis() + 60000));
     }
+    @Test public void previewMetadataFailureCannotBreakTheIndependentBareFallback() {
+        Map<String, String> incoming = new HashMap<String, String>(data(73, 801, "Ankit", "The delivered message 👋")) {
+            @Override public String get(Object key) {
+                if ("message_at_ms".equals(key)) throw new java.util.regex.PatternSyntaxException("PRIVATE_MESSAGE", "PRIVATE_MESSAGE", 0);
+                return super.get(key);
+            }
+        };
+        HubMessagingService.dispatchData(app, incoming);
+        assertNotNull(notification(73)); assertEquals("Ankit", title(73)); assertEquals("The delivered message 👋", preview(73));
+        assertNull(notification(73).extras.getString(Notification.EXTRA_TEMPLATE)); assertEquals("posted", store.lastMessageOutcome());
+    }
+    @Test @Config(shadows = EveryPostFails.class) public void finalFailureKeepsItsSafeCauseAndCanBeRetried() {
+        post(73, 801, "Ankit", "PRIVATE_MESSAGE"); assertNull(notification(73));
+        assertEquals("fallback_failed_pattern", store.lastMessageOutcome());
+        assertTrue(store.receiveMessage(73, 801, System.currentTimeMillis(), System.currentTimeMillis() + 60000));
+    }
 
     @Implements(NotificationManager.class) public static class BigTextFailure extends ShadowNotificationManager {
         @Implementation @Override protected void notify(String tag, int id, Notification notification) {
             if (notification.extras.getString(Notification.EXTRA_TEMPLATE, "").contains("BigTextStyle")) throw new IllegalArgumentException("Synthetic rich-style failure");
             super.notify(tag, id, notification);
+        }
+    }
+    @Implements(NotificationManager.class) public static class EveryPostFails extends ShadowNotificationManager {
+        @Implementation @Override protected void notify(String tag, int id, Notification notification) {
+            throw new java.util.regex.PatternSyntaxException("PRIVATE_MESSAGE", "PRIVATE_MESSAGE", 0);
         }
     }
 }

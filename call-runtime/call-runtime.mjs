@@ -34,7 +34,18 @@ function schedule(session, now) {
     // revocation/expiry must remain discoverable throughout that joining phase.
     if (session.owner) deadlines.push(now + 15000);
   }
-  if (operationPending(session)) deadlines.push(now + 15000);
+  if (operationPending(session)) {
+    if (!session.terminal || session.providerCallId) deadlines.push(now + 15000);
+    else {
+      // A lost Dial response can leave an exact, reserved attempt with no
+      // provider call ID. Once terminal, a timer cannot discover that ID or
+      // safely replay Dial. Observe an outstanding local lease once, then park
+      // until its exact HTTP response or trusted correlated webhook arrives.
+      // Keep the uncertain operation/reservation; parking grants no authority.
+      for (const op of Object.values(session.operations))
+        if (op.status === 'issued' && op.leaseUntil > now) deadlines.push(op.leaseUntil);
+    }
+  }
   session.nextActionAtMs = Math.min(...outstanding, ...deadlines.filter(Number.isFinite));
   if (!Number.isFinite(session.nextActionAtMs)) session.nextActionAtMs = null;
 }
@@ -409,7 +420,15 @@ export class CallRuntime {
       if (next) {
         requireValue(next.tenantId === this.tenantId && (!next.providerCallId || next.providerCallId === event.callId),
           'CALL_ROUTE_CONFLICT', 'The provider call does not match this durable attempt.');
+        const firstProviderBinding = !next.providerCallId;
         next.providerCallId = event.callId;
+        if (firstProviderBinding && next.terminal && next.direction === 'outgoing' && event.type !== 'terminate' && !terminal) {
+          // This exact provider ID was unknown when the attempt was cancelled.
+          // A parked ambiguous Dial must wake durable compensation as soon as
+          // its trusted correlated webhook supplies the missing identity.
+          job(next, { id: 'terminate:late-dial', kind: 'terminate', callId: event.callId,
+            reason: next.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
+        }
         if (next.direction === 'outgoing' && answer && !next.terminal && !terminal && !next.mediaReadyAt) {
           requireValue(answer.tenantId === next.tenantId && answer.phoneNumberId === next.phoneNumberId &&
             answer.providerFingerprint === next.providerFingerprint && (!next.answerSdp || next.answerSdp === answer.answerSdp),
@@ -430,6 +449,8 @@ export class CallRuntime {
         }
         // SDP negotiation and ringback RTP do not mean the recipient picked up.
         // Only a trusted Meta ACCEPTED event can satisfy the outgoing answer gate.
+        if (next.direction === 'outgoing' && event.type === 'accepted' && next.operations.dial)
+          next.operations.dial.status = 'acknowledged';
         if (next.direction === 'outgoing' && !next.terminal && !terminal && event.type !== 'terminate' &&
           (accepted || event.type === 'accepted')) {
           next.customerAcceptedAt ||= accepted?.acceptedAt || now;
@@ -873,10 +894,14 @@ export class CallRuntime {
     const callId = session.providerCallId;
     let result;
     if (action === 'invite') {
-      const currentCall = await this.store.get(callStoreKey(callId));
+      const targetDeviceId = identifier(body.toDeviceId);
+      // These are independent preflight hints. The controller still freshly
+      // authenticates the source/target and claims the invitation atomically.
+      const [currentCall, target] = await Promise.all([
+        this.store.get(callStoreKey(callId)), this.resolveDevice(targetDeviceId)
+      ]);
       requireValue(currentCall?.active && sameBinding(actor, ownerBinding(session, currentCall)),
         'DEVICE_BINDING_CHANGED', 'This transfer must belong to the current enrolled operator leg.', 403);
-      const target = await this.resolveDevice(identifier(body.toDeviceId));
       requireValue(target && target.tenantId === this.tenantId && target.revoked !== true && target.receiveCalls !== false &&
         target.mediaProtocol === 'sh-room-audio-v1' && target.nativeBuild >= this.minimumNativeBuild &&
         target.credentialExpiresAt > this.now() && Number.isSafeInteger(target.credentialGeneration),
@@ -903,6 +928,10 @@ export class CallRuntime {
           schedule(current, this.now()); tx.set(sessionKey(current.id), current);
         }
       });
+      // The exact enrollment binding and notification intent are durable now.
+      // Wake delivery before slower response projection reads; the outbox claim
+      // still rechecks terminal/transfer state and suppresses duplicate wakes.
+      this.signalWork(session.id);
     } else {
       const currentCall = await this.store.get(callStoreKey(callId));
       const transfer = currentCall?.transfer?.id === body.transferId ? currentCall.transfer : currentCall?.transferHistory?.[body.transferId];
@@ -1158,6 +1187,15 @@ export class CallRuntime {
             current.phase !== 'ringing' || current.deadlineAt <= this.now())) return null;
         if (endedOnly && !current.terminal && !current.owner) return null;
         let changed = false;
+        for (const item of current.outbox.filter(row => row.kind === 'notify' && row.status !== 'done')) {
+          if (item.notificationExpiresAtMs !== undefined && item.notificationExpiresAtMs <= this.now() ||
+              item.event === 'incoming' && current.deadlineAt <= this.now()) {
+            // Push is a bounded wake-up hint, not durable authority. An FCM
+            // outage must not retry an obsolete ringing/cancellation alert for
+            // days after call cleanup. App reconnect reads current call state.
+            item.status = 'done'; delete item.leaseId; delete item.leaseUntil; changed = true;
+          }
+        }
         for (const item of current.outbox.filter(row => row.kind === 'connect' && row.status !== 'done')) {
           const operation = current.operations.connect;
           if (current.terminal || current.mediaReadyAt || operation && ['acknowledged', 'provider-ended', 'failed'].includes(operation.status)) {
@@ -1184,6 +1222,9 @@ export class CallRuntime {
         }
         if (selected.kind === 'connect') current.operations.connect = { id: selected.id, status: 'issued',
           issuedAt: this.now(), leaseUntil: this.now() + 45000 };
+        if (selected.kind === 'notify' && selected.notificationExpiresAtMs === undefined)
+          selected.notificationExpiresAtMs = Math.min(this.now() + 60000,
+            selected.event === 'incoming' ? current.deadlineAt : Number.MAX_SAFE_INTEGER);
         Object.assign(selected, { status: 'running', leaseId, leaseUntil: this.now() + 45000, attempts: selected.attempts + 1 });
         schedule(current, this.now()); tx.set(sessionKey(id), current);
         return { session: current, job: copy(selected) };
@@ -1243,9 +1284,18 @@ export class CallRuntime {
         item.status = succeeded || item.kind === 'connect' && current.operations.connect?.status === 'failed' ? 'done' : 'pending';
         item.notBefore = this.now() + (item.kind === 'connect' ? 15000 : Math.min(30000, 1000 * 2 ** Math.min(item.attempts, 5)));
         delete item.leaseId; delete item.leaseUntil;
-        if (succeeded && item.kind === 'terminate' && (current.operations.connect?.status === 'uncertain' ||
-            current.operations.connect?.status === 'issued' && current.operations.connect.leaseUntil <= this.now()))
-          current.operations.connect.status = 'provider-ended';
+        if (succeeded && item.kind === 'terminate' && current.terminal && item.callId === current.providerCallId) {
+          // A lost Accept acknowledgement needs the same exact-disconnect
+          // resolution as Connect. Retaining "uncertain" after acknowledged
+          // termination otherwise keeps a dead session/reservation on the
+          // recovery queue forever. An in-flight HTTP response still owns its
+          // separate late-operation compensation key below/above.
+          for (const name of ['accept', 'connect']) {
+            const operation = current.operations[name];
+            if (operation?.status === 'uncertain' || operation?.status === 'issued' && operation.leaseUntil <= this.now())
+              operation.status = 'provider-ended';
+          }
+        }
         if (succeeded && ['terminate', 'reject'].includes(item.kind) && current.terminal && !operationPending(current) &&
           current.outbox.filter(row => ['terminate', 'reject'].includes(row.kind)).every(row => row.status === 'done') && !current.terminal.confirmedAt) {
           current.terminal.confirmedAt = this.now(); current.phase = 'ended'; current.version++;
@@ -1280,21 +1330,26 @@ export class CallRuntime {
     await this.syncTransferNotifications(id);
     await this.store.transaction(async tx => {
       const current = await tx.get(sessionKey(id));
+      const before = JSON.stringify(current);
       const now = this.now();
       for (const [name, op] of Object.entries(current.operations)) if (op.status === 'issued' && op.leaseUntil <= now) {
         op.status = 'uncertain'; if (!current.terminal && name !== 'connect') current.phase = 'uncertain'; current.version++;
       }
-      if (current.terminal && current.operations.connect?.status === 'uncertain' && current.operations.connect.leaseUntil <= now) {
-        // Recover a process crash during Connect after its original bounded
-        // operation lease. A final exact-call disconnect settles uncertainty;
-        // the device remains reserved until that compensating cleanup succeeds.
-        job(current, { id: 'terminate:late-connect', kind: 'terminate', callId: current.providerCallId,
-          reason: current.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
+      if (current.terminal && current.providerCallId) for (const name of ['accept', 'connect']) {
+        const operation = current.operations[name];
+        if (operation?.status === 'uncertain' && operation.leaseUntil <= now) {
+          // Recover a process crash during Accept/Connect after its original
+          // bounded lease. Only acknowledged exact-call compensation resolves
+          // uncertainty; the old device remains reserved until then.
+          job(current, { id: `terminate:expired-${name}`, kind: 'terminate', callId: current.providerCallId,
+            reason: current.terminal.confirmedAt ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
+        }
       }
       if (!current.terminal && current.phase !== 'connected' && current.deadlineAt <= now) {
         terminalize(current, 'TIMED_OUT', now);
       }
-      current.updatedAt = now; schedule(current, now); tx.set(sessionKey(id), current);
+      schedule(current, now);
+      if (JSON.stringify(current) !== before) { current.updatedAt = now; tx.set(sessionKey(id), current); }
     });
     await this.dispatchCriticalCleanup(id);
     const effects = await this.drainSessionOutbox(id, { limit });

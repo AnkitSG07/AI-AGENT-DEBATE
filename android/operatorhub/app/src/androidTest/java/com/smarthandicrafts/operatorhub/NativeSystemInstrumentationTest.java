@@ -138,6 +138,21 @@ public class NativeSystemInstrumentationTest {
         HubMessagingService.dispatchData(context,data);await(()->notification("message:73")!=null);Notification value=notification("message:73");assertEquals(Notification.VISIBILITY_PRIVATE,value.visibility);assertTrue(value.extras.getString(Notification.EXTRA_TEMPLATE).contains("BigTextStyle"));assertNotNull(value.contentIntent);
         HubMessagingService.dispatchData(context,data);assertEquals(1,manager.getActiveNotifications().length); // one standalone conversation alert
     }
+    @Test public void actualAndroidPreviewFormattingPreservesUnicodeAndPostsSenderAndText() throws Exception {
+        // This must run on Android's ICU-backed runtime: a desktop Pattern/JVM
+        // test did not catch R19's unsupported embedded uppercase-U regex flag.
+        assertEquals("Ankit Garia",MessageNotificationData.clean("\u00a0Ankit\u0085Garia\u202f",80));
+        assertEquals("नमस्ते 👨‍👩‍👧‍👦",MessageNotificationData.clean("नमस्ते\u3000👨‍👩‍👧‍👦",400));
+        long now=System.currentTimeMillis();Map<String,String> data=new HashMap<>();
+        data.put("type","sh_operator_message");data.put("channel_id","73");data.put("message_id","902");
+        data.put("issued_at_ms",String.valueOf(now));data.put("expires_at_ms",String.valueOf(now+30000));
+        data.put("hub_url",HubPolicy.HUB_URL+"?channel_id=73&channel=73");data.put("preview_protocol","sh-message-preview-v1");
+        data.put("sender_name","\u00a0Ankit\u0085Garia\u202f");data.put("message_preview","नमस्ते\u3000👨‍👩‍👧‍👦");
+        HubMessagingService.dispatchData(context,data);await(()->notification("message:73")!=null);
+        Notification value=notification("message:73");assertEquals("posted",store.lastMessageOutcome());
+        assertEquals("Ankit Garia",value.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
+        assertEquals("नमस्ते 👨‍👩‍👧‍👦",value.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+    }
     @Test public void realWebViewPopupConnectsThroughExactOpenerWithoutNativeCredential() throws Exception {
         // Genuine pointer input is necessary: programmatic click() is not a user gesture.
         try(ActivityScenario<SimulationHostActivity> scenario=ActivityScenario.launch(SimulationHostActivity.class)){

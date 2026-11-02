@@ -2569,7 +2569,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     state.callRefreshTimer = setInterval(() => {
       if (!appRoot.isConnected) { destroyOperatorApp(); return; }
       if (!state.destroyed && state.autoRefreshEnabled && (!document.hidden || state.whatsappActiveCall || findIncomingWhatsappCall() || (whatsappCallsRuntime.presenceConfirmed && whatsappOperatorAvailable()))) {
-        pollRecentWhatsappCalls().catch(() => {});
+        pollRecentWhatsappCalls({ background: true }).catch(() => {});
       }
     }, 2000);
   }
@@ -3114,6 +3114,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       hubCallHistory.navParent.insertBefore(nav, next);
     }
     hubCallHistory.navParent = null; hubCallHistory.navNext = null;
+    clearTimeout(hubCallHistory.retryTimer); hubCallHistory.retryTimer = null;
     hidePanel(byId("shCallsPage"));
   }
 
@@ -3132,16 +3133,32 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   async function loadHubCallHistory({ force = false } = {}) {
     if (state.destroyed) return;
     if (hubCallHistory.request) return hubCallHistory.request;
-    if (!force && Date.now() - hubCallHistory.loadedAt < 15000) return;
-    hubCallHistory.error = "";
+    if (!force && (Date.now() < (hubCallHistory.retryAt || 0) ||
+        (!hubCallHistory.error && Date.now() - hubCallHistory.loadedAt < 15000))) return;
+    clearTimeout(hubCallHistory.retryTimer); hubCallHistory.retryTimer = null;
     const request = (async () => {
       try {
         const data = await fetchWhatsappCallJson("/api/whatsapp-calls/logs?limit=200", { cache: "no-store" });
         if (state.destroyed) return;
         mergeWhatsappCallLogs(whatsappCallsFromResponse(data));
         hubCallHistory.loadedAt = Date.now();
+        hubCallHistory.error = ""; hubCallHistory.failures = 0; hubCallHistory.retryAt = 0;
       } catch (error) {
-        if (!state.destroyed) hubCallHistory.error = error.message || "Could not refresh calls.";
+        if (!state.destroyed) {
+          const retryable = !error.status || error.status >= 500 || error.status === 429;
+          hubCallHistory.error = retryable ? "Call history is temporarily unavailable. Showing previously loaded calls; retrying." :
+            error.message || "Call history authorization is unavailable. Check App settings.";
+          hubCallHistory.failures = Math.min(5, (hubCallHistory.failures || 0) + 1);
+          const delay = Math.min(60000, 5000 * 2 ** (hubCallHistory.failures - 1));
+          hubCallHistory.retryAt = Date.now() + delay;
+          if (retryable && !document.hidden && hubScreenVisible(byId("shCallsPage"))) {
+            hubCallHistory.retryTimer = setTimeout(async () => {
+              hubCallHistory.retryTimer = null;
+              if (!state.destroyed && state.autoRefreshEnabled !== false && !document.hidden && hubScreenVisible(byId("shCallsPage")))
+                await loadHubCallHistory();
+            }, delay);
+          }
+        }
       } finally {
         hubCallHistory.request = null;
         if (!state.destroyed) renderHubCallsPage();
@@ -8262,6 +8279,10 @@ Once received, our team will prepare the quotation accordingly.`
     realtimeCallIds: new Set(),
     realtimeRetryTimer: null,
     realtimeFailures: 0,
+    realtimeReady: false,
+    pollFailures: 0,
+    lastPollAttemptMs: 0,
+    pollRetryAt: 0,
     disconnectTimer: null,
     connectTimer: null,
     focusedCallKey: "",
@@ -8412,22 +8433,59 @@ Once received, our team will prepare the quotation accordingly.`
     return changed;
   }
 
-  async function refreshAppMessageStates() {
+  async function refreshAppMessageStates({ channelIds = null, force = false } = {}) {
     if (!appMessageStateAvailable()) return false;
-    const ids = [...new Set((state.channels || []).map(row => Number(row.id)).filter(id => Number.isSafeInteger(id) && id > 0))];
-    for (let start = 0; start < ids.length; start += 100) {
-      const channelIds = ids.slice(start, start + 100), key = channelIds.join(",");
-      let pending = appUnreadRuntime.lists.get(key);
-      if (!pending) {
-        const sequence = ++appUnreadRuntime.sequence;
-        pending = requestAppMessageState("list", { channelIds }).then(body => applyAppMessageState(body, sequence))
-          .finally(() => { if (appUnreadRuntime.lists.get(key) === pending) appUnreadRuntime.lists.delete(key); });
-        appUnreadRuntime.lists.set(key, pending);
-      }
-      await pending;
-      if (state.destroyed) return false;
+    const runtime = appUnreadRuntime, now = Date.now();
+    // These are local request watermarks only. Server stateVersion and the
+    // mutation CAS remain the authority for every read/unread transition.
+    runtime.observedLatest ||= new Map(); runtime.listedAt ||= new Map(); runtime.dirtyChannels ||= new Map();
+    runtime.refreshRevision ||= 0;
+    const ids = [...new Set((channelIds || (state.channels || []).map(row => row.id)).map(Number)
+      .filter(id => Number.isSafeInteger(id) && id > 0))];
+    for (const id of ids) {
+      const preview = Number(state.latestMessagesByChannel?.[id]?.id) || 0;
+      const changed = runtime.observedLatest.has(id) && runtime.observedLatest.get(id) !== preview;
+      runtime.observedLatest.set(id, preview);
+      const listed = runtime.listedAt.get(id);
+      // Changed conversations and FCM hints refresh immediately; unchanged
+      // inbox rerenders do not become an all-chat database poll. The five-minute
+      // repair catches missed hints and read changes made on another phone.
+      if (force || changed || (!runtime.dirtyChannels.has(id) &&
+          (listed === undefined || now < listed || now - listed >= 300000)))
+        runtime.dirtyChannels.set(id, ++runtime.refreshRevision);
     }
-    return true;
+    // Keep invalidations while backgrounded, but consume no database quota.
+    if (typeof document !== "undefined" && document.hidden) return false;
+    if (runtime.refreshPromise) return runtime.refreshPromise;
+    if (!force && now < (runtime.refreshRetryAt || 0)) return false;
+    const request = (async () => {
+      const attempts = new Map();
+      while (!state.destroyed && runtime.dirtyChannels.size) {
+        if (typeof document !== "undefined" && document.hidden) return false;
+        const batch = [...runtime.dirtyChannels.entries()].filter(([id]) => (attempts.get(id) || 0) < 2).slice(0, 100);
+        if (!batch.length) break; // Keep dirty hints for the next bounded refresh.
+        const ids = batch.map(([id]) => id);
+        for (const id of ids) attempts.set(id, (attempts.get(id) || 0) + 1);
+        const sequence = ++runtime.sequence;
+        const body = await requestAppMessageState("list", { channelIds: ids });
+        if (state.destroyed) return false;
+        applyAppMessageState(body, sequence);
+        for (const [id, revision] of batch) {
+          runtime.listedAt.set(id, Date.now());
+          // A hint received during an older snapshot requires another read.
+          if (runtime.dirtyChannels.get(id) === revision) runtime.dirtyChannels.delete(id);
+        }
+        runtime.refreshFailures = 0; runtime.refreshRetryAt = 0;
+      }
+      return true;
+    })();
+    runtime.refreshPromise = request;
+    try { return await request; }
+    catch (error) {
+      runtime.refreshFailures = Math.min(5, (runtime.refreshFailures || 0) + 1);
+      runtime.refreshRetryAt = Date.now() + Math.min(60000, 5000 * 2 ** (runtime.refreshFailures - 1));
+      throw error;
+    } finally { if (runtime.refreshPromise === request) runtime.refreshPromise = null; }
   }
 
   function visibleAppMessageCursor() {
@@ -8462,6 +8520,40 @@ Once received, our team will prepare the quotation accordingly.`
     return throughMessageId ? { channelId: id, throughMessageId, epoch: state.selectionEpoch } : null;
   }
 
+  function queueAppMessageCursorRepair(cursor, intent) {
+    const runtime = appUnreadRuntime;
+    runtime.cursorRepairs ||= new Map();
+    const current = () => {
+      const visible = !state.destroyed && appMessageStateAvailable() && visibleAppMessageCursor();
+      return !!visible && visible.channelId === cursor.channelId && visible.epoch === cursor.epoch &&
+        visible.throughMessageId >= cursor.throughMessageId &&
+        (runtime.intents.get(cursor.channelId) || 0) === intent &&
+        (runtime.acknowledged.get(cursor.channelId) || 0) < cursor.throughMessageId;
+    };
+    if (!current()) return;
+    let repair = runtime.cursorRepairs.get(cursor.channelId);
+    if (!repair || repair.epoch !== cursor.epoch || repair.through !== cursor.throughMessageId || repair.intent !== intent) {
+      if (repair) clearTimeout(repair.timer);
+      repair = { epoch: cursor.epoch, through: cursor.throughMessageId, intent, attempts: 0, timer: null };
+      runtime.cursorRepairs.set(cursor.channelId, repair);
+    }
+    if (repair.timer !== null || repair.attempts >= 3) return;
+    const delay = [500, 1000, 2000][repair.attempts++];
+    repair.timer = setTimeout(async () => {
+      repair.timer = null;
+      if (!current() || runtime.cursorRepairs.get(cursor.channelId) !== repair) return;
+      // FCM deliberately need not await the ingestion transaction. Repair only
+      // this still-visible cursor; no hidden polling or repeated read writes.
+      try { await refreshAppMessageStates({ channelIds: [cursor.channelId], force: true }); } catch { }
+      if (!current() || runtime.cursorRepairs.get(cursor.channelId) !== repair) return;
+      if ((runtime.channels.get(cursor.channelId)?.latestMessageId || 0) >= cursor.throughMessageId) {
+        const previous = runtime.lastReadAttempts.get(cursor.channelId);
+        if (previous?.requestedThrough === cursor.throughMessageId) runtime.lastReadAttempts.delete(cursor.channelId);
+        queueVisibleAppMessageRead();
+      } else queueAppMessageCursorRepair(cursor, intent);
+    }, delay);
+  }
+
   function queueVisibleAppMessageRead() {
     if (!appMessageStateAvailable() || appUnreadRuntime.frame !== null) return;
     appUnreadRuntime.frame = requestAnimationFrame(() => {
@@ -8488,6 +8580,11 @@ Once received, our team will prepare the quotation accordingly.`
           appUnreadRuntime.acknowledged.set(cursor.channelId, Math.max(through, appUnreadRuntime.acknowledged.get(cursor.channelId) || 0));
           appUnreadRuntime.lastReadAttempts.set(cursor.channelId, { requestedThrough: cursor.throughMessageId, observedLatest });
           applyAppMessageState(body, sequence);
+          if (through < cursor.throughMessageId) queueAppMessageCursorRepair(cursor, intent);
+          else {
+            const repair = appUnreadRuntime.cursorRepairs?.get(cursor.channelId);
+            if (repair) { clearTimeout(repair.timer); appUnreadRuntime.cursorRepairs.delete(cursor.channelId); }
+          }
         }).catch(() => {}).finally(() => {
           if (appUnreadRuntime.readRequests.get(cursor.channelId) === pending) appUnreadRuntime.readRequests.delete(cursor.channelId);
         });
@@ -8605,12 +8702,29 @@ Once received, our team will prepare the quotation accordingly.`
     syncHubNativeCallState();
   }
 
+  function receiveHubNativeCallChanged(event) {
+    if (!hubNativeRuntime.ready || state.destroyed || !state.session?.uid || !hasHubNativeBridge()) return;
+    const detail = event?.detail;
+    if (!detail || typeof detail.callId !== "string" || !["incoming", "ended", ""].includes(detail.event)) return;
+    const id = whatsappOpaqueId(detail.callId);
+    if (!id) return;
+    // An ID-only FCM/lifecycle hint requests current server state immediately.
+    // It never answers, rejects, captures audio or trusts push state as authority.
+    queueWhatsappCallRealtimeRefresh(id).catch(() => {});
+  }
+
   function setupHubNativeBridge() {
     if (!hasHubNativeBridge()) return;
     const signal = state.lifecycleController.signal;
     window.addEventListener("sh-native-message-state", receiveAppMessageState, { signal });
-    window.addEventListener("sh-native-message-changed", () => { refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead(); }, { signal });
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead(); } }, { signal });
+    window.addEventListener("sh-native-call-changed", receiveHubNativeCallChanged, { signal });
+    window.addEventListener("sh-native-message-changed", event => {
+      const id = Number(event.detail?.channelId);
+      refreshAppMessageStates({ force: true, channelIds: Number.isSafeInteger(id) && id > 0 ? [id] : null }).catch(() => {});
+      queueVisibleAppMessageRead();
+      if (!document.hidden) refreshInboxAndThread().catch(() => {});
+    }, { signal });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshAppMessageStates({ force: true }).catch(() => {}); queueVisibleAppMessageRead(); } }, { signal });
     messageThread?.addEventListener("scroll", queueVisibleAppMessageRead, { signal, passive: true });
     window.addEventListener("sh-native-call-closed", event => {
       if (hubNativeRuntime.ready && hasHubNativeBridge()) closeReleasedNativeCallUi(event.detail);
@@ -8657,6 +8771,8 @@ Once received, our team will prepare the quotation accordingly.`
       appUnreadRuntime.frame = null;
       for (const pending of appUnreadRuntime.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("App unread sync stopped.")); }
       appUnreadRuntime.pending.clear();
+      for (const repair of appUnreadRuntime.cursorRepairs?.values() || []) clearTimeout(repair.timer);
+      appUnreadRuntime.cursorRepairs?.clear();
       stopHubNativeCallState(); hubNativeRuntime.ready = false;
       hubNativeRuntime.openId = ""; hubNativeRuntime.openPromise = null;
       hubNativeRuntime.chatId = 0; hubNativeRuntime.chatPromise = null;
@@ -8834,7 +8950,7 @@ Once received, our team will prepare the quotation accordingly.`
   function stopWhatsappCallRealtime() {
     const runtime = whatsappCallsRuntime;
     const source = runtime.eventSource;
-    runtime.eventSource = null;
+    runtime.eventSource = null; runtime.realtimeReady = false;
     if (source) { try { source.close(); } catch {} }
     clearTimeout(runtime.realtimeRetryTimer); runtime.realtimeRetryTimer = null;
     runtime.realtimeRefreshDirty = false;
@@ -8854,14 +8970,16 @@ Once received, our team will prepare the quotation accordingly.`
         const ids = [...runtime.realtimeCallIds]; runtime.realtimeCallIds.clear();
         const activeId = runtime.session?.callId;
         if (activeId && !ids.includes(activeId)) ids.unshift(activeId);
-        // An event arriving during an older GET is not represented by that GET.
-        // Wait for those snapshots, then perform exactly one fresh read per ID.
-        const identity = whatsappOperatorIdentity();
-        const inFlight = ids.map(key => runtime.callReads.get(`${identity.operator_device_id}:${key}`)).filter(Boolean);
-        if (runtime.pollPromise) inFlight.push(runtime.pollPromise);
-        if (inFlight.length) await Promise.allSettled(inFlight);
+        // An incoming/terminal event must not wait behind an unrelated old
+        // inbox GET. Exact event reads have their own newest-request fence.
         if (state.destroyed || (!state.autoRefreshEnabled && !runtime.session)) break;
-        await Promise.allSettled([...ids.map(key => fetchWhatsappCallById(key, { afterPending: true })), pollRecentWhatsappCalls()]);
+        const reads = ids.map(key => fetchWhatsappCallById(key, { afterPending: true }));
+        const repair = pollRecentWhatsappCalls();
+        // A slow history/incoming repair cannot delay rendering a fresh exact
+        // call or consuming the next hint. Reconnect without an ID still waits
+        // for its authoritative catch-up snapshot.
+        if (ids.length) { repair.catch(() => {}); await Promise.allSettled(reads); }
+        else await repair.catch(() => {});
         if (!state.destroyed) renderWhatsappCallPanel();
       }
     });
@@ -8886,7 +9004,7 @@ Once received, our team will prepare the quotation accordingly.`
     runtime.eventSource = source;
     source.addEventListener("ready", () => {
       if (state.destroyed || runtime.eventSource !== source) return;
-      runtime.realtimeFailures = 0;
+      runtime.realtimeFailures = 0; runtime.realtimeReady = true;
       queueWhatsappCallRealtimeRefresh().catch(() => {});
     });
     source.addEventListener("call-status", event => {
@@ -8898,9 +9016,9 @@ Once received, our team will prepare the quotation accordingly.`
     });
     source.onerror = () => {
       if (runtime.eventSource !== source) return;
-      source.close(); runtime.eventSource = null;
+      source.close(); runtime.eventSource = null; runtime.realtimeReady = false;
       // Bounded reconnects also handle an older server without this endpoint.
-      // Existing polling continues throughout, including active-call cleanup.
+      // Active-call repair remains fast; idle failure retries back off.
       runtime.realtimeFailures += 1;
       const delay = Math.min(30000, 5000 * 2 ** Math.min(3, runtime.realtimeFailures - 1));
       clearTimeout(runtime.realtimeRetryTimer);
@@ -9101,18 +9219,20 @@ Once received, our team will prepare the quotation accordingly.`
     // The active-session timer, a manual refresh and an incoming-call refresh can
     // request the same provider record together. Share the read, never a mutation.
     const key = `${identity.operator_device_id}:${String(callId)}`;
-    const existing = whatsappCallsRuntime.callReads.get(key);
-    if (existing) {
-      if (!afterPending) return existing;
-      // A status hint received during a read needs one read after that snapshot.
-      await existing.catch(() => null);
-      if (state.destroyed) return null;
-      return fetchWhatsappCallById(callId);
-    }
+    const runtime = whatsappCallsRuntime, existing = runtime.callReads.get(key);
+    if (existing && !afterPending) return existing;
+    runtime.callReadWatermarks ||= new Map();
+    runtime.callReadSerial = (runtime.callReadSerial || 0) + 1;
+    runtime.callReadWatermarks.set(String(callId), runtime.callReadSerial);
+    while (runtime.callReadWatermarks.size > 512) runtime.callReadWatermarks.delete(runtime.callReadWatermarks.keys().next().value);
+    // A realtime event supersedes the pending snapshot immediately. The old
+    // request may finish, but cannot overwrite state from the newer request.
     const request = (async () => {
       const data = await fetchWhatsappCallJson(`/api/whatsapp-calls/${encodeURIComponent(callId)}?operator_device_id=${encodeURIComponent(identity.operator_device_id)}`, { cache: "no-store" });
       const call = whatsappCallsFromResponse(data).find(item => whatsappProviderCallId(item) === String(callId));
       if (!call || state.destroyed) return null;
+      if (runtime.callReads.get(key) !== request)
+        return (state.whatsappCallLogs || []).find(item => whatsappProviderCallId(item) === String(callId)) || null;
       mergeWhatsappCallLogs([call]);
       return (state.whatsappCallLogs || []).find(item => whatsappProviderCallId(item) === String(callId)) || null;
     })();
@@ -9889,8 +10009,10 @@ Once received, our team will prepare the quotation accordingly.`
     const channel = state.selectedChannel;
     const phone = selectedWhatsappPhone();
     if (!phone || channel?.channel_type !== "whatsapp" || state.destroyed) return [];
-    const selectedId = state.selectedChannelId;
+    const selectedId = state.selectedChannelId, runtime = whatsappCallsRuntime;
+    runtime.historyErrors ||= new Map(); runtime.historyFailures ||= new Map(); runtime.historyRetryAt ||= new Map();
     const cached = () => (state.whatsappCallLogs || []).filter(call => callEventMatchesChannel(call, channel));
+    if (!force && Date.now() < (runtime.historyRetryAt.get(phone) || 0)) return cached();
     if (silent && !force && Date.now() - (whatsappCallsRuntime.loadedAt.get(phone) || 0) < 10000) return cached();
     let request = whatsappCallsRuntime.requests.get(phone);
     if (!request) {
@@ -9898,6 +10020,7 @@ Once received, our team will prepare the quotation accordingly.`
         .then(data => {
           if (state.destroyed) return false;
           whatsappCallsRuntime.loadedAt.set(phone, Date.now());
+          runtime.historyFailures.delete(phone); runtime.historyRetryAt.delete(phone);
           return mergeWhatsappCallLogs(whatsappCallsFromResponse(data));
         }).finally(() => whatsappCallsRuntime.requests.delete(phone));
       whatsappCallsRuntime.requests.set(phone, request);
@@ -9906,13 +10029,22 @@ Once received, our team will prepare the quotation accordingly.`
       const changed = await request;
       if (state.destroyed) return [];
       if (state.selectedChannelId === selectedId && selectedWhatsappPhone() === phone) {
-        if (!silent) hideInlineError(whatsappCallError);
+        if (!silent || whatsappCallError?.textContent === runtime.historyErrors.get(phone)) hideInlineError(whatsappCallError);
+        runtime.historyErrors.delete(phone);
         renderWhatsappCallPanel();
         if (changed) renderMessages({ scrollToBottom: false });
       }
       return cached();
     } catch (error) {
-      if (!state.destroyed && state.selectedChannelId === selectedId && !silent) showInlineError(whatsappCallError, error.message || "Could not load WhatsApp calls.");
+      const failures = Math.min(5, (runtime.historyFailures.get(phone) || 0) + 1);
+      runtime.historyFailures.set(phone, failures);
+      runtime.historyRetryAt.set(phone, Date.now() + Math.min(60000, 5000 * 2 ** (failures - 1)));
+      const message = !error.status || error.status >= 500 || error.status === 429
+        ? "Call history is temporarily unavailable. Showing previously loaded calls; retrying."
+        : error.message || "Call history authorization is unavailable. Check App settings.";
+      runtime.historyErrors.set(phone, message);
+      if (!state.destroyed && state.selectedChannelId === selectedId && !silent && whatsappCallError?.textContent !== message)
+        showInlineError(whatsappCallError, message);
       return cached();
     }
   }
@@ -10181,6 +10313,7 @@ Once received, our team will prepare the quotation accordingly.`
     whatsappCallsRuntime.controllers.forEach(controller => controller.abort());
     whatsappCallsRuntime.controllers.clear();
     whatsappCallsRuntime.callReads.clear();
+    if (typeof hubCallHistory !== "undefined") { clearTimeout(hubCallHistory.retryTimer); hubCallHistory.retryTimer = null; }
   }
 
   function waitForWhatsappIce(pc) {
@@ -10820,10 +10953,26 @@ Once received, our team will prepare the quotation accordingly.`
     if (session) await endWhatsappCallSession(session);
   }
 
-  async function pollRecentWhatsappCalls() {
+  async function pollRecentWhatsappCalls({ background = false } = {}) {
     if (state.destroyed) return;
-    if (whatsappCallsRuntime.pollPromise) return whatsappCallsRuntime.pollPromise;
+    const runtime = whatsappCallsRuntime;
+    if (runtime.pollPromise) return runtime.pollPromise;
     const startedAt = Date.now();
+    const active = !!runtime.session || !!findIncomingWhatsappCall();
+    const native = hubNativeRoomCapabilities();
+    // R19 can ring via FCM but cannot invalidate this foreground inbox. Only
+    // the explicit R20 hint capability may replace its fast repair polling.
+    const liveHints = runtime.realtimeReady === true || native?.callChangeHints === true;
+    if (background) {
+      if (!active && document.hidden && liveHints) return;
+      if (startedAt < (runtime.pollRetryAt || 0)) return;
+      const repairMs = !active && liveHints ? 60000 : 2000;
+      if (runtime.lastPollAttemptMs && startedAt >= runtime.lastPollAttemptMs && startedAt - runtime.lastPollAttemptMs < repairMs) return;
+    }
+    // Realtime/FCM navigation, explicit actions and reconnect snapshots never
+    // wait for this idle budget. Polling is only bounded loss-repair traffic.
+    runtime.lastPollAttemptMs = startedAt;
+    const readSerial = runtime.callReadSerial || 0;
     const identity = whatsappOperatorIdentity();
     const suffix = `operator_device_id=${encodeURIComponent(identity.operator_device_id)}`;
     const since = Math.max(0, (state.whatsappCallLastPollMs || startedAt - 30 * 60 * 1000) - 5000);
@@ -10845,9 +10994,16 @@ Once received, our team will prepare the quotation accordingly.`
             state.whatsappCallLastPollMs = startedAt;
             whatsappCallsRuntime.lastHistoryPollMs = startedAt;
           }
-          changed = mergeWhatsappCallLogs(whatsappCallsFromResponse(result.value)) || changed;
+          const currentRows = whatsappCallsFromResponse(result.value).filter(call =>
+            (runtime.callReadWatermarks?.get(String(whatsappProviderCallId(call))) || 0) <= readSerial);
+          changed = mergeWhatsappCallLogs(currentRows) || changed;
         });
         const incomingResult = results[jobs.findIndex(job => job.type === "incoming")];
+        if (incomingResult?.status === "fulfilled") { runtime.pollFailures = 0; runtime.pollRetryAt = 0; }
+        else {
+          runtime.pollFailures = Math.min(6, (runtime.pollFailures || 0) + 1);
+          runtime.pollRetryAt = Date.now() + Math.min(60000, 2000 * 2 ** (runtime.pollFailures - 1));
+        }
         const unhydrated = incomingResult?.status === "fulfilled" ? whatsappCallsFromResponse(incomingResult.value)
           .map(normalizeWhatsappCallRecord).filter(call => normalizedWhatsappCallEvent(call.event) === "connect" && whatsappProviderCallId(call) && !whatsappCallHasRemoteOffer(call) && !whatsappCallLockedByOther(call)).slice(0, 3) : [];
         if (unhydrated.length) {

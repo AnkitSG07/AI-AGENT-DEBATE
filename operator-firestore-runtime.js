@@ -91,6 +91,7 @@ export function createOperatorFirestoreRuntime({
         if (maintenanceTimer) clearInterval(maintenanceTimer);
         maintenanceTimer = null;
         if (maintenanceRun) await maintenanceRun;
+        deviceRegistry.closeAppMessageState?.();
         await firestore.terminate();
       } };
   } catch {
