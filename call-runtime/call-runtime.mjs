@@ -928,7 +928,7 @@ export class CallRuntime {
         await this.tools.prepareHandover(currentCall);
       }
       result = await this.timed('transfer-invite-controller', () => this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
-        expectedVersion: body.version, requestId: request(body.requestId), mode: body.mode, observedCall: currentCall,
+        expectedVersion: body.version, requestId: request(body.requestId), mode: body.mode === 'consult' ? 'consult' : 'instant', observedCall: currentCall,
         // The controller freshly authenticates immediately on entry. Bind that
         // read to this preflight instead of doing the same auth twice in a row.
         expectedSourceBinding: { deviceId: actor.deviceId, userId: actor.userId, tenantId: actor.tenantId,

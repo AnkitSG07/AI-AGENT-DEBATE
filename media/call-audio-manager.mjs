@@ -157,6 +157,7 @@ export class CallAudioManager {
     const row = this.calls.get(call?.id);
     if (!row?.child) return;
     if (!call.active) { this.close(call.id); return; }
+    if (row.initializing || !row.ready) return;
     const hold = customerOnHold(call), transfer = call.transfer;
     row.holdExpected = hold;
     const operators = hold ? [] : [...new Set([call.owner.identity,

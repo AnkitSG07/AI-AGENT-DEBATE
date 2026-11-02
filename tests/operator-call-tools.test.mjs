@@ -19,7 +19,10 @@ function audioFixture(options = {}) {
         child.commands.push(message); callback?.();
         queueMicrotask(() => {
           if (!child.connected) return;
-          if (message.type === 'connect') child.emit('message', { type: 'ready' });
+          if (message.type === 'connect') {
+            if (options.connectGate) void options.connectGate.then(() => child.emit('message', { type: 'ready' }));
+            else child.emit('message', { type: 'ready' });
+          }
           if (message.type === 'prepare-hold') child.emit('message', { type: 'prepared' });
           if (message.type === 'record') child.emit('message', { type: 'recording' });
           if (message.type === 'stop-record') child.emit('message', { type: 'stopped' });
@@ -51,6 +54,14 @@ test('simultaneous hold preparation and recording reuse the same media connectio
 test('hangup before worker authorization resolves cannot start a late media worker', async () => {
   const f = audioFixture(); const pending = f.manager.ensure(call); f.manager.close(call.id);
   await assert.rejects(pending, error => error.code === 'CALL_AUDIO_CLOSED'); assert.equal(f.children.length, 0);
+});
+
+test('ordinary status polling cannot close a media worker while it is starting', async () => {
+  const gate = deferred(); const f = audioFixture({ connectGate: gate.promise });
+  const pending = f.manager.ensure(call); await tick(); await tick();
+  assert.equal(f.children.length, 1); f.manager.sync(call);
+  assert.equal(f.children[0].commands.some(item => item.type === 'close'), false);
+  gate.resolve(); await pending; f.manager.close(call.id); await tick();
 });
 
 test('stop during slow Odoo manifest creation cannot start recording afterward', async () => {

@@ -1,0 +1,18 @@
+# Isolated synthetic verification only. No production service/account secrets.
+FROM node:24-bookworm-slim AS node24
+FROM mcr.microsoft.com/playwright:v1.56.1-noble AS verify
+COPY --from=node24 /usr/local/bin/node /usr/local/bin/node
+WORKDIR /work/SH-Chat-Source
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+RUN npm install --prefix /opt/r22-browser --ignore-scripts --no-audit --no-fund playwright@1.56.1
+COPY . .
+RUN python3 tests/simulator-media-r13/prepare-tools.py
+ENV SH_PLAYWRIGHT_MODULE=/opt/r22-browser/node_modules/playwright
+RUN SH_TEST_CHROMIUM="$(node -p 'require(process.env.SH_PLAYWRIGHT_MODULE).chromium.executablePath()')" SH_VERIFY_OUTPUT=verification/r22/backend node scripts/verify-r13.mjs unit http browser
+RUN SH_R22_MEDIA_TESTS=1 node --test tests/simulator-media-r13/call-tools-media.test.mjs
+FROM node:24-bookworm-slim
+WORKDIR /verification
+COPY --from=verify /work/SH-Chat-Source/verification/r22/ ./results/
+COPY tests/simulator-media-r13/serve-verification-r22.mjs ./server.mjs
+CMD ["node", "server.mjs"]
