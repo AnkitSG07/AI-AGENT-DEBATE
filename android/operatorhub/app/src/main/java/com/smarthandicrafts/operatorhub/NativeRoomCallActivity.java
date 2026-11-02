@@ -86,7 +86,8 @@ public final class NativeRoomCallActivity extends Activity {
     private final NativeRoomStartGate startGate = new NativeRoomStartGate();
     private DeviceLeasePolicy.Credential pendingStartCredential;
     private DeviceLeasePolicy.Credential screenCredential;
-    private TextView title, status, timer, hint;
+    private TextView title, status, timer, hint, recordingLabel;
+    private NativeCallIconButton notes, record, merge, incomingNotes;
     private EditText dialInput;
     private ImageView avatar;
     private Button accept, decline, mute, speaker, transfer, end, cancelTransfer;
@@ -172,7 +173,7 @@ public final class NativeRoomCallActivity extends Activity {
 
     private void buildUi() {
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(NativeUi.background(this)); int pad = NativeUi.dp(this, 18);
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{Color.rgb(34,68,103), Color.rgb(39,42,48)})); int pad = NativeUi.dp(this, 18);
         root.setPadding(pad, pad, pad, pad);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -183,9 +184,9 @@ public final class NativeRoomCallActivity extends Activity {
             return insets;
         });
         LinearLayout heading = new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
-        android.widget.ImageButton back = new android.widget.ImageButton(this); back.setImageResource(R.drawable.ic_call_back); back.setColorFilter(NativeUi.foreground(this));
+        android.widget.ImageButton back = new android.widget.ImageButton(this); back.setImageResource(R.drawable.ic_call_back); back.setColorFilter(Color.WHITE);
         back.setContentDescription("Return to chat; keep the active call connected"); back.setOnClickListener(view -> returnToChat());
-        GradientDrawable backCircle = new GradientDrawable(); backCircle.setShape(GradientDrawable.OVAL); backCircle.setColor(NativeUi.dark(this) ? Color.rgb(39,51,59) : Color.rgb(241,243,242));
+        GradientDrawable backCircle = new GradientDrawable(); backCircle.setShape(GradientDrawable.OVAL); backCircle.setColor(Color.argb(45,255,255,255));
         back.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.argb(45,0,135,107)),backCircle,null));
         back.setPadding(NativeUi.dp(this,12),NativeUi.dp(this,12),NativeUi.dp(this,12),NativeUi.dp(this,12));
         heading.addView(back, new LinearLayout.LayoutParams(NativeUi.dp(this, 48), NativeUi.dp(this, 48)));
@@ -211,11 +212,25 @@ public final class NativeRoomCallActivity extends Activity {
         content.addView(dialInput, new LinearLayout.LayoutParams(-1, -2)); dialInput.setMinimumHeight(NativeUi.dp(this, 56)); dialInput.setVisibility(View.GONE);
         activeActions = new LinearLayout(this); activeActions.setOrientation(LinearLayout.VERTICAL);
         LinearLayout audio = new LinearLayout(this); audio.setOrientation(LinearLayout.HORIZONTAL);
-        mute = NativeUi.button(this, "Mute", view -> command("mute", ""));
-        speaker = NativeUi.button(this, "Speaker", view -> command("speaker", "")); addHalf(audio, mute); addHalf(audio, speaker); activeActions.addView(audio);
-        transfer = NativeUi.button(this, "Transfer to another phone", view -> chooseTransfer()); actionSize(transfer); activeActions.addView(transfer);
-        cancelTransfer = NativeUi.button(this, "Cancel transfer", view -> command("cancel-transfer", latest == null ? "" : latest.optString("sourceTransferId")));
-        actionSize(cancelTransfer); activeActions.addView(cancelTransfer); cancelTransfer.setVisibility(View.GONE);
+        mute = new NativeCallIconButton(this, "mute", "Mute", view -> command("mute", ""));
+        speaker = new NativeCallIconButton(this, "speaker", "Speaker", view -> command("speaker", ""));
+        notes = new NativeCallIconButton(this, "notes", "Notes", view -> showCallRecords());
+        addIcon(audio, speaker); addIcon(audio, mute); addIcon(audio, notes); activeActions.addView(audio);
+        LinearLayout actions = new LinearLayout(this);
+        record = new NativeCallIconButton(this, "record", "Record", view -> recordTapped());
+        transfer = new NativeCallIconButton(this, "transfer", "Transfer", view -> {
+            if (latest != null && latest.optBoolean("canCompleteTransfer")) command("complete-transfer", ""); else chooseTransferMode();
+        });
+        merge = new NativeCallIconButton(this, "merge", "Merge", view -> new AlertDialog.Builder(this)
+            .setTitle("Merge call?").setMessage("The customer and both operators will hear each other.")
+            .setPositiveButton("Merge", (dialog, which) -> command("merge", "")).setNegativeButton("Cancel", null).show());
+        addIcon(actions, record); addIcon(actions, transfer); addIcon(actions, merge); activeActions.addView(actions);
+        LinearLayout handoverActions = new LinearLayout(this); handoverActions.setGravity(Gravity.CENTER);
+        cancelTransfer = new NativeCallIconButton(this, "cancel", "Cancel transfer", view -> command("cancel-transfer", latest == null ? "" : latest.optString("sourceTransferId")));
+        handoverActions.addView(cancelTransfer, new LinearLayout.LayoutParams(NativeUi.dp(this, 108), NativeUi.dp(this, 94)));
+        activeActions.addView(handoverActions); cancelTransfer.setVisibility(View.GONE);
+        recordingLabel = NativeUi.text(this, "", 13, false); recordingLabel.setTextColor(Color.rgb(255, 170, 170));
+        recordingLabel.setGravity(Gravity.CENTER); recordingLabel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); content.addView(recordingLabel);
         activeActions.setVisibility(View.GONE); content.addView(activeActions, new LinearLayout.LayoutParams(-1, -2));
         hint = NativeUi.text(this, transferId.isEmpty() ? "Your microphone starts only after you choose Accept." : "The first phone stays connected until this phone is ready.", 13, false);
         hint.setTextColor(NativeUi.muted(this)); hint.setGravity(Gravity.CENTER); content.addView(hint);
@@ -235,10 +250,43 @@ public final class NativeRoomCallActivity extends Activity {
         });
         // Answer/Decline/End stay outside the scrolling content, including on small screens and large fonts.
         incomingActions = new LinearLayout(this); incomingActions.setOrientation(LinearLayout.HORIZONTAL);
-        decline = NativeUi.button(this, "Decline", view -> decline()); accept = NativeUi.button(this, "Accept", view -> callButtonTapped());
-        paintRed(decline); addHalf(incomingActions, decline); addHalf(incomingActions, accept); root.addView(incomingActions);
-        end = NativeUi.button(this, "End call", view -> endCall()); paintRed(end); actionSize(end); end.setVisibility(View.GONE); root.addView(end);
-        setContentView(root);
+        decline = new NativeCallIconButton(this, "decline", "Decline", view -> decline());
+        accept = new NativeCallIconButton(this, "accept", "Accept", view -> callButtonTapped());
+        incomingNotes = new NativeCallIconButton(this, "notes", "Notes", view -> showCallRecords());
+        addIcon(incomingActions, decline); addIcon(incomingActions, incomingNotes); addIcon(incomingActions, accept);
+        incomingNotes.setVisibility(transferId.isEmpty() ? View.GONE : View.VISIBLE); root.addView(incomingActions);
+        end = new NativeCallIconButton(this, "end", "End", view -> endCall());
+        LinearLayout.LayoutParams endSize = new LinearLayout.LayoutParams(NativeUi.dp(this, 96), NativeUi.dp(this, 94));
+        endSize.gravity = Gravity.CENTER_HORIZONTAL; end.setVisibility(View.GONE); root.addView(end, endSize);
+        hint.setVisibility(View.GONE); whitenText(root); recordingLabel.setTextColor(Color.rgb(255,170,170)); setContentView(root);
+    }
+    private void addIcon(LinearLayout row, Button button) {
+        row.addView(button, new LinearLayout.LayoutParams(0, NativeUi.dp(this, 94), 1));
+    }
+    private void whitenText(View view) {
+        if (view instanceof TextView && !(view instanceof Button)) ((TextView)view).setTextColor(Color.WHITE);
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup)view;
+            for (int i = 0; i < group.getChildCount(); i++) whitenText(group.getChildAt(i));
+        }
+    }
+    private void showCallRecords() {
+        if (!HubPolicy.validCallId(callId)) return;
+        startActivity(new Intent(this, NativeCallRecordsActivity.class).putExtra("call_id", callId));
+    }
+    private void recordTapped() {
+        if (latest == null || !latest.optBoolean("canRecord")) return;
+        String state = latest.optString("recordingState");
+        if (state.equals("recording") || state.equals("starting")) { command("record", ""); return; }
+        new AlertDialog.Builder(this).setTitle("Record this call?")
+            .setMessage("Let the customer know before recording. Audio is saved privately with this call in Odoo.")
+            .setPositiveButton("Start recording", (dialog, which) -> command("record", ""))
+            .setNegativeButton("Cancel", null).show();
+    }
+    private void chooseTransferMode() {
+        new AlertDialog.Builder(this).setTitle("Transfer call")
+            .setItems(new String[]{"Instant transfer", "Transfer with message"}, (dialog, which) -> chooseTransfer(which == 1 ? "consult" : "instant"))
+            .setNegativeButton("Cancel", null).show();
     }
     private void actionSize(Button button) {
         button.setMinimumHeight(NativeUi.dp(this, 52)); button.setPadding(NativeUi.dp(this, 12), NativeUi.dp(this, 10), NativeUi.dp(this, 12), NativeUi.dp(this, 10));
@@ -291,6 +339,9 @@ public final class NativeRoomCallActivity extends Activity {
                     }
                     String customer = call.optString("customerName", call.optString("callerName"));
                     if (!customer.isEmpty()) { displayName = customer; title.setText(customer); }
+                    JSONObject incomingTransfer = call.optJSONObject("transfer");
+                    if (!transferId.isEmpty() && incomingTransfer != null && "consult".equals(incomingTransfer.optString("mode")))
+                        status.setText("Private handover · customer on hold");
                     String owner = NativeRoomJson.text(call,"ownerDeviceId");
                     if (!HubPolicy.terminal(call.optString("phase")) && !owner.isEmpty() && transferId.isEmpty()) {
                         if (owner.equals(credential.deviceId)) { accept.setText("Resume call"); status.setText("Resume this phone's call audio"); }
@@ -637,7 +688,7 @@ public final class NativeRoomCallActivity extends Activity {
             .putExtra("enrollment_generation", pendingStartCredential.generation).putExtra("enrolled_device_id", pendingStartCredential.deviceId)
             .putExtra("room_action", action.equals("outgoing") ? "outgoing" : "accept").putExtra("phone", phone)
             .putExtra("display_name", displayName).putExtra("channel_id", channelId);
-        try { startForegroundService(intent); dialInput.setVisibility(View.GONE); incomingActions.setVisibility(View.GONE); activeActions.setVisibility(View.VISIBLE); end.setVisibility(View.VISIBLE); mute.setEnabled(false); speaker.setEnabled(false); transfer.setEnabled(false); status.setText("Connecting audio"); }
+        try { startForegroundService(intent); dialInput.setVisibility(View.GONE); incomingActions.setVisibility(View.GONE); activeActions.setVisibility(View.GONE); end.setText("Cancel"); end.setVisibility(View.VISIBLE); mute.setEnabled(false); speaker.setEnabled(false); transfer.setEnabled(false); status.setText("Connecting audio"); }
         catch (RuntimeException error) { new NativeStore(this).cancelRoomAttempt(expectedAttemptId); starting = false; incomingActions.setVisibility(View.VISIBLE); activeActions.setVisibility(View.GONE); end.setVisibility(View.GONE); accept.setEnabled(true); status.setText("Android could not start call audio. Reopen the app and try again."); }
     }
     private void decline() {
@@ -663,9 +714,26 @@ public final class NativeRoomCallActivity extends Activity {
         title.setText(value.optString("displayName", displayName)); status.setText(value.optString("detail"));
         dialInput.setVisibility(View.GONE); avatar.setVisibility(View.VISIBLE); timer.setVisibility(View.VISIBLE);
         incomingActions.setVisibility(View.GONE); activeActions.setVisibility(View.VISIBLE); end.setVisibility(View.VISIBLE);
-        boolean closed = value.optBoolean("closed"); boolean ready = "connected".equals(value.optString("state"));
+        boolean closed = value.optBoolean("closed");
+        boolean ready = "connected".equals(value.optString("state")) || value.optLong("connectedAtElapsed") > 0;
         mute.setEnabled(ready); speaker.setEnabled(!closed && !value.optString("ownerLegId").isEmpty()); end.setEnabled(!closed); transfer.setEnabled(value.optBoolean("canTransfer"));
-        mute.setText(value.optBoolean("muted") ? "Unmute" : "Mute"); speaker.setText(value.optBoolean("speaker") ? "Speaker on" : "Speaker");
+        activeActions.setVisibility(ready && !closed ? View.VISIBLE : View.GONE);
+        mute.setText(value.optBoolean("muted") ? "Unmute" : "Mute"); speaker.setText("Speaker");
+        ((NativeCallIconButton)mute).active(value.optBoolean("muted")); ((NativeCallIconButton)speaker).active(value.optBoolean("speaker"));
+        boolean complete = value.optBoolean("canCompleteTransfer");
+        transfer.setText(complete ? "Complete" : "Transfer"); ((NativeCallIconButton)transfer).icon(complete ? "complete" : "transfer");
+        transfer.setEnabled(complete || value.optBoolean("canTransfer"));
+        merge.setVisibility(value.optBoolean("canMerge") ? View.VISIBLE : View.INVISIBLE);
+        merge.setEnabled(value.optBoolean("canMerge"));
+        notes.setEnabled(value.optBoolean("callToolsEnabled"));
+        String recordingState = value.optString("recordingState", "idle");
+        boolean recording = recordingState.equals("recording");
+        record.icon(recording || recordingState.equals("starting") ? "stop" : "record");
+        record.setText(recording || recordingState.equals("starting") ? "Stop" : "Record");
+        record.setEnabled(value.optBoolean("canRecord") && !value.optBoolean("recordingPending") && !recordingState.equals("saving"));
+        recordingLabel.setText(recording ? "● Recording" : recordingState.equals("starting") ? "Starting recording…" : recordingState.equals("saving") ? "Saving recording…" : value.optString("recordingError"));
+        recordingLabel.setVisibility(recordingLabel.getText().length() > 0 ? View.VISIBLE : View.GONE);
+        end.setText(ready ? "End" : "Cancel");
         mute.setContentDescription(value.optBoolean("muted") ? "Unmute microphone" : "Mute microphone");
         speaker.setContentDescription("Audio output: " + value.optString("audioRoute", "Phone") + ". " + (value.optBoolean("speaker") ? "Turn speaker off" : "Turn speaker on"));
         if (Build.VERSION.SDK_INT >= 30) { mute.setStateDescription(value.optBoolean("muted") ? "Muted" : "Unmuted"); speaker.setStateDescription(value.optString("audioRoute", "Phone")); }
@@ -703,7 +771,8 @@ public final class NativeRoomCallActivity extends Activity {
         if (transferDialog != null) transferDialog.dismiss();
         transferDialog = null;
     }
-    private void chooseTransfer() {
+    private void chooseTransfer() { chooseTransfer("instant"); }
+    private void chooseTransfer(String mode) {
         TransferContext selected = transferContext(); if (selected == null) return;
         if (transferPicker != null && transferPicker.dialog.isShowing()) return;
         ArrayAdapter<String> labels = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, new ArrayList<>()) {
@@ -715,7 +784,7 @@ public final class NativeRoomCallActivity extends Activity {
         TransferPicker picker = new TransferPicker(selected, labels); transferPicker = picker;
         picker.dialog = new AlertDialog.Builder(this).setTitle("Transfer call to").setAdapter(labels, (dialog, position) -> {
             if (transferPicker != picker || !currentTransferContext(selected) || position < 0 || position >= picker.rows.size()) return;
-            NativeRoomCallService.commandForAttempt(selected.attempt, selected.leg, "transfer", picker.rows.get(position).id);
+            NativeRoomCallService.commandForAttempt(selected.attempt, selected.leg, mode.equals("consult") ? "consult-transfer" : "transfer", picker.rows.get(position).id);
         }).setNegativeButton("Cancel", null).create();
         picker.dialog.setOnDismissListener(dialog -> {
             if (transferPicker == picker) { transferPicker = null; transferDialog = null; }

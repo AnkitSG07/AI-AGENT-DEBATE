@@ -43,6 +43,10 @@ class NativeRoomCallService : Service() {
                 "mute" -> if (service.readyCommitted) service.engine?.setMuted(!service.muted)
                 "speaker" -> service.engine?.setSpeaker(!service.speaker)
                 "transfer" -> service.inviteTransfer(value)
+                "consult-transfer" -> service.inviteTransfer(value, "consult")
+                "complete-transfer" -> service.decideTransfer("complete")
+                "merge" -> service.decideTransfer("merge")
+                "record" -> service.changeRecording()
                 "cancel-transfer" -> if (value == service.sourceTransferId) service.cancelTransfer()
                 else -> return false
             }
@@ -65,6 +69,15 @@ class NativeRoomCallService : Service() {
     private var transferId = ""
     private var sourceTransferId = ""
     private var transferStillCompleting = false
+    private var consultStage = ""
+    private var consultReady = false
+    private var ownsCustomer = false
+    private var actualCustomerIdentity = ""
+    private var callToolsEnabled = false
+    private var recordingState = "idle"
+    private var recordingError = ""
+    private var recordingPending = false
+    private var decisionPending = false
     private var channelId = 0
     private var displayName = "Customer"
     private var state = "preparing"
@@ -282,6 +295,8 @@ class NativeRoomCallService : Service() {
         val join = result.optJSONObject("join") ?: throw IllegalStateException("Call audio authorization was missing.")
         legId = join.optString("legId", result.optString("legId"))
         join.put("legId", legId)
+        actualCustomerIdentity = join.optString("actualCustomerIdentity", join.optString("customerIdentity"))
+        updateCallTools(call)
         require(nonce.isNotEmpty() && legId.isNotEmpty()) { "Call audio authorization was incomplete." }
         state = if (transferId.isEmpty()) "joining" else "transferring"; detail = if (transferId.isEmpty()) "Connecting audio" else "Joining the customer; the other phone stays connected"
         engine = NativeRoomEngine(this, object : NativeRoomEngine.Listener {
@@ -322,7 +337,7 @@ class NativeRoomCallService : Service() {
                 endLocally(message, failed = true)
             }
         })
-        engine?.connect(join); emit()
+        engine?.connect(join); configureCallRouting(call); emit()
     }
 
     private fun microphoneControlUnavailable() {
@@ -435,6 +450,8 @@ class NativeRoomCallService : Service() {
         val incomingVersion = call.optLong("version", -1)
         if (!guard.acceptVersion(epoch, incomingVersion)) return
         version = incomingVersion
+        updateCallTools(call)
+        configureCallRouting(call)
         providerCallId = NativeRoomJson.text(call,"providerCallId", providerCallId)
         if (channelId == 0) channelId = call.optInt("channelId", 0)
         val phase = call.optString("phase")
@@ -451,6 +468,10 @@ class NativeRoomCallService : Service() {
             finishLocal("transferred", "Call transferred to the other phone"); return
         }
         if (transferId.isNotEmpty()) {
+            if (consultReady && consultStage in listOf("private", "merged")) {
+                readyCommitted = true
+                if (health.fresh()) markConnected()
+            }
             if (owner == credential.deviceId && call.optBoolean("roomReady")) {
                 readyCommitted = true; transferId = ""
                 if (health.fresh()) markConnected()
@@ -468,7 +489,8 @@ class NativeRoomCallService : Service() {
         if (!readyCommitted && phase in listOf("joining", "connecting", "accepted")) { state = "joining"; detail = "Connecting audio" }
         if (!readyCommitted && phase == "dialing") { state = "calling"; detail = "Calling" }
         if (!readyCommitted && phase == "uncertain") { state = "joining"; detail = "Checking the existing call connection" }
-        if (sourceTransferId.isNotEmpty() && readyCommitted) detail = "Waiting for the other phone; your audio stays connected"
+        if (sourceTransferId.isNotEmpty() && readyCommitted) detail = if (consultStage.isNotEmpty()) handoverDetail() else "Waiting for the other phone"
+        if (transferId.isNotEmpty() && consultStage.isNotEmpty()) detail = handoverDetail()
         if (!readyCommitted && transferId.isNotEmpty() && customerMuted)
             detail = "Waiting for the customer's microphone; the first phone stays connected"
         emit()
@@ -495,19 +517,87 @@ class NativeRoomCallService : Service() {
         if (firstConnection) store.clearAudioFailureIfMatches(credential)
         state = "connected"
         detail = when {
+            consultStage.isNotEmpty() -> handoverDetail()
             transferInFlight -> "Inviting the other phone"
-            sourceTransferId.isNotEmpty() -> "Transferring; your audio stays connected"
+            sourceTransferId.isNotEmpty() -> "Waiting for the other phone"
             customerMuted -> "Customer microphone muted"
             else -> "Connected"
         }
         emit()
     }
 
-    private fun inviteTransfer(deviceId: String) {
+    private fun handoverDetail(): String = when (consultStage) {
+        "private" -> if (consultReady) "Private handover · customer on hold" else "Calling operator · customer on hold"
+        "customer" -> "Connecting customer to the other operator"
+        "conference" -> "Merging call"
+        "merged" -> "Customer and both operators connected"
+        else -> "Connected"
+    }
+
+    private fun updateCallTools(call: JSONObject) {
+        ownsCustomer = call.optString("ownerDeviceId") == credential.deviceId
+        callToolsEnabled = call.optBoolean("callToolsEnabled")
+        call.optJSONObject("recording")?.let { recordingState = it.optString("state", "idle"); recordingError = it.optString("error") }
+        val transfer = call.optJSONObject("transfer")
+        val next = if (transfer?.optString("mode") == "consult" && transfer.optString("status") in listOf("invited", "connecting")) transfer.optString("consultStage") else ""
+        if (next != consultStage && transferId.isNotEmpty() && next in listOf("customer", "conference")) {
+            readyCommitted = false; lastEvidence = null; lastEvidenceAt = 0
+        }
+        consultStage = next
+        consultReady = transfer?.optBoolean("consultReady") == true
+        health.hold(ownsCustomer && (consultStage == "customer" || consultStage == "private" && !consultReady), SystemClock.elapsedRealtime())
+    }
+
+    private fun configureCallRouting(call: JSONObject) {
+        if (actualCustomerIdentity.isEmpty()) return
+        val transfer = call.optJSONObject("transfer")
+        val source = transfer?.optString("fromDeviceId") == credential.deviceId
+        val peer = if (source) transfer?.optString("targetIdentity", "") ?: "" else transfer?.optString("sourceIdentity", "") ?: ""
+        val mode = when (consultStage) {
+            "private" -> if (peer.isEmpty()) "hold" else "private"
+            "conference", "merged" -> "conference"
+            "customer" -> if (source) "hold" else "normal"
+            else -> "normal"
+        }
+        engine?.configureRouting(JSONObject().put("mode", mode).put("customerIdentity", actualCustomerIdentity)
+            .put("peerIdentity", if (mode == "hold") "" else peer))
+    }
+
+    private fun decideTransfer(action: String) {
+        if (!current() || decisionPending || !ownsCustomer || !consultReady || sourceTransferId.isEmpty()) return
+        if (action == "merge" && consultStage != "private") return
+        if (action == "complete" && consultStage !in listOf("private", "merged")) return
+        decisionPending = true; emit()
+        val selected = sourceTransferId
+        scope.launch {
+            try {
+                val result = requestIdempotent(path("transfers/${Uri.encode(selected)}/$action"), JSONObject().put("version", version))
+                if (current()) applyStatus(result)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { if (current()) { detail = readable(error); authFailure(error); emit() } }
+            finally { decisionPending = false; if (current()) { pollWake.trySend(Unit); emit() } }
+        }
+    }
+
+    private fun changeRecording() {
+        if (!current() || !ownsCustomer || !readyCommitted || !callToolsEnabled || recordingPending) return
+        val action = if (recordingState in listOf("starting", "recording")) "stop" else "start"
+        recordingPending = true; emit()
+        scope.launch {
+            try {
+                val result = requestIdempotent(path("recording/$action"), JSONObject().put("requestId", UUID.randomUUID().toString()))
+                if (current()) result.optJSONObject("recording")?.let { recordingState = it.optString("state", "idle"); recordingError = it.optString("error") }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { if (current()) { recordingError = readable(error); authFailure(error) } }
+            finally { recordingPending = false; if (current()) { pollWake.trySend(Unit); emit() } }
+        }
+    }
+
+    private fun inviteTransfer(deviceId: String, mode: String = "instant") {
         if (!current() || !readyCommitted || !health.fresh() || !store.nativeRoomTransfers() || transferInFlight || sourceTransferId.isNotEmpty() || !deviceId.matches(Regex("android_[A-Za-z0-9_-]{16,100}")) || deviceId == credential.deviceId) return
         transferInFlight = true; transferRequestId = UUID.randomUUID().toString()
         detail = "Inviting the other phone"; emit()
-        val body = JSONObject().put("toDeviceId", deviceId).put("version", version).put("requestId", transferRequestId)
+        val body = JSONObject().put("toDeviceId", deviceId).put("version", version).put("requestId", transferRequestId).put("mode", mode)
         scope.launch {
             try { val result = requestIdempotent(path("transfers"), body); if (current()) applyStatus(result) }
             catch (cancelled: CancellationException) { throw cancelled }
@@ -578,7 +668,13 @@ class NativeRoomCallService : Service() {
         .put("transportReady", readyCommitted && health.fresh() && !closed)
         .put("failureStage", failureStage).put("failureCode", failureCode)
         .put("transferPending", transferInFlight).put("cancelTransferPending", cancelTransferInFlight)
-        .put("canTransfer", readyCommitted && health.fresh() && !closed && !transferInFlight && !transferStillCompleting && sourceTransferId.isEmpty() && store.nativeRoomTransfers()).put("closed", closed)
+        .put("callToolsEnabled", callToolsEnabled).put("recordingState", recordingState).put("recordingError", recordingError)
+        .put("recordingPending", recordingPending).put("canRecord", ownsCustomer && readyCommitted && !closed && callToolsEnabled &&
+            (recordingState in listOf("starting", "recording") || consultStage !in listOf("private", "customer", "conference")))
+        .put("consultStage", consultStage).put("consultReady", consultReady).put("decisionPending", decisionPending)
+        .put("canCompleteTransfer", ownsCustomer && consultReady && consultStage in listOf("private", "merged") && !decisionPending && !closed)
+        .put("canMerge", ownsCustomer && consultReady && consultStage == "private" && !decisionPending && !closed)
+        .put("canTransfer", ownsCustomer && readyCommitted && health.fresh() && !closed && !transferInFlight && !transferStillCompleting && sourceTransferId.isEmpty() && store.nativeRoomTransfers()).put("closed", closed)
 
     private fun emit() {
         updateProximity()

@@ -8,6 +8,8 @@ const digest = value => createHash('sha256').update(identifier(value)).digest('h
 export const callStoreKey = callId => `media_calls/${digest(callId)}`;
 export const deviceReservationKey = deviceId => `media_reservations/${digest(deviceId)}`;
 const PENDING = new Set(['invited', 'connecting']);
+export const transferDeadline = transfer => transfer?.mode === 'consult' && Number.isSafeInteger(transfer.consultDeadlineAt)
+  ? transfer.consultDeadlineAt : transfer?.expiresAt;
 // Bound normal call documents below the production store's 512 KiB limit.
 // Refuse new invitations at the cap; never discard replay/terminal evidence.
 export const MAX_TRANSFERS_PER_CALL = 64;
@@ -25,7 +27,7 @@ function visible(call, transfer = call.transfer) {
       id: transfer.id, status: transfer.status, fromDeviceId: transfer.fromDeviceId,
       toDeviceId: transfer.toDeviceId, createdAt: transfer.createdAt,
       expiresAt: transfer.expiresAt, completedAt: transfer.completedAt || null,
-      reason: transfer.reason || null
+      reason: transfer.reason || null, mode: transfer.mode || 'instant', consultStage: transfer.consultStage || null
     } : null,
     cleanupPending: call.outbox.some(job => job.status !== 'done') };
 }
@@ -142,7 +144,7 @@ export class TransferController {
     return transfer;
   }
 
-  async invite(context, { callId, toDeviceId, expectedVersion, requestId, observedCall, expectedSourceBinding }) {
+  async invite(context, { callId, toDeviceId, expectedVersion, requestId, observedCall, expectedSourceBinding, mode = 'instant' }) {
     const actor = await this.actor(context);
     // Runtime callers supply their server-created preflight binding. This is
     // an additional constraint on fresh authentication, never a substitute for
@@ -171,7 +173,7 @@ export class TransferController {
       this.requireCall(call, actor);
       const replay = call.requests[`${actor.deviceId}:${requestId}`];
       if (replay) {
-        requireValue(replay.toDeviceId === toDeviceId, 'REQUEST_ID_CONFLICT', 'This request ID belongs to a different destination.');
+        requireValue(replay.toDeviceId === toDeviceId && (replay.mode || 'instant') === mode, 'REQUEST_ID_CONFLICT', 'This request ID belongs to a different destination.');
         return { ...visible(call, transferById(call, replay.transferId)), replayed: true };
       }
       this.requireActive(call); exactVersion(call, expectedVersion);
@@ -188,12 +190,12 @@ export class TransferController {
         'TARGET_BUSY', 'The target device is already handling a call or invitation.');
       if (call.transfer) call.transferHistory[call.transfer.id] = call.transfer;
       const transfer = {
-        id: transferId, status: 'invited', fromDeviceId: actor.deviceId, sourceIdentity: call.owner.identity,
+        id: transferId, mode, ...(mode === 'consult' ? { consultStage: 'private' } : {}), status: 'invited', fromDeviceId: actor.deviceId, sourceIdentity: call.owner.identity,
         toDeviceId, toUserId: target.userId, createdAt: now, expiresAt: now + this.invitationMs,
         requestId, generation: call.version + 1
       };
       call.transfer = transfer;
-      call.requests[`${actor.deviceId}:${requestId}`] = { transferId, toDeviceId };
+      call.requests[`${actor.deviceId}:${requestId}`] = { transferId, toDeviceId, mode };
       call.version++; call.updatedAt = now;
       tx.set(deviceReservationKey(toDeviceId), { callId, transferId, kind: 'invite', expiresAt: transfer.expiresAt });
       tx.set(callStoreKey(callId), call);
@@ -217,7 +219,7 @@ export class TransferController {
         'TRANSFER_CHANGED', 'The exact invitation identity changed before accepting.');
       if (['completed', 'completing'].includes(transfer.status)) return { result: visible(call, transfer) };
       this.requireActive(call);
-      requireValue(call.transfer?.id === transfer.id && PENDING.has(transfer.status) && transfer.expiresAt > this.now(),
+      requireValue(call.transfer?.id === transfer.id && PENDING.has(transfer.status) && transferDeadline(transfer) > this.now(),
         'TRANSFER_EXPIRED', 'This transfer is no longer available.');
       requireValue(call.owner.deviceId === transfer.fromDeviceId && call.owner.identity === transfer.sourceIdentity &&
         matchReservation(reservation, call, transfer.id) && reservation.kind === 'invite',
@@ -239,12 +241,12 @@ export class TransferController {
     if (prepared.result) return prepared.result;
     const { call, transfer } = prepared;
     const join = await this.provider.issueOperatorJoin({ roomName: call.roomName, deviceId: actor.deviceId,
-      legId: transfer.attemptId, ttlSeconds: Math.min(90, Math.max(15, Math.ceil((transfer.expiresAt - this.now()) / 1000))) });
+      legId: transfer.attemptId, ttlSeconds: Math.min(90, Math.max(15, Math.ceil((transferDeadline(transfer) - this.now()) / 1000))) });
     await this.recheckActor(context, actor);
     const latest = await this.store.get(callStoreKey(callId));
     this.requireCall(latest, actor); this.requireActive(latest);
     requireValue(latest.transfer?.id === transfer.id && latest.transfer.status === 'connecting' &&
-      latest.transfer.attemptId === transfer.attemptId && latest.transfer.expiresAt > this.now(),
+      latest.transfer.attemptId === transfer.attemptId && transferDeadline(latest.transfer) > this.now(),
       'TRANSFER_CHANGED', 'Transfer ended while the join token was being created.');
     requireValue(join.identity === transfer.targetIdentity, 'PROVIDER_IDENTITY_MISMATCH', 'The media join identity did not match the target leg.', 502);
     return { ...visible(latest), join, readinessNonce: transfer.readinessNonce };
@@ -260,7 +262,7 @@ export class TransferController {
     if (['completing', 'completed'].includes(transfer.status)) return { ...visible(snapshot, transfer), replayed: true };
     this.requireActive(snapshot); exactVersion(snapshot, expectedVersion);
     requireValue(transfer.toUserId === actor.userId, 'DEVICE_BINDING_CHANGED', 'The target device enrollment changed.', 403);
-    requireValue(transfer.status === 'connecting' && transfer.expiresAt > this.now() &&
+    requireValue(transfer.status === 'connecting' && transferDeadline(transfer) > this.now() &&
       transfer.readinessNonce === readinessNonce, 'READINESS_STALE', 'This readiness attempt is no longer current.');
     requireValue(typeof this.verifyReadiness === 'function', 'CLIENT_MEDIA_NOT_INTEGRATED',
       'The native room client and trusted bidirectional readiness path are not integrated.', 501);
@@ -293,7 +295,7 @@ export class TransferController {
       // Terminal events, cancellation, expiry or another commit during I/O win.
       exactVersion(call, snapshot.version);
       requireValue(current.status === 'connecting' && current.attemptId === transfer.attemptId &&
-        current.readinessNonce === transfer.readinessNonce && current.expiresAt > this.now() &&
+        current.readinessNonce === transfer.readinessNonce && transferDeadline(current) > this.now() &&
         this.now() - proof.observedAt <= this.evidenceMaxAgeMs &&
         this.now() - observation.observedAt <= this.evidenceMaxAgeMs &&
         current.toUserId === actor.userId && call.owner.deviceId === current.fromDeviceId &&
@@ -342,13 +344,32 @@ export class TransferController {
     // Only a due mutation needs a transaction. Action transactions independently
     // recheck expiry/current invitation, so a stale snapshot grants no authority.
     const observed = observedCall === undefined ? await this.store.get(callStoreKey(callId)) : observedCall;
-    if (!observed?.transfer || !PENDING.has(observed.transfer.status) || observed.transfer.expiresAt > this.now()) return false;
+    if (!observed?.transfer || !PENDING.has(observed.transfer.status) || transferDeadline(observed.transfer) > this.now()) return false;
     return this.store.transaction(async tx => {
       const call = await tx.get(callStoreKey(callId));
-      if (!call?.transfer || !PENDING.has(call.transfer.status) || call.transfer.expiresAt > this.now()) return false;
+      if (!call?.transfer || !PENDING.has(call.transfer.status) || transferDeadline(call.transfer) > this.now()) return false;
       const transfer = call.transfer;
       const reservation = await tx.get(deviceReservationKey(transfer.toDeviceId));
       transfer.status = 'expired'; transfer.reason = 'no_answer'; call.version++; call.updatedAt = this.now();
+      detachJob(call, transfer.targetIdentity, transfer.id, this.now(), transfer.toDeviceId);
+      if (matchReservation(reservation, call, transfer.id)) {
+        if (transfer.targetIdentity) tx.set(deviceReservationKey(transfer.toDeviceId), cleanupReservation(callId, transfer.targetIdentity, transfer.id));
+        else tx.delete(deviceReservationKey(transfer.toDeviceId));
+      }
+      tx.set(callStoreKey(callId), call);
+      return true;
+    });
+  }
+
+  // Internal media-worker recovery only. It cannot retarget, complete, or end
+  // a customer call, and a concurrent completion wins over this stale callback.
+  async abortConsultation(callId, transferId) {
+    return this.store.transaction(async tx => {
+      const call = await tx.get(callStoreKey(callId)), transfer = call?.transfer;
+      if (!call?.active || !transfer || transfer.id !== transferId || transfer.mode !== 'consult' ||
+          !PENDING.has(transfer.status) || transfer.consultStage !== 'private') return false;
+      const reservation = await tx.get(deviceReservationKey(transfer.toDeviceId));
+      transfer.status = 'failed'; transfer.reason = 'hold_audio_unavailable'; call.version++; call.updatedAt = this.now();
       detachJob(call, transfer.targetIdentity, transfer.id, this.now(), transfer.toDeviceId);
       if (matchReservation(reservation, call, transfer.id)) {
         if (transfer.targetIdentity) tx.set(deviceReservationKey(transfer.toDeviceId), cleanupReservation(callId, transfer.targetIdentity, transfer.id));

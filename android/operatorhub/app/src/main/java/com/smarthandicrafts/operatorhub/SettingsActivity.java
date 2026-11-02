@@ -30,6 +30,7 @@ public final class SettingsActivity extends Activity {
         panel.addView(NativeUi.text(this, "App settings", 28, true));
         panel.addView(NativeUi.text(this, "SH Chat · Smart Handicrafts · " + BuildConfig.VERSION_NAME, 14, false));
         status = NativeUi.text(this, "Checking background alert setup…", 16, false); panel.addView(status);
+        panel.addView(NativeUi.button(this, "Call notes and recordings", v -> startActivity(new Intent(this, NativeCallRecordsActivity.class))));
         panel.addView(NativeUi.button(this, "Check background alerts", v -> refresh()));
         panel.addView(NativeUi.button(this, "Send Firebase test notification", v -> sendTest()));
         panel.addView(NativeUi.button(this, "Allow notifications", v -> {

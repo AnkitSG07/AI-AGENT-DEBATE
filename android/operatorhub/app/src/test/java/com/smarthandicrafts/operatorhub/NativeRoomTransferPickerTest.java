@@ -60,7 +60,7 @@ public class NativeRoomTransferPickerTest {
         set(activity, "callApi", (NativeRoomCleanupProcessor.Requester)(path, method, body, bearer) -> devices());
         serviceController = Robolectric.buildService(NativeRoomCallService.class).create(); service = serviceController.get();
         set(service, "credential", store.credential()); set(service, "callId", CALL); set(service, "requestId", ATTEMPT);
-        set(service, "legId", "leg-a"); set(service, "readyCommitted", true); set(service, "state", "connected");
+        set(service, "legId", "leg-a"); set(service, "readyCommitted", true); set(service, "ownsCustomer", true); set(service, "state", "connected");
         NativeRoomPolicy.Epoch guard = (NativeRoomPolicy.Epoch)get(service, "guard"); set(service, "epoch", guard.begin());
         NativeRoomCallHealth health = (NativeRoomCallHealth)get(service, "health"); health.start(1); health.evidence(); health.connected(true, 2);
         set(activity, "callId", CALL); set(activity, "expectedAttemptId", ATTEMPT);

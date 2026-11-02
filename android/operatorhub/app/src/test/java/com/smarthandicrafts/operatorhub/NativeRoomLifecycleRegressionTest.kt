@@ -33,7 +33,9 @@ class NativeRoomLifecycleRegressionTest {
     private lateinit var fake: FakeMedia
     private class FakeMedia : NativeRoomMedia {
         var closes = 0; var muteChanges = 0; var speakerChanges = 0
+        var routing = JSONObject()
         override fun connect(descriptor: JSONObject) = Unit
+        override fun configureRouting(value: JSONObject) { routing = JSONObject(value.toString()) }
         override fun setMuted(value: Boolean) { muteChanges++ }
         override fun setSpeaker(value: Boolean) { speakerChanges++ }
         override fun silenceForClose() = true
@@ -48,7 +50,7 @@ class NativeRoomLifecycleRegressionTest {
         controller = Robolectric.buildService(NativeRoomCallService::class.java).create()
         service = controller.get(); fake = FakeMedia()
         set("credential", store.credential()); set("callId", call); set("requestId", a); set("legId", "leg-A1")
-        set("engine", fake); set("readyCommitted", true); set("state", "connected")
+        set("engine", fake); set("readyCommitted", true); set("ownsCustomer", true); set("state", "connected")
         val guard = get("guard") as NativeRoomPolicy.Epoch; set("epoch", guard.begin())
         val health = get("health") as NativeRoomCallHealth; health.start(1); health.evidence(); health.connected(true, 2)
         set("lastStatusOkAt", android.os.SystemClock.elapsedRealtime())
@@ -58,6 +60,31 @@ class NativeRoomLifecycleRegressionTest {
     private fun get(name: String): Any? = NativeRoomCallService::class.java.getDeclaredField(name).apply { isAccessible = true }.get(service)
     private fun invoke(name: String) { NativeRoomCallService::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(service) }
     private fun evidence(value: JSONObject) { NativeRoomCallService::class.java.getDeclaredMethod("recordMediaEvidence",JSONObject::class.java).apply { isAccessible = true }.invoke(service,value) }
+    @Test fun privateHandoverWaitsWithoutEndingTheCustomerAndRoutesOnlyAfterEachDecision() {
+        set("actualCustomerIdentity", "customer-media")
+        val transfer = JSONObject().put("id", "handover-1").put("mode", "consult").put("status", "invited")
+            .put("fromDeviceId", store.deviceId()).put("toDeviceId", "android_other_device_12345678")
+            .put("sourceIdentity", "A").put("consultStage", "private")
+        fun status(version: Int) {
+            val value = JSONObject().put("call", JSONObject().put("version", version).put("phase", "connected")
+                .put("ownerDeviceId", store.deviceId()).put("ownerLegId", "leg-A1").put("roomReady", true)
+                .put("transfer", transfer).put("callToolsEnabled", true))
+            NativeRoomCallService::class.java.getDeclaredMethod("applyStatus", JSONObject::class.java).apply { isAccessible = true }.invoke(service, value)
+        }
+        status(10); assertEquals("hold", fake.routing.optString("mode")); assertEquals(0, fake.closes)
+        val health = get("health") as NativeRoomCallHealth
+        assertFalse(health.fresh()); assertEquals("", health.timeout(true, android.os.SystemClock.elapsedRealtime() + 60000))
+        assertFalse(NativeRoomCallService.snapshot()!!.optBoolean("canCompleteTransfer"))
+        transfer.put("status", "connecting").put("targetIdentity", "B"); status(11)
+        assertEquals("private", fake.routing.optString("mode")); assertEquals("B", fake.routing.optString("peerIdentity"))
+        transfer.put("consultReady", true); status(12)
+        assertTrue(NativeRoomCallService.snapshot()!!.optBoolean("canCompleteTransfer")); assertTrue(NativeRoomCallService.snapshot()!!.optBoolean("canMerge"))
+        transfer.put("consultStage", "conference"); status(13); assertEquals("conference", fake.routing.optString("mode"))
+        transfer.put("consultStage", "merged"); status(14)
+        assertFalse(NativeRoomCallService.snapshot()!!.optBoolean("canMerge")); assertTrue(NativeRoomCallService.snapshot()!!.optBoolean("canCompleteTransfer"))
+        transfer.put("status", "cancelled"); status(15)
+        assertEquals("normal", fake.routing.optString("mode")); assertEquals("customer-media", fake.routing.optString("customerIdentity")); assertEquals(0, fake.closes)
+    }
     private fun boundStart(intent: Intent): Intent = intent.putExtra("enrollment_generation",store.credential().generation).putExtra("enrolled_device_id",store.deviceId())
     private fun runMainUntil(condition: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)

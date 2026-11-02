@@ -1,5 +1,6 @@
+import { CallTools } from './call-tools.mjs';
 import { LiveKitWhatsAppProvider, readLiveKitConfig } from '../media/livekit-provider.mjs';
-import { TransferController } from '../media/transfer-controller.mjs';
+import { AttendedTransferController } from '../media/attended-transfer.mjs';
 import { callStoreKey } from '../media/transfer-controller.mjs';
 import { requireValue } from '../media/errors.mjs';
 import { CallRuntime } from './call-runtime.mjs';
@@ -12,7 +13,7 @@ import { createBoundedNativeReject } from '../media/native-meta-reject.mjs';
 export function createNativeCallRuntime({ store, env, authenticate, resolveDevice, listDevices,
   capabilities = async () => ({ roomCalling: false, transferEnabled: false }), roomCapabilities, rejectIncoming, notify, onWorkAvailable, onTiming, onRuntimeTiming,
   phoneNumberId, minimumNativeBuild = 10, tenantId = 'smart-handicrafts', now = Date.now,
-  provider: injectedProvider } = {}) {
+  provider: injectedProvider, callFiles } = {}) {
   const provider = injectedProvider || new LiveKitWhatsAppProvider(readLiveKitConfig(env), { onTiming });
   // Production native declines must not inherit the legacy browser adapter's
   // unbounded HTTP lifetime. Tests can still inject an isolated provider stub.
@@ -40,7 +41,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
   } : undefined;
   // Explicit, bounded pilot authority is separate from production evidence.
   // No fabricated live-test ID or request-supplied mode bypasses the guard.
-  class RuntimeTransferController extends TransferController {
+  class RuntimeTransferController extends AttendedTransferController {
     get enforcesRuntimeCapabilities() { return true; }
     async requireRollout(context, args, actor) {
       const policy = await release();
@@ -69,6 +70,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
     }, verifyReadiness: data => runtime.verifyTransferReadiness(data) });
   runtime = new CallRuntime({ store, provider, transferController: controller, authenticate, resolveDevice, listDevices,
     capabilities: release, roomCapabilities: roomRelease, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now, onRuntimeTiming });
+  if (callFiles) runtime.tools = new CallTools({ runtime, files: callFiles });
   return { runtime, provider, controller,
     verifyConfiguration: async () => {
       controlVerified = false;

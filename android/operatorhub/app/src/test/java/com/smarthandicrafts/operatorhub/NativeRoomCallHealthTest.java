@@ -4,6 +4,14 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NativeRoomCallHealthTest {
+    @Test public void intentionalHoldDoesNotPretendToHaveAudioOrTriggerAReconnectHangup() {
+        NativeRoomCallHealth call = new NativeRoomCallHealth(); call.start(1000); call.evidence(); call.connected(true, 2000);
+        call.hold(true, 3000); call.mediaLost(4000);
+        assertFalse(call.fresh()); assertEquals("", call.timeout(true, 100000));
+        call.hold(false, 100000); assertFalse(call.fresh()); assertEquals("", call.timeout(true, 129999));
+        assertFalse(call.timeout(true, 130000).isEmpty());
+        call.evidence(); assertTrue(call.connected(true, 130001)); assertEquals(2000, call.connectedAt());
+    }
     @Test public void signalingAndMediaEachRequireTheOtherBeforeConnected() {
         NativeRoomCallHealth call = new NativeRoomCallHealth(); call.start(1000);
         assertFalse(call.connected(true, 2000));

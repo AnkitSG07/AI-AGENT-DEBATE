@@ -41,6 +41,33 @@ public class NativeRoomPlatformUiTest {
     }
     private static Object field(Object object,String name) throws Exception { Field f=object.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(object); }
     private static void set(Object object,String name,Object value) throws Exception { Field f=object.getClass().getDeclaredField(name); f.setAccessible(true); f.set(object,value); }
+    @Test @Config(qualifiers="w360dp-h800dp-port-mdpi") public void controlsFollowConnectionAndHandoverState() throws Exception {
+        Intent intent=new Intent(RuntimeEnvironment.getApplication(),NativeRoomCallActivity.class).putExtra("room_action","dial");
+        try (ActivityController<NativeRoomCallActivity> controller=Robolectric.buildActivity(NativeRoomCallActivity.class,intent).setup()) {
+            NativeRoomCallActivity activity=controller.get();
+            java.lang.reflect.Method render=NativeRoomCallActivity.class.getDeclaredMethod("render",JSONObject.class); render.setAccessible(true);
+            JSONObject value=new JSONObject().put("callId",CALL).put("clientAttemptId",A).put("ownerLegId","leg-A1")
+                .put("displayName","Example Customer").put("detail","Connecting audio").put("state","joining");
+            render.invoke(activity,value); assertEquals(View.GONE,((View)field(activity,"activeActions")).getVisibility());
+            assertEquals("Cancel",((Button)field(activity,"end")).getText().toString());
+            value.put("state","connected").put("detail","Connected").put("connectedAtElapsed",1000)
+                .put("callToolsEnabled",true).put("canTransfer",true).put("canRecord",true);
+            render.invoke(activity,value); assertEquals(View.VISIBLE,((View)field(activity,"activeActions")).getVisibility());
+            assertEquals("End",((Button)field(activity,"end")).getText().toString());
+            assertTrue(((Button)field(activity,"record")).isEnabled()); assertEquals(View.INVISIBLE,((View)field(activity,"merge")).getVisibility());
+            value.put("detail","Private handover · customer on hold").put("sourceTransferId","handover-1")
+                .put("canTransfer",false).put("canCompleteTransfer",true).put("canMerge",true).put("recordingState","recording");
+            render.invoke(activity,value); assertEquals("Complete",((Button)field(activity,"transfer")).getText().toString());
+            assertEquals(View.VISIBLE,((View)field(activity,"merge")).getVisibility()); assertEquals(View.VISIBLE,((View)field(activity,"cancelTransfer")).getVisibility());
+            assertEquals("Stop",((Button)field(activity,"record")).getText().toString());
+            View root=activity.findViewById(android.R.id.content); root.measure(View.MeasureSpec.makeMeasureSpec(360,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(800,View.MeasureSpec.EXACTLY)); root.layout(0,0,360,800);
+            Bitmap image=Bitmap.createBitmap(360,800,Bitmap.Config.ARGB_8888); root.draw(new Canvas(image));
+            File file=new File("build/reports/r22-native-ui/private-handover.png"); file.getParentFile().mkdirs();
+            try(FileOutputStream output=new FileOutputStream(file)) { assertTrue(image.compress(Bitmap.CompressFormat.PNG,100,output)); }
+            value.put("state","reconnecting").put("canCompleteTransfer",false).put("canMerge",false); render.invoke(activity,value);
+            assertEquals(View.VISIBLE,((View)field(activity,"activeActions")).getVisibility()); assertTrue(((Button)field(activity,"end")).isEnabled());
+        }
+    }
     @Test public void endRemainsVisibleOnSmallScreenWithLargeSystemFont() throws Exception {
         Application app=RuntimeEnvironment.getApplication(); Configuration config=new Configuration(app.getResources().getConfiguration()); config.fontScale=1.8f;
         app.getResources().updateConfiguration(config,app.getResources().getDisplayMetrics());

@@ -2,6 +2,7 @@
 // native routes, credentials, feature activation or history deletion live here.
 import { createHash, randomUUID } from 'node:crypto';
 import { MediaError } from '../media/errors.mjs';
+import { transferDeadline } from '../media/transfer-controller.mjs';
 
 const HASH = value => createHash('sha256').update(String(value)).digest('hex');
 const MAX_DUE = Number.MAX_SAFE_INTEGER;
@@ -90,6 +91,16 @@ function validateCall(value, key, before) {
       ['invited', 'connecting', 'completing', ...FINAL_TRANSFER].includes(transfer.status) &&
       validTime(transfer.createdAt) && validTime(transfer.expiresAt) && Number.isSafeInteger(transfer.generation) && transfer.generation >= 1,
     'Invalid transfer record.');
+    requireInput(transfer.mode === undefined || ['instant', 'consult'].includes(transfer.mode), 'Invalid transfer mode.');
+    if (transfer.mode === 'consult') {
+      requireInput(['private', 'customer', 'conference', 'merged'].includes(transfer.consultStage), 'Invalid consultation stage.');
+      if (transfer.consultReadyAt !== undefined) requireInput(validTime(transfer.consultReadyAt), 'Invalid consultation readiness.');
+      if (transfer.decisionAt !== undefined) requireInput(validTime(transfer.decisionAt), 'Invalid consultation decision.');
+      if (transfer.consultDeadlineAt !== undefined) requireInput(validTime(transfer.consultDeadlineAt) &&
+        (transfer.consultStage === 'merged' ? transfer.consultDeadlineAt === MAX_DUE :
+          transfer.consultDeadlineAt <= call.updatedAt + 10 * 60 * 1000), 'Invalid consultation deadline.');
+    } else requireInput(transfer.consultStage === undefined && transfer.consultDeadlineAt === undefined,
+      'Only a consultation can extend its invitation.');
   }
   if (!call.active) requireInput(isObject(call.terminal) && validTime(call.terminal.endedAt) &&
     ['BUSINESS_INITIATED', 'USER_INITIATED'].includes(call.terminal.reason) &&
@@ -119,8 +130,18 @@ function validateCall(value, key, before) {
     if (!next || canonical(next) !== canonical(before.transfer)) fail('TRANSFER_GENERATION_WINS', 'An old transfer cannot become pending again or change its target.');
   } else if (before.transfer) {
     if (call.transfer?.id !== before.transfer.id) fail('TRANSFER_GENERATION_WINS', 'A pending or completing transfer cannot be replaced.');
-    for (const field of ['id', 'fromDeviceId', 'toDeviceId', 'toUserId', 'sourceIdentity', 'requestId', 'generation', 'createdAt', 'expiresAt']) {
+    for (const field of ['id', 'fromDeviceId', 'toDeviceId', 'toUserId', 'sourceIdentity', 'requestId', 'generation', 'createdAt', 'expiresAt', 'mode']) {
       if (call.transfer[field] !== before.transfer[field]) fail('TRANSFER_GENERATION_WINS', 'The current transfer identity and generation cannot change.');
+    }
+    if (before.transfer.mode === 'consult') {
+      const stages = { private: ['private', 'customer', 'conference'], conference: ['conference', 'merged'],
+        merged: ['merged', 'customer'], customer: ['customer'] };
+      if (!stages[before.transfer.consultStage]?.includes(call.transfer.consultStage))
+        fail('TRANSFER_GENERATION_WINS', 'A consultation route cannot move backwards.');
+      if (before.transfer.consultDeadlineAt !== call.transfer.consultDeadlineAt &&
+        before.transfer.consultStage === call.transfer.consultStage &&
+        before.transfer.consultReadyAt === call.transfer.consultReadyAt)
+        fail('TRANSFER_GENERATION_WINS', 'Polling cannot extend a consultation deadline.');
     }
     const allowed = {
       invited: new Set(['invited', 'connecting', 'declined', 'cancelled', 'expired', 'failed']),
@@ -288,8 +309,8 @@ function projections(call) {
     const workId = HASH(`${callKey}:expire:${transfer.id}`);
     const currentPending = call.active && !call.terminal && call.transfer?.id === transfer.id && PENDING_TRANSFER.has(transfer.status);
     jobs.set(workId, { callId: call.id, callKey, workType: 'expire', workId: transfer.id, transferId: transfer.id,
-      sourceDueAtMs: currentPending ? transfer.expiresAt : MAX_DUE,
-      data: { transferId: transfer.id, generation: transfer.generation, expiresAt: transfer.expiresAt, status: transfer.status } });
+      sourceDueAtMs: currentPending ? transferDeadline(transfer) : MAX_DUE,
+      data: { transferId: transfer.id, generation: transfer.generation, expiresAt: transferDeadline(transfer), status: transfer.status } });
   }
   for (const job of call.outbox) {
     const workId = HASH(`${callKey}:cleanup:${job.id}`);

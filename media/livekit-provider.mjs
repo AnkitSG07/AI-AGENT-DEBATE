@@ -12,6 +12,10 @@ export function operatorIdentity(deviceId, legId) {
   return `sh-op-${hash(deviceId).slice(0, 24)}-${hash(legId).slice(0, 24)}`;
 }
 
+export function callMediaIdentity(roomName) {
+  return `sh-media-${hash(identifier(roomName, 'room')).slice(0, 40)}`;
+}
+
 export function customerIdentity(callKey) {
   return `sh-customer-${hash(identifier(callKey, 'call key')).slice(0, 32)}`;
 }
@@ -172,7 +176,7 @@ export class LiveKitWhatsAppProvider {
       canPublishSources: [TrackSource.MICROPHONE], canPublishData: false, canUpdateOwnMetadata: false
     });
     const token = await access.toJwt();
-    return { url: this.config.wsUrl, token, roomName, identity, issuedAt, expiresAt: issuedAt + ttlSeconds * 1000 };
+    return { url: this.config.wsUrl, token, roomName, identity, mediaIdentity: callMediaIdentity(roomName), issuedAt, expiresAt: issuedAt + ttlSeconds * 1000 };
   }
 
   async inspectParticipants({ roomName, customerIdentity: customer, operatorIdentity: operator, sourceIdentity }) {

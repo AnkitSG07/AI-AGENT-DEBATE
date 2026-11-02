@@ -21,6 +21,7 @@
   "dependencies": {
     "@google-cloud/firestore": "8.7.1",
     "@google/genai": "^0.3.0",
+    "@livekit/rtc-node": "1.2.1",
     "dotenv": "^16.4.5",
     "exceljs": "4.4.0",
     "express": "^4.19.2",

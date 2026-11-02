@@ -1,7 +1,7 @@
 import { cleanupRetryDelay } from '../media/cleanup-retry.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { MediaError, identifier, requireValue } from '../media/errors.mjs';
-import { callStoreKey, deviceReservationKey, newBridgedCall } from '../media/transfer-controller.mjs';
+import { callStoreKey, deviceReservationKey, newBridgedCall, transferDeadline } from '../media/transfer-controller.mjs';
 import { roomNameFor, customerIdentity, operatorIdentity } from '../media/livekit-provider.mjs';
 import { readTransactionRecords } from '../media/transaction-reads.mjs';
 
@@ -293,6 +293,7 @@ export class CallRuntime {
       direction: session.direction, ownerDeviceId: call?.owner?.deviceId || session.owner?.deviceId || null,
       ownerLegId: call?.owner?.legId || session.owner?.legId || null,
       roomReady: !!call?.active && call.status === 'connected', endConfirmed: !!terminal?.confirmedAt,
+      callToolsEnabled: !!this.tools, recording: this.tools ? this.tools.view(call) : null,
       // Historical readiness proof; current mute UI comes from the native track.
       mediaReadiness: call?.mediaReadiness || null,
       customerAcceptedAt: session.customerAcceptedAt || null,
@@ -301,7 +302,9 @@ export class CallRuntime {
       customerPhone: session.customerPhone || '', customerName: session.customerName || '',
       channelId: Number.isSafeInteger(session.channelId) && session.channelId > 0 ? session.channelId : 0,
       transfer: call?.transfer ? { id: call.transfer.id, status: call.transfer.status, fromDeviceId: call.transfer.fromDeviceId,
-        toDeviceId: call.transfer.toDeviceId, expiresAt: call.transfer.expiresAt, reason: call.transfer.reason || null } : null };
+        toDeviceId: call.transfer.toDeviceId, expiresAt: transferDeadline(call.transfer), reason: call.transfer.reason || null, mode: call.transfer.mode || 'instant',
+        consultStage: call.transfer.consultStage || '', consultReady: !!call.transfer.consultReadyAt,
+        sourceIdentity: call.transfer.sourceIdentity || '', targetIdentity: call.transfer.targetIdentity || '' } : null };
   }
 
   async status(context, id) {
@@ -325,7 +328,7 @@ export class CallRuntime {
       canonical.id === session.providerCallId && canonical.tenantId === session.tenantId &&
       transfer.fromDeviceId === canonical.owner?.deviceId && transfer.toUserId === actor.userId &&
       sameBinding(actor, session.transferBindings?.[transfer.id]) &&
-      Number.isSafeInteger(transfer.expiresAt) && transfer.expiresAt > this.now() &&
+      Number.isSafeInteger(transferDeadline(transfer)) && transferDeadline(transfer) > this.now() &&
       reservation?.kind === 'invite' && reservation.callId === canonical.id &&
       reservation.transferId === transfer.id && reservation.expiresAt === transfer.expiresAt);
     return { call: await this.view(session, canonical || null), deviceAvailable: !reservation,
@@ -919,8 +922,13 @@ export class CallRuntime {
       // Injected controllers that do not implement the binding constraint keep
       // the runtime's original fresh pre-invite check.
       if (!this.transferController.validatesExpectedSourceBinding) await this.recheck(context, actor);
+      if (body.mode === 'consult') {
+        requireValue(this.tools, 'HANDOVER_UNAVAILABLE', 'Private handover audio is not configured.', 503);
+        requireValue(actor.nativeBuild >= 22 && target.nativeBuild >= 22, 'HANDOVER_UPDATE_REQUIRED', 'Update both phones to R22 for private handover.', 426);
+        await this.tools.prepareHandover(currentCall);
+      }
       result = await this.timed('transfer-invite-controller', () => this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
-        expectedVersion: body.version, requestId: request(body.requestId), observedCall: currentCall,
+        expectedVersion: body.version, requestId: request(body.requestId), mode: body.mode, observedCall: currentCall,
         // The controller freshly authenticates immediately on entry. Bind that
         // read to this preflight instead of doing the same auth twice in a row.
         expectedSourceBinding: { deviceId: actor.deviceId, userId: actor.userId, tenantId: actor.tenantId,
@@ -962,7 +970,9 @@ export class CallRuntime {
           if (binding) { current.bindings[actor.deviceId] = { ...binding, legId: transfer.attemptId, identity: transfer.targetIdentity };
             current.version++; current.updatedAt = this.now(); schedule(current, this.now()); tx.set(sessionKey(current.id), current); }
         });
-      } else if (['decline', 'cancel'].includes(action)) result = await this.transferController.stopTransfer(context,
+      } else if (['complete', 'merge'].includes(action)) result = await this.transferController.decide(context,
+        { callId, transferId: body.transferId, expectedVersion: body.version, action });
+      else if (['decline', 'cancel'].includes(action)) result = await this.transferController.stopTransfer(context,
         { callId, transferId: body.transferId, expectedVersion: body.version, action });
       else throw new MediaError('INVALID_TRANSFER_ACTION', 'Unknown transfer action.', 400);
     }
@@ -980,7 +990,10 @@ export class CallRuntime {
       requireValue(currentCall?.active && !fresh.terminal && currentCall.transfer?.id === body.transferId &&
         currentCall.transfer.status === 'connecting' && sameBinding(actor, fresh.transferBindings?.[body.transferId]),
         'TRANSFER_CHANGED', 'The invitation changed while the room token was being prepared.');
-      response.join = { ...result.join, customerIdentity: session.customerIdentity, legId: currentCall.transfer.attemptId };
+      response.join = { ...result.join, customerIdentity: currentCall.transfer.mode === 'consult' && currentCall.transfer.consultStage === 'private'
+          ? currentCall.transfer.sourceIdentity : session.customerIdentity,
+        actualCustomerIdentity: session.customerIdentity, transferMode: currentCall.transfer.mode || 'instant',
+        legId: currentCall.transfer.attemptId };
       response.readinessNonce = result.readinessNonce;
     }
     return response;

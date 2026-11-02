@@ -1,0 +1,41 @@
+name: SH Chat R22 call tools media
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/r22-call-tools']
+permissions:
+  contents: read
+concurrency:
+  group: sh-chat-r22-media-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare isolated media tools
+        run: |
+          python tests/simulator-media-r13/prepare-tools.py
+          npm install --prefix "$RUNNER_TEMP/r22-browser" --ignore-scripts --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/r22-browser/node_modules/.bin/playwright" install --with-deps chromium
+          echo "SH_PLAYWRIGHT_MODULE=$RUNNER_TEMP/r22-browser/node_modules/playwright" >> "$GITHUB_ENV"
+      - name: Handover, notes and recording races
+        run: node --test tests/operator-attended-transfer.test.mjs tests/operator-call-tools.test.mjs
+      - name: Real encrypted audio, private routing, hold music and recording
+        run: node --test tests/simulator-media-r13/call-tools-media.test.mjs
+        env:
+          SH_R22_MEDIA_TESTS: '1'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: r22-isolated-audio-evidence
+          retention-days: 14
+          path: verification/r22/media/

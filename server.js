@@ -1,3 +1,4 @@
+import { OdooCallFiles } from './call-runtime/odoo-call-files.mjs';
 import { createOperatorAiSwitch } from './operator-ai-switch.js';
 import { createMessageNotificationWorker } from './operator-message-worker.js';
 import express from "express";
@@ -25416,7 +25417,9 @@ const operatorCallPermission = createOperatorCallPermission({
 const operatorMediaGateway = createOperatorMediaGateway({
   firestoreRuntime: operatorFirestoreRuntime,
   runtimeFactory: options => {
-    const bundle = createNativeCallRuntime(options);
+    const bundle = createNativeCallRuntime({ ...options, callFiles: odooConfigured ? new OdooCallFiles({
+      execute: async (model, method, params, kwargs = {}) => odooExecute(await odooLoginCached(), model, method, params, kwargs)
+    }) : undefined });
     operatorCallPermissionRuntime = bundle.runtime;
     return bundle;
   },

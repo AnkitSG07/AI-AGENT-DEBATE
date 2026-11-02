@@ -19,6 +19,11 @@ public final class NativeApi {
     public static JSONObject controlRequest(String path, String method, JSONObject data, String bearer) throws Exception {
         return request(path, method, data, bearer, 3000, "GET".equals(method) ? 4000 : 8000);
     }
+    /** Private call notes/recording metadata; audio itself uses the authenticated fixed-origin player. */
+    public static JSONObject callRecords(String path, String method, JSONObject data, String bearer) throws Exception {
+        if (!(path.equals("/call-records") || path.matches("/calls/[^/]+/(records|notes)"))) throw new Exception("Invalid call records path.");
+        return request(HubPolicy.API_BASE, path, method, data, bearer, 4000, 12000, 512 * 1024, false);
+    }
     /** Read-only Hub call records, with device credentials kept entirely in native code. */
     public static JSONObject hubRead(String path, String bearer) throws Exception {
         if (!NativeHubReadPolicy.allowedPath(path)) throw new Exception("Unsupported Hub call read.");

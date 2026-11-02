@@ -45,7 +45,8 @@ export function mountNativeCallRoutes(app, { runtime, prefix = '/api/operator-an
   app.post(`${prefix}/calls/:callId/reject`, wrap('reject', (req, body) => runtime.end(req, req.params.callId, { ...body, reject: true })));
   app.post(`${prefix}/calls/:callId/end`, wrap('end', (req, body) => runtime.end(req, req.params.callId, body)));
   app.post(`${prefix}/calls/:callId/transfers`, wrap('transfer-invite', (req, body) => runtime.transfer(req, req.params.callId, 'invite', body)));
-  for (const action of ['accept', 'ready', 'decline', 'cancel']) app.post(`${prefix}/calls/:callId/transfers/:transferId/${action}`,
+  for (const action of ['accept', 'ready', 'decline', 'cancel', 'complete', 'merge']) app.post(`${prefix}/calls/:callId/transfers/:transferId/${action}`,
     wrap(`transfer-${action}`, (req, body) => runtime.transfer(req, req.params.callId, action, { ...body, transferId: req.params.transferId })));
+  if (typeof runtime.tools?.mount === 'function') runtime.tools.mount(app);
   return runtime;
 }

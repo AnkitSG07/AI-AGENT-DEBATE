@@ -9,12 +9,16 @@ import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.AudioTrackPublishDefaults
+import io.livekit.android.room.participant.AudioTrackPublishOptions
+import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.Track
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import livekit.org.webrtc.AudioTrackSink
 import livekit.org.webrtc.RTCStatsReport
 import org.json.JSONObject
@@ -49,9 +53,17 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var focusLost = false
     private var startupEvidenceSent = false
     private var immediatelySilenced = false
+    private val routingMutex = Mutex()
+    private var routingKey = ""
+    private var routingBusy = false
+    private var routingFailed = false
+    private var routingAttempts = 0
+    private var routingGeneration = 0L
+    private var additionalPeer = ""
+    private var desiredRouting: JSONObject? = null
     private val microphoneControl = NativeRoomMicrophoneControl(scope, { closed },
-        captureMute = { room.setMicrophoneMute(it) },
-        trackEnabled = { room.localParticipant.setMicrophoneEnabled(it) },
+        captureMute = { room.setMicrophoneMute(it || routingBusy || routingFailed || (setupStage == NativeRoomAudioSetup.Stage.AUDIO_ACTIVE && join.optString("customerIdentity").isEmpty())) },
+        trackEnabled = { routingMutex.withLock { room.localParticipant.setMicrophoneEnabled(it) } },
         changed = { muted = it; previous = null; listener.onMuteChanged(it) },
         unavailable = { listener.onMicrophoneControlUnavailable() })
     private val routeListener = object : AudioDeviceChangeListener {
@@ -120,8 +132,11 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 stage(NativeRoomAudioSetup.Stage.IDENTITY)
                 require(room.localParticipant.identity?.value == join.getString("identity")) { "The audio identity did not match this call." }
                 stage(NativeRoomAudioSetup.Stage.MICROPHONE_PERMISSION)
+                val initialRecorder = if (join.optString("transferMode") == "consult" &&
+                    join.optString("actualCustomerIdentity") != join.optString("customerIdentity")) "" else join.optString("mediaIdentity")
                 room.localParticipant.setTrackSubscriptionPermissions(false,
-                    listOf(NativeRoomAudioSetup.customerPermission(join.getString("customerIdentity"))))
+                    listOf(join.getString("customerIdentity"), initialRecorder).filter { it.isNotEmpty() }
+                        .distinct().map { NativeRoomAudioSetup.customerPermission(it) })
                 // Disable DTX while proving fresh outgoing RTP even if the operator is silent.
                 stage(NativeRoomAudioSetup.Stage.MICROPHONE_PUBLISH)
                 room.audioTrackPublishDefaults = AudioTrackPublishDefaults(audioBitrate = 24000, dtx = false, red = true, preconnect = false)
@@ -130,6 +145,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 stage(NativeRoomAudioSetup.Stage.CUSTOMER_SUBSCRIPTION)
                 subscribeCustomer()
                 stage(NativeRoomAudioSetup.Stage.AUDIO_ACTIVE)
+                desiredRouting?.let { configureRouting(it) }
                 launch { while (isActive && !closed) { sample(); delay(if (startupEvidenceSent) 1000 else 500) } }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
@@ -164,7 +180,8 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                     customerTrack?.removeSink(sink)
                     customerTrack = track; customerTrackSid = event.publication.sid
                     decodedFrames.set(0); previous = null; track.addSink(sink)
-                } else (event.publication as? RemoteTrackPublication)?.setSubscribed(false)
+                } else if (event.participant.identity?.value != additionalPeer)
+                    (event.publication as? RemoteTrackPublication)?.setSubscribed(false)
             }
             is RoomEvent.TrackUnsubscribed -> if (event.track.sid == customerTrackSid) {
                 clearCustomerTrack(); listener.onTransport("media-lost")
@@ -189,8 +206,9 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private fun subscribeCustomer() {
         for (participant in room.remoteParticipants.values) {
             val customer = participant.identity?.value == join.optString("customerIdentity")
+            val allowed = customer || additionalPeer.isNotEmpty() && participant.identity?.value == additionalPeer
             for (publication in participant.trackPublications.values) {
-                (publication as? RemoteTrackPublication)?.setSubscribed(customer && publication.kind == Track.Kind.AUDIO)
+                (publication as? RemoteTrackPublication)?.setSubscribed(allowed && publication.kind == Track.Kind.AUDIO)
                 if (customer && publication.track is RemoteAudioTrack && customerTrack !== publication.track) {
                     customerTrack?.removeSink(sink)
                     customerTrack = publication.track as RemoteAudioTrack; customerTrackSid = publication.sid
@@ -225,7 +243,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private suspend fun sample() {
         try {
             val requestedAt = SystemClock.elapsedRealtime()
-            if (room.state != Room.State.CONNECTED || focusLost) { previous = null; return }
+            if (room.state != Room.State.CONNECTED || focusLost || routingBusy) { previous = null; return }
             val remote = customerTrack ?: return
             val local = room.localParticipant.trackPublications.values.firstOrNull { it.source == Track.Source.MICROPHONE && it.track != null } ?: return
             val localTrack = local.track ?: return
@@ -280,6 +298,61 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             listener.onEvidence(evidence)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { previous = null /* No guessed readiness on a missing/unsupported stat. */ }
+    }
+
+    override fun configureRouting(routing: JSONObject) {
+        desiredRouting = JSONObject(routing.toString())
+        if (closed || setupStage != NativeRoomAudioSetup.Stage.AUDIO_ACTIVE) return
+        val mode = routing.optString("mode", "normal")
+        val customer = routing.optString("customerIdentity", join.optString("actualCustomerIdentity", join.optString("customerIdentity")))
+        val peer = routing.optString("peerIdentity")
+        val primary = if (mode == "private" || mode == "hold") peer else customer
+        val extra = if (mode == "conference") peer else ""
+        val key = listOf(mode, primary, extra).joinToString("|")
+        if (key == routingKey && (!routingFailed || routingAttempts >= 3 || routingBusy)) return
+        if (key != routingKey) routingAttempts = 0
+        if (routingGeneration == 0L && routingKey.isEmpty() && primary == join.optString("customerIdentity") && extra.isEmpty()) {
+            routingKey = key; return
+        }
+        routingKey = key
+        routingAttempts++
+        val ticket = ++routingGeneration
+        // Gate capture before replacing the publication. A private microphone is
+        // a fresh track; the customer's old subscription can never receive it.
+        room.setMicrophoneMute(true)
+        routingBusy = true
+        scope.launch {
+          routingMutex.withLock {
+            if (closed || ticket != routingGeneration) return@withLock
+            try {
+                val oldTracks = room.localParticipant.trackPublications.values.filter { it.source == Track.Source.MICROPHONE }.mapNotNull { it.track }
+                oldTracks.forEach { room.localParticipant.unpublishTrack(it, true) }
+                if (closed || ticket != routingGeneration) return@launch
+                clearCustomerTrack()
+                join.put("customerIdentity", primary)
+                additionalPeer = extra
+                val recorder = if (mode == "private" || mode == "hold") "" else join.optString("mediaIdentity")
+                val allowed = listOf(primary, extra, recorder).filter { it.isNotEmpty() }.distinct()
+                room.localParticipant.setTrackSubscriptionPermissions(false, allowed.map { NativeRoomAudioSetup.customerPermission(it) })
+                val fresh = room.localParticipant.createAudioTrack(name = "operator-microphone")
+                val published = room.localParticipant.publishAudioTrack(fresh,
+                    AudioTrackPublishOptions(source = Track.Source.MICROPHONE, audioBitrate = 24000, dtx = false, red = true))
+                if (!published) throw IllegalStateException("Microphone routing failed.")
+                if (closed || ticket != routingGeneration) return@launch
+                routingFailed = false
+                room.setMicrophoneMute(muted || focusLost || primary.isEmpty())
+                if (muted) room.localParticipant.setMicrophoneEnabled(false)
+                subscribeCustomer()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                // A failed privacy transition remains muted. The operator can cancel
+                // or end; never fall back to broadcasting a private conversation.
+                room.setMicrophoneMute(true)
+                routingFailed = true
+                listener.onMicrophoneControlUnavailable()
+            } finally { if (ticket == routingGeneration) routingBusy = false }
+          }
+        }
     }
 
     override fun setMuted(value: Boolean) {

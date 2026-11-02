@@ -130,6 +130,7 @@ public class NativeRoomCleanupPriorityTest {
         AtomicInteger posts = new AtomicInteger(); AtomicBoolean silenced = new AtomicBoolean(); AtomicReference<Throwable> observerFailure = new AtomicReference<>();
         field(NativeRoomCallService.class, "engine").set(service, new NativeRoomMedia() {
             public void connect(JSONObject descriptor) { }
+            public void configureRouting(JSONObject routing) { }
             public void setMuted(boolean value) { }
             public void setSpeaker(boolean value) { }
             public boolean silenceForClose() { silenced.set(true); return true; }

@@ -25,6 +25,7 @@ android/**/local.properties
 verification/r13/*
 !verification/r13/release-summary.json
 verification/recovery-current/
+verification/r22/
 android/operatorhub/verification/r12/call-320x480-large-font.png
 android/operatorhub/verification/r13/
 
