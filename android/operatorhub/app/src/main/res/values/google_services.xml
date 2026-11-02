@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="google_app_id" translatable="false">1:467493355898:android:d08efaaaa884eaa86196c3</string>
-    <string name="google_api_key" translatable="false">AIzaSyAjQMWKprjnNpIlYjVmw4pO-9s9hFTwR_o</string>
-    <string name="gcm_defaultSenderId" translatable="false">467493355898</string>
-    <string name="project_id" translatable="false">smart-handicrafts</string>
+    <string name="google_app_id" translatable="false">1:788764965455:android:4e49d55d9e66b68091083a</string>
+    <string name="google_api_key" translatable="false">AIzaSyDBV94XjPs7AIZloZm7XDMea0t_l7m_YsE</string>
+    <string name="gcm_defaultSenderId" translatable="false">788764965455</string>
+    <string name="project_id" translatable="false">sh-chat-896e0</string>
 </resources>
