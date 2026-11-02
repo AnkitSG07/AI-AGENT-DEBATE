@@ -1,3 +1,5 @@
+import { createOperatorAiSwitch } from './operator-ai-switch.js';
+import { createMessageNotificationWorker } from './operator-message-worker.js';
 import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
 import { createOperatorFirestoreRuntime } from "./operator-firestore-runtime.js";
@@ -21,6 +23,9 @@ import { registerFedexRoutes } from "./fedex-integration.js";
 import { buildKitControllerPromptInstructions, deriveKitBuildGoal, resolveKitPlanForPayload, summarizeKitPlan } from "./kit-ai-controller-v25-server-helper.js";
 
 dotenv.config();
+// Disabled at the administrator's request. Re-enabling requires an explicit
+// deployment configuration change; stale phone toggles cannot turn it back on.
+const SH_CHAT_AI_ENABLED = String(process.env.SH_CHAT_AI_ENABLED || 'false').toLowerCase() === 'true';
 
 const SERVER_PATCH_VERSION = "2026-10-30-operator-hub-r13-private-integrations";
 const EXPECTED_HUB_UI_BUILD = "2026.10.30-ui-r13";
@@ -15874,7 +15879,7 @@ const WHATSAPP_CALL_PRE_ACCEPT_ENABLED = String(process.env.WHATSAPP_CALL_PRE_AC
 
 // ===================== AI MODE: ODOO MEMORY MODELS =====================
 // These are the Odoo Studio custom model/field names from your Model Overview PDFs.
-const AI_MODE_ODOO_ENABLED = String(process.env.AI_MODE_ODOO_ENABLED || "true").toLowerCase() !== "false";
+const AI_MODE_ODOO_ENABLED = SH_CHAT_AI_ENABLED && String(process.env.AI_MODE_ODOO_ENABLED || "true").toLowerCase() !== "false";
 
 const AI_MODE_MEMORY_MODEL = process.env.AI_MODE_MEMORY_MODEL || "x_ai_operator_memory";
 const AI_MODE_HANDOVER_MODEL = process.env.AI_MODE_HANDOVER_MODEL || "x_ai_handover_log";
@@ -15943,7 +15948,7 @@ function aiModeNormalizeMode(value) {
 // - zapier: Zapier auto-reply / automation
 // Hidden Gemini/server chat mode must never become active by default or from stale env values.
 // Enable it only for emergency/internal fallback by setting AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
-const AI_MODE_ALLOW_HIDDEN_CHAT_MODE =
+const AI_MODE_ALLOW_HIDDEN_CHAT_MODE = SH_CHAT_AI_ENABLED &&
   String(process.env.AI_MODE_ALLOW_HIDDEN_CHAT_MODE || "false").toLowerCase() === "true";
 
 function aiModeNormalizeOperationalMode(value) {
@@ -15958,7 +15963,7 @@ function aiModeNormalizeOperationalMode(value) {
 // - ON  => Zapier AI auto-reply by default
 // - OFF => Manual/human reply only
 // Gemini/server AI mode is hidden and blocked unless AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
-const AI_MODE_TOGGLE_ON_MODE = aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier");
+const AI_MODE_TOGGLE_ON_MODE = SH_CHAT_AI_ENABLED ? aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier") : 'manual';
 const AI_MODE_TOGGLE_OFF_MODE = aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_OFF_MODE || "manual");
 
 function aiModeIsAutoReplyMode(mode) {
@@ -16112,7 +16117,7 @@ const ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL = String(
   process.env.ZAPIER_WEBHOOK_URL || ""
 ).trim();
 
-const ZAPIER_INCOMING_WHATSAPP_ENABLED =
+const ZAPIER_INCOMING_WHATSAPP_ENABLED = SH_CHAT_AI_ENABLED &&
   String(process.env.ZAPIER_INCOMING_WHATSAPP_ENABLED || "true").toLowerCase() !== "false";
 
 const ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS = Math.max(
@@ -20185,13 +20190,14 @@ Safe no-reply fallback applied.`.trim()
     });
   }
 }
+app.use(createOperatorAiSwitch({ enabled: SH_CHAT_AI_ENABLED }));
 app.post("/api/ai-mode/chat", handleAiModeChat);
 
 
 // ===================== AI MODE: SERVER-SIDE BACKGROUND WORKER =====================
 // This makes AI Mode work even when the Operator Hub browser tab is closed.
 // The browser only sets the global mode; Render polls Odoo in the background.
-const AI_MODE_BACKGROUND_WORKER_ENABLED =
+const AI_MODE_BACKGROUND_WORKER_ENABLED = SH_CHAT_AI_ENABLED &&
   String(process.env.AI_MODE_BACKGROUND_WORKER_ENABLED || "true").toLowerCase() !== "false";
 const AI_MODE_BACKGROUND_INTERVAL_MS = Math.max(
   3000,
@@ -21159,7 +21165,44 @@ function nativeMessageBackgroundEnabled() {
   try { return androidPushBridge.status().enabled === true; } catch { return false; }
 }
 
+let nativeMessageWorker;
+function startNativeMessageWorker() {
+  if (nativeMessageWorker || !odooConfigured || !nativeMessageBackgroundEnabled()) return;
+  nativeMessageWorker = createMessageNotificationWorker({
+    scan: async () => {
+      const context = await aiModeGetOdooUserContext();
+      const messages = await aiModeFetchRecentWorkerMessages(context.uid);
+      return (messages || []).filter(message => {
+        const at = aiModeParseOdooDateMs(message.date);
+        return message?.model === "discuss.channel" && Number(message.res_id) > 0 && Number(message.id) > 0 &&
+          at > 0 && at <= Date.now() + 5000 && Date.now() - at <= 5 * 60000 &&
+          !aiModeIsOwnOdooMessageForWorker(message, context) && !aiModeIsLikelySmartHandicraftsOutbound(message) &&
+          (aiModeMessagePlainText(message) || aiModeHasWorkerAttachments(message));
+      });
+    },
+    hydrate: async messages => {
+      const context = await aiModeGetOdooUserContext();
+      const channels = await aiModeFetchWorkerChannelsByIds(context.uid, messages.map(message => Number(message.res_id)));
+      const byId = new Map((channels || []).filter(channel => ['whatsapp', 'livechat', 'chat'].includes(channel.channel_type))
+        .map(channel => [Number(channel.id), channel]));
+      return messages.filter(message => byId.has(Number(message.res_id)))
+        .map(message => ({ id: message.id, channel: byId.get(Number(message.res_id)), message }));
+    },
+    publish: async row => {
+      const delivered = await androidPushBridge.publishMessage({ channel: row.channel, message: row.message, verifiedIncoming: true });
+      // Firebase receipt and app-unread persistence are independent. A successful
+      // push must not suppress retrying an unread write that failed during it.
+      const observed = await androidPushBridge.observeIncomingMessages({ channel: row.channel, messages: [row.message], verifiedIncoming: true });
+      return { ...delivered, ok: delivered.ok && observed !== false,
+        retryAtMs: observed === false ? Date.now() + 1000 : delivered.retryAtMs };
+    },
+    onError: () => console.warn('SH_MESSAGE_DISCOVERY retry_backoff')
+  });
+  nativeMessageWorker.start();
+}
+
 async function aiModeBackgroundTick() {
+  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
   const nativeMessageEnabled = nativeMessageBackgroundEnabled();
   const aiProcessingEnabled = AI_MODE_BACKGROUND_WORKER_ENABLED && !!aiModeGlobalState && ["manual", "assist", "chat", "zapier"].includes(aiModeGlobalState.mode);
   if (!aiProcessingEnabled && !nativeMessageEnabled) return;
@@ -21416,7 +21459,7 @@ async function aiModeBackgroundTick() {
 }
 
 function startAiModeBackgroundWorker() {
-  if (!AI_MODE_BACKGROUND_WORKER_ENABLED && !nativeMessageBackgroundEnabled()) {
+  if (!AI_MODE_BACKGROUND_WORKER_ENABLED) {
     console.warn("AI Mode background worker disabled by env.");
     return;
   }
@@ -22298,6 +22341,9 @@ async function handleWhatsappWebhookPost(req, res) {
       return res.status(200).json({ ...callResult, odoo_forward: { queued: true }, router_mode: true });
     }
     const forwardResult = await forwardWhatsappWebhookToOdoo(req, body);
+    // Odoo now owns the exact message ID/chat mapping. Wake discovery immediately
+    // after its verified webhook commit; do not wait for the AI timer.
+    if (forwardResult.ok && fields.includes('messages')) nativeMessageWorker?.wake();
     const result = {
       ...callResult,
       odoo_forward: forwardResult,
@@ -23887,6 +23933,9 @@ function whatsappCallOwnOutgoingClaim(payload = {}, body = {}, rows = []) {
 function queueWhatsappWebhookFollowup(req, body, callResult) {
   Promise.resolve().then(async () => {
     const forwardResult = await forwardWhatsappWebhookToOdoo(req, body);
+    // Odoo now owns the exact message ID/chat mapping. Wake discovery immediately
+    // after its verified webhook commit; do not wait for the AI timer.
+    if (forwardResult.ok && fields.includes('messages')) nativeMessageWorker?.wake();
     await recordWebhookDebugEvent(req, body, { ...callResult, odoo_forward: forwardResult, router_mode: true });
   }).catch((error) => console.warn("WhatsApp webhook follow-up failed:", error?.message || error));
 }
@@ -25401,6 +25450,7 @@ const operatorHttpServer = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   operatorKeepAlive.start();
   operatorFirestoreRuntime.startMaintenance?.();
+  void androidPushBridge.warm();
   operatorMediaGateway.start();
   operatorReportingRuntime.start();
 
@@ -25411,6 +25461,7 @@ const operatorHttpServer = app.listen(PORT, () => {
     try {
       startWhatsappCallHistorySync();
       if (typeof startAiModeBackgroundWorker === "function") {
+        startNativeMessageWorker();
         startAiModeBackgroundWorker();
       }
     } catch (error) {
@@ -25424,6 +25475,7 @@ function closeOperatorServices() {
   if (operatorShutdown) return operatorShutdown;
   operatorShutdown = (async () => {
     operatorKeepAlive.close();
+    nativeMessageWorker?.close();
     // Stop new HTTP work and drain worker transactions before closing their
     // shared client. Independent media rooms are not ended by a Render restart.
     const forceExit = setTimeout(() => process.exit(0), 20000);

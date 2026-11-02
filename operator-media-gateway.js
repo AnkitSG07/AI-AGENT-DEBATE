@@ -184,7 +184,10 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     // suppress stale, answered and duplicate alerts across workers.
     // Terminal work takes the cleanup lane immediately, skipping no-op alert
     // claims. Setup signaling and transfer push have independent durable leases.
-    if (bundle.runtime.dispatchRealtimeWork) await bundle.runtime.dispatchRealtimeWork(id);
+    // Committed Answer/End hints cannot wait for provider acknowledgement.
+    // New incoming alerts still take priority over compatibility history I/O.
+    if (bundle.runtime.dispatchRealtimeWork) await bundle.runtime.dispatchRealtimeWork(id,
+      { onCommittedControlState: () => queueHistoryProjection(id) });
     else await bundle.runtime.dispatchIncomingAlert(id);
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.

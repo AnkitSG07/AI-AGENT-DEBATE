@@ -41,12 +41,12 @@ function fixture({ ai = false, native = true, messages = [] } = {}) {
 }
 const message = (id, res_id, extra = {}) => ({ id, res_id, model: 'discuss.channel', date: new Date(Date.now() - 1000).toISOString(), body: 'Synthetic customer message', ...extra });
 
-test('native notification scan continues with AI worker explicitly disabled and never invokes AI or its journal', async () => {
+test('disabled AI worker performs no discovery or AI work; the independent notification worker owns discovery', async () => {
   const f = fixture({ messages: [message(10, 73)] });
   await f.context.aiModeBackgroundTick();
-  assert.deepEqual(f.events, [['observe', 73], ['push', 10]]);
-  assert.equal(f.state.running, false); assert.equal(f.state.last_error, '');
-  f.context.startAiModeBackgroundWorker(); assert.ok(f.state.timer);
+  assert.deepEqual(f.events, []);
+  assert.equal(f.state.running, false);
+  f.context.startAiModeBackgroundWorker(); assert.equal(f.state.timer, undefined);
 });
 test('raw native candidates survive AI processed/preboot filters even when another AI-eligible channel exists', async () => {
   const f = fixture({ ai: true, messages: [message(10, 73), message(11, 74), message(12, 76)] });

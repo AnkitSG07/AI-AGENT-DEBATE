@@ -1,0 +1,26 @@
+{
+  "release": "r20-server-followup",
+  "node": "v24.22.1",
+  "completed": "2026-11-02T10:29:48.324Z",
+  "backend": {
+    "ok": true,
+    "pass": 833,
+    "fail": 0,
+    "changedDuringRun": []
+  },
+  "physical_phone_verified": false,
+  "live_daily_firestore_usage_verified": false,
+  "registered_active_builds_at_audit": {
+    "19": 2
+  },
+  "fcm_token_validation_codes": [
+    "SENDER_ID_MISMATCH"
+  ],
+  "duplicate_message_callbacks": 75,
+  "duplicate_additional_reads": 0,
+  "duplicate_additional_writes": 0,
+  "stale_cleanup_simulation_hours": 24,
+  "stale_cleanup_attempts": 34,
+  "stale_cleanup_document_writes": 253,
+  "ai_enabled": false
+}

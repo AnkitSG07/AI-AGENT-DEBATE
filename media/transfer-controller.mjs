@@ -1,3 +1,4 @@
+import { cleanupRetryDelay } from './cleanup-retry.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { MediaError, identifier, requireValue } from './errors.mjs';
 import { readTransactionRecords } from './transaction-reads.mjs';
@@ -448,7 +449,7 @@ export class TransferController {
         if (!current || current.leaseId !== leaseId) return;
         const reservation = job.kind === 'detach' && job.deviceId ? await tx.get(deviceReservationKey(job.deviceId)) : null;
         current.status = succeeded ? 'done' : 'pending';
-        current.notBefore = this.now() + Math.min(30000, 1000 * 2 ** Math.min(current.attempts, 5));
+        current.notBefore = this.now() + cleanupRetryDelay(current.attempts, call.terminal, this.now());
         delete current.leaseId; delete current.leaseUntil;
         if (succeeded && job.kind === 'terminate' && !call.active && !call.terminal?.confirmedAt) {
           call.status = 'ended'; call.terminal.confirmedAt = this.now(); call.version++;

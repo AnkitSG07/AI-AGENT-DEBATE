@@ -476,6 +476,8 @@ export function createFirestoreDeviceRegistry({
       if (previous && (previous.schema !== 1 || previous.deviceId !== identity.deviceId || previous.event !== identity.event)) throw unavailable();
       if (previous?.state === 'sent' || previous?.sentAt > 0 || previous?.state === 'cancelled') return { claimed: false, reason: 'already_finished', deliveryId };
       if (previous?.state === 'claimed' && previous.claimUntilMs > now) return { claimed: false, reason: 'in_progress', deliveryId };
+      if (previous?.state === 'failed' && previous.retryAtMs > now)
+        return { claimed: false, reason: 'retry_backoff', retryAtMs: previous.retryAtMs, deliveryId };
       if (identity.callId) {
         if (identity.event === 'incoming' && oppositeSnapshot.exists) return { claimed: false, reason: 'call_ended', deliveryId };
         if (identity.event === 'ended' && !oppositeSnapshot.exists) return { claimed: false, reason: 'not_previously_alerted', deliveryId };
@@ -484,11 +486,12 @@ export function createFirestoreDeviceRegistry({
         expiresAtMs: input.expiresAtMs, createdAt: previous?.createdAt || now, updatedAt: now, sentAt: 0,
         attempts: (previous?.attempts || 0) + 1 };
       tx.set(reference, next);
-      return { claimed: true, claimId, deliveryId, claimUntilMs: next.claimUntilMs, device: row };
+      return { claimed: true, claimId, deliveryId, claimUntilMs: next.claimUntilMs, attempts: next.attempts, device: row };
     }));
   }
 
-  async function finishDelivery({ deliveryId, claimId, outcome } = {}) {
+  async function finishDelivery({ deliveryId, claimId, outcome, retryAfterMs = 0 } = {}) {
+    if (!Number.isSafeInteger(retryAfterMs) || retryAfterMs < 0 || retryAfterMs > 300000) throw badInput('A bounded retry delay is required.');
     if (!HASH_PATTERN.test(deliveryId || '') || typeof claimId !== 'string' || !/^[a-f0-9-]{36}$/.test(claimId) || !['sent', 'failed', 'cancelled'].includes(outcome)) throw badInput('A valid delivery claim and outcome are required.');
     return guarded(() => firestore.runTransaction(async tx => {
       const reference = collections.deliveries.doc(deliveryId), snapshot = await tx.get(reference);
@@ -496,7 +499,7 @@ export function createFirestoreDeviceRegistry({
       const row = snapshot.data();
       if (row.state !== 'claimed' || row.claimId !== claimId) return { finished: false };
       const now = nowMs();
-      tx.set(reference, { ...row, state: outcome, claimUntilMs: 0, updatedAt: now, sentAt: outcome === 'sent' ? now : 0 });
+      tx.set(reference, { ...row, state: outcome, claimUntilMs: 0, retryAtMs: outcome === 'failed' ? now + retryAfterMs : 0, updatedAt: now, sentAt: outcome === 'sent' ? now : 0 });
       return { finished: true };
     }));
   }

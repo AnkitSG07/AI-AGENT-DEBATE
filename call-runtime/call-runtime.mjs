@@ -1,3 +1,4 @@
+import { cleanupRetryDelay } from '../media/cleanup-retry.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { MediaError, identifier, requireValue } from '../media/errors.mjs';
 import { callStoreKey, deviceReservationKey, newBridgedCall } from '../media/transfer-controller.mjs';
@@ -35,15 +36,21 @@ function schedule(session, now) {
     if (session.owner) deadlines.push(now + 15000);
   }
   if (operationPending(session)) {
-    if (!session.terminal || session.providerCallId) deadlines.push(now + 15000);
+    if (!session.terminal) deadlines.push(now + 15000);
     else {
       // A lost Dial response can leave an exact, reserved attempt with no
       // provider call ID. Once terminal, a timer cannot discover that ID or
       // safely replay Dial. Observe an outstanding local lease once, then park
       // until its exact HTTP response or trusted correlated webhook arrives.
       // Keep the uncertain operation/reservation; parking grants no authority.
-      for (const op of Object.values(session.operations))
+      for (const [name, op] of Object.entries(session.operations)) {
         if (op.status === 'issued' && op.leaseUntil > now) deadlines.push(op.leaseUntil);
+        // Expired Accept/Connect compensation must be created once. After that,
+        // its durable cleanup deadline controls retries, not a moving 15s tick.
+        else if (session.providerCallId && ['accept', 'connect'].includes(name) &&
+            ['issued', 'uncertain'].includes(op.status) &&
+            !session.outbox.some(item => item.id === `terminate:expired-${name}`)) deadlines.push(now + 15000);
+      }
     }
   }
   session.nextActionAtMs = Math.min(...outstanding, ...deadlines.filter(Number.isFinite));
@@ -1149,11 +1156,16 @@ export class CallRuntime {
     await this.releasePreMediaReservation(id);
   }
 
-  async dispatchRealtimeWork(id) {
+  async dispatchRealtimeWork(id, { onCommittedControlState = () => {} } = {}) {
     const session = await this.store.get(sessionKey(id));
     if (!session || session.routeChoice === 'legacy') return;
-    if (session.terminal) return this.dispatchCriticalCleanup(id, session);
-    const work = [this.dispatchSetupSignals(id, session)];
+    if (session.terminal || session.owner) onCommittedControlState();
+    const work = [session.terminal ? this.dispatchCriticalCleanup(id, session) : this.dispatchSetupSignals(id, session)];
+    // Stop ringing on all other phones immediately after committed Answer/End.
+    // A slow provider disconnect must not hold its separate FCM cancellation.
+    if ((session.terminal || session.owner) && session.outbox.some(item =>
+        item.kind === 'notify' && item.event === 'ended' && isDue(item, this.now())))
+      work.push(this.dispatchRingCancellation(id));
     if (!session.owner && session.phase === 'ringing' &&
         session.outbox.some(item => item.kind === 'notify' && item.event === 'incoming' && isDue(item, this.now())))
       work.push(this.dispatchIncomingAlert(id));
@@ -1282,7 +1294,8 @@ export class CallRuntime {
           if (operation.status === 'failed' && !current.terminal) terminalize(current, 'FAILED', this.now());
         }
         item.status = succeeded || item.kind === 'connect' && current.operations.connect?.status === 'failed' ? 'done' : 'pending';
-        item.notBefore = this.now() + (item.kind === 'connect' ? 15000 : Math.min(30000, 1000 * 2 ** Math.min(item.attempts, 5)));
+        item.notBefore = this.now() + (item.kind === 'connect' ? 15000 :
+          cleanupRetryDelay(item.attempts, item.kind === 'notify' ? null : current.terminal, this.now()));
         delete item.leaseId; delete item.leaseUntil;
         if (succeeded && item.kind === 'terminate' && current.terminal && item.callId === current.providerCallId) {
           // A lost Accept acknowledgement needs the same exact-disconnect

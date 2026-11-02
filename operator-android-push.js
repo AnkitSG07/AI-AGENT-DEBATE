@@ -4,8 +4,9 @@ import { createHash, createPrivateKey, createSign, randomBytes, randomUUID, timi
 import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { messageNotificationPreview } from './operator-message-preview.js';
+import { fcmFailure, notificationRetryDelay } from './operator-notification-retry.js';
 
-export const ANDROID_PUSH_VERSION = '2026-11-02-android-push-r20-idle-quota-and-preview-fix';
+export const ANDROID_PUSH_VERSION = '2026-11-02-android-push-r20-token-retry-and-priority-fix';
 const PREFIX = '/api/operator-android';
 const HUB = 'https://www.smarthandicrafts.com/livechat-api-test';
 const OAUTH = 'https://oauth2.googleapis.com/token';
@@ -89,7 +90,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   // Positive acknowledgements only: repeated Odoo scans of the same trusted
   // IDs need not read Firestore again. Never remember a failed write, infer
   // unseen IDs from a high watermark, or cache authorization/delivery claims.
-  const observedMessageIds = new Map();
+  const observedMessageIds = new Map(), messageResults = new Map();
+  let messageGeneration = 0;
+  const invalidateMessageResults = () => { messageGeneration++; messageResults.clear(); };
+  function rememberMessageResult(id, value) {
+    messageResults.delete(id); messageResults.set(id, value);
+    while (messageResults.size > 1000) messageResults.delete(messageResults.keys().next().value);
+  }
   const OBSERVED_TTL_MS = 10 * 60000, MAX_OBSERVED_CHANNELS = 1000;
   let sentCount = 0, failedCount = 0;
 
@@ -159,15 +166,16 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       const device = store.devices.find(row => row.id === value.deviceId);
       if (!eligibleDevice(device, value.event) || value.expiresAtMs <= clock()) return { claimed: false };
       const current = store.deliveries.find(row => sameDelivery(row, value));
+      if (current?.state === 'failed' && current.retryAtMs > clock()) return { claimed: false, reason: 'retry_backoff', retryAtMs: current.retryAtMs };
       if (current && (deliverySent(current) || (current.state === 'claimed' && current.claimUntilMs > clock()))) return { claimed: false };
       const deliveryId = HASH(JSON.stringify([value.deviceId, value.callId || '', value.messageId || '', value.event]));
       const next = { ...value, deliveryId, claimId, state: 'claimed', createdAt: current?.createdAt || clock(),
-        updatedAt: clock(), claimUntilMs: clock() + DELIVERY_LEASE_MS };
+        updatedAt: clock(), claimUntilMs: clock() + DELIVERY_LEASE_MS, attempts: (current?.attempts || 0) + 1 };
       store.deliveries = store.deliveries.filter(row => !sameDelivery(row, value) &&
         Math.max(Number(row.sentAt) || 0, Number(row.updatedAt) || 0, Number(row.createdAt) || 0) > clock() - 86400000);
       if (store.deliveries.length >= 10000) throw fail(503, 'Android notification storage requires maintenance.');
       store.deliveries.push(next);
-      return { claimed: true, claimId, deliveryId, claimUntilMs: next.claimUntilMs, device: { ...device } };
+      return { claimed: true, claimId, deliveryId, claimUntilMs: next.claimUntilMs, attempts: next.attempts, device: { ...device } };
     });
   }
   async function finishDelivery(value) {
@@ -176,6 +184,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       const row = store.deliveries.find(item => item.deliveryId === value.deliveryId && item.claimId === value.claimId);
       if (!row || row.state !== 'claimed') return { finished: false };
       row.state = value.outcome; row.updatedAt = clock();
+      row.retryAtMs = value.outcome === 'failed' ? clock() + (value.retryAfterMs || 0) : 0;
       if (value.outcome === 'sent') row.sentAt = clock();
       return { finished: true };
     });
@@ -291,11 +300,14 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
           (['file', 'firestore'].includes(storageMode) && typeof deviceRegistry?.renewLease === 'function') },
         deviceLeaseTtlMs: TOKEN_TTL_MS };
     }));
-    app.post(`${PREFIX}/devices/register`, route(registration));
+    app.post(`${PREFIX}/devices/register`, route(async req => {
+      const result = await registration(req); invalidateMessageResults(); return result;
+    }));
     app.post(`${PREFIX}/devices/token`, route(async req => {
       const device = await authenticated(req), token = fcmTokenValue(req.body?.fcmToken);
       const nativeClient = nativeClientMetadata(req);
       if (!token) throw fail(400, 'A valid Firebase token is required.');
+      invalidateMessageResults();
       if (useExternalRegistry) {
         const value = { fcmToken: token, ...nativeClient };
         if (typeof req.body?.receiveCalls === 'boolean') value.receiveCalls = req.body.receiveCalls;
@@ -415,8 +427,8 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     });
     if (response.status === 401) { accessToken = ''; accessExpiresAt = 0; }
     if (!response.ok || typeof body.name !== 'string') {
-      const unregistered = body?.error?.details?.some(item => item.errorCode === 'UNREGISTERED');
-      throw Object.assign(new Error('Firebase push delivery failed'), { unregistered, status: response.status });
+      throw Object.assign(new Error('Firebase push delivery failed'),
+        fcmFailure(body, response.status, response.headers?.get?.('retry-after'), clock()));
     }
     return { ok: true };
   }
@@ -425,6 +437,8 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     try {
       claim = await claimDelivery({ ...descriptor, expiresAtMs: Number(data.expires_at_ms) });
       if (!claim?.claimed) {
+        if (claim?.reason === 'retry_backoff' || claim?.reason === 'in_progress') return 'pending';
+        if (claim?.reason) return 'skipped';
         // A different worker may still own the lease. Its network response is
         // not proof of delivery, so native outbox jobs must retry this case.
         const rows = await getDeliveries(descriptor.callId ? { callId: descriptor.callId } : { messageId: descriptor.messageId });
@@ -446,7 +460,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       if (!attemptedDevice) return await cancel();
       try { await send(attemptedDevice, data); }
       catch (firstError) {
-        if (firstError.unregistered || (firstError.status >= 400 && firstError.status < 500 && ![401, 429].includes(firstError.status))) throw firstError;
+        if (firstError.unregistered || firstError.senderMismatch || firstError.status === 429 || firstError.retryAfterMs > 0 || (firstError.status >= 400 && firstError.status < 500 && ![401, 429].includes(firstError.status))) throw firstError;
         await retryDelay(750);
         attemptedDevice = await validDevice();
         if (!attemptedDevice) return await cancel();
@@ -464,12 +478,13 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       // FCM acceptance + registry commit are not an exactly-once transaction;
       // Android still deduplicates the exact call/message event on receipt.
       if (claim?.claimed && !accepted) {
-        await finishDelivery({ deliveryId: claim.deliveryId, claimId: claim.claimId, outcome: 'failed' }).catch(() => {});
+        await finishDelivery({ deliveryId: claim.deliveryId, claimId: claim.claimId, outcome: 'failed',
+          retryAfterMs: notificationRetryDelay(claim.attempts, error) }).catch(() => {});
       }
-      if (error.unregistered && attemptedDevice) {
+      if ((error.unregistered || error.senderMismatch) && attemptedDevice) {
         await clearFcmToken(attemptedDevice.id, attemptedDevice.fcmToken).catch(() => {});
       }
-      logger.warn?.('Android notification delivery unavailable', { status: Number(error.status) || 0, unregistered: !!error.unregistered });
+      logger.warn?.('Android notification delivery unavailable', { status: Number(error.status) || 0, unregistered: !!error.unregistered, senderMismatch: !!error.senderMismatch });
       return 'failed';
     }
   }
@@ -564,17 +579,18 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
     if (!ids.length) return;
     let queued = appMessageQueues.get(channelId);
     if (queued) {
-      ids.forEach(id => queued.ids.add(id));
+      ids.forEach(id => { if (!queued.inFlight.has(id)) queued.ids.add(id); });
       while (queued.ids.size > 100) queued.ids.delete(Math.min(...queued.ids));
       return queued.promise;
     }
     if (appMessageQueues.size >= 1000) { logger.warn?.('SH_APP_MESSAGE_STATE busy'); return; }
-    queued = { ids: new Set(ids), promise: null };
+    queued = { ids: new Set(ids), inFlight: new Set(), promise: null };
     appMessageQueues.set(channelId, queued);
     queued.promise = Promise.resolve().then(async () => {
       while (queued.ids.size) {
-        const messageIds = [...queued.ids]; queued.ids.clear();
+        const messageIds = [...queued.ids]; queued.ids.clear(); queued.inFlight = new Set(messageIds);
         await registryCall('observeAppMessages', { channelId: Number(channelId), messageIds });
+        queued.inFlight.clear();
         const previous = observedMessageIds.get(channelId), savedAt = clock();
         const committed = previous && savedAt >= previous.at && savedAt - previous.at < OBSERVED_TTL_MS ? previous.ids : new Set();
         messageIds.forEach(id => committed.add(id));
@@ -583,7 +599,8 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
         observedMessageIds.set(channelId, { ids: committed, at: savedAt });
         while (observedMessageIds.size > MAX_OBSERVED_CHANNELS) observedMessageIds.delete(observedMessageIds.keys().next().value);
       }
-    }).catch(() => { logger.warn?.('SH_APP_MESSAGE_STATE unavailable'); })
+      return true;
+    }).catch(() => { logger.warn?.('SH_APP_MESSAGE_STATE unavailable'); return false; })
       .finally(() => { if (appMessageQueues.get(channelId) === queued) appMessageQueues.delete(channelId); });
     return queued.promise;
   }
@@ -603,7 +620,17 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       report('not_a_recent_verified_incoming_message');
       return Promise.resolve({ ok: false, skipped: 'not_a_recent_verified_incoming_message' });
     }
-    const operation = (messageQueues.get(messageId) || Promise.resolve()).catch(() => {}).then(async () => {
+    // A receipt is remembered only after all eligible sends have durable
+    // receipts. Repeated Odoo scans then cost no additional Firestore reads.
+    // This is not authorization: every new send still claims/rechecks its device.
+    if (messageQueues.has(messageId)) return messageQueues.get(messageId);
+    const remembered = messageResults.get(messageId);
+    if (remembered && remembered.nextAt > clock()) {
+      report(remembered.done ? 'already_submitted' : 'retry_backoff');
+      return Promise.resolve({ ok: remembered.done, sent: 0, failed: remembered.done ? 0 : 1, retryAtMs: remembered.nextAt });
+    }
+    const generation = messageGeneration;
+    const operation = Promise.resolve().then(async () => {
       // Unread persistence is separately retried by the trusted worker. A slow
       // ledger transaction must not delay Firebase delivery to the phone.
       void observeIncomingMessages({ channel, messages: [message], verifiedIncoming });
@@ -639,12 +666,17 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       report(!targets.length ? eligible.length ? 'already_submitted' : 'no_eligible_devices' : failed || pending ? 'delivery_incomplete' : 'processed',
         { devices: devices.length, eligible: eligible.length, targets: targets.length, sent, accepted: sent,
           handsetReceiptConfirmed: false, targetBuilds, failed, pending, skipped });
-      return { ok: failed === 0, sent, failed };
+      const done = eligible.length > 0 && failed === 0 && pending === 0 && skipped === 0;
+      const failures = done ? 0 : (remembered?.failures || 0) + 1;
+      const nextAt = Math.min(messageAt + MESSAGE_TTL_MS, clock() + (done ? MESSAGE_TTL_MS : notificationRetryDelay(failures)));
+      if (messageGeneration === generation) rememberMessageResult(messageId, { done, failures, nextAt });
+      return { ok: failed === 0 && pending === 0, sent, failed, retryAtMs: nextAt };
     });
     messageQueues.set(messageId, operation);
     operation.catch(() => { report('storage_or_processing_failed'); });
     operation.finally(() => { if (messageQueues.get(messageId) === operation) messageQueues.delete(messageId); }).catch(() => {});
     return operation;
   }
-  return { registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, observeIncomingMessages, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
+  return { warm: () => config.enabled && !delivery ? oauthToken().then(() => true).catch(() => false) : Promise.resolve(false),
+    registerRoutes, publishCallEvents, publishRoomEvent, publishMessage, observeIncomingMessages, status: () => ({ version: ANDROID_PUSH_VERSION, enabled: config.enabled, storageMode, sentCount, failedCount }) };
 }

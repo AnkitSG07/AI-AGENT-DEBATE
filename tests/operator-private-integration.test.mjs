@@ -17,9 +17,9 @@ const SECRET = 'synthetic-r13-profile-secret-abcdefghijklmnopqrstuvwxyz-1234';
 const BACKEND = 'https://ai-agent-debate.onrender.com', HUB = 'https://www.smarthandicrafts.com';
 const source = await readFile(new URL('../server.js', import.meta.url), 'utf8');
 
-async function startFixture({ weakSecret = false, callbacks = false, zapier = {} } = {}) {
+async function startFixture({ weakSecret = false, callbacks = false, zapier = {}, aiEnabled = true } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'sh-private-r13-'));
-  const env = { PATH: process.env.PATH, NODE_ENV: 'test', PORT: '0',
+  const env = { PATH: process.env.PATH, NODE_ENV: 'test', PORT: '0', SH_CHAT_AI_ENABLED: String(aiEnabled),
     PROFILE_SESSION_SECRET: weakSecret ? '' : SECRET, PROFILE_PASS_SMART_HANDICRAFTS: 'fixture-profile-password',
     PROFILE_PASS_SUDO: 'fixture-admin-password', PROFILE_PASS_ACCOUNTS: 'fixture-finance-password',
     ODOO_URL: 'https://odoo.fixture.invalid', ODOO_DB: 'fixture-db', ODOO_USERNAME: 'fixture-user', ODOO_API_KEY_OR_PASSWORD: 'fixture-only',
@@ -552,4 +552,19 @@ test('least-privilege integration scopes do not grant generic ERP, writes from r
   await routes.get('/api/operator-browser-auth/refresh')({ originalUrl: '/api/operator-browser-auth/refresh', method: 'POST',
     headers: { origin: HUB, authorization: 'Bearer ' + narrow(['calls:read']) }, body: { scopes: ['mail:write'] } }, refreshed);
   assert.deepEqual(auth.verifyToken(refreshed.body.token).scopes, ['calls:read']);
+});
+
+
+test('deployment-disabled AI rejects toggles, direct inference and automation callbacks over actual HTTP', async t => {
+  const f = await startFixture({ aiEnabled: false }); t.after(f.close);
+  const token = await f.grant(await f.login());
+  const state = await f.request('/api/ai-mode/global', { token });
+  assert.equal(state.status, 200); assert.equal(state.data.global.mode, 'manual');
+  assert.equal(state.data.worker.enabled, false); assert.equal(state.data.worker.running, false);
+  assert.equal(state.data.worker.started_at, null);
+  for (const path of ['/api/ai-mode', '/api/ai-mode/global', '/api/ai-mode/chat', '/api/zapier/reply']) {
+    const result = await f.request(path, { token, method: 'POST', body: { aiEnabled: true, mode: 'chat', message: 'synthetic' } });
+    assert.equal(result.status, 503, path); assert.equal(result.data.code, 'AI_DISABLED');
+  }
+  assert.equal((await f.request('/api/ai-mode', { token })).data.aiEnabled, false);
 });
