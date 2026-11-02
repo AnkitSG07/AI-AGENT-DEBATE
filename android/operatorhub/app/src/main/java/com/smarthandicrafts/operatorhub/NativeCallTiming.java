@@ -19,7 +19,7 @@ final class NativeCallTiming {
         String fixed;
         switch (action == null ? "" : action) {
             case "status": case "end": case "ready": case "accept": case "cancel":
-            case "transfer-invite": case "outgoing": case "call-control": fixed = action; break;
+            case "transfer-invite": case "transfer-devices": case "outgoing": case "call-control": fixed = action; break;
             default: fixed = "call-control";
         }
         long elapsed = Math.max(0, elapsedMs), server = serverMillis(serverTiming);

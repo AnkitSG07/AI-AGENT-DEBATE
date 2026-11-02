@@ -1,0 +1,31 @@
+{
+  "artifact": "SH-Chat-1.0-r21.apk",
+  "sha256": "e5c7d711ed7127fae8ed7f116cc000c1e0fd49476c035015b570b2a8cf594b6a",
+  "bytes": 60429913,
+  "package": "com.smarthandicrafts.operatorhub",
+  "versionCode": 21,
+  "versionName": "1.0-r21",
+  "firebaseProject": "sh-chat-896e0",
+  "senderId": "788764965455",
+  "androidAppId": "1:788764965455:android:4e49d55d9e66b68091083a",
+  "bundledPublicConfigVerified": true,
+  "signingCertificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+  "signatureVerified": true,
+  "zipalign16KiBVerified": true,
+  "logoSourceSha256": "21e40476d3aa1c07b864f61da738174040c36255bf9f21dfc56c59fde0d369d6",
+  "logoPixelIdenticalEntries": [
+    "res/N0.png"
+  ],
+  "tests": {
+    "suites": 36,
+    "tests": 301,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 89
+  },
+  "physicalHandsetTestPerformed": false
+}

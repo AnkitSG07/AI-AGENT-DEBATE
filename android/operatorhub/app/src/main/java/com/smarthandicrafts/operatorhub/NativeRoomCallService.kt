@@ -312,8 +312,9 @@ class NativeRoomCallService : Service() {
                 recordMediaEvidence(evidence)
             }
             override fun onMuteChanged(value: Boolean) { if (current()) { muted = value; emit() } }
+            override fun onMicrophoneControlUnavailable() { microphoneControlUnavailable() }
             override fun onAudioRoute(route: String, isSpeaker: Boolean) { if (current()) { audioRoute = route; speaker = isSpeaker; emit() } }
-            override fun onRouteUnavailable() { if (current()) { detail = "Audio route could not change; the call stays active"; emit() } }
+            override fun onRouteUnavailable() { audioRouteUnavailable() }
             override fun onFailure(stage: NativeRoomAudioSetup.Stage, code: String, message: String) {
                 if (!current()) return
                 failureStage = stage.name; failureCode = code
@@ -322,6 +323,18 @@ class NativeRoomCallService : Service() {
             }
         })
         engine?.connect(join); emit()
+    }
+
+    private fun microphoneControlUnavailable() {
+        if (!current()) return
+        detail = if (muted) "Microphone remains muted; try Unmute again" else "Microphone could not change; try again"
+        emit()
+    }
+
+    private fun audioRouteUnavailable() {
+        if (!current()) return
+        detail = "Audio route could not change; the call stays active"
+        emit()
     }
 
     private fun customerMuteChanged(value: Boolean) {

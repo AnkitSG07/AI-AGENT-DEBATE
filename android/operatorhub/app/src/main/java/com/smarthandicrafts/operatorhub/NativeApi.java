@@ -117,8 +117,8 @@ public final class NativeApi {
             return result;
         } finally {
             c.disconnect();
-            if (path.startsWith("/calls/")) {
-                String action = path.endsWith("/status") ? "status" : path.endsWith("/end") ? "end"
+            if (path.startsWith("/calls/") || path.startsWith("/devices?callId=")) {
+                String action = path.startsWith("/devices?callId=") ? "transfer-devices" : path.endsWith("/status") ? "status" : path.endsWith("/end") ? "end"
                     : path.endsWith("/ready") ? "ready" : path.endsWith("/accept") ? "accept"
                     : path.endsWith("/cancel") ? "cancel" : path.endsWith("/transfers") ? "transfer-invite"
                     : path.endsWith("/outgoing") ? "outgoing" : "call-control";

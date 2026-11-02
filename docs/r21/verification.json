@@ -1,0 +1,23 @@
+{
+  "release": "r21",
+  "backend": {
+    "ok": true,
+    "pass": 846,
+    "fail": 0,
+    "changedDuringRun": []
+  },
+  "android": {
+    "suites": 36,
+    "tests": 301,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 89
+  },
+  "instrumentationSourceCompiled": true,
+  "physicalHandsetVerified": false,
+  "recordingAndSummaryImplemented": false
+}

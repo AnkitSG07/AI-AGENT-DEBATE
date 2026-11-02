@@ -200,6 +200,7 @@ export class CallRuntime {
     requireValue(value?.roomCalling === true && (!transfer || value.transferEnabled === true),
       transfer ? 'TRANSFER_MEDIA_NOT_VALIDATED' : 'ROOM_CALLING_NOT_ENABLED',
       transfer ? 'This release has not enabled verified audio handoff.' : 'Native room calling is not enabled for this release.', 501);
+    return value;
   }
 
   providerFor(session) {
@@ -332,26 +333,28 @@ export class CallRuntime {
   }
 
   async availableDevices(context, id) {
-    const actor = await this.actor(context); await this.requireEnabled({ transfer: true });
-    const session = await this.locate(id); this.requireSession(session);
+    const [actor, session] = await this.authenticatedSession(context, id); this.requireSession(session);
     const call = session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
     requireValue(call?.active && call.owner.deviceId === actor.deviceId, 'NOT_CALL_OWNER', 'Only the current operator can choose a transfer target.', 403);
     const [rows, policy] = await Promise.all([
-      this.listDevices?.({ tenantId: this.tenantId, limit: 16 }), this.capabilityProvider()
+      this.timed('transfer-device-directory', () => this.listDevices?.({ tenantId: this.tenantId, limit: 16 })),
+      this.requireEnabled({ transfer: true })
     ]);
     requireValue(Array.isArray(rows) && rows.length <= 16, 'DEVICE_LIST_UNAVAILABLE', 'The bounded device list is unavailable.', 503);
     const candidates = rows.filter(row => row.deviceId !== actor.deviceId && !row.revoked && row.tenantId === this.tenantId &&
       row.mediaProtocol === 'sh-room-audio-v1' && row.nativeBuild >= this.minimumNativeBuild &&
       row.credentialExpiresAt > this.now() && row.receiveCalls !== false &&
       (policy.mode !== 'pilot' || policy.pilotDeviceIds?.includes(actor.deviceId) && policy.pilotDeviceIds?.includes(row.deviceId)));
+    // The same fresh policy both gates this request and filters its directory.
+    // Do not read the pilot registry again before or after this snapshot.
     // This bounded list is a UI hint. The actual invite still transactionally
     // authorizes its one target and reservation. Independent rows need not
     // serially wait for each other or reread the entire pilot registry.
-    const result = await Promise.all(candidates.map(async row => {
+    const result = await this.timed('transfer-device-reservations', () => Promise.all(candidates.map(async row => {
       const reservation = await this.store.get(deviceReservationKey(row.deviceId));
       return { deviceId: row.deviceId, label: String(row.label || 'Operator device').slice(0, 120), available: !reservation,
         nativeBuild: row.nativeBuild, mediaProtocol: row.mediaProtocol };
-    }));
+    })));
     return { devices: result };
   }
 

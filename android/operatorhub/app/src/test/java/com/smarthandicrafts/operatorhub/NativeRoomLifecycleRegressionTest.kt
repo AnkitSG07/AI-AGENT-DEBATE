@@ -92,6 +92,24 @@ class NativeRoomLifecycleRegressionTest {
         assertEquals(0,fake.closes); assertEquals(0,fake.muteChanges); assertEquals(0,fake.speakerChanges)
         assertTrue(NativeRoomCallService.commandForAttempt(b,"leg-A2","mute","")); assertEquals(1,fake.muteChanges)
     }
+    @Test fun microphoneControlFailurePreservesConfirmedMuteAndKeepsTheCallRunning() {
+        set("muted", true)
+        invoke("microphoneControlUnavailable")
+        val view = NativeRoomCallService.snapshot()!!
+        assertTrue(view.optBoolean("muted")); assertFalse(view.optBoolean("closed"))
+        assertTrue(view.optString("detail").contains("remains muted"))
+        assertTrue(NativeRoomCallService.isRunning()); assertEquals(0, fake.closes)
+    }
+    @Test fun speakerControlDispatchesToRealMediaAndFailureNeverInventsARouteOrEndsTheCall() {
+        set("speaker", false); set("audioRoute", "Bluetooth")
+        assertTrue(NativeRoomCallService.commandForAttempt(a,"leg-A1","speaker",""))
+        assertEquals(1, fake.speakerChanges)
+        invoke("audioRouteUnavailable")
+        val view = NativeRoomCallService.snapshot()!!
+        assertFalse(view.optBoolean("speaker")); assertEquals("Bluetooth", view.optString("audioRoute"))
+        assertFalse(view.optBoolean("closed")); assertTrue(view.optString("detail").contains("call stays active"))
+        assertTrue(NativeRoomCallService.isRunning()); assertEquals(0, fake.closes)
+    }
     @Test fun serviceRefusesAnAttemptCancelledBeforeAndroidDeliveredStartIntent() {
         controller.destroy()
         store.cancelRoomAttempt(b)

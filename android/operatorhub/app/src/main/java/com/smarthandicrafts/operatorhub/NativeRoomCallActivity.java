@@ -27,6 +27,10 @@ import android.widget.TextView;
 import android.widget.EditText;
 import android.widget.Toast;
 import android.widget.ScrollView;
+import android.widget.ArrayAdapter;
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import androidx.core.content.ContextCompat;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -54,7 +58,30 @@ public final class NativeRoomCallActivity extends Activity {
             deadline = SystemClock.elapsedRealtime() + 30000;
         }
     }
-    private NativeRoomCleanupProcessor.Requester callApi = NativeApi::request;
+    private NativeRoomCleanupProcessor.Requester callApi = (path, method, body, bearer) ->
+        "GET".equals(method) ? NativeApi.controlRequest(path, method, body, bearer) : NativeApi.request(path, method, body, bearer);
+    // Discovery must not queue behind downloads, token renewal or Hub history.
+    private static final Executor DIRECTORY_IO = Executors.newFixedThreadPool(2);
+    private Executor directoryIo = DIRECTORY_IO;
+    private final NativeRoomTransferDirectory transferDirectory = new NativeRoomTransferDirectory();
+    private TransferPicker transferPicker;
+    private static final class TransferContext {
+        final String callId, attempt, leg, key;
+        final long generation;
+        final DeviceLeasePolicy.Credential credential;
+        TransferContext(JSONObject call, long generation, DeviceLeasePolicy.Credential credential) {
+            callId = call.optString("callId"); attempt = call.optString("clientAttemptId"); leg = call.optString("ownerLegId");
+            this.generation = generation; this.credential = credential;
+            key = credential.generation + ":" + credential.deviceId + ":" + callId + ":" + attempt + ":" + leg;
+        }
+    }
+    private static final class TransferPicker {
+        final TransferContext context;
+        final ArrayAdapter<String> labels;
+        List<NativeRoomTransferDirectory.Entry> rows = java.util.Collections.emptyList();
+        AlertDialog dialog;
+        TransferPicker(TransferContext context, ArrayAdapter<String> labels) { this.context = context; this.labels = labels; }
+    }
     private long uiGeneration;
     private final NativeRoomStartGate startGate = new NativeRoomStartGate();
     private DeviceLeasePolicy.Credential pendingStartCredential;
@@ -127,7 +154,7 @@ public final class NativeRoomCallActivity extends Activity {
         uiGeneration++; startGate.invalidate(); pendingStartCredential = null; starting = false; returnOnResume = false; busyWaiting = false; latest = null;
         waitingAnswer = null; waitingCleanupRequired = false; busyAttemptId = ""; busyOwnerLegId = "";
         screenCredential = new NativeStore(this).credential();
-        if (transferDialog != null) { transferDialog.dismiss(); transferDialog = null; }
+        clearTransferDirectory();
         expectedAttemptId = string(intent, "client_attempt_id");
         if (!NativeRoomUiBinding.validAttemptId(expectedAttemptId)) expectedAttemptId = "";
         callId = string(intent, "call_id"); transferId = string(intent, "transfer_id");
@@ -645,39 +672,99 @@ public final class NativeRoomCallActivity extends Activity {
         cancelTransfer.setEnabled(!value.optBoolean("cancelTransferPending"));
         cancelTransfer.setVisibility(value.optString("sourceTransferId").isEmpty() ? View.GONE : View.VISIBLE);
         hint.setText(value.optString("transferId").isEmpty() ? "Audio continues when you return to chat." : "Joining the customer while the first phone stays connected.");
+        if (!closed && value.optBoolean("canTransfer")) {
+            TransferContext directoryContext = transferContext();
+            if (directoryContext != null) {
+                if (transferPicker != null && !transferPicker.context.key.equals(directoryContext.key)) clearTransferDirectory();
+                requestTransferDirectory(directoryContext, false);
+            }
+        } else clearTransferDirectory();
         if (closed) {
             if ("failed".equals(value.optString("state")) || "unavailable".equals(value.optString("state"))) Toast.makeText(this, value.optString("detail"), Toast.LENGTH_LONG).show();
             if (resumed) returnToChat(); else returnOnResume = true;
         }
     }
+    private TransferContext transferContext() {
+        JSONObject active = NativeRoomCallService.snapshot();
+        if (active == null || !sameCall(active) || !active.optBoolean("canTransfer") || active.optBoolean("closed")) return null;
+        NativeStore store = new NativeStore(this); DeviceLeasePolicy.Credential credential = store.credential();
+        if (!DeviceLeasePolicy.valid(credential, System.currentTimeMillis()) || !DeviceLeasePolicy.sameIdentity(credential, screenCredential)) return null;
+        return new TransferContext(active, uiGeneration, credential);
+    }
+    private boolean currentTransferContext(TransferContext selected) {
+        if (isFinishing() || isDestroyed() || selected.generation != uiGeneration || !new NativeStore(this).matchesCredential(selected.credential)) return false;
+        TransferContext current = transferContext();
+        return current != null && selected.key.equals(current.key);
+    }
+    private void clearTransferDirectory() {
+        transferDirectory.invalidate();
+        TransferPicker picker = transferPicker; transferPicker = null;
+        if (picker != null && picker.dialog != null) picker.dialog.dismiss();
+        if (transferDialog != null) transferDialog.dismiss();
+        transferDialog = null;
+    }
     private void chooseTransfer() {
-        JSONObject active = NativeRoomCallService.snapshot(); if (active == null || !sameCall(active) || !active.optBoolean("canTransfer")) return;
-        String selectedAttempt = active.optString("clientAttemptId"), selectedLeg = active.optString("ownerLegId"); long generation = uiGeneration;
-        NativeStore store = new NativeStore(this); DeviceLeasePolicy.Credential credential = store.credential(); String id = active.optString("callId");
-        transfer.setEnabled(false);
-        HubApplication.IO.execute(() -> {
+        TransferContext selected = transferContext(); if (selected == null) return;
+        if (transferPicker != null && transferPicker.dialog.isShowing()) return;
+        ArrayAdapter<String> labels = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, new ArrayList<>()) {
+            @Override public boolean areAllItemsEnabled() { return false; }
+            @Override public boolean isEnabled(int position) {
+                return transferPicker != null && transferPicker.labels == this && position >= 0 && position < transferPicker.rows.size();
+            }
+        };
+        TransferPicker picker = new TransferPicker(selected, labels); transferPicker = picker;
+        picker.dialog = new AlertDialog.Builder(this).setTitle("Transfer call to").setAdapter(labels, (dialog, position) -> {
+            if (transferPicker != picker || !currentTransferContext(selected) || position < 0 || position >= picker.rows.size()) return;
+            NativeRoomCallService.commandForAttempt(selected.attempt, selected.leg, "transfer", picker.rows.get(position).id);
+        }).setNegativeButton("Cancel", null).create();
+        picker.dialog.setOnDismissListener(dialog -> {
+            if (transferPicker == picker) { transferPicker = null; transferDialog = null; }
+        });
+        transferDialog = picker.dialog;
+        updateTransferPicker(picker, transferDirectory.cached(selected.key, SystemClock.elapsedRealtime()), null);
+        picker.dialog.show();
+        // The screen opens before network dispatch, and joins any earlier prefetch.
+        requestTransferDirectory(selected, true);
+    }
+    private void updateTransferPicker(TransferPicker picker, List<NativeRoomTransferDirectory.Entry> rows, String error) {
+        if (transferPicker != picker) return;
+        picker.rows = rows == null ? java.util.Collections.emptyList() : rows;
+        picker.labels.clear();
+        if (error != null) picker.labels.add(error);
+        else if (rows == null) picker.labels.add("Loading registered phones…");
+        else if (rows.isEmpty()) picker.labels.add("No other available registered phones.");
+        else for (NativeRoomTransferDirectory.Entry row : rows) picker.labels.add(row.label);
+        picker.labels.notifyDataSetChanged();
+    }
+    private void requestTransferDirectory(TransferContext selected, boolean explicit) {
+        long ticket = transferDirectory.begin(selected.key, SystemClock.elapsedRealtime(), explicit);
+        if (ticket == 0) return;
+        directoryIo.execute(() -> {
             try {
-                JSONObject result = callApi.request("/devices?callId=" + Uri.encode(id), "GET", null, credential.bearer);
-                JSONArray devices = result.optJSONArray("devices"); ArrayList<String> labels = new ArrayList<>(), ids = new ArrayList<>();
-                if (devices != null) for (int i = 0; i < devices.length(); i++) {
+                if (!new NativeStore(this).matchesCredential(selected.credential)) return;
+                JSONObject result = callApi.request("/devices?callId=" + Uri.encode(selected.callId), "GET", null, selected.credential.bearer);
+                JSONArray devices = result.optJSONArray("devices");
+                if (devices == null) throw new IllegalStateException("Missing device directory");
+                List<NativeRoomTransferDirectory.Entry> rows = new ArrayList<>();
+                for (int i = 0; i < devices.length(); i++) {
                     JSONObject device = devices.optJSONObject(i); if (device == null) continue;
-                    String deviceId = device.optString("deviceId", device.optString("id"));
-                    if (deviceId.equals(credential.deviceId) || device.optBoolean("busy") || !device.optBoolean("available", false) || !device.optBoolean("eligible", true)
+                    String id = device.optString("deviceId", device.optString("id"));
+                    if (!id.matches("android_[A-Za-z0-9_-]{16,100}") || id.equals(selected.credential.deviceId) || device.optBoolean("busy")
+                        || !device.optBoolean("available", false) || !device.optBoolean("eligible", true)
                         || device.optInt("nativeBuild", 0) < 10 || !NativeRoomPolicy.PROTOCOL.equals(device.optString("mediaProtocol"))) continue;
-                    ids.add(deviceId); labels.add(device.optString("deviceLabel", device.optString("label", "Operator phone")));
+                    rows.add(new NativeRoomTransferDirectory.Entry(id, device.optString("deviceLabel", device.optString("label", "Operator phone"))));
                 }
                 runOnUiThread(() -> {
-                    if (isFinishing() || generation != uiGeneration || !store.matchesCredential(credential)) return;
-                    JSONObject current = NativeRoomCallService.snapshot();
-                    if (current == null || !NativeRoomControl.matches(selectedAttempt, selectedLeg, current.optString("clientAttemptId"), current.optString("ownerLegId"), current.optBoolean("closed"))) return;
-                    transfer.setEnabled(current.optBoolean("canTransfer"));
-                    if (ids.isEmpty()) { Toast.makeText(this, "No other available registered phones.", Toast.LENGTH_LONG).show(); return; }
-                    transferDialog = new AlertDialog.Builder(this).setTitle("Transfer call to")
-                        .setItems(labels.toArray(new String[0]), (dialog, selected) -> {
-                            if (generation == uiGeneration && store.matchesCredential(credential)) NativeRoomCallService.commandForAttempt(selectedAttempt, selectedLeg, "transfer", ids.get(selected));
-                        }).setNegativeButton("Cancel", null).show();
+                    if (!currentTransferContext(selected) || !transferDirectory.complete(selected.key, ticket, rows, SystemClock.elapsedRealtime())) return;
+                    if (transferPicker != null && transferPicker.context.key.equals(selected.key)) updateTransferPicker(transferPicker, rows, null);
                 });
-            } catch (Exception error) { runOnUiThread(() -> { if (!isFinishing() && generation == uiGeneration && selectedAttempt.equals(expectedAttemptId)) { transfer.setEnabled(latest != null && latest.optBoolean("canTransfer")); Toast.makeText(this, "Could not load registered phones. Your call stays connected.", Toast.LENGTH_LONG).show(); } }); }
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    if (!currentTransferContext(selected) || !transferDirectory.failed(selected.key, ticket)) return;
+                    if (transferPicker != null && transferPicker.context.key.equals(selected.key))
+                        updateTransferPicker(transferPicker, null, "Could not load phones. Close and retry; your call stays connected.");
+                });
+            }
         });
     }
     private void returnToChat() {
@@ -725,5 +812,5 @@ public final class NativeRoomCallActivity extends Activity {
         // Bluetooth is optional; a denied route permission must not deny the microphone call.
         if (code == 42) startAudioService(ticket);
     }
-    @Override protected void onDestroy() { permissionGeneration++; uiGeneration++; startGate.invalidate(); if (transferDialog != null) transferDialog.dismiss(); handler.removeCallbacksAndMessages(null); if (registered) unregisterReceiver(receiver); super.onDestroy(); }
+    @Override protected void onDestroy() { permissionGeneration++; uiGeneration++; startGate.invalidate(); clearTransferDirectory(); handler.removeCallbacksAndMessages(null); if (registered) unregisterReceiver(receiver); super.onDestroy(); }
 }

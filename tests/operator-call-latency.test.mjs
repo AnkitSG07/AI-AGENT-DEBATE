@@ -124,7 +124,7 @@ test('transfer target listing reads policy a bounded number of times rather than
   f.runtime.capabilityProvider = async () => { checks++; return prior(); };
   const rows = await f.runtime.availableDevices('a', call.call.sessionId);
   assert.ok(rows.devices.length >= 2);
-  assert.equal(checks, 2, 'one release gate plus one list policy snapshot, independent of phone count');
+  assert.equal(checks, 1, 'one fresh policy gates and filters the directory, independent of phone count');
 });
 
 test('route timings contain fixed action labels and elapsed time without request secrets', async () => {

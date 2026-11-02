@@ -103,6 +103,7 @@ public class NativeMediaInstrumentationTest {
                     public void onEvidence(JSONObject evidence){readiness.add(evidence);observe("media-ready",evidence.optString("legId"));}
                     public void onFailure(NativeRoomAudioSetup.Stage stage,String code,String message){failure.set(stage.name()+":"+code);observe("failure",failure.get());}
                     public void onMuteChanged(boolean value){muted.set(value);observe("muted",String.valueOf(value));}
+                    public void onMicrophoneControlUnavailable(){failure.set("MICROPHONE_CONTROL");observe("control-unavailable","microphone");}
                     public void onAudioRoute(String route,boolean isSpeaker){observe("route",route);}
                     public void onRouteUnavailable(){observe("route-unavailable","");}
                 });

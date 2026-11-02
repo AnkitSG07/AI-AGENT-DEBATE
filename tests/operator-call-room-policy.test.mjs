@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture } from './operator-r12-helpers.mjs';
+import { fixture, deferred } from './operator-r12-helpers.mjs';
+import { deviceReservationKey } from '../media/transfer-controller.mjs';
 import { createNativeCallRuntime } from '../call-runtime/startup.mjs';
 import { createOperatorMediaGateway } from '../operator-media-gateway.js';
 
@@ -32,6 +33,11 @@ test('production room policy skips pilot enumeration while full capabilities sti
   assert.deepEqual((await args.capabilities()).pilotDeviceIds, ['a', 'b']);
   assert.equal(lists, 1);
   await args.capabilities(); assert.equal(lists, 2, 'transfer/UI policy is still fresh on each evaluation');
+  const f = fixture(), connected = await f.connected();
+  const s = service(f, { capabilities: args.capabilities, listDevices: args.listDevices });
+  await s.verifyConfiguration(); lists = 0;
+  assert.deepEqual((await s.runtime.availableDevices('a', connected.call.sessionId)).devices.map(row => row.deviceId), ['b']);
+  assert.equal(lists, 2, 'one pilot snapshot and one directory read; no repeated pilot preflight');
   env.SH_NATIVE_CALLS_ENABLED = 'false'; assert.equal((await args.roomCapabilities()).roomCalling, false);
 });
 
@@ -86,4 +92,88 @@ test('existing runtime integrations keep the full policy when no room-only provi
   await s.verifyConfiguration();
   await assert.rejects(incoming(s.runtime), { code: 'ROOM_CALLING_NOT_ENABLED' });
   enabled = true; await incoming(s.runtime); assert.equal(calls, 2);
+});
+
+test('transfer picker overlaps fresh policy and directory reads and evaluates policy once', async () => {
+  const f = fixture(), connected = await f.connected();
+  const release = deferred(), directoryEntered = deferred(), policyEntered = deferred();
+  let policies = 0, directories = 0;
+  f.runtime.capabilityProvider = async () => {
+    policies++; policyEntered.resolve(); await release.promise;
+    return { roomCalling: true, transferEnabled: true, mode: 'pilot', pilotDeviceIds: ['a', 'b'] };
+  };
+  f.runtime.listDevices = async () => {
+    directories++; directoryEntered.resolve(); await release.promise;
+    return [...f.devices.values()].map(row => structuredClone(row));
+  };
+  const listing = f.runtime.availableDevices('a', connected.call.sessionId);
+  let timer;
+  try {
+    const started = await Promise.race([
+      Promise.all([directoryEntered.promise, policyEntered.promise]).then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })
+    ]);
+    assert.equal(started, true, 'neither network lookup waits behind the other');
+  } finally { clearTimeout(timer); release.resolve(); }
+  const result = await listing;
+  assert.equal(policies, 1); assert.equal(directories, 1);
+  assert.deepEqual(result.devices.map(row => row.deviceId), ['b']);
+  assert.equal(result.devices[0].available, true);
+});
+
+test('transfer picker rejects revoked/non-owner devices before directory reads and uses fresh disable state', async () => {
+  const f = fixture(), connected = await f.connected();
+  let policies = 0, directories = 0, enabled = true;
+  f.runtime.capabilityProvider = async () => { policies++; return { roomCalling: true, transferEnabled: enabled }; };
+  f.runtime.listDevices = async () => { directories++; return [...f.devices.values()].map(row => structuredClone(row)); };
+  f.devices.get('a').revoked = true;
+  await assert.rejects(f.runtime.availableDevices('a', connected.call.sessionId), { code: 'DEVICE_BINDING_INVALID' });
+  f.devices.get('a').revoked = false;
+  await assert.rejects(f.runtime.availableDevices('b', connected.call.sessionId), { code: 'NOT_CALL_OWNER' });
+  assert.equal(policies, 0); assert.equal(directories, 0);
+  await f.runtime.availableDevices('a', connected.call.sessionId);
+  enabled = false;
+  await assert.rejects(f.runtime.availableDevices('a', connected.call.sessionId), { code: 'TRANSFER_MEDIA_NOT_VALIDATED' });
+  assert.equal(policies, 2); assert.equal(directories, 2, 'each authorized request gets a fresh directory');
+});
+
+test('transfer picker checks independent target reservations concurrently and preserves busy hints', async () => {
+  const f = fixture(), connected = await f.connected();
+  const release = deferred(), bothEntered = deferred(), entered = new Set();
+  const get = f.store.get.bind(f.store);
+  f.runtime.store = { ...f.store, get: async key => {
+    if ([deviceReservationKey('b'), deviceReservationKey('c')].includes(key)) {
+      entered.add(key); if (entered.size === 2) bothEntered.resolve();
+      await release.promise;
+      return key === deviceReservationKey('b') ? { kind: 'owner', callId: 'another-call' } : undefined;
+    }
+    return get(key);
+  } };
+  const listing = f.runtime.availableDevices('a', connected.call.sessionId);
+  let timer;
+  try {
+    const started = await Promise.race([bothEntered.promise.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })]);
+    assert.equal(started, true);
+  } finally { clearTimeout(timer); release.resolve(); }
+  assert.deepEqual((await listing).devices.map(({ deviceId, available }) => ({ deviceId, available })),
+    [{ deviceId: 'b', available: false }, { deviceId: 'c', available: true }]);
+});
+
+test('transfer picker locates its call while authentication runs, without releasing a listing first', async () => {
+  const f = fixture(), connected = await f.connected(), release = deferred(), located = deferred();
+  const authenticate = f.runtime.authenticate, locate = f.runtime.locate.bind(f.runtime);
+  let directoryReads = 0;
+  f.runtime.authenticate = async context => { await release.promise; return authenticate(context); };
+  f.runtime.locate = async id => { located.resolve(); return locate(id); };
+  f.runtime.listDevices = async () => { directoryReads++; return [...f.devices.values()]; };
+  const listing = f.runtime.availableDevices('a', connected.call.sessionId);
+  let timer;
+  try {
+    const started = await Promise.race([located.promise.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })]);
+    assert.equal(started, true, 'the call lookup does not wait behind credential transport');
+    assert.equal(directoryReads, 0, 'the lookup hint grants no authority while authentication is pending');
+  } finally { clearTimeout(timer); release.resolve(); }
+  assert.equal((await listing).devices.length, 2);
 });

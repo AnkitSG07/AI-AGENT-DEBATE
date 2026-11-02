@@ -28,6 +28,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         fun onEvidence(evidence: JSONObject)
         fun onFailure(stage: NativeRoomAudioSetup.Stage, code: String, message: String)
         fun onMuteChanged(value: Boolean)
+        fun onMicrophoneControlUnavailable()
         fun onAudioRoute(route: String, isSpeaker: Boolean)
         fun onRouteUnavailable()
     }
@@ -45,10 +46,14 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var previous: Sample? = null
     private var speaker = false
     private var muted = false
-    private var mutePending = false
     private var focusLost = false
     private var startupEvidenceSent = false
     private var immediatelySilenced = false
+    private val microphoneControl = NativeRoomMicrophoneControl(scope, { closed },
+        captureMute = { room.setMicrophoneMute(it) },
+        trackEnabled = { room.localParticipant.setMicrophoneEnabled(it) },
+        changed = { muted = it; previous = null; listener.onMuteChanged(it) },
+        unavailable = { listener.onMicrophoneControlUnavailable() })
     private val routeListener = object : AudioDeviceChangeListener {
         override fun invoke(audioDevices: List<AudioDevice>, selectedAudioDevice: AudioDevice?) {
             scope.launch {
@@ -70,12 +75,12 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             if (closed) return@launch
             if (change == AudioManager.AUDIOFOCUS_GAIN) {
                 focusLost = false; previous = null
-                room.setMicrophoneMute(false); room.setSpeakerMute(false)
+                microphoneControl.focus(false); room.setSpeakerMute(false)
                 listener.onTransport("focus-gained")
             } else if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
                 focusLost = true; previous = null
                 // Do not mix a cellular call's audio with this customer's conversation.
-                room.setMicrophoneMute(true); room.setSpeakerMute(true)
+                microphoneControl.focus(true); room.setSpeakerMute(true)
                 listener.onTransport("focus-lost")
             }
         }
@@ -278,17 +283,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     }
 
     override fun setMuted(value: Boolean) {
-        if (closed || mutePending) return
-        mutePending = true; previous = null
-        scope.launch {
-            try {
-                if (!room.localParticipant.setMicrophoneEnabled(!value)) throw IllegalStateException("Microphone update failed.")
-                if (!closed) { muted = value; listener.onMuteChanged(value) }
-            }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { reportFailure(error, NativeRoomAudioSetup.Stage.MICROPHONE_CONTROL) }
-            finally { mutePending = false }
-        }
+        microphoneControl.request(value)
     }
 
     override fun setSpeaker(value: Boolean) {
