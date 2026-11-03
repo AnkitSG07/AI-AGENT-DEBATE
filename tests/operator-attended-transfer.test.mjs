@@ -40,8 +40,12 @@ test('private handover keeps A and customer connected until A explicitly complet
     transferId: privateReady.call.transfer.id, version: privateReady.call.version });
   assert.equal(deciding.call.ownerDeviceId, 'a', 'changing the route is not yet verified customer audio');
   assert.equal(deciding.call.transfer.consultStage, 'customer');
+  assert.equal(customerOnHold(await f.store.get(callStoreKey(canonical.id))), true, 'music continues until destination customer audio is verified');
   const completed = await f.ready({ ...deciding, readinessNonce: accepted.readinessNonce });
   assert.equal(completed.call.ownerDeviceId, 'b');
+  assert.equal(customerOnHold(await f.store.get(callStoreKey(canonical.id))), false);
+  await assert.rejects(f.runtime.end('a', completed.call.sessionId, {requestId: 'source-late-end-001', expectedOwnerLegId: canonical.owner.legId}), error => ['NOT_CALL_OWNER', 'CALL_LEG_CHANGED'].includes(error.code));
+  assert.equal((await f.store.get(callStoreKey(canonical.id))).active, true);
   await f.controller.drainOutbox(canonical.id);
   assert.equal(f.effects.some(effect => effect.kind === 'terminate'), false);
   assert.equal(f.effects.some(effect => effect.kind === 'detach' && effect.identity === canonical.owner.identity), true);

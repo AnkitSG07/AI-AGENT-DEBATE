@@ -109,3 +109,35 @@ test('slow relay preparation never blocks Create or End and is reused by Join', 
   release(); await rejected;
   assert.equal(requests, 2, 'Join must reuse the preparation already in flight');
 });
+
+test('R25 customer links are short, open without a fragment, and previews cannot claim the seat', async t => {
+  const f = fixture(t); f.service.authorize = async () => ({deviceId: 'a', nativeBuild: 25});
+  const links = await f.service.create({}, {requestId: 'short-video-0001'}), code = new URL(links.customerUrl).pathname.split('/').at(-1);
+  assert.match(links.customerUrl, /^https:\/\/ai-agent-debate\.onrender\.com\/v\/[A-Za-z0-9_-]{24}$/);
+  assert.ok(links.customerUrl.length < 70);
+  const first = f.service.invitation(code), second = f.service.invitation(code);
+  assert.deepEqual(first, second); assert.equal(first.role, 'customer');
+  assert.equal(f.service.rooms.get(first.id).roles.customer.clientId, undefined);
+  await f.service.join(first.id, first.token, {clientId:'real-customer-client-001'});
+  assert.equal(f.service.rooms.get(first.id).roles.customer.clientId, 'real-customer-client-001');
+  await f.service.endFromDevice({}, first.id); assert.throws(() => f.service.invitation(code), {code:'VIDEO_LINK_EXPIRED'});
+});
+test('explicit fresh R25 call replaces only the same device abandoned room', async t => {
+  const f = fixture(t); f.service.authorize = async c => ({deviceId: c.deviceId || 'a', nativeBuild: 25});
+  const a = await session(f), b = await f.service.create({deviceId: 'b'}, {requestId:'other-video-0001'});
+  const old = identity(a.links.operatorUrl), other = identity(b.operatorUrl);
+  await f.service.create({}, {requestId:'new-video-0002', replaceActive:true});
+  assert.equal(f.service.rooms.get(old.id).ended, true); assert.equal(f.service.rooms.get(other.id).ended, false);
+});
+test('short-link HTTP page is no-store and invitation resolver returns only customer access', async t => {
+  const f = fixture(t); f.service.authorize = async () => ({deviceId: 'a', nativeBuild: 25});
+  const links = await f.service.create({}, {requestId:'page-video-0001'}), path = new URL(links.customerUrl).pathname;
+  const app = express(); app.use(express.json()); f.service.mount(app);
+  const server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
+  t.after(() => {server.closeAllConnections(); server.close();});
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const page = await fetch(base + path); assert.equal(page.status, 200); assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.equal(page.headers.get('referrer-policy'), 'no-referrer'); assert.match(await page.text(), /Join video call/);
+  const response = await fetch(base + '/api/sh-video/invitation', {method:'POST',headers:{Authorization:'Bearer ' + path.split('/').at(-1)}});
+  const data = await response.json(); assert.equal(data.role,'customer'); assert.notEqual(data.token, identity(links.operatorUrl).token);
+});

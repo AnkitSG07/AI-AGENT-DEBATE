@@ -138,7 +138,7 @@ class NativeRoomCallService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null || epoch != 0L) return START_NOT_STICKY
-        if (NativeVideoCallService.isRunning()) { finishLocal("failed", "Finish the video call before answering a voice call."); return START_NOT_STICKY }
+        if (NativeVideoSession.active() || NativeVideoCallService.isRunning()) { finishLocal("failed", "Finish the video call before answering a voice call."); return START_NOT_STICKY }
         val clientAttempt = intent.getStringExtra("client_attempt_id")
         if (NativeRoomUiBinding.validAttemptId(clientAttempt)) requestId = clientAttempt!!
         callId = intent.getStringExtra("call_id") ?: ""
@@ -480,10 +480,6 @@ class NativeRoomCallService : Service() {
         val incomingVersion = call.optLong("version", -1)
         if (!guard.acceptVersion(epoch, incomingVersion)) return
         version = incomingVersion
-        updateReadinessContext(call)
-        updateCallTools(call)
-        configureCallRouting(call)
-        call.optJSONObject("recording")?.let { engine?.configureRecording(it) }
         providerCallId = NativeRoomJson.text(call,"providerCallId", providerCallId)
         if (channelId == 0) channelId = call.optInt("channelId", 0)
         val phase = call.optString("phase")
@@ -499,6 +495,12 @@ class NativeRoomCallService : Service() {
         if (transferId.isEmpty() && owner.isNotEmpty() && owner != credential.deviceId) {
             finishLocal("transferred", "Call transferred to the other phone"); return
         }
+        // A completed source leg must close without republishing its microphone
+        // into the customer's route. Only the continuing destination applies it.
+        updateReadinessContext(call)
+        updateCallTools(call)
+        configureCallRouting(call)
+        call.optJSONObject("recording")?.let { engine?.configureRecording(it) }
         if (transferId.isNotEmpty()) {
             if (consultReady && consultStage in listOf("private", "merged")) {
                 readyCommitted = true

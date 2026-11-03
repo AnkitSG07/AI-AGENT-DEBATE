@@ -24,8 +24,8 @@ public final class NativeVideoCallService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel("sh_video_active", "Active video calls", NotificationManager.IMPORTANCE_LOW));
-        PendingIntent open = PendingIntent.getActivity(this, 940, new Intent(this, NativeVideoCallActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        PendingIntent end = PendingIntent.getActivity(this, 941, new Intent(this, NativeVideoCallActivity.class).putExtra("end", true).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent open = PendingIntent.getActivity(this, 940, NativeVideoSession.open(this), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent end = PendingIntent.getActivity(this, 941, NativeVideoSession.open(this).putExtra("end", true), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification note = new Notification.Builder(this, "sh_video_active").setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("SH Chat video call").setContentText("Tap to return to your call")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_CALL)

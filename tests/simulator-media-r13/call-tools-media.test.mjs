@@ -124,6 +124,26 @@ test('hold music, private handover privacy, conference, and continuous recorded 
       for (const ms of [29500, 30050, 31000]) assert.ok(amplitude(440, ms) > .005, `customer audio continues across part boundary at ${ms}ms`);
       phases.push({ name: 'recorded duration', seconds: pcm.length / 32000, parts: parts.length,
         customerPrivateAmplitude: amplitude(440, privateMs), privateOperatorAmplitude: Math.max(amplitude(660, privateMs), amplitude(880, privateMs)) });
+      // Reproduce the reported Complete path with a hold-only worker (R24+
+      // records on the phone). Both real peer audio directions must survive
+      // removing A and promptly disconnecting the unused hold participant.
+      await until(() => !manager.calls.get(call.id)?.child, 'unused recorder disconnected');
+      await manager.prepareHold(call);
+      manager.sync(held); await route(a, ['B'], ['B']); await route(b, ['A'], ['A']);
+      await hears(customer, mediaIdentity, true, 'customer hears music during private handover');
+      const completing = { ...held, transfer: { ...held.transfer, consultStage: 'customer' } };
+      manager.sync(completing); await route(a, [], []);
+      await hears(customer, mediaIdentity, true, 'Complete retains music before destination readiness');
+      await route(b, ['customer', mediaIdentity], ['customer']);
+      await hears(b, 'customer', true, 'destination hears customer before ownership change');
+      await hears(customer, 'B', true, 'customer hears destination before source leaves');
+      const completeAt = Date.now();
+      manager.sync({ ...completing, owner: { ...call.owner, deviceId: 'b', identity: 'B' }, transfer: { ...completing.transfer, status: 'completing' } });
+      await a.evaluate(() => room.disconnect());
+      await until(() => !manager.calls.get(call.id)?.child, 'hold-only worker released after handover');
+      await hears(b, 'customer', true, 'destination audio survives source and hold-worker exit');
+      await hears(customer, 'B', true, 'customer audio survives completed handover');
+      phases.push({ name: 'complete handover preserves both audio directions', elapsedMs: Date.now() - completeAt });
       await writeFile(resolve(out, 'result.json'), JSON.stringify({ passed: true, phases }, null, 2));
     } finally {
       manager?.close(call.id); await browser?.close(); if (server) await new Promise(resolve => server.close(resolve));

@@ -136,9 +136,14 @@
     if (!video && window.SHNativeCapabilities?.videoLinks === true) {
       video = document.createElement("button"); video.id = "shNativeVideoBtn";
       video.type = "button"; video.className = "sh-op-head-tool";
-      video.title = "Video call link"; video.setAttribute("aria-label", "Start private video call");
+      video.title = "Video call"; video.setAttribute("aria-label", "Start private video call");
       video.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="5" width="14" height="14" rx="3"/><path d="m16 9 6-4v14l-6-4"/></svg>';
-      video.addEventListener("click", event => { if (event.isTrusted && window.SHNativeCapabilities?.videoLinks) window.SHNative.postMessage(JSON.stringify({type:"native-video"})); });
+      video.addEventListener("click", event => {
+        if (!event.isTrusted || !window.SHNativeCapabilities?.videoLinks) return;
+        if (window.SHNativeCapabilities.activeVideo) { window.SHNative.postMessage(JSON.stringify({type:"native-video", action:"resume"})); return; }
+        if (window.SHNativeVideoInvitations !== 1) { window.alert("Refresh SH Chat to load the updated video invitation controls."); return; }
+        window.dispatchEvent(new CustomEvent("sh-native-video-start"));
+      });
       voice.after(video);
     }
     if (video) video.hidden = window.SHNativeCapabilities?.videoLinks !== true;

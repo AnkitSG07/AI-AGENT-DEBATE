@@ -3,17 +3,18 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), parts = location.hash.slice(1).split('.');
-  const [id, role, token] = parts;
-  const valid = /^[A-Za-z0-9_-]{32}$/.test(id || '') && ['operator', 'customer'].includes(role) && /^[A-Za-z0-9_-]{32}$/.test(token || '');
+  let [id, role, token] = parts;
+  let valid = /^[A-Za-z0-9_-]{32}$/.test(id || '') && ['operator', 'customer'].includes(role) && /^[A-Za-z0-9_-]{32}$/.test(token || '');
   const clientId = crypto.randomUUID();
-  const endpoint = `/api/sh-video/${encodeURIComponent(id || '')}`;
+  let endpoint = `/api/sh-video/${encodeURIComponent(id || '')}`;
   let stream, pc, closed = false, joining = false, sending = Promise.resolve(), cursor = 0, readerAbort, disconnectTimer, facing = 'user', offering = false, offered = false;
-  let pendingCandidates = [], processing = Promise.resolve(), expiresTimer, recoveryTimer, focusAllowed = true, joined = false;
+  let pendingCandidates = [], processing = Promise.resolve(), expiresTimer, recoveryTimer, focusAllowed = true, joined = false, claimed = false;
   const native = value => window.SHVideoNative?.postMessage(JSON.stringify(value));
+  const supported = () => !!navigator.mediaDevices?.getUserMedia && typeof RTCPeerConnection === 'function';
   const status = text => { $('status').textContent = text; $('liveStatus').textContent = text; };
   async function request(path, body) {
     const response = await fetch(endpoint + path, { method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
-      cache: 'no-store', keepalive: body.type === 'end', signal: AbortSignal.timeout(10000), body: JSON.stringify({clientId, ...body}) });
+      cache: 'no-store', keepalive: body.type === 'end', signal: AbortSignal.timeout(15000), body: JSON.stringify({clientId, ...body}) });
     const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'The connection is unavailable.'); return data;
   }
   function signal(type, fields = {}) {
@@ -30,9 +31,9 @@
     if (closed) return;
     closed = true; clearTimeout(disconnectTimer); clearTimeout(expiresTimer); clearTimeout(recoveryTimer); readerAbort?.abort();
     stream?.getTracks().forEach(track => track.stop()); pc?.close();
-    if (notify && valid && joined) void request('/signal', {type: 'end', messageId: crypto.randomUUID()}).catch(() => {});
+    if (notify && valid && (joined || claimed)) void request('/signal', {type: 'end', messageId: crypto.randomUUID()}).catch(() => {});
     $('controls').hidden = true; $('intro').hidden = false; $('join').hidden = true; $('play').hidden = true;
-    $('local').srcObject = null; $('remote').srcObject = null; document.body.classList.remove('joined'); status(message); native({type: 'ended'});
+    $('local').srcObject = null; $('remote').srcObject = null; document.body.classList.remove('joined', 'connected', 'waiting'); $('participant').textContent = 'Call ended'; $('invitation').textContent = ''; $('copy').hidden = true; status(message); native({type: 'ended'});
   }
   window.SHVideoEnd = () => stop();
   window.SHVideoBackground = () => { if (stream) { stream.getVideoTracks().forEach(t => { t.enabled = false; }); $('camera').setAttribute('aria-pressed', 'true'); } };
@@ -86,16 +87,27 @@
   }
   async function join() {
     if (!valid || joining || closed) return;
-    joining = true; $('join').disabled = true; status('Opening camera and microphone…');
+    if (!supported()) { status('Open this invitation in Chrome or Safari to use your camera and microphone.'); return; }
+    joining = true; $('join').disabled = true; document.body.classList.add('waiting'); status('Opening camera and microphone…');
+    if (window.SHVideoNative) { $('controls').hidden = false; $('join').hidden = true; }
     try {
-      // Permission prompt and relay authorization run together, never serially.
-      const results = await Promise.allSettled([navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}, video: {width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 24, max: 30}, facingMode: facing}}), request('/join', {})]);
+      // Do not claim a customer's link before permission succeeds. An in-app
+      // browser refusal must leave the same invitation usable in Chrome.
+      const media = navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}, video: {width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 24, max: 30}, facingMode: facing}});
+      const authorization = (role === 'customer' ? media : Promise.resolve()).then(() => {
+        if (closed) throw new Error('Call ended');
+        return request('/join', {}).then(config => { claimed = true; if (closed) void request('/signal', {type: 'end', messageId: crypto.randomUUID()}).catch(() => {}); return config; });
+      });
+      const results = await Promise.allSettled([media, authorization]);
       if (results[0].status === 'fulfilled') stream = results[0].value;
       if (closed) { stream?.getTracks().forEach(t => t.stop()); return; }
       if (results[0].status !== 'fulfilled' || results[1].status !== 'fulfilled') throw results.find(r => r.status === 'rejected').reason;
       const config = results[1].value; pc = new RTCPeerConnection({iceServers: config.iceServers, bundlePolicy: 'max-bundle'});
       joined = true;
-      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      for (const track of stream.getTracks()) {
+        track.enabled = track.kind === 'audio' ? focusAllowed && $('mic').getAttribute('aria-pressed') !== 'true' : $('camera').getAttribute('aria-pressed') !== 'true';
+        pc.addTrack(track, stream);
+      }
       for (const sender of pc.getSenders()) if (sender.track?.kind === 'video') {
         const params = sender.getParameters(); if (!params.encodings?.length) params.encodings = [{}]; params.encodings[0].maxBitrate = 800000; await sender.setParameters(params).catch(() => {});
       }
@@ -104,14 +116,14 @@
       pc.ontrack = event => { $('remote').srcObject = event.streams[0]; $('remote').play().catch(() => { $('play').hidden = false; }); };
       pc.onconnectionstatechange = () => {
         if (closed) return;
-        if (pc.connectionState === 'connected') { clearTimeout(disconnectTimer); clearTimeout(recoveryTimer); recoveryTimer = null; status('Connected'); native({type: 'connected'}); }
+        if (pc.connectionState === 'connected') { clearTimeout(disconnectTimer); clearTimeout(recoveryTimer); recoveryTimer = null; document.body.classList.add('connected'); document.body.classList.remove('waiting'); status('Connected'); native({type: 'connected'}); }
         else if (['disconnected', 'failed'].includes(pc.connectionState)) {
           status('Reconnecting…'); clearTimeout(disconnectTimer);
           disconnectTimer = setTimeout(() => { if (role === 'operator') void offer(true).catch(() => {}); else void signal('restart').catch(() => {}); }, 500);
           if (!recoveryTimer) recoveryTimer = setTimeout(() => stop('Connection lost. Please ask for a new video link.'), 20000);
         }
       };
-      $('controls').hidden = false; $('intro').hidden = true; document.body.classList.add('joined'); status('Waiting for the other participant…');
+      $('controls').hidden = false; $('join').hidden = true; document.body.classList.add('joined'); status(role === 'operator' ? 'Waiting for customer to join…' : 'Waiting for Smart Handicrafts…');
       if (window.SHVideoNative) { $('speaker').hidden = false; native({type: 'joining'}); }
       expiresTimer = setTimeout(() => stop('This video session reached its 30-minute limit.'), Math.max(0, config.expiresAt - Date.now()));
       void events(); await signal('ready');
@@ -119,9 +131,18 @@
       stream?.getTracks().forEach(t => t.stop()); pc?.close();
       if (joined) { stop('Could not connect. Please ask for a new video link.'); return; }
       status(error.name === 'NotAllowedError' ? 'Allow camera and microphone access to join.' : error.message || 'Could not join. Please try again.');
-      $('join').disabled = false; joining = false;
+      $('join').disabled = false; $('join').hidden = false; joining = false; document.body.classList.remove('waiting');
     }
   }
+  $('minimize').onclick = () => native({type: 'minimize'});
+  $('share').onclick = () => native({type: 'share'});
+  $('copy').onclick = () => native({type: 'copy'});
+  window.SHVideoContext = value => {
+    if (closed) return;
+    const name = String(value.name || 'Customer').slice(0, 160); $('participant').textContent = name;
+    document.querySelector('.mark').textContent = name.split(/\s+/).slice(0, 2).map(word => word[0] || '').join('').toUpperCase();
+    $('invitation').textContent = String(value.invitation || 'Sending invitation…');
+  };
   $('join').onclick = join; $('end').onclick = () => stop();
   $('mic').onclick = () => { const muted = $('mic').getAttribute('aria-pressed') !== 'true'; stream?.getAudioTracks().forEach(t => { t.enabled = !muted && focusAllowed; }); $('mic').setAttribute('aria-pressed', String(muted)); $('mic').setAttribute('aria-label', muted ? 'Unmute microphone' : 'Mute microphone'); };
   $('camera').onclick = () => { const off = $('camera').getAttribute('aria-pressed') !== 'true'; stream?.getVideoTracks().forEach(t => { t.enabled = !off; }); $('camera').setAttribute('aria-pressed', String(off)); $('camera').setAttribute('aria-label', off ? 'Turn camera on' : 'Turn camera off'); };
@@ -141,5 +162,32 @@
   window.SHVideoSpeaker = enabled => { $('speaker').setAttribute('aria-pressed', String(enabled)); $('speaker').setAttribute('aria-label', enabled ? 'Use earpiece' : 'Use speaker'); };
   $('play').onclick = () => { $('remote').play().then(() => { $('play').hidden = true; }).catch(() => {}); };
   window.addEventListener('pagehide', () => stop());
-  if (!valid) { $('join').disabled = true; status('This private link is incomplete. Please ask for a new link.'); }
+  async function initialize() {
+    const code = location.pathname.match(/^\/v\/([A-Za-z0-9_-]{24})$/)?.[1];
+    if (code) {
+      $('join').disabled = true; status('Opening your invitation…');
+      try {
+        const response = await fetch('/api/sh-video/invitation', {method: 'POST', cache: 'no-store', headers: {Authorization: 'Bearer ' + code}, signal: AbortSignal.timeout(10000)});
+        const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'Could not open this invitation.');
+        ({id, role, token} = data); valid = /^[A-Za-z0-9_-]{32}$/.test(id) && role === 'customer' && /^[A-Za-z0-9_-]{32}$/.test(token);
+        endpoint = `/api/sh-video/${encodeURIComponent(id)}`;
+      } catch (error) { status(error.message || 'Could not open this invitation. Please reopen the link.'); $('join').hidden = true; return; }
+    }
+    if (!valid) { $('join').disabled = true; status('This private link is incomplete. Please ask for a new link.'); return; }
+    $('join').disabled = false; status('Join with your camera and microphone.');
+    if (/Android/i.test(navigator.userAgent) && !window.SHVideoNative) {
+      const url = location.href;
+      $('browser').href = 'intent://' + location.host + location.pathname + location.hash + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+      // Embedded browsers may not expose camera capture. Offer a genuine,
+      // user-clicked browser handoff instead of a silent, blocked popup.
+      $('browser').hidden = !(/; wv\)|WhatsApp|FBAN|Instagram/i.test(navigator.userAgent) || !supported());
+    }
+    if (!supported()) { status('Open this invitation in Chrome or Safari to use your camera and microphone.'); $('join').disabled = true; }
+    if (window.SHVideoNative && role === 'operator') {
+      $('minimize').hidden = false; $('share').hidden = false; $('copy').hidden = false;
+      $('participant').textContent = 'Customer'; $('invitation').textContent = 'Sending invitation…';
+      void join();
+    }
+  }
+  void initialize();
 })();

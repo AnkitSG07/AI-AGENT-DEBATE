@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { requireValue, MediaError } from '../media/errors.mjs';
 
 const opaque = () => randomBytes(24).toString('base64url');
@@ -29,12 +30,17 @@ export class VideoLinks {
     requireValue(typeof body.requestId === 'string' && /^[A-Za-z0-9_-]{8,100}$/.test(body.requestId), 'INVALID_REQUEST_ID', 'A video request identity is required.', 400);
     const prior = [...this.rooms.values()].find(r => r.deviceId === actor.deviceId && r.requestId === body.requestId);
     if (prior && !prior.ended) return this.links(prior);
-    requireValue(![...this.rooms.values()].some(r => r.deviceId === actor.deviceId && !r.ended), 'VIDEO_BUSY', 'End the current video link before creating another.', 409);
+    const active = [...this.rooms.values()].filter(r => r.deviceId === actor.deviceId && !r.ended);
+    // A new explicit tap after Android process death can replace only this
+    // enrolled device's abandoned session. Ordinary retries reuse requestId.
+    if (body.replaceActive === true && actor.nativeBuild >= 24) active.forEach(r => this.end(r));
+    else requireValue(!active.length, 'VIDEO_BUSY', 'Return to the current video call before creating another.', 409);
     const limit = this.limits.get(actor.deviceId) || { count: 0, until: this.now() + 3600000 };
     requireValue(limit.count < 12 && [...this.rooms.values()].filter(r => !r.ended).length < 20,
       'VIDEO_BUSY', 'Video links are busy. Try again shortly.', 429);
     limit.count++; this.limits.set(actor.deviceId, limit);
-    const room = { id: opaque(), deviceId: actor.deviceId, requestId: body.requestId,
+    const room = { id: opaque(), invitation: randomBytes(18).toString('base64url'), deviceId: actor.deviceId, requestId: body.requestId,
+      shortLink: actor.nativeBuild >= 25 || body.shortLink === true,
       createdAt: this.now(), expiresAt: this.now() + 30 * 60000, joinUntil: this.now() + 10 * 60000,
       roles: { operator: { token: opaque() }, customer: { token: opaque() } },
       events: [], sequence: 0, subscribers: new Map(), seen: new Set(), signalWindow: this.now(), signals: 0, ended: false };
@@ -50,7 +56,14 @@ export class VideoLinks {
     const origin = this.env.SH_VIDEO_PUBLIC_ORIGIN || 'https://ai-agent-debate.onrender.com';
     requireValue(/^https:\/\/[a-z0-9.-]+(?::\d+)?$/.test(origin), 'VIDEO_CONFIG_INVALID', 'Video origin configuration is invalid.', 503);
     const link = role => `${origin}/video-call.html#${room.id}.${role}.${room.roles[role].token}`;
-    return { operatorUrl: link('operator'), customerUrl: link('customer'), expiresAt: room.joinUntil };
+    return { operatorUrl: link('operator'), customerUrl: room.shortLink ? `${origin}/v/${room.invitation}` : link('customer'), expiresAt: room.joinUntil };
+  }
+  invitation(code) {
+    this.prune();
+    const room = typeof code === 'string' && /^[A-Za-z0-9_-]{24}$/.test(code) && [...this.rooms.values()].find(row => row.invitation === code);
+    requireValue(room && !room.ended && this.now() < room.joinUntil, 'VIDEO_LINK_EXPIRED', 'This invitation has ended or expired. Ask for a new video call.', 410);
+    // Link previews never claim the customer seat or request media permission.
+    return { id: room.id, role: 'customer', token: room.roles.customer.token };
   }
   access(id, token, clientId, claim = false) {
     this.prune(); const room = this.rooms.get(id);
@@ -122,6 +135,10 @@ export class VideoLinks {
     this.end(room); return { ended: true };
   }
   mount(app) {
+    app.get('/v/:code', (req, res) => {
+      res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+      res.sendFile(fileURLToPath(new URL('../public/video-call.html', import.meta.url)));
+    });
     const token = req => String(req.headers.authorization || '').replace(/^Bearer /, '');
     const wrap = action => async (req, res) => {
       res.set('Cache-Control', 'no-store');
@@ -132,6 +149,7 @@ export class VideoLinks {
         code: e instanceof MediaError ? e.code : 'VIDEO_UNAVAILABLE', error: e instanceof MediaError ? e.message : 'Video is temporarily unavailable.' }); else res.end(); }
     };
     app.get('/api/operator-android/video-config', wrap(async req => { await this.authorize(req); return { enabled: this.enabled() }; }));
+    app.post('/api/sh-video/invitation', wrap(req => this.invitation(token(req))));
     app.post('/api/operator-android/video-calls', wrap(req => this.create(req, req.body)));
     app.post('/api/operator-android/video-calls/:id/end', wrap(req => this.endFromDevice(req, req.params.id)));
     app.post('/api/sh-video/:id/join', wrap(req => this.join(req.params.id, token(req), req.body)));

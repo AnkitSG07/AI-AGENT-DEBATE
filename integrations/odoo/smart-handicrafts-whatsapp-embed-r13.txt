@@ -8786,6 +8786,9 @@ Once received, our team will prepare the quotation accordingly.`
   function setupHubNativeBridge() {
     if (!hasHubNativeBridge()) return;
     const signal = state.lifecycleController.signal;
+    window.addEventListener("sh-native-video-start", startNativeVideoInvitation, { signal });
+    window.addEventListener("sh-native-video-created", receiveNativeVideoInvitation, { signal });
+    window.SHNativeVideoInvitations = 1;
     window.addEventListener("sh-native-message-state", receiveAppMessageState, { signal });
     window.addEventListener("sh-native-call-changed", receiveHubNativeCallChanged, { signal });
     window.addEventListener("sh-native-message-changed", event => {
@@ -11866,6 +11869,42 @@ Once received, our team will prepare the quotation accordingly.`
     }
 
     return true;
+  }
+
+  const nativeVideoInvitations = new Map();
+  function startNativeVideoInvitation() {
+    if (state.destroyed || !state.session?.uid || !hasHubNativeBridge()) return;
+    const channel = state.selectedChannel;
+    if (!channel || !["whatsapp", "livechat"].includes(channel.channel_type)) { showOperatorToast("Open the customer's chat to start a video call."); return; }
+    if (channel.channel_type === "whatsapp" && !isWhatsappWindowOpen(channel)) { showOperatorToast("The WhatsApp reply window is closed. Send an approved template first."); return; }
+    if ([...nativeVideoInvitations.values()].some(row => row.state === "creating")) return;
+    const requestId = crypto.randomUUID();
+    nativeVideoInvitations.set(requestId, { channel: { ...channel }, uid: state.session.uid, state: "creating" });
+    if (nativeVideoInvitations.size > 40) for (const [id, row] of nativeVideoInvitations) {
+      if (!["creating", "sending"].includes(row.state)) nativeVideoInvitations.delete(id);
+      if (nativeVideoInvitations.size <= 30) break;
+    }
+    postHubNativeMessage({ type: "native-video", requestId, channelId: Number(channel.id), displayName: channelDisplayName(channel) });
+  }
+  async function receiveNativeVideoInvitation(event) {
+    const detail = event?.detail, pending = nativeVideoInvitations.get(detail?.requestId);
+    if (!pending || pending.state !== "creating" || Number(detail.channelId) !== Number(pending.channel.id)) return;
+    if (state.destroyed || state.session?.uid !== pending.uid) { pending.state = "cancelled"; return; }
+    if (detail.error) { pending.state = "failed"; showOperatorToast(detail.error); return; }
+    // Only the customer capability is sent, bound to the chat selected at the
+    // original tap. Switching chats or duplicate callbacks cannot retarget it.
+    if (!/^https:\/\/ai-agent-debate\.onrender\.com\/v\/[A-Za-z0-9_-]{24}$/.test(detail.customerUrl || "")) { pending.state = "failed"; showOperatorToast("The video invitation was not valid."); return; }
+    pending.state = "sending";
+    let outcome = "uncertain";
+    try {
+      const sent = await postTextToChannel(pending.channel, "Join our private SH Chat video call:\n" + detail.customerUrl, { reload: false });
+      if (sent) { outcome = "sent"; pending.state = "sent";
+        // Refresh is independent of delivery acknowledgement and never sends again.
+        if (Number(state.selectedChannelId) === Number(pending.channel.id)) void loadMessages(pending.channel.id, { scrollToBottom: true, force: true }).catch(() => {});
+        void loadChannels({ preserveSelection: true }).catch(() => {});
+      } else { pending.state = "failed"; outcome = "failed"; }
+    } catch (_) { pending.state = "uncertain"; showOperatorToast("Check the chat before sharing again: the invitation delivery could not be confirmed."); }
+    postHubNativeMessage({ type: "native-video-invitation-result", requestId: detail.requestId, outcome });
   }
 
   async function postTextToCurrentChannel(text, { reload = true } = {}) {

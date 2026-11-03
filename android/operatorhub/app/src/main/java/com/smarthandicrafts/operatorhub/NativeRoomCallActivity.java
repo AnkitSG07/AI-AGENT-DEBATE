@@ -749,7 +749,7 @@ public final class NativeRoomCallActivity extends Activity {
             }
         } else clearTransferDirectory();
         if (closed) {
-            if ("failed".equals(value.optString("state")) || "unavailable".equals(value.optString("state"))) Toast.makeText(this, value.optString("detail"), Toast.LENGTH_LONG).show();
+            if ("failed".equals(value.optString("state")) || "unavailable".equals(value.optString("state")) || "transferred".equals(value.optString("state"))) Toast.makeText(this, value.optString("detail"), Toast.LENGTH_LONG).show();
             if (resumed) returnToChat(); else returnOnResume = true;
         }
     }

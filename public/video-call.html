@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; base-uri 'none'; form-action 'none'">
-<title>SH Chat · Private video call</title><link rel="stylesheet" href="/video-call.css"></head>
-<body><main><header><span class="brand">SH CHAT</span><span id="security">Private video call</span></header>
+<meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>SH Chat · Video call</title><link rel="stylesheet" href="/video-call.css"></head>
+<body><main>
+<header><button id="minimize" aria-label="Back to chat" hidden><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></button><span class="brand">SH CHAT <small>VIDEO CALL</small></span><button id="share" aria-label="Share customer invitation" hidden><svg viewBox="0 0 24 24"><path d="M12 16V3m-4 4 4-4 4 4M5 12v8h14v-8"/></svg></button></header>
 <video id="remote" autoplay playsinline></video><video id="local" autoplay playsinline muted></video>
-<section id="intro"><div class="mark">SH</div><h1>Let’s connect</h1><p id="status" role="status" aria-live="polite">Join with your camera and microphone.</p><button id="join" class="join">Join video call</button><p class="hint">Only people with this private link can join.<br>Share it only with your intended participant.</p></section>
+<section id="intro"><div class="mark" aria-hidden="true">SH</div><h1 id="participant">Smart Handicrafts</h1><p class="call-kind">Private video call</p><p id="status" role="status" aria-live="polite">Join with your camera and microphone.</p><div class="waiting-dots" aria-hidden="true"><i></i><i></i><i></i></div><button id="join" class="join">Join video call</button><p id="invitation" class="hint">Your camera and microphone turn on when you join.</p><button id="copy" class="text-action" hidden>Copy invitation link</button><a id="browser" class="browser-action" hidden>Open in Chrome</a></section>
 <p id="liveStatus" role="status" aria-live="polite"></p>
 <nav id="controls" aria-label="Call controls" hidden>
 <button id="mic" aria-label="Mute microphone" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Mute</span></button>

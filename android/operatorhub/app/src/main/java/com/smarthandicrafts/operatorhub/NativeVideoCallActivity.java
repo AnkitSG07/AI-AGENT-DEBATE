@@ -21,13 +21,14 @@ import java.util.*;
 public final class NativeVideoCallActivity extends Activity {
     static final String ORIGIN = "https://ai-agent-debate.onrender.com";
     private WebView web;
-    private LinearLayout root, shareBar;
+    private LinearLayout root;
     private String operatorUrl = "", customerUrl = "";
     private boolean ended, receiverRegistered, endRequested;
     private static final java.util.concurrent.ExecutorService CLEANUP = java.util.concurrent.Executors.newCachedThreadPool();
     private final BroadcastReceiver focusReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (intent.getBooleanExtra("failed", false)) { Toast.makeText(context, "Video could not acquire the microphone. Your other call stays active.", Toast.LENGTH_LONG).show(); endVideo(); return; }
+            if ("invitation".equals(intent.getStringExtra("update"))) { publishContext(); return; }
             if (web != null) web.evaluateJavascript("window.SHVideoFocus?.(" + intent.getBooleanExtra("allowed", false) + ")", null);
         }
     };
@@ -48,27 +49,21 @@ public final class NativeVideoCallActivity extends Activity {
     static boolean validUrl(String url, String role) {
         if (url == null) return false;
         Uri parsed = Uri.parse(url);
+        if ("customer".equals(role) && sameOrigin(parsed) && parsed.getQuery() == null && parsed.getFragment() == null && parsed.getPath() != null && parsed.getPath().matches("/v/[A-Za-z0-9_-]{24}")) return true;
         return ORIGIN.equals(parsed.getScheme() + "://" + parsed.getAuthority()) && "/video-call.html".equals(parsed.getPath()) && parsed.getQuery() == null &&
             parsed.getFragment() != null && parsed.getFragment().matches("[A-Za-z0-9_-]{32}\\." + role + "\\.[A-Za-z0-9_-]{32}");
     }
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        if (getIntent().getBooleanExtra("end", false)) { NativeVideoCallService.end(this); finish(); return; }
         if (NativeRoomCallService.isRunning()) { Toast.makeText(this, "Finish your voice call before opening video.", Toast.LENGTH_LONG).show(); finish(); return; }
+        if (getIntent().getStringExtra("operator_url") == null && NativeVideoSession.active()) {
+            boolean end = getIntent().getBooleanExtra("end", false); setIntent(NativeVideoSession.open(this).putExtra("end", end));
+        }
         operatorUrl = getIntent().getStringExtra("operator_url"); customerUrl = getIntent().getStringExtra("customer_url");
         if (!validUrl(operatorUrl, "operator") || !validUrl(customerUrl, "customer")) { NativeVideoCallService.end(this); finish(); return; }
+        if (getIntent().getBooleanExtra("end", false)) { endVideo(); return; }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(0xff101e24); setContentView(root);
-        shareBar = new LinearLayout(this); shareBar.setOrientation(LinearLayout.HORIZONTAL);
-        Button share = new Button(this); share.setText("Share customer link"); share.setOnClickListener(v -> {
-            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Join our private SH Chat video call: " + customerUrl);
-            startActivity(Intent.createChooser(send, "Send video invitation"));
-        });
-        Button copy = new Button(this); copy.setText("Copy link"); copy.setOnClickListener(v -> {
-            getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Private SH Chat video invitation", customerUrl));
-            Toast.makeText(this, "Customer link copied. Paste it into your chat.", Toast.LENGTH_LONG).show();
-        });
-        shareBar.addView(share, new LinearLayout.LayoutParams(0, -2, 1)); shareBar.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); root.addView(shareBar);
         ContextCompat.registerReceiver(this, focusReceiver, new IntentFilter(NativeVideoCallService.FOCUS), ContextCompat.RECEIVER_NOT_EXPORTED); receiverRegistered = true;
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO}, 240);
@@ -85,6 +80,14 @@ public final class NativeVideoCallActivity extends Activity {
             try {
                 JSONObject data = new JSONObject(message.getData()); String type = data.optString("type");
                 if ("ended".equals(type)) endVideo();
+                else if ("minimize".equals(type)) onBackPressed();
+                else if ("share".equals(type)) {
+                    Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "Join our private SH Chat video call:\n" + customerUrl);
+                    startActivity(Intent.createChooser(send, "Send video invitation"));
+                } else if ("copy".equals(type)) {
+                    getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("SH Chat video invitation", customerUrl));
+                    Toast.makeText(this, "Customer link copied", Toast.LENGTH_SHORT).show();
+                }
                 else if ("speaker".equals(type)) {
                     AudioManager audio = getSystemService(AudioManager.class); audio.setSpeakerphoneOn(data.optBoolean("enabled"));
                     web.evaluateJavascript("window.SHVideoSpeaker?.(" + audio.isSpeakerphoneOn() + ")", null);
@@ -92,6 +95,7 @@ public final class NativeVideoCallActivity extends Activity {
             } catch (Exception ignored) { }
         });
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) { publishContext(); }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return !validUrl(request.getUrl().toString(), "operator"); }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, android.net.http.SslError error) { handler.cancel(); endVideo(); }
             @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) { endVideo(); return true; }
@@ -112,28 +116,44 @@ public final class NativeVideoCallActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) openPage();
         else { Toast.makeText(this, "Camera and microphone access are needed for video.", Toast.LENGTH_LONG).show(); finish(); }
     }
-    @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); if (intent.getBooleanExtra("end", false)) endVideo(); }
+    private void publishContext() {
+        if (web == null || ended) return;
+        try { web.evaluateJavascript("window.SHVideoContext?.(" + new JSONObject()
+            .put("name", getIntent().getStringExtra("display_name"))
+            .put("invitation", NativeVideoSession.invitationStatus()) + ")", null); } catch (Exception ignored) { }
+    }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent.getBooleanExtra("end", false)) endVideo();
+        else { publishContext(); if (web != null) web.onResume(); }
+    }
     private void endVideo() {
         if (ended) return; ended = true;
         requestEnd();
         if (web != null) web.evaluateJavascript("window.SHVideoEnd?.()", null);
         NativeVideoCallService.end(this); finish();
     }
+    private void minimizeVideo() {
+        if (ended || !NativeVideoSession.active()) return;
+        if (NativeVideoCallService.isRunning() && !isInPictureInPictureMode() && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            try { enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(new Rational(3, 4)).build()); }
+            catch (RuntimeException ignored) { /* Audio and the ongoing notification remain available. */ }
+        }
+    }
     @Override public void onBackPressed() {
-        if (NativeVideoCallService.isRunning() && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
-            enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(new Rational(3, 4)).build());
-            startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-        } else if (!NativeVideoCallService.isRunning()) endVideo();
-        else moveTaskToBack(true);
+        minimizeVideo();
+        // Video has its own task. Returning to singleTask MainActivity must not
+        // clear the active WebView and send End to the customer.
+        startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
     }
-    @Override protected void onUserLeaveHint() {
-        super.onUserLeaveHint(); if (NativeVideoCallService.isRunning() && !ended && getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE))
-            enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(new Rational(3, 4)).build());
+    @Override protected void onUserLeaveHint() { super.onUserLeaveHint(); minimizeVideo(); }
+    @Override public void onPictureInPictureModeChanged(boolean inPip, Configuration config) {
+        super.onPictureInPictureModeChanged(inPip, config);
+        if (web != null) web.evaluateJavascript("document.body.classList.toggle('pip', " + inPip + ")", null);
     }
-    @Override public void onPictureInPictureModeChanged(boolean inPip, Configuration config) { super.onPictureInPictureModeChanged(inPip, config); if (shareBar != null) shareBar.setVisibility(inPip ? View.GONE : View.VISIBLE); }
     @Override protected void onStop() { super.onStop(); if (web != null && !isInPictureInPictureMode()) web.evaluateJavascript("window.SHVideoBackground?.()", null); }
     @Override protected void onDestroy() {
-        requestEnd();
+        requestEnd(); NativeVideoSession.finish(operatorUrl);
         if (receiverRegistered) unregisterReceiver(focusReceiver);
         if (web != null) { web.evaluateJavascript("window.SHVideoEnd?.()", null); web.destroy(); web = null; }
         NativeVideoCallService.end(this); super.onDestroy();

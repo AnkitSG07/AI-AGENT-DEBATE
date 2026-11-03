@@ -20,6 +20,7 @@ const groups = {
     'tests/operator-attended-transfer.test.mjs',
     'tests/operator-call-tools.test.mjs',
     'tests/operator-video-links.test.mjs',
+    'integrations/odoo/tests/r13/video-invitation.test.cjs',
     'tests/operator-message-preview.test.mjs',
     'tests/operator-notification-retry.test.mjs',
     'tests/operator-message-worker-priority.test.mjs',
