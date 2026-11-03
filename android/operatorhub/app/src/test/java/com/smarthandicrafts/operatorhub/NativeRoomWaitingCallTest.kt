@@ -33,6 +33,7 @@ import javax.net.ssl.HttpsURLConnection
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
 class NativeRoomWaitingCallTest {
+    @get:org.junit.Rule val offlineApi = OfflineNativeApiRule()
     private val oldCall = "out_0123456789abcdef0123456789abcdef"
     private val waitingCall = "out_waiting_valid_call_1234567890"
     private val attempt = "de3cc9b1-d0f7-4c06-a677-2c99cf8ef319"

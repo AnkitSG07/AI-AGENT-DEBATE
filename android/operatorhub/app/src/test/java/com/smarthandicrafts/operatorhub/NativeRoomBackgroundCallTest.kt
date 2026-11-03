@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
 class NativeRoomBackgroundCallTest {
+    @get:org.junit.Rule val offlineApi = OfflineNativeApiRule()
     private val call = "out_0123456789abcdef0123456789abcdef"
     private val attempt = "de3cc9b1-d0f7-4c06-a677-2c99cf8ef319"
     private lateinit var controller: ServiceController<NativeRoomCallService>

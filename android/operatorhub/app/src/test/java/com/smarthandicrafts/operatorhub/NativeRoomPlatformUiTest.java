@@ -32,6 +32,7 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 28, application = Application.class, qualifiers = "w320dp-h480dp-port-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class NativeRoomPlatformUiTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private static final String CALL = "out_0123456789abcdef0123456789abcdef";
     private static final String A = "de3cc9b1-d0f7-4c06-a677-2c99cf8ef319", B = "23f5e680-949b-45a7-93c5-24f2e85a8375";
     @Before public void installedSignaturePermission() {

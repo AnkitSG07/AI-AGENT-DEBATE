@@ -17,6 +17,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk = {28, 35}, application = Application.class)
 public class NativeRoomIncomingEventTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private static final String CALL = "out_0123456789abcdef0123456789abcdef";
     private Application app;
     private NotificationManager manager;

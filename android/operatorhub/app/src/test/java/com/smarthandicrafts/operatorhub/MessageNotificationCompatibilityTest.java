@@ -24,6 +24,7 @@ import static org.junit.Assert.*;
 /** Fault containment tests, not a claim that a particular physical OEM has this fault. */
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 28, application = Application.class)
 public class MessageNotificationCompatibilityTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private Application app; private NativeStore store; private NotificationManager manager;
     @Before public void setup() {
         app = RuntimeEnvironment.getApplication(); app.getSharedPreferences("native_private", Context.MODE_PRIVATE).edit().clear().commit();

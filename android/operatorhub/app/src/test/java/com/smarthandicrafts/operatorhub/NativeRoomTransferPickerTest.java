@@ -26,6 +26,7 @@ import static org.junit.Assert.*;
 @RunWith(org.robolectric.RobolectricTestRunner.class)
 @Config(sdk = 28, application = Application.class)
 public class NativeRoomTransferPickerTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private static final String CALL = "out_0123456789abcdef0123456789abcdef";
     private static final String ATTEMPT = "de3cc9b1-d0f7-4c06-a677-2c99cf8ef319";
     private ActivityController<NativeRoomCallActivity> activityController;

@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
 class NativeRoomLifecycleRegressionTest {
+    @get:org.junit.Rule val offlineApi = OfflineNativeApiRule()
     private lateinit var controller: ServiceController<NativeRoomCallService>
     private lateinit var service: NativeRoomCallService
     private lateinit var store: NativeStore
@@ -325,11 +326,14 @@ class NativeRoomLifecycleRegressionTest {
                 .put("ownerDeviceId", store.deviceId()).put("ownerLegId", "leg-A1").put("roomReady", true))
         })
         applyReadinessStatus(1, "accepting")
-        evidence(JSONObject().put("legId", "leg-A1").put("sampleAgeMs", 20))
+        val sample = JSONObject().put("legId", "leg-A1").put("sampleAgeMs", 20)
+        evidence(sample)
         assertEquals(0, requests.get())
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(100, TimeUnit.MILLISECONDS)
         applyReadinessStatus(2, "joining")
         runMainUntil { get("readyCommitted") == true }
         assertEquals(1, requests.get()); assertEquals(0, fake.closes)
+        assertEquals(20, sample.getInt("sampleAgeMs")) // transmission never ages the saved sample twice
     }
     @Test fun outdatedAudioSampleCannotBeRejuvenatedByAProviderStatusUpdate() {
         val requests = AtomicInteger()

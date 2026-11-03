@@ -11,6 +11,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28,application=Application.class)
 public class NativeCallPermissionStateTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     static final String TO="919001234567",ID="de3cc9b1-d0f7-4c06-a677-2c99cf8ef319";
     static JSONObject response(String status,boolean canCall,boolean canRequest,long expiry,String state,String id) throws Exception {
         JSONObject value=new JSONObject().put("ok",true).put("to",TO).put("permission",new JSONObject().put("status",status)

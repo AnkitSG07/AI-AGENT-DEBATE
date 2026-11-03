@@ -20,6 +20,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28, application=Application.class)
 public class NativeForegroundHintsTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     MainActivity activity; WebView web; NativeStore store; BroadcastReceiver receiver;
     Field field(String name) throws Exception { Field f=MainActivity.class.getDeclaredField(name); f.setAccessible(true); return f; }
     void set(String name,Object value) throws Exception { field(name).set(activity,value); }

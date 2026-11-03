@@ -31,6 +31,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 28, application = Application.class)
 public class NativeRoomCleanupPriorityTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private static final String OLD = "out_0123456789abcdef0123456789abcdef";
     private static final String FRESH = "out_abcdef0123456789abcdef0123456789";
     private static Field field(Class<?> type, String name) throws Exception {

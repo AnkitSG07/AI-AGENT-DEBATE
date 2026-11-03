@@ -26,6 +26,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28,application=Application.class)
 public class NativeCallPermissionUiTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private Application app;private NativeStore store;
     private static final String TO=NativeCallPermissionStateTest.TO;
     @Before public void setup(){

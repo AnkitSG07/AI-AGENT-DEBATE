@@ -13,6 +13,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 28, application = Application.class)
 public class NativeRoomCleanupProcessorTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private static final long NOW = 1793188800000L;
     private static final String ID = "android_1234567890abcdefghijklmnop", TOKEN = ID + ".abcdefghijklmnopqrstuvwxyz0123456789";
     private static final String CALL = "out_0123456789abcdef0123456789abcdef";

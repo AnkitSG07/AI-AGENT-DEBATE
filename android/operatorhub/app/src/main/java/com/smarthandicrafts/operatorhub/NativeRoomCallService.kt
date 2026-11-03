@@ -412,7 +412,7 @@ class NativeRoomCallService : Service() {
         lastReadinessVersion = version
         scope.launch {
             try {
-                val body = JSONObject().put("version", version).put("readinessNonce", nonce).put("evidence", evidence)
+                val body = JSONObject().put("version", version).put("readinessNonce", nonce).put("evidence", JSONObject(evidence.toString()))
                 val suffix = if (transferId.isEmpty()) "ready" else "transfers/${Uri.encode(transferId)}/ready"
                 val result = request(path(suffix), "POST", body, evidenceAt)
                 if (!guard.current(capturedEpoch) || !current()) return@launch

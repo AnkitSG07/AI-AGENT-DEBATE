@@ -674,6 +674,7 @@ scenario('R23 joins real audio during a delayed Accept and wakes exact operators
   assert.equal(ready.call.roomReady, true);
   await audio(f.customers.get(id).peer, accepted.join.identity, 660, 'R23 customer hears A');
   const before = await p.page.evaluate(() => window.controlHintCount());
+  f.lastAIdentity = accepted.join.identity;
   await f.handoff('a', 'b', id);
   assert.ok(await p.page.evaluate(() => window.controlHintCount()) > before, 'transfer wakes source without waiting on its poll');
   const customerHints = await f.customers.get(id).peer.page.evaluate(() => window.controlHintCount());

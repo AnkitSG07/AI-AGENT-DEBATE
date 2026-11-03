@@ -25,6 +25,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28, application=Application.class)
 public class NativeAppMessageBridgeTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private MainActivity activity;
     private WebView web;
     private NativeStore store;

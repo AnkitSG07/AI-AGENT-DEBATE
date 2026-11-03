@@ -20,6 +20,7 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28,application=Application.class)
 public class NativeApiHistoryBoundaryTest {
+    @org.junit.Rule public final OfflineNativeApiRule offlineApi = new OfflineNativeApiRule();
     private NativeApi.ConnectionFactory previous;
     private Fake connection;
     private AtomicInteger opened;
