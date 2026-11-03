@@ -383,7 +383,13 @@ public final class MainActivity extends Activity {
         else if ("request-settings".equals(type)) startActivity(new Intent(this, SettingsActivity.class));
         else if ("hub-call-read".equals(type)) readHubCallHistory(obj);
         else if ("appMessageState".equals(type)) appMessageState(obj);
-        else if ("native-video".equals(type) && hubReady) startVideoLink();
+        else if ("native-video".equals(type) && hubReady) startVideoLink(obj);
+        else if ("native-video-invitation-result".equals(type) && hubReady) {
+            String outcome = obj.optString("outcome");
+            String status = "sent".equals(outcome) ? "Invitation sent in chat" : "Check the chat: invitation could not be confirmed";
+            if (NativeVideoSession.updateInvitation(obj.optString("requestId"), status))
+                sendBroadcast(new Intent(NativeVideoCallService.FOCUS).setPackage(getPackageName()).putExtra("update", "invitation"));
+        }
         else if ("native-call".equals(type) && hubReady) {
             if (!activeCall.isEmpty() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Finish the current browser call before starting a native call."); return; }
             if (!new NativeStore(this).nativeRoomCalls() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Native calling is not enabled. Check App settings and the server connection."); return; }
@@ -571,23 +577,36 @@ public final class MainActivity extends Activity {
         } catch (Exception ignored) { }
     }
     private boolean nativeCapabilityLoading;
-    private boolean nativeVideoEnabled, videoStarting;
-    private void startVideoLink() {
-        if (!nativeVideoEnabled || videoStarting) return;
-        if (NativeRoomCallService.isRunning() || !activeCall.isEmpty()) { toast("Finish the current voice call before opening video."); return; }
-        if (NativeVideoCallService.isRunning()) { startActivity(new Intent(this, NativeVideoCallActivity.class)); return; }
+    private boolean nativeVideoEnabled, videoStarting, videoCapabilityChecked;
+    private void videoResult(String requestId, int channelId, String customerUrl, String error) {
+        if (web == null || !hubReady || !HubPolicy.trustedHubPage(web.getUrl())) return;
+        try { JSONObject value = new JSONObject().put("requestId", requestId).put("channelId", channelId)
+            .put("customerUrl", customerUrl).put("error", error);
+            web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sh-native-video-created',{detail:" + value + "}));", null);
+        } catch (Exception ignored) { }
+    }
+    private void startVideoLink(JSONObject input) {
+        if (NativeVideoSession.active()) { videoResult(input.optString("requestId"), input.optInt("channelId"), "", "Returning to your active video call."); startActivity(NativeVideoSession.open(this)); return; }
+        String requestId = input.optString("requestId"); int channelId = input.optInt("channelId");
+        if (!requestId.matches("[A-Za-z0-9_-]{16,100}") || channelId <= 0) { toast("Open the customer's chat to start a video call."); return; }
+        if (!nativeVideoEnabled || videoStarting) { videoResult(requestId, channelId, "", "Video is already starting or unavailable. Please try again."); return; }
+        if (NativeRoomCallService.isRunning() || !activeCall.isEmpty()) { videoResult(requestId, channelId, "", "Finish the current voice call before opening video."); return; }
         NativeStore store = new NativeStore(this); DeviceLeasePolicy.Credential credential = store.credential();
         videoStarting = true;
+        String name = input.optString("displayName", "Customer");
         HubApplication.IO.execute(() -> {
             try {
-                JSONObject result = NativeApi.request("/video-calls", "POST", new JSONObject().put("requestId", java.util.UUID.randomUUID().toString()), credential.bearer);
+                JSONObject result = NativeApi.request("/video-calls", "POST", new JSONObject().put("requestId", requestId).put("replaceActive", true).put("shortLink", true), credential.bearer);
                 runOnUiThread(() -> {
                     String operator = result.optString("operatorUrl"), customer = result.optString("customerUrl");
-                    if (isFinishing() || isDestroyed() || !store.matchesCredential(credential) || NativeRoomCallService.isRunning()) { NativeVideoCallActivity.cancelLink(this, operator); return; }
-                    if (!NativeVideoCallActivity.validUrl(operator, "operator") || !NativeVideoCallActivity.validUrl(customer, "customer")) { toast("The video invitation was not valid."); return; }
-                    startActivity(new Intent(this, NativeVideoCallActivity.class).putExtra("operator_url", operator).putExtra("customer_url", customer));
+                    if (isFinishing() || isDestroyed() || !store.matchesCredential(credential) || NativeRoomCallService.isRunning()) { NativeVideoCallActivity.cancelLink(this, operator); videoResult(requestId, channelId, "", "The video call was cancelled."); return; }
+                    if (!NativeVideoCallActivity.validUrl(operator, "operator") || !NativeVideoCallActivity.validUrl(customer, "customer")) { NativeVideoCallActivity.cancelLink(this, operator); videoResult(requestId, channelId, "", "The video invitation was not valid."); return; }
+                    NativeVideoSession.begin(this, operator, customer, name.substring(0, Math.min(160, name.length())), requestId);
+                    videoResult(requestId, channelId, customer, "");
+                    startActivity(NativeVideoSession.open(this));
+                    publishNativeCallCapabilities();
                 });
-            } catch (Exception error) { runOnUiThread(() -> toast("Could not create the video invitation. Please try again.")); }
+            } catch (Exception error) { runOnUiThread(() -> videoResult(requestId, channelId, "", "Could not create the video invitation. Please try again.")); }
             finally { runOnUiThread(() -> { videoStarting = false; }); }
         });
     }
@@ -595,12 +614,13 @@ public final class MainActivity extends Activity {
         NativeStore store = new NativeStore(this);
         publishNativeCallCapabilities();
         long age = System.currentTimeMillis() - store.roomCapabilityCheckedAt();
-        if (nativeCapabilityLoading || !store.enrolled() || (age >= 0 && age < 60000)) return;
+        if (nativeCapabilityLoading || !store.enrolled() || (age >= 0 && age < 60000 && videoCapabilityChecked)) return;
         DeviceLeasePolicy.Credential credential = store.credential(); nativeCapabilityLoading = true;
         HubApplication.IO.execute(() -> {
             try { NativeRoomCapabilities.refresh(this, credential); } catch (Exception ignored) { }
             try { nativeVideoEnabled = store.matchesCredential(credential) && NativeApi.request("/video-config", "GET", null, credential.bearer).optBoolean("enabled"); }
             catch (Exception ignored) { nativeVideoEnabled = false; }
+            videoCapabilityChecked = true;
             runOnUiThread(() -> { nativeCapabilityLoading = false; if (!isFinishing() && !isDestroyed()) publishNativeCallCapabilities(); });
         });
     }
@@ -612,7 +632,8 @@ public final class MainActivity extends Activity {
                 .put("callHistoryProxy", true)
                 .put("appMessageState", true)
                 .put("callChangeHints", true)
-                .put("videoLinks", nativeVideoEnabled)
+                .put("videoLinks", nativeVideoEnabled || NativeVideoSession.active())
+                .put("activeVideo", NativeVideoSession.active())
                 .put("activeCall", NativeRoomCallService.isRunning());
             JSONObject call = NativeRoomCallService.snapshot();
             if (call != null && !call.optBoolean("closed")) value.put("activeCallId", call.optString("callId"))

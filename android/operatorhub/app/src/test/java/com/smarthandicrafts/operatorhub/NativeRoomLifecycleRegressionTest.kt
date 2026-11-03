@@ -86,6 +86,34 @@ class NativeRoomLifecycleRegressionTest {
         transfer.put("status", "cancelled"); status(15)
         assertEquals("normal", fake.routing.optString("mode")); assertEquals("customer-media", fake.routing.optString("customerIdentity")); assertEquals(0, fake.closes)
     }
+    @Test fun completedSourceDoesNotRepublishOrEndTheDestinationCall() {
+        set("actualCustomerIdentity", "customer-media")
+        fake.routing = JSONObject().put("mode", "hold")
+        val result = JSONObject().put("call", JSONObject().put("version", 20).put("phase", "connected")
+            .put("ownerDeviceId", "android_destination_12345678").put("ownerLegId", "leg-B1").put("roomReady", true)
+            .put("transfer", JSONObject().put("id", "handover-1").put("status", "completing").put("mode", "consult").put("consultStage", "customer")))
+        NativeRoomCallService::class.java.getDeclaredMethod("applyStatus", JSONObject::class.java).apply { isAccessible = true }.invoke(service, result)
+        assertEquals(1, fake.closes)
+        assertEquals("hold", fake.routing.optString("mode"))
+        assertEquals("transferred", NativeRoomCallService.snapshot()!!.optString("state"))
+    }
+    @Test fun completedDestinationKeepsItsAudioAndOwnsTheSameJoinedLeg() {
+        set("legId", "leg-B1"); set("transferId", "handover-1"); set("ownsCustomer", false)
+        set("consultStage", "private"); set("actualCustomerIdentity", "customer-media")
+        fun status(version: Int, stage: String, owner: String, status: String) {
+            val result = JSONObject().put("call", JSONObject().put("version", version).put("phase", "connected")
+                .put("ownerDeviceId", owner).put("ownerLegId", if (owner == store.deviceId()) "leg-B1" else "leg-A1").put("roomReady", true)
+                .put("transfer", JSONObject().put("id", "handover-1").put("status", status).put("mode", "consult").put("consultStage", stage)
+                    .put("fromDeviceId", "android_source_1234567890").put("toDeviceId", store.deviceId()).put("sourceIdentity", "A").put("targetIdentity", "B").put("consultReady", true)))
+            NativeRoomCallService::class.java.getDeclaredMethod("applyStatus", JSONObject::class.java).apply { isAccessible = true }.invoke(service, result)
+        }
+        status(20, "customer", "android_source_1234567890", "connecting")
+        assertEquals("normal", fake.routing.optString("mode")); assertFalse(get("readyCommitted") as Boolean); assertEquals(0, fake.closes)
+        status(21, "customer", store.deviceId(), "completing")
+        status(22, "customer", store.deviceId(), "completed")
+        assertEquals(0, fake.closes); assertEquals("", get("transferId")); assertTrue(get("readyCommitted") as Boolean)
+        assertEquals("customer-media", fake.routing.optString("customerIdentity")); assertFalse(NativeRoomCallService.snapshot()!!.optBoolean("closed"))
+    }
     private fun boundStart(intent: Intent): Intent = intent.putExtra("enrollment_generation",store.credential().generation).putExtra("enrolled_device_id",store.deviceId())
     private fun runMainUntil(condition: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)

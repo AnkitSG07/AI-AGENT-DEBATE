@@ -5,7 +5,9 @@ import { readTransactionRecords } from './transaction-reads.mjs';
 export const isConsultation = transfer => transfer?.mode === 'consult' &&
   ['invited', 'connecting'].includes(transfer.status);
 export const customerOnHold = call => !!call?.active && isConsultation(call.transfer) &&
-  !['customer', 'conference', 'merged'].includes(call.transfer.consultStage);
+  // Complete requests the new audio route; it is not the ownership commit.
+  // Keep music until B's customer audio is verified and transfer is completing.
+  !['conference', 'merged'].includes(call.transfer.consultStage);
 
 /** The established direct transfer keeps its original readiness/cleanup path.
  * A consultation adds an explicit source decision before that ownership commit. */
