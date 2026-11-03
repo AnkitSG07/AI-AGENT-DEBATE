@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; media-src 'self' blob:; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>SH Chat · Private video call</title><link rel="stylesheet" href="/video-call.css"></head>
+<body><main><header><span class="brand">SH CHAT</span><span id="security">Private video call</span></header>
+<video id="remote" autoplay playsinline></video><video id="local" autoplay playsinline muted></video>
+<section id="intro"><div class="mark">SH</div><h1>Let’s connect</h1><p id="status" role="status" aria-live="polite">Join with your camera and microphone.</p><button id="join" class="join">Join video call</button><p class="hint">Only people with this private link can join.<br>Share it only with your intended participant.</p></section>
+<p id="liveStatus" role="status" aria-live="polite"></p>
+<nav id="controls" aria-label="Call controls" hidden>
+<button id="mic" aria-label="Mute microphone" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><span>Mute</span></button>
+<button id="camera" aria-label="Turn camera off" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="2" y="5" width="14" height="14" rx="3"/><path d="m16 9 6-4v14l-6-4"/></svg><span>Camera</span></button>
+<button id="flip" aria-label="Switch camera"><svg viewBox="0 0 24 24"><path d="M3 7h15l-4-4M21 17H6l4 4M4 11v6M20 13V7"/></svg><span>Flip</span></button>
+<button id="speaker" aria-label="Use earpiece" aria-pressed="true" hidden><svg viewBox="0 0 24 24"><path d="M3 9h4l5-5v16l-5-5H3zM16 8a6 6 0 0 1 0 8M19 4a12 12 0 0 1 0 16"/></svg><span>Speaker</span></button>
+<button id="end" class="end" aria-label="End call"><svg viewBox="0 0 24 24"><path d="M3 15v-4c4-6 14-6 18 0v4l-5-1v-3H8v3z"/></svg><span>End</span></button>
+</nav><button id="play" hidden>Tap to hear the call</button></main><script src="/video-call.js" defer></script></body></html>

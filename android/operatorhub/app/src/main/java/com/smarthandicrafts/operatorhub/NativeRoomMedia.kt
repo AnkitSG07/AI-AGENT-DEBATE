@@ -8,6 +8,7 @@ internal interface NativeRoomMedia {
     fun setMuted(value: Boolean)
     fun setSpeaker(value: Boolean)
     fun configureRouting(routing: JSONObject) { }
+    fun configureRecording(recording: JSONObject) { }
     /** Synchronously silence local capture/playout without waiting for RTC transport work. */
     fun silenceForClose(): Boolean
     fun close()

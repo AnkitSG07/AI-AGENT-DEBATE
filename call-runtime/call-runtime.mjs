@@ -1011,7 +1011,7 @@ export class CallRuntime {
       if (body.mode === 'consult') {
         requireValue(this.tools, 'HANDOVER_UNAVAILABLE', 'Private handover audio is not configured.', 503);
         requireValue(actor.nativeBuild >= 22 && target.nativeBuild >= 22, 'HANDOVER_UPDATE_REQUIRED', 'Update both phones to R22 for private handover.', 426);
-        await this.tools.prepareHandover(currentCall);
+        await this.timed('handover-hold-prepare', () => this.tools.prepareHandover(currentCall));
       }
       result = await this.timed('transfer-invite-controller', () => this.transferController.invite(context, { callId, toDeviceId: body.toDeviceId,
         expectedVersion: body.version, requestId: request(body.requestId), mode: body.mode === 'consult' ? 'consult' : 'instant', observedCall: currentCall,

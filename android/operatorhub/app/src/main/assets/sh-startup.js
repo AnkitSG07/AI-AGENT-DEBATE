@@ -13,6 +13,19 @@
   const isVerification = location.pathname.startsWith("/web/login/");
   function apply() {
     if (!document.documentElement) return;
+    // A cached Odoo login form may have an expired CSRF token. Reload a GET
+    // sign-in page once; never resubmit passwords or bypass authentication.
+    if (document.readyState !== "loading" && !document.querySelector('form input[name="csrf_token"]') &&
+        /invalid csrf token|csrf token expired/i.test(document.body?.innerText || "")) {
+      try {
+        const last = Number(sessionStorage.getItem("sh-csrf-login-retry") || 0);
+        if (Date.now() - last > 30000) {
+          sessionStorage.setItem("sh-csrf-login-retry", String(Date.now()));
+          location.replace("/web/login?redirect=" + encodeURIComponent("/livechat-api-test"));
+          return;
+        }
+      } catch (_) { /* Leave Odoo's explicit error visible if storage is blocked. */ }
+    }
     document.documentElement.classList.add("sh-native-auth");
     if (!document.getElementById("sh-native-auth-css")) {
       const style = document.createElement("style");

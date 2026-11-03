@@ -26,6 +26,7 @@ public final class HubApplication extends Application {
         } catch (Exception ignored) { }
         maybeRenewDeviceLease();
         NativeRoomCleanup.drain(this);
+        NativeMediaUploads.schedule(this);
     }
     public synchronized boolean initializeFirebase(JSONObject firebase) {
         if (firebase == null) return false;

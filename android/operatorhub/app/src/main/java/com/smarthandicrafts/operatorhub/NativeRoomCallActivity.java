@@ -277,7 +277,7 @@ public final class NativeRoomCallActivity extends Activity {
     private void recordTapped() {
         if (latest == null || !latest.optBoolean("canRecord")) return;
         String state = latest.optString("recordingState");
-        if (state.equals("recording") || state.equals("starting")) { command("record", ""); return; }
+        if (latest.optBoolean("recordingActive") || state.equals("recording") || state.equals("starting")) { command("record", ""); return; }
         new AlertDialog.Builder(this).setTitle("Record this call?")
             .setMessage("Let the customer know before recording. Audio is saved privately with this call in Odoo.")
             .setPositiveButton("Start recording", (dialog, which) -> command("record", ""))
@@ -728,8 +728,9 @@ public final class NativeRoomCallActivity extends Activity {
         notes.setEnabled(value.optBoolean("callToolsEnabled"));
         String recordingState = value.optString("recordingState", "idle");
         boolean recording = recordingState.equals("recording");
-        record.icon(recording || recordingState.equals("starting") ? "stop" : "record");
-        record.setText(recording || recordingState.equals("starting") ? "Stop" : "Record");
+        boolean canStopRecording = value.optBoolean("recordingActive") || recording || recordingState.equals("starting");
+        record.icon(canStopRecording ? "stop" : "record");
+        record.setText(canStopRecording ? "Stop" : "Record");
         record.setEnabled(value.optBoolean("canRecord") && !value.optBoolean("recordingPending") && !recordingState.equals("saving"));
         recordingLabel.setText(recording ? "● Recording" : recordingState.equals("starting") ? "Starting recording…" : recordingState.equals("saving") ? "Saving recording…" : value.optString("recordingError"));
         recordingLabel.setVisibility(recordingLabel.getText().length() > 0 ? View.VISIBLE : View.GONE);
@@ -792,6 +793,7 @@ public final class NativeRoomCallActivity extends Activity {
         transferDialog = picker.dialog;
         updateTransferPicker(picker, transferDirectory.cached(selected.key, SystemClock.elapsedRealtime()), null);
         picker.dialog.show();
+        if (mode.equals("consult")) NativeRoomCallService.commandForAttempt(selected.attempt, selected.leg, "prepare-handover", "");
         // The screen opens before network dispatch, and joins any earlier prefetch.
         requestTransferDirectory(selected, true);
     }

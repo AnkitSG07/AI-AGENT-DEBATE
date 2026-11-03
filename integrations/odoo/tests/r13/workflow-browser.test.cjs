@@ -251,6 +251,7 @@ check('attachment upload keeps its original conversation while the operator swit
     await f.page.waitForFunction(()=>__hubUiTest.state.isUploadingAttachment);
     await f.page.evaluate(()=>__hubUiTest.selectChannel(102));release();await f.page.evaluate(()=>window.__pendingUpload);
     assert.equal(f.sim.backendWrites.filter(x=>x.path==='/mail/attachment/upload').length,1);
+    assert.match(f.sim.backendWrites.find(x=>x.path==='/mail/attachment/upload').body, /synthetic-odoo-csrf-token-only-0001/);
     const post=methods(f,'discuss.channel','message_post')[0];assert.ok(post);assert.equal(post.args[0][0],101);assert.deepEqual(post.kwargs.attachment_ids,[901]);
     assert.equal(await f.page.evaluate(()=>__hubUiTest.state.selectedChannelId),102);assert.deepEqual(f.errors,[]);
   }finally{await f.close();}

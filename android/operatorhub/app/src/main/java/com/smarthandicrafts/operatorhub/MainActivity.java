@@ -383,6 +383,7 @@ public final class MainActivity extends Activity {
         else if ("request-settings".equals(type)) startActivity(new Intent(this, SettingsActivity.class));
         else if ("hub-call-read".equals(type)) readHubCallHistory(obj);
         else if ("appMessageState".equals(type)) appMessageState(obj);
+        else if ("native-video".equals(type) && hubReady) startVideoLink();
         else if ("native-call".equals(type) && hubReady) {
             if (!activeCall.isEmpty() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Finish the current browser call before starting a native call."); return; }
             if (!new NativeStore(this).nativeRoomCalls() && !NativeRoomCallService.isRunning()) { publishNativeCallCapabilities(); toast("Native calling is not enabled. Check App settings and the server connection."); return; }
@@ -570,6 +571,26 @@ public final class MainActivity extends Activity {
         } catch (Exception ignored) { }
     }
     private boolean nativeCapabilityLoading;
+    private boolean nativeVideoEnabled, videoStarting;
+    private void startVideoLink() {
+        if (!nativeVideoEnabled || videoStarting) return;
+        if (NativeRoomCallService.isRunning() || !activeCall.isEmpty()) { toast("Finish the current voice call before opening video."); return; }
+        if (NativeVideoCallService.isRunning()) { startActivity(new Intent(this, NativeVideoCallActivity.class)); return; }
+        NativeStore store = new NativeStore(this); DeviceLeasePolicy.Credential credential = store.credential();
+        videoStarting = true;
+        HubApplication.IO.execute(() -> {
+            try {
+                JSONObject result = NativeApi.request("/video-calls", "POST", new JSONObject().put("requestId", java.util.UUID.randomUUID().toString()), credential.bearer);
+                runOnUiThread(() -> {
+                    String operator = result.optString("operatorUrl"), customer = result.optString("customerUrl");
+                    if (isFinishing() || isDestroyed() || !store.matchesCredential(credential) || NativeRoomCallService.isRunning()) { NativeVideoCallActivity.cancelLink(this, operator); return; }
+                    if (!NativeVideoCallActivity.validUrl(operator, "operator") || !NativeVideoCallActivity.validUrl(customer, "customer")) { toast("The video invitation was not valid."); return; }
+                    startActivity(new Intent(this, NativeVideoCallActivity.class).putExtra("operator_url", operator).putExtra("customer_url", customer));
+                });
+            } catch (Exception error) { runOnUiThread(() -> toast("Could not create the video invitation. Please try again.")); }
+            finally { runOnUiThread(() -> { videoStarting = false; }); }
+        });
+    }
     private void refreshNativeCallCapabilities() {
         NativeStore store = new NativeStore(this);
         publishNativeCallCapabilities();
@@ -578,6 +599,8 @@ public final class MainActivity extends Activity {
         DeviceLeasePolicy.Credential credential = store.credential(); nativeCapabilityLoading = true;
         HubApplication.IO.execute(() -> {
             try { NativeRoomCapabilities.refresh(this, credential); } catch (Exception ignored) { }
+            try { nativeVideoEnabled = store.matchesCredential(credential) && NativeApi.request("/video-config", "GET", null, credential.bearer).optBoolean("enabled"); }
+            catch (Exception ignored) { nativeVideoEnabled = false; }
             runOnUiThread(() -> { nativeCapabilityLoading = false; if (!isFinishing() && !isDestroyed()) publishNativeCallCapabilities(); });
         });
     }
@@ -589,6 +612,7 @@ public final class MainActivity extends Activity {
                 .put("callHistoryProxy", true)
                 .put("appMessageState", true)
                 .put("callChangeHints", true)
+                .put("videoLinks", nativeVideoEnabled)
                 .put("activeCall", NativeRoomCallService.isRunning());
             JSONObject call = NativeRoomCallService.snapshot();
             if (call != null && !call.optBoolean("closed")) value.put("activeCallId", call.optString("callId"))
