@@ -166,10 +166,14 @@ internal class NativeRoomEngine(private val context: Context, private val listen
                 // readiness sampler. No recorder sinks are attached until the
                 // current operator explicitly enables recording.
                 if (HubPolicy.validCallId(join.optString("sessionId"))) {
-                    recorder = NativeDeviceRecorder(context, join.getString("sessionId"), NativeStore(context).credential(), join.optString("legId")) { state, error ->
-                        scope.launch { if (!closed) listener.onRecordingState(state, error) }
-                    }.also { it.connected(connectedWall, connectedTick) }
-                    desiredRecording?.let { configureRecording(it) }
+                    try {
+                        recorder = NativeDeviceRecorder(context, join.getString("sessionId"), NativeStore(context).credential(), join.optString("legId")) { state, error ->
+                            scope.launch { if (!closed) listener.onRecordingState(state, error) }
+                        }.also { it.connected(connectedWall, connectedTick) }
+                        desiredRecording?.let { configureRecording(it) }
+                    } catch (_: Exception) {
+                        recordingUnavailable()
+                    }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
@@ -227,8 +231,18 @@ internal class NativeRoomEngine(private val context: Context, private val listen
         refreshRecordingTracks()
     }
     override fun configureRecording(recording: JSONObject) {
-        desiredRecording = JSONObject(recording.toString())
-        recorder?.configure(recording); refreshRecordingTracks()
+        if (closed) return
+        try {
+            desiredRecording = JSONObject(recording.toString())
+            recorder?.configure(recording); refreshRecordingTracks()
+        } catch (_: Exception) { recordingUnavailable() }
+    }
+    private fun recordingUnavailable() {
+        // Optional recording/accounting must never report a voice-media failure.
+        for ((track, capture) in recordingSinks) runCatching { track.removeSink(capture) }
+        recordingSinks.clear()
+        runCatching { recorder?.close() }; recorder = null
+        listener.onRecordingState("failed", "Recording is unavailable on this call. The voice call is still connected.")
     }
     private fun refreshRecordingTracks() {
         if (closed || recorder == null) return
