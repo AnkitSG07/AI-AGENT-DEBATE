@@ -61,7 +61,8 @@ const groups = {
     'integrations/odoo/tests/native-embed-r12.test.cjs',
     'integrations/odoo/tests/hub-ui-r12.test.cjs', 'integrations/odoo/tests/transport-r12.test.cjs',
     'integrations/odoo/tests/notification-setup-r12.test.cjs',
-    'integrations/odoo/tests/r13/workflow-browser.test.cjs'],
+    'integrations/odoo/tests/r13/workflow-browser.test.cjs',
+    'integrations/odoo/tests/r13/whatsapp-accounts-browser.test.cjs'],
   firestore: ['tests/operator-r12-emulator.test.mjs', 'tests/operator-ai-r13-emulator.test.mjs'],
   media: ['tests/simulator-media-r13/real-media.test.mjs']
 };
