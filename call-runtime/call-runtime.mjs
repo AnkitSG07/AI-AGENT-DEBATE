@@ -320,8 +320,8 @@ export class CallRuntime {
   }
 
   async status(context, id) {
-    const actor = await this.actor(context, { media: false });
-    const session = await this.locate(id); this.requireSession(session);
+    const [actor, session] = await this.authenticatedSession(context, id, { media: false });
+    this.requireSession(session);
     const [canonical, reservation] = await Promise.all([
       session.providerCallId ? this.store.get(callStoreKey(session.providerCallId)) : null,
       this.store.get(deviceReservationKey(actor.deviceId))
@@ -408,7 +408,7 @@ export class CallRuntime {
     const now = this.now();
     if (event.type === 'incoming') requireValue(actualAudioSdp(event.offerSdp), 'INVALID_SDP', 'An actual incoming audio offer is required.', 400);
     if (event.type === 'connect') requireValue(actualAudioSdp(event.answerSdp), 'INVALID_SDP', 'An actual outgoing audio answer is required.', 400);
-    const result = await this.store.transaction(async tx => {
+    const { controlState, ...result } = await this.store.transaction(async tx => {
       const [existingMarker, route, terminal, accepted, answer, observedSession, canonical] = await readTransactionRecords(tx, [
         eventKey(marker), eventKey(routeId(event.callId)),
         eventKey(terminalId(event.callId)), eventKey(acceptedId(event.callId)),
@@ -443,6 +443,16 @@ export class CallRuntime {
           terminalize(next, terminal ? 'USER_INITIATED' : 'TIMED_OUT', now, { confirmed: !!terminal });
         else job(next, { id: 'incoming-notification', kind: 'notify', event: 'incoming' });
       }
+      // An already connected operator must not wait for its next status poll
+      // when the customer answers or hangs up. Select a wake only for a new
+      // meaningful transition; repeated provider events need no extra packet.
+      const controlChanged = next && !next.terminal && (
+        event.type === 'terminate' ||
+        next.direction === 'outgoing' && (
+          event.type === 'accepted' && !next.customerAcceptedAt ||
+          event.type === 'connect' && !next.answerSdp
+        )
+      );
       if (next) {
         requireValue(next.tenantId === this.tenantId && (!next.providerCallId || next.providerCallId === event.callId),
           'CALL_ROUTE_CONFLICT', 'The provider call does not match this durable attempt.');
@@ -521,8 +531,13 @@ export class CallRuntime {
       }
       if (!existingMarker) tx.set(eventKey(marker), { id: marker, kind: 'provider-event', eventType: event.type, providerCallId: event.callId,
         sessionId: next?.id || '', tenantId: this.tenantId, createdAt: now });
-      return { handled: !!next || event.type === 'connect', sessionId: next?.id, terminal: event.type === 'terminate' };
+      return { handled: !!next || event.type === 'connect', sessionId: next?.id, terminal: event.type === 'terminate',
+        ...(controlChanged ? { controlState: { session: next, call: canonical } } : {}) };
     });
+    // Snapshot delivery is strictly after the durable commit. Failed/retried
+    // transactions never send hints; no extra database read or idle loop is
+    // needed. Only the existing content-free operator wake leaves the server.
+    if (controlState) this.signalRoomState(controlState.session, controlState.call);
     return result;
   }
 

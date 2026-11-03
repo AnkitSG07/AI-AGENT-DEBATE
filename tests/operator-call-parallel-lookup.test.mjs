@@ -14,6 +14,7 @@ async function actionFixture(action) {
     return { f, context: 'a', invoke: () => f.ready(accepted) };
   }
   const connected = await f.connected();
+  if (action === 'status') return { f, context: 'a', invoke: () => f.runtime.status('a', connected.call.sessionId) };
   if (action === 'end') return { f, context: 'a', invoke: () => f.runtime.end('a', connected.call.sessionId,
     { expectedOwnerLegId: connected.call.ownerLegId, requestId: 'parallel-end-01' }) };
   const invited = await f.runtime.transfer('a', connected.call.sessionId, 'invite', {
@@ -23,7 +24,7 @@ async function actionFixture(action) {
     { version: invited.call.version, transferId: invited.call.transfer.id }) };
 }
 
-for (const action of ['accept', 'ready', 'end', 'transfer']) {
+for (const action of ['accept', 'ready', 'end', 'transfer', 'status']) {
   test(`${action} starts its non-authoritative lookup with authentication and waits for both`, { timeout: 5000 }, async () => {
     const { f, context, invoke } = await actionFixture(action);
     const authEntered = deferred(), lookupEntered = deferred(), releaseAuth = deferred(), releaseLookup = deferred();

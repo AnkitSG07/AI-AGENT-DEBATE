@@ -675,8 +675,48 @@ scenario('R23 joins real audio during a delayed Accept and wakes exact operators
   await audio(f.customers.get(id).peer, accepted.join.identity, 660, 'R23 customer hears A');
   const before = await p.page.evaluate(() => window.controlHintCount());
   f.lastAIdentity = accepted.join.identity;
-  await f.handoff('a', 'b', id);
+  const transferred = await f.handoff('a', 'b', id);
   assert.ok(await p.page.evaluate(() => window.controlHintCount()) > before, 'transfer wakes source without waiting on its poll');
+  const beforeEnd = await transferred.p.page.evaluate(() => window.controlHintCount());
+  await f.event('terminate', id);
+  await waitFor(async () => await transferred.p.page.evaluate(() => window.controlHintCount()) > beforeEnd,
+    'customer Hang-up wakes the transferred owner over real room data');
+  assert.equal((await f.status('b', id)).call.phase, 'ended');
   const customerHints = await f.customers.get(id).peer.page.evaluate(() => window.controlHintCount());
   assert.equal(customerHints, 0, 'operator control hints are never broadcast to the customer');
+});
+
+scenario('R23 provider Answer and Hang-up wake real joined audio without an idle poll', async f => {
+  for (const device of f.devices.values()) device.nativeBuild = 23;
+  const original = f.provider.dialOutgoing;
+  let release; const blocked = new Promise(resolve => { release = resolve; });
+  f.provider.dialOutgoing = async args => { await blocked; return original.call(f.provider, args); };
+  let outgoing, p;
+  try {
+    outgoing = await f.api('a', 'POST', '/calls/outgoing', { to: '919999999999', requestId: 'r23-provider-event-outgoing' });
+    p = await f.operator(outgoing.join);
+  } finally { release(); }
+  const id = outgoing.call.sessionId;
+  const saved = await waitFor(async () => {
+    const value = await f.bundle.runtime.locate(id);
+    return value?.operations?.dial?.status === 'acknowledged' && value.providerCallId ? value : null;
+  }, 'durable outgoing provider binding');
+  await waitFor(async () => await p.page.evaluate(() => window.controlHintCount()) > 0, 'setup wake');
+  for (const type of ['connect', 'accepted']) {
+    const before = await p.page.evaluate(() => window.controlHintCount()), started = performance.now();
+    await f.event(type, saved.providerCallId, type === 'connect' ? { answerSdp: sdp } : {});
+    await waitFor(async () => await p.page.evaluate(() => window.controlHintCount()) > before, `real ${type} wake`);
+    measurements.push({ name: `R23 verified ${type} event to real room wake`, milliseconds: performance.now() - started });
+    assert.equal((await f.status('a', id)).call.roomReady, false, 'the wake alone cannot mark audio Connected');
+    if (type === 'connect') await f.recover(id);
+  }
+  const ready = await f.ready('a', outgoing, p);
+  assert.equal(ready.call.roomReady, true);
+  await audio(f.customers.get(saved.providerCallId).peer, outgoing.join.identity, 660, 'R23 outgoing customer decodes operator');
+  const beforeEnd = await p.page.evaluate(() => window.controlHintCount()), started = performance.now();
+  await f.event('terminate', saved.providerCallId);
+  await waitFor(async () => await p.page.evaluate(() => window.controlHintCount()) > beforeEnd, 'real remote Hang-up wake');
+  measurements.push({ name: 'R23 verified terminate event to real room wake', milliseconds: performance.now() - started });
+  assert.equal((await f.status('a', id)).call.phase, 'ended');
+  assert.equal(await f.customers.get(saved.providerCallId).peer.page.evaluate(() => window.controlHintCount()), 0);
 });

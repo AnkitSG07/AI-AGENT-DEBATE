@@ -190,3 +190,86 @@ test('room-control hints target only the supplied operator identities and contai
   assert.equal(calls[0][1].toString(), 'refresh');
   assert.deepEqual(calls[0][3], { destinationIdentities: ['operator-a', 'operator-b'], topic: 'sh-call-control-v1' });
 });
+
+const providerEvent = (f, type, callId, suffix = '') => ({ verified: true,
+  eventId: `r23-provider-${type}-${suffix || 'first'}`, type, callId,
+  phoneNumberId: 'business-1', occurredAtMs: f.now(),
+  ...(type === 'connect' ? { answerSdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' } : {}) });
+
+for (const type of ['accepted', 'connect']) {
+  test(`trusted outgoing ${type} wakes the joined operator after commit without waiting on delivery`, async () => {
+    const f = modern(), release = deferred(), hints = [];
+    const joined = await f.runtime.outgoing('a', { to: '919999999999', requestId: `r23-event-${type}` });
+    const session = await settled(f, joined.call.sessionId, 'dial');
+    f.provider.signalControlState = async hint => { hints.push(hint); await release.promise; };
+    const event = providerEvent(f, type, session.providerCallId);
+    try {
+      const result = await within(f.runtime.ingestVerifiedMetaEvent(event));
+      assert.deepEqual(Object.keys(result).sort(), ['handled', 'sessionId', 'terminal']);
+      assert.equal(hints.length, 1);
+      assert.deepEqual(hints[0], { roomName: session.roomName, identities: [joined.join.identity] });
+      const saved = await f.runtime.locate(session.id);
+      assert.ok(type === 'accepted' ? saved.customerAcceptedAt : saved.answerSdp);
+      assert.equal(saved.mediaReadyAt, undefined, 'a wake is never proof of connected audio');
+      await f.runtime.ingestVerifiedMetaEvent(event);
+      await f.runtime.ingestVerifiedMetaEvent(providerEvent(f, type, session.providerCallId, 'duplicate-delivery'));
+      assert.equal(hints.length, 1, 'duplicate IDs and repeated same-state events must not amplify wakes');
+    } finally { release.resolve(); }
+  });
+}
+
+test('customer Hang-up wakes both exact operator legs during transfer and excludes the customer', async () => {
+  const f = modern(), joined = await joining(f);
+  const connected = await f.runtime.ready('a', joined.call.sessionId, evidenceFor(joined));
+  const invited = await f.runtime.transfer('a', joined.call.sessionId, 'invite', {
+    version: connected.call.version, toDeviceId: 'b', requestId: 'r23-remote-end-invite' });
+  const target = await f.runtime.transfer('b', joined.call.sessionId, 'accept', {
+    transferId: invited.call.transfer.id, expectedTransferId: invited.call.transfer.id });
+  const hints = [], release = deferred();
+  f.provider.signalControlState = async hint => { hints.push(hint); await release.promise; };
+  const event = providerEvent(f, 'terminate', joined.call.providerCallId);
+  try {
+    await within(f.runtime.ingestVerifiedMetaEvent(event));
+    assert.equal(hints.length, 1);
+    assert.deepEqual(new Set(hints[0].identities), new Set([joined.join.identity, target.join.identity]));
+    assert.ok(!hints[0].identities.includes(joined.join.customerIdentity));
+    assert.equal((await f.runtime.status('b', joined.call.sessionId)).call.phase, 'ended');
+    await f.runtime.ingestVerifiedMetaEvent(event);
+    await f.runtime.ingestVerifiedMetaEvent(providerEvent(f, 'terminate', joined.call.providerCallId, 'again'));
+    assert.equal(hints.length, 1);
+  } finally { release.resolve(); }
+});
+
+test('failed or untrusted provider-event transactions cannot send a room wake', async () => {
+  const f = modern(), joined = await joining(f), hints = [];
+  f.provider.signalControlState = async hint => { hints.push(hint); };
+  const event = providerEvent(f, 'terminate', joined.call.providerCallId);
+  await assert.rejects(f.runtime.ingestVerifiedMetaEvent({ ...event, verified: false }), { code: 'UNVERIFIED_WEBHOOK' });
+  f.db.failBeforeCommit = Error('synthetic database commit failure');
+  await assert.rejects(f.runtime.ingestVerifiedMetaEvent(event), { code: 'MEDIA_STORE_UNAVAILABLE' });
+  assert.equal(hints.length, 0);
+  assert.equal((await f.runtime.locate(joined.call.sessionId)).terminal, undefined);
+  await f.runtime.ingestVerifiedMetaEvent(event);
+  assert.equal(hints.length, 1);
+});
+
+test('legacy phone webhooks retain their contract without sending unsupported room hints', async () => {
+  const f = fixture(), joined = await f.connected(), hints = [];
+  f.provider.signalControlState = async hint => { hints.push(hint); };
+  await f.runtime.ingestVerifiedMetaEvent(providerEvent(f, 'terminate', joined.call.providerCallId));
+  assert.equal(hints.length, 0);
+  assert.equal((await f.runtime.status('a', joined.call.sessionId)).call.phase, 'ended');
+});
+
+for (const synchronous of [true, false]) {
+  test(`a ${synchronous ? 'throwing' : 'rejecting'} room wake cannot fail a committed provider Hang-up`, async () => {
+    const f = modern(), joined = await joining(f);
+    f.provider.signalControlState = () => {
+      if (synchronous) throw Error('synthetic transport unavailable');
+      return Promise.reject(Error('synthetic transport unavailable'));
+    };
+    const result = await f.runtime.ingestVerifiedMetaEvent(providerEvent(f, 'terminate', joined.call.providerCallId));
+    assert.equal(result.terminal, true);
+    assert.equal((await f.runtime.status('a', joined.call.sessionId)).call.phase, 'ended');
+  });
+}
