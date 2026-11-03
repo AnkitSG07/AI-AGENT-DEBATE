@@ -16,6 +16,7 @@ const groups = {
     'tests/operator-call-security.test.mjs', 'tests/operator-ai-r13.test.mjs',
     'tests/operator-call-permission.test.mjs',
     'tests/operator-call-latency.test.mjs',
+    'tests/operator-call-r23-latency.test.mjs',
     'tests/operator-attended-transfer.test.mjs',
     'tests/operator-call-tools.test.mjs',
     'tests/operator-message-preview.test.mjs',

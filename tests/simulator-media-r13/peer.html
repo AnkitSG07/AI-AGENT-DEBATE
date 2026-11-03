@@ -27,6 +27,9 @@ window.joinPeer = async ({url, token, frequency=440}) => {
   room = new LK.Room({adaptiveStream:false,dynacast:false,disconnectOnPageLeave:true,
     publishDefaults:{audioBitrate:64000,dtx:false,red:false,stopMicTrackOnMute:false}});
   room.on(LK.RoomEvent.TrackSubscribed,attachRemote);
+  room.on(LK.RoomEvent.DataReceived,(data,participant,kind,topic)=>{
+    if(!participant && topic==='sh-call-control-v1' && new TextDecoder().decode(data)==='refresh') mark('control-refresh');
+  });
   room.on(LK.RoomEvent.TrackUnsubscribed,(track,pub,part)=>{const row=tracks.get(part.identity);if(row?.track===track){row.source.disconnect();row.processor.disconnect();row.element.remove();tracks.delete(part.identity);}mark('track-unsubscribed',{identity:part.identity,sid:pub.trackSid});});
   room.on(LK.RoomEvent.ParticipantDisconnected,p=>mark('participant-disconnected',{identity:p.identity}));
   room.on(LK.RoomEvent.ConnectionStateChanged,s=>mark('connection', {state:s}));
@@ -40,6 +43,7 @@ window.joinPeer = async ({url, token, frequency=440}) => {
   mark('published',{sid:localPublication.trackSid});
   return {identity:room.localParticipant.identity,sid:room.localParticipant.sid,trackSid:localPublication.trackSid,state:room.state};
 };
+window.controlHintCount = ()=>events.filter(event=>event.type==='control-refresh').length;
 window.peerSnapshot = async identity => {
   const row=tracks.get(identity), inbound=[],outbound=[],transport=[],candidate=[];
   const pick=stats=>{stats?.forEach(s=>{if(s.type==='inbound-rtp'&&s.kind==='audio')inbound.push({id:s.id,packets:s.packetsReceived,bytes:s.bytesReceived,samples:s.totalSamplesReceived,concealed:s.concealedSamples});if(s.type==='outbound-rtp'&&s.kind==='audio')outbound.push({id:s.id,packets:s.packetsSent,bytes:s.bytesSent});if(s.type==='transport')transport.push({dtlsState:s.dtlsState,selectedCandidatePairId:s.selectedCandidatePairId});if(s.type==='candidate-pair'&&s.state==='succeeded')candidate.push({state:s.state,nominated:s.nominated});});};

@@ -307,4 +307,50 @@ class NativeRoomLifecycleRegressionTest {
         assertEquals("The previous call is still finishing. Try Answer again.",NativeRoomCallService.snapshot()!!.optString("detail"));assertNull(get("engine"))
         val settled=answers.get();Shadows.shadowOf(Looper.getMainLooper()).idleFor(2,TimeUnit.SECONDS);assertEquals(settled,answers.get())
     }
+    private fun applyReadinessStatus(version: Int, phase: String, direction: String = "incoming", accepted: Boolean = false) {
+        val callState = JSONObject().put("version", version).put("phase", phase).put("direction", direction)
+            .put("ownerDeviceId", store.deviceId()).put("ownerLegId", "leg-A1").put("roomReady", false)
+        if (accepted) callState.put("customerAcceptedAt", System.currentTimeMillis())
+        NativeRoomCallService::class.java.getDeclaredMethod("applyStatus", JSONObject::class.java)
+            .apply { isAccessible = true }.invoke(service, JSONObject().put("call", callState))
+    }
+    @Test fun earlyRoomAudioWaitsForProviderStateThenSubmitsExistingFreshSampleImmediately() {
+        val requests = AtomicInteger()
+        set("readyCommitted", false); set("nonce", "readiness-nonce")
+        set("callApi", NativeRoomCleanupProcessor.Requester { path, method, body, _ ->
+            assertTrue(path.endsWith("/ready")); assertEquals("POST", method)
+            assertEquals(2, body.getInt("version")); assertEquals("leg-A1", body.getJSONObject("evidence").getString("legId"))
+            requests.incrementAndGet()
+            JSONObject().put("call", JSONObject().put("version", 3).put("phase", "connected")
+                .put("ownerDeviceId", store.deviceId()).put("ownerLegId", "leg-A1").put("roomReady", true))
+        })
+        applyReadinessStatus(1, "accepting")
+        evidence(JSONObject().put("legId", "leg-A1").put("sampleAgeMs", 20))
+        assertEquals(0, requests.get())
+        applyReadinessStatus(2, "joining")
+        runMainUntil { get("readyCommitted") == true }
+        assertEquals(1, requests.get()); assertEquals(0, fake.closes)
+    }
+    @Test fun outdatedAudioSampleCannotBeRejuvenatedByAProviderStatusUpdate() {
+        val requests = AtomicInteger()
+        set("readyCommitted", false); set("nonce", "readiness-nonce")
+        set("callApi", NativeRoomCleanupProcessor.Requester { _, _, _, _ -> requests.incrementAndGet(); JSONObject() })
+        set("lastEvidence", JSONObject().put("legId", "leg-A1")); set("lastEvidenceAt", android.os.SystemClock.elapsedRealtime() - 1501)
+        applyReadinessStatus(1, "joining")
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0, requests.get()); assertFalse(get("readyCommitted") as Boolean)
+    }
+    @Test fun outgoingAudioDoesNotSubmitReadinessBeforeCustomerAcceptanceAndMutedTransferCannotCommit() {
+        val requests = AtomicInteger()
+        set("readyCommitted", false); set("nonce", "readiness-nonce")
+        set("callApi", NativeRoomCleanupProcessor.Requester { _, _, _, _ -> requests.incrementAndGet(); JSONObject() })
+        applyReadinessStatus(1, "ringing", "outgoing")
+        evidence(JSONObject().put("legId", "leg-A1"))
+        Shadows.shadowOf(Looper.getMainLooper()).idle(); assertEquals(0, requests.get())
+        set("transferId", "transfer-B"); set("bidirectionalAudio", false)
+        set("lastEvidence", JSONObject().put("readinessMode", "customer-muted-transport"))
+        invoke("retryFreshReadiness")
+        Shadows.shadowOf(Looper.getMainLooper()).idle(); assertEquals(0, requests.get())
+    }
+
 }

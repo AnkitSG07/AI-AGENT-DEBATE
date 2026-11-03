@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AccessToken, ConnectorClient, RoomServiceClient, SessionDescription, TrackSource,
-  TrackType, ParticipantInfo_State, DisconnectWhatsAppCallRequest_DisconnectReason } from 'livekit-server-sdk';
+  TrackType, ParticipantInfo_State, DataPacket_Kind, DisconnectWhatsAppCallRequest_DisconnectReason } from 'livekit-server-sdk';
 import { MediaError, identifier, requireValue } from './errors.mjs';
 
 const DISCONNECT = DisconnectWhatsAppCallRequest_DisconnectReason;
@@ -88,6 +88,17 @@ export class LiveKitWhatsAppProvider {
     } finally {
       try { this.onTiming({ stage: method, elapsedMs: Math.round(performance.now() - started), ok }); } catch { /* telemetry never controls media */ }
     }
+  }
+
+  async signalControlState({ roomName, identities }) {
+    identifier(roomName, 'room');
+    const destinations = [...new Set(identities.filter(Boolean))];
+    destinations.forEach(value => identifier(value, 'operator identity'));
+    if (!destinations.length) return;
+    // A wake-up only: no commands, credentials, call state or customer content.
+    // Handsets must fetch and authorize the durable state before acting.
+    await this.run('SendControlHint', () => this.rooms.sendData(roomName, Buffer.from('refresh'),
+      DataPacket_Kind.RELIABLE, { destinationIdentities: destinations, topic: 'sh-call-control-v1' }));
   }
 
   async probeControlApi() {

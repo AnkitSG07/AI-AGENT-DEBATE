@@ -17,6 +17,7 @@ import io.livekit.android.room.track.Track
 import com.twilio.audioswitch.AudioDevice
 import com.twilio.audioswitch.AudioDeviceChangeListener
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import livekit.org.webrtc.AudioTrackSink
@@ -52,6 +53,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var muted = false
     private var focusLost = false
     private var startupEvidenceSent = false
+    private val sampleWake = Channel<Unit>(Channel.CONFLATED)
     private var immediatelySilenced = false
     private val routingMutex = Mutex()
     private var routingKey = ""
@@ -146,7 +148,10 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 subscribeCustomer()
                 stage(NativeRoomAudioSetup.Stage.AUDIO_ACTIVE)
                 desiredRouting?.let { configureRouting(it) }
-                launch { while (isActive && !closed) { sample(); delay(if (startupEvidenceSent) 1000 else 500) } }
+                launch { while (isActive && !closed) {
+                    sample()
+                    withTimeoutOrNull(if (startupEvidenceSent) 1000L else 500L) { sampleWake.receive() }
+                } }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
         }
@@ -167,6 +172,8 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
 
     private fun handle(event: RoomEvent) {
         when (event) {
+            is RoomEvent.DataReceived -> if (event.participant == null && event.topic == "sh-call-control-v1" &&
+                event.data.contentEquals("refresh".toByteArray(Charsets.UTF_8))) listener.onTransport("control-refresh")
             is RoomEvent.Connected -> { previous = null; listener.onTransport("joining"); subscribeCustomer() }
             is RoomEvent.Reconnecting -> { previous = null; listener.onTransport("reconnecting") }
             is RoomEvent.Reconnected -> { previous = null; listener.onTransport("joining"); subscribeCustomer() }
@@ -179,7 +186,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 if (event.participant.identity?.value == join.optString("customerIdentity") && track is RemoteAudioTrack) {
                     customerTrack?.removeSink(sink)
                     customerTrack = track; customerTrackSid = event.publication.sid
-                    decodedFrames.set(0); previous = null; track.addSink(sink)
+                    decodedFrames.set(0); previous = null; track.addSink(sink); sampleWake.trySend(Unit)
                 } else if (event.participant.identity?.value != additionalPeer)
                     (event.publication as? RemoteTrackPublication)?.setSubscribed(false)
             }
@@ -315,6 +322,10 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             routingKey = key; return
         }
         routingKey = key
+        // A new private/customer route needs a fresh half-second RTP window,
+        // not the slower ongoing-call health cadence.
+        startupEvidenceSent = false
+        previous = null
         routingAttempts++
         val ticket = ++routingGeneration
         // Gate capture before replacing the publication. A private microphone is
@@ -350,7 +361,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 room.setMicrophoneMute(true)
                 routingFailed = true
                 listener.onMicrophoneControlUnavailable()
-            } finally { if (ticket == routingGeneration) routingBusy = false }
+            } finally { if (ticket == routingGeneration) { routingBusy = false; sampleWake.trySend(Unit) } }
           }
         }
     }

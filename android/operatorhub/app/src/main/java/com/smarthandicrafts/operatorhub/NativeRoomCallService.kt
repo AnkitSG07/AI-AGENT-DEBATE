@@ -105,6 +105,8 @@ class NativeRoomCallService : Service() {
     private var pollWake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
     private var lastEvidence: JSONObject? = null
     private var lastEvidenceAt = 0L
+    private var lastReadinessVersion = -1L
+    private var initialReadinessAllowed = false
     private var publishedSnapshot = ""
     private var failureStage = ""
     private var failureCode = ""
@@ -297,11 +299,15 @@ class NativeRoomCallService : Service() {
         join.put("legId", legId)
         actualCustomerIdentity = join.optString("actualCustomerIdentity", join.optString("customerIdentity"))
         updateCallTools(call)
+        updateReadinessContext(call)
         require(nonce.isNotEmpty() && legId.isNotEmpty()) { "Call audio authorization was incomplete." }
         state = if (transferId.isEmpty()) "joining" else "transferring"; detail = if (transferId.isEmpty()) "Connecting audio" else "Joining the customer; the other phone stays connected"
         engine = NativeRoomEngine(this, object : NativeRoomEngine.Listener {
             override fun onTransport(transport: String) {
                 if (!current()) return
+                if (transport == "control-refresh") {
+                    pollWake.trySend(Unit); return
+                }
                 if (transport == "disconnected") {
                     // SDK Disconnected is final; Reconnecting has its own recoverable event.
                     // Transfer detach returns to chat now. Cleanup rechecks ownership and cannot end B's call.
@@ -384,14 +390,26 @@ class NativeRoomCallService : Service() {
             detail = "Waiting for the customer's microphone; the first phone stays connected"
             emit(); return
         }
-        if (readyCommitted) markConnected() else sendReadiness(evidence)
+        if (readyCommitted) markConnected() else sendReadiness(evidence, lastEvidenceAt)
     }
 
-    private fun sendReadiness(evidence: JSONObject) {
-        if (!current() || readyInFlight || nonce.isEmpty()) return
+    private fun updateReadinessContext(call: JSONObject) {
+        initialReadinessAllowed = call.optString("phase") in listOf("joining", "connecting", "ringing") &&
+            (call.optString("direction") != "outgoing" || call.optLong("customerAcceptedAt", 0) > 0)
+    }
+
+    private fun retryFreshReadiness() {
+        val evidence = lastEvidence ?: return
+        if (!readyCommitted && (transferId.isEmpty() || bidirectionalAudio) && version > lastReadinessVersion &&
+            SystemClock.elapsedRealtime() - lastEvidenceAt in 0L..1500L)
+            sendReadiness(evidence, lastEvidenceAt)
+    }
+
+    private fun sendReadiness(evidence: JSONObject, evidenceAt: Long) {
+        if (!current() || readyInFlight || nonce.isEmpty() || transferId.isEmpty() && !initialReadinessAllowed) return
         readyInFlight = true
         val capturedEpoch = epoch
-        val evidenceAt = SystemClock.elapsedRealtime()
+        lastReadinessVersion = version
         scope.launch {
             try {
                 val body = JSONObject().put("version", version).put("readinessNonce", nonce).put("evidence", evidence)
@@ -412,9 +430,11 @@ class NativeRoomCallService : Service() {
                 if (current()) {
                     authFailure(error)
                     if (error is NativeApi.ApiException && error.status == 401) endLocally("Device authorization expired.")
-                    // A 409 or transient provider readiness response is reconciled by the next status poll.
+                    // Wake once to read the committed state. Reuse only the original
+                    // fresh sample, with its original timestamp, on a newer version.
+                    if (error is NativeApi.ApiException && error.status == 409) pollWake.trySend(Unit)
                 }
-            } finally { readyInFlight = false }
+            } finally { readyInFlight = false; retryFreshReadiness() }
         }
     }
 
@@ -450,6 +470,7 @@ class NativeRoomCallService : Service() {
         val incomingVersion = call.optLong("version", -1)
         if (!guard.acceptVersion(epoch, incomingVersion)) return
         version = incomingVersion
+        updateReadinessContext(call)
         updateCallTools(call)
         configureCallRouting(call)
         providerCallId = NativeRoomJson.text(call,"providerCallId", providerCallId)
@@ -493,6 +514,7 @@ class NativeRoomCallService : Service() {
         if (transferId.isNotEmpty() && consultStage.isNotEmpty()) detail = handoverDetail()
         if (!readyCommitted && transferId.isNotEmpty() && customerMuted)
             detail = "Waiting for the customer's microphone; the first phone stays connected"
+        retryFreshReadiness()
         emit()
     }
 

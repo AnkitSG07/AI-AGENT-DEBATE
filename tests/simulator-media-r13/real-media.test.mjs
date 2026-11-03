@@ -647,3 +647,35 @@ scenario('one-way microphone publication cannot become Connected until both actu
   await customer.page.evaluate(()=>window.setMute(false));const ready=await f.ready('a',accepted,p);assert.equal(ready.call.phase,'connected');
   await audio(customer,accepted.join.identity,660,'both audio directions recover before Connected');
 });
+
+
+scenario('R23 joins real audio during a delayed Accept and wakes exact operators on transfer changes', async f => {
+  for (const device of f.devices.values()) device.nativeBuild = 23;
+  const original = f.provider.acceptIncoming;
+  let release; const blocked = new Promise(resolve => { release = resolve; });
+  let settled = false;
+  f.provider.acceptIncoming = async args => { await blocked; const result = await original.call(f.provider, args); settled = true; return result; };
+  const id = await f.incoming();
+  const started = performance.now();
+  let accepted, p;
+  try {
+    accepted = await f.api('a', 'POST', `/calls/${id}/accept`, { requestId: 'r23-real-early-accept' });
+    const responseMs = performance.now() - started;
+    assert.equal(settled, false, 'Answer must return before the deliberately blocked connector');
+    assert.equal(accepted.call.roomReady, false);
+    p = await f.operator(accepted.join);
+    assert.equal(settled, false, 'The real operator joins/publishes while provider Accept remains blocked');
+    assert.ok((await rooms.listParticipants(accepted.join.roomName)).some(row => row.identity === accepted.join.identity));
+    measurements.push({ name: 'R23 early Answer before blocked connector, real room join', responseMs, operatorRoomJoinMs: p.joinLatencyMs });
+  } finally { release(); }
+  await waitFor(() => settled, 'customer connector completion');
+  await waitFor(async () => await p.page.evaluate(() => window.controlHintCount()) > 0, 'provider setup wake over real room data');
+  const ready = await f.ready('a', accepted, p);
+  assert.equal(ready.call.roomReady, true);
+  await audio(f.customers.get(id).peer, accepted.join.identity, 660, 'R23 customer hears A');
+  const before = await p.page.evaluate(() => window.controlHintCount());
+  await f.handoff('a', 'b', id);
+  assert.ok(await p.page.evaluate(() => window.controlHintCount()) > before, 'transfer wakes source without waiting on its poll');
+  const customerHints = await f.customers.get(id).peer.page.evaluate(() => window.controlHintCount());
+  assert.equal(customerHints, 0, 'operator control hints are never broadcast to the customer');
+});

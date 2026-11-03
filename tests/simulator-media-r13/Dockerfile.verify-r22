@@ -1,6 +1,7 @@
 # Isolated synthetic verification only. No production service/account secrets.
 FROM node:24-bookworm-slim AS node24
 FROM mcr.microsoft.com/playwright:v1.56.1-noble AS verify
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jre-headless && rm -rf /var/lib/apt/lists/*
 COPY --from=node24 /usr/local/bin/node /usr/local/bin/node
 WORKDIR /work/SH-Chat-Source
 COPY package.json package-lock.json ./
@@ -11,6 +12,7 @@ RUN python3 tests/simulator-media-r13/prepare-tools.py
 ENV SH_PLAYWRIGHT_MODULE=/opt/r22-browser/node_modules/playwright
 RUN SH_TEST_CHROMIUM="$(node -p 'require(process.env.SH_PLAYWRIGHT_MODULE).chromium.executablePath()')" SH_VERIFY_OUTPUT=verification/r22/backend node scripts/verify-r13.mjs unit http browser
 RUN SH_R22_MEDIA_TESTS=1 node --test tests/simulator-media-r13/call-tools-media.test.mjs
+RUN SH_R13_REAL_MEDIA_TESTS=1 SH_MEDIA_TEST_OUTPUT=verification/r22/room-media node --test tests/simulator-media-r13/real-media.test.mjs
 FROM node:24-bookworm-slim
 WORKDIR /verification
 COPY --from=verify /work/SH-Chat-Source/verification/r22/ ./results/
