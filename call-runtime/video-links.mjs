@@ -40,6 +40,10 @@ export class VideoLinks {
       events: [], sequence: 0, subscribers: new Map(), seen: new Set(), signalWindow: this.now(), signals: 0, ended: false };
     this.rooms.set(room.id, room);
     room.timer = setTimeout(() => { this.end(room); this.rooms.delete(room.id); }, 30 * 60000); room.timer.unref?.();
+    // Overlap relay credential generation with camera permission and sharing.
+    // A slow relay must not block creating or ending a link, or voice calling.
+    // Each participant keeps separate credentials and coalesces a later Join.
+    for (const participant of Object.values(room.roles)) void this.iceServers(participant).catch(() => {});
     return this.links(room);
   }
   links(room) {
@@ -67,7 +71,7 @@ export class VideoLinks {
     if (!participant.ice) participant.ice = (async () => {
       const id = encodeURIComponent(this.env.SH_VIDEO_TURN_KEY_ID);
       const response = await this.fetchImpl(`https://rtc.live.cloudflare.com/v1/turn/keys/${id}/credentials/generate-ice-servers`, {
-        method: 'POST', signal: AbortSignal.timeout(7000), headers: { Authorization: `Bearer ${this.env.SH_VIDEO_TURN_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 2100 }) });
+        method: 'POST', signal: AbortSignal.timeout(12000), headers: { Authorization: `Bearer ${this.env.SH_VIDEO_TURN_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 2100 }) });
       requireValue(response.ok, 'VIDEO_RELAY_UNAVAILABLE', 'Video relay is temporarily unavailable. Your voice calls are unaffected.', 503);
       const data = await response.json();
       requireValue(Array.isArray(data.iceServers) && data.iceServers.length <= 8, 'VIDEO_RELAY_UNAVAILABLE', 'Video relay returned an invalid configuration.', 503);

@@ -23,14 +23,14 @@ test('video stays disabled without an explicitly configured relay and makes no r
 test('repeated Create is one private room and never opens a LiveKit participant', async t => {
   const f = fixture(t), {links} = await session(f);
   assert.deepEqual(await f.service.create({}, {requestId: 'request-video-0001'}), links);
-  assert.equal(f.service.rooms.size, 1); assert.equal(f.turnCalls, 0); assert.notEqual(links.operatorUrl, links.customerUrl);
+  assert.equal(f.service.rooms.size, 1); assert.equal(f.turnCalls, 2); assert.notEqual(links.operatorUrl, links.customerUrl);
   assert.equal(new URL(links.customerUrl).search, '');
   await assert.rejects(f.service.create({}, {requestId: 'request-video-0002'}), {code: 'VIDEO_BUSY'});
 });
 test('short-lived relay credentials are coalesced per participant and no long-term secret reaches the page', async t => {
   const f = fixture(t), {operator: a, customer: b} = await session(f);
   const [one, two] = await Promise.all([f.service.join(a.id, a.token, a), f.service.join(a.id, a.token, a)]);
-  assert.deepEqual(one, two); assert.equal(f.turnCalls, 1); assert.equal(one.iceServers[0].urls.length, 1);
+  assert.deepEqual(one, two); assert.equal(f.turnCalls, 2); assert.equal(one.iceServers[0].urls.length, 1);
   await f.service.join(b.id, b.token, b); assert.equal(f.turnCalls, 2);
   assert.ok(!JSON.stringify(one).includes('test-secret'));
 });
@@ -86,9 +86,26 @@ test('native End revokes an unjoined link, is idempotent and cannot close anothe
   await assert.rejects(f.service.endFromDevice({deviceId: 'b'}, a.id), {code: 'VIDEO_ACCESS_DENIED'});
   assert.deepEqual(await f.service.endFromDevice({}, a.id), {ended: true});
   assert.deepEqual(await f.service.endFromDevice({}, a.id), {ended: true});
-  assert.equal(f.turnCalls, 0);
+  assert.equal(f.turnCalls, 2);
   await assert.rejects(f.service.join(a.id, a.token, a), {code: 'VIDEO_ENDED'});
   const next = await f.service.create({}, {requestId: 'request-video-0002'});
   assert.notEqual(next.operatorUrl, f.service.links(f.service.rooms.get(a.id)).operatorUrl);
   f.advance(60001); f.service.prune(); assert.equal(f.service.rooms.size, 1);
+});
+
+test('slow relay preparation never blocks Create or End and is reused by Join', async t => {
+  let release, requests = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const service = new VideoLinks({authorize: async () => ({deviceId: 'a', nativeBuild: 24}),
+    env: {SH_VIDEO_LINKS_ENABLED: 'true', SH_VIDEO_TURN_KEY_ID: 'fixture', SH_VIDEO_TURN_API_TOKEN: 'fixture'},
+    fetchImpl: async () => { requests++; await gate; return {ok: true, json: async () => ({iceServers: []})}; }});
+  t.after(() => {release(); service.close();});
+  const links = await service.create({}, {requestId: 'slow-relay-1234'});
+  const a = identity(links.operatorUrl);
+  assert.equal(requests, 2);
+  const joining = service.join(a.id, a.token, a);
+  const rejected = assert.rejects(joining, {code: 'VIDEO_ENDED'});
+  assert.deepEqual(await service.endFromDevice({}, a.id), {ended: true});
+  release(); await rejected;
+  assert.equal(requests, 2, 'Join must reuse the preparation already in flight');
 });
