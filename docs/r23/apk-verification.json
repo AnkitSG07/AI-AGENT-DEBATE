@@ -1,0 +1,16 @@
+{
+  "android": {
+    "tests": 309,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "apk": {
+    "name": "SH-Chat-R23.apk",
+    "size": 60446297,
+    "sha256": "4a128eaa8d7a3ab4b6362b3da1f3a3bb7e9a05244d1e41c8f99a6ef63f6274ed",
+    "certificateSha256": "4bb1e06ee31a93cbd5ccc27b5c26862eb782ea9dff773e2e73fa0d73bfc2fb7a",
+    "versionCode": 23,
+    "versionName": "1.0-r23"
+  }
+}
