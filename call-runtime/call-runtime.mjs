@@ -322,10 +322,11 @@ export class CallRuntime {
   async status(context, id) {
     const [actor, session] = await this.authenticatedSession(context, id, { media: false });
     this.requireSession(session);
-    const [canonical, reservation] = await Promise.all([
+    const [canonical, savedReservation] = await Promise.all([
       session.providerCallId ? this.store.get(callStoreKey(session.providerCallId)) : null,
       this.store.get(deviceReservationKey(actor.deviceId))
     ]);
+    const reservation = await this.reconcileEndedReservation(actor.deviceId, savedReservation);
     // Local hang-up can precede remote cleanup, including an outgoing call
     // whose provider ID has not arrived. Only the durable reservation can say
     // whether this exact actor is available to attempt a waiting call. The
@@ -366,11 +367,35 @@ export class CallRuntime {
     // authorizes its one target and reservation. Independent rows need not
     // serially wait for each other or reread the entire pilot registry.
     const result = await this.timed('transfer-device-reservations', () => Promise.all(candidates.map(async row => {
-      const reservation = await this.store.get(deviceReservationKey(row.deviceId));
+      const saved = await this.store.get(deviceReservationKey(row.deviceId));
+      const reservation = await this.reconcileEndedReservation(row.deviceId, saved);
       return { deviceId: row.deviceId, label: String(row.label || 'Operator device').slice(0, 120), available: !reservation,
         nativeBuild: row.nativeBuild, mediaProtocol: row.mediaProtocol };
     })));
     return { devices: result };
+  }
+
+  async reconcileEndedReservation(deviceId, reservation) {
+    // Only an exact saved pre-media cleanup reservation is eligible. An active
+    // owner/invitation or unknown outgoing result must never be cleared by age.
+    if (reservation?.kind !== 'cleanup' || !reservation.sessionId || reservation.deviceId !== deviceId) return reservation;
+    if (!await this.releasePreMediaReservation(reservation.sessionId, { expectedDeviceId: deviceId })) return reservation;
+    // Another accepted call may have won immediately after release. Re-read it;
+    // directory/status are hints and the next claim still uses a transaction.
+    return this.store.get(deviceReservationKey(deviceId));
+  }
+
+  async claimWithEndedReservationRecovery(context, actor, claim) {
+    try { return await claim(); }
+    catch (error) {
+      if (error?.code !== 'DEVICE_BUSY') throw error;
+      const saved = await this.store.get(deviceReservationKey(actor.deviceId));
+      if (!saved || await this.reconcileEndedReservation(actor.deviceId, saved)) throw error;
+      await this.recheck(context, actor);
+      // The first failed claim issued no provider action. Retry exactly once,
+      // retaining its original request ID and freshly authenticated ownership.
+      return claim();
+    }
   }
 
   async join(context, session, actor) {
@@ -551,7 +576,7 @@ export class CallRuntime {
     if (snapshot.mediaReadyAt) return this.resume(context, snapshot, actor);
     if (!snapshot.owner) await this.requireEnabled();
     const legId = `leg_${randomUUID()}`, readinessNonce = randomUUID();
-    const prepared = await this.#claimAnswer(snapshot.id, () => this.store.transaction(async tx => {
+    const prepared = await this.#claimAnswer(snapshot.id, () => this.claimWithEndedReservationRecovery(context, actor, () => this.store.transaction(async tx => {
       const [session, reservation] = await readTransactionRecords(tx, [
         sessionKey(snapshot.id), deviceReservationKey(actor.deviceId)
       ]);
@@ -582,7 +607,7 @@ export class CallRuntime {
       tx.set(deviceReservationKey(actor.deviceId), { callId: session.id, sessionId: session.id, deviceId: actor.deviceId, kind: 'pending' });
       tx.set(sessionKey(session.id), session);
       return { session, issueProvider: true };
-    }));
+    })));
     if (prepared.issueProvider) this.signalWork(prepared.session.id);
     let current = prepared.session;
     if (prepared.issueProvider) {
@@ -639,7 +664,7 @@ export class CallRuntime {
     const actor = await this.actor(context); await this.requireEnabled(); safePhone(to); request(requestId);
     const id = outgoingSessionId(this.tenantId, actor.deviceId, requestId);
     const legId = `leg_${randomUUID()}`, nonce = randomUUID();
-    const prepared = await this.store.transaction(async tx => {
+    const prepared = await this.claimWithEndedReservationRecovery(context, actor, () => this.store.transaction(async tx => {
       const [existing, reservation, cancelled] = await readTransactionRecords(tx, [
         sessionKey(id), deviceReservationKey(actor.deviceId),
         eventKey(outgoingCancelId(this.tenantId, actor.deviceId, requestId))
@@ -667,7 +692,7 @@ export class CallRuntime {
       tx.set(sessionKey(id), session);
       tx.set(deviceReservationKey(actor.deviceId), { callId: id, sessionId: id, deviceId: actor.deviceId, kind: 'pending' });
       return { session, issueProvider: true };
-    });
+    }));
     if (prepared.cancelled) return { sessionId: id, cancelled: true, call: { sessionId: id, callId: id, providerCallId: null,
       phase: 'ended', direction: 'outgoing', ownerDeviceId: actor.deviceId, roomReady: false, endConfirmed: true, cleanupPending: false,
       version: 0, sessionVersion: 0, transfer: null } };
@@ -1335,7 +1360,19 @@ export class CallRuntime {
         const item = claimed.job;
         if (item.kind === 'connect') {
           if (!current.terminal && !current.mediaReadyAt) await this.providerFor(current).connectOutgoing({ callId: current.providerCallId, answerSdp: current.answerSdp });
-        } else if (item.kind === 'terminate') await this.providerFor(current).terminateCustomer(item);
+        } else if (item.kind === 'terminate') {
+          const provider = this.providerFor(current);
+          const confirmed = !!current.terminal?.confirmedAt && item.callId === current.providerCallId;
+          try { await provider.terminateCustomer(confirmed ? { ...item, reason: 'USER_INITIATED' } : item); }
+          catch (error) {
+            // A customer can end before /ready promotes this to a canonical
+            // call. Apply the same exact-absence recovery as canonical cleanup;
+            // a repeated connector disconnect must not retry forever here.
+            if (!confirmed || typeof provider.confirmCustomerAbsent !== 'function' ||
+                await provider.confirmCustomerAbsent({ roomName: current.roomName,
+                  customerIdentity: current.customerIdentity }) !== true) throw error;
+          }
+        }
         else if (item.kind === 'detach') await this.providerFor(current).detachOperator(item);
         else if (item.kind === 'reject') {
           if (!current.terminal?.confirmedAt) {
@@ -1460,12 +1497,20 @@ export class CallRuntime {
     return { recovered: true, effects };
   }
 
-  async releasePreMediaReservation(id) {
+  async releasePreMediaReservation(id, { expectedDeviceId } = {}) {
     for (let transition = 0; transition < 2; transition++) {
     const advanced = await this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(id));
-      if (!session?.owner || !session.terminal?.confirmedAt || operationPending(session) ||
-          session.outbox.some(item => item.kind !== 'notify' && item.status !== 'done')) return false;
+      if (!session?.owner || session.tenantId !== this.tenantId ||
+          (expectedDeviceId && session.owner.deviceId !== expectedDeviceId) ||
+          !session.terminal?.confirmedAt || operationPending(session) ||
+          !session.outbox.some(item => item.kind === 'detach' && item.status === 'done' &&
+            item.deviceId === session.owner.deviceId && item.identity === session.owner.identity && item.roomName === session.roomName) ||
+          session.outbox.some(item => item.status !== 'done' && item.kind !== 'notify' &&
+            !(item.kind === 'terminate' && item.callId === session.providerCallId))) return false;
+      // Meta/provider confirmation and successful exact operator revocation
+      // already make this phone safe to reuse. Residual customer-connector
+      // cleanup remains durable, but no longer blocks Answer or transfer.
       const call = session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
       const reservation = await tx.get(deviceReservationKey(session.owner.deviceId));
       if (call || !reservation || reservation.sessionId !== session.id || reservation.deviceId !== session.owner.deviceId ||
@@ -1475,10 +1520,11 @@ export class CallRuntime {
         // Two commits deliberately preserve the explicit cleanup transition.
         tx.set(deviceReservationKey(session.owner.deviceId), { ...reservation, kind: 'cleanup', identity: session.owner.identity });
         session.nextActionAtMs = this.now(); tx.set(sessionKey(id), session);
-        return true;
-      } else { tx.delete(deviceReservationKey(session.owner.deviceId)); return false; }
+        return 'transitioned';
+      } else { tx.delete(deviceReservationKey(session.owner.deviceId)); return 'released'; }
     });
-    if (!advanced) break;
+    if (advanced !== 'transitioned') return advanced === 'released';
     }
+    return false;
   }
 }

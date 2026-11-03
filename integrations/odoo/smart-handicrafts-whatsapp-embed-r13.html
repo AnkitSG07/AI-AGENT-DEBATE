@@ -123,6 +123,7 @@
             </button></div><div class="sh-wa-call-availability" id="shWhatsappCallAvailabilityBox">
         <label for="shWhatsappCallAvailability">Call availability</label>
         <select id="shWhatsappCallAvailability"><option value="online">Online</option><option value="busy">Busy</option><option value="away">Away</option><option value="dnd">Do not disturb</option><option value="offline">Offline</option></select>
+        <button id="shWhatsappNativeCallSettings" type="button" class="is-hidden">App settings</button>
         <span id="shWhatsappCallPresenceStatus" role="status"></span>
       </div>
         </section>
@@ -8792,6 +8793,7 @@ Once received, our team will prepare the quotation accordingly.`
       if (!hubNativeRuntime.ready || state.destroyed || !hasHubNativeBridge()) return;
       refreshAppMessageStates().catch(() => {}); queueVisibleAppMessageRead();
       const native = hubNativeRoomCapabilities();
+      syncWhatsappPresenceUi();
       if (native) stopWhatsappRingtone();
       if (native?.activeCall) {
         const focused = focusedWhatsappCall(), id = whatsappNativeProviderId(focused);
@@ -8930,8 +8932,18 @@ Once received, our team will prepare the quotation accordingly.`
   function syncWhatsappPresenceUi() {
     const profile = readWhatsappOperatorProfile();
     const select = byId("shWhatsappCallAvailability");
+    const native = window.SHNativeHistory?.protocol === "sh-call-history-v1";
+    if (select) { select.disabled = native; select.classList.toggle("is-hidden", native); }
+    byId("shWhatsappNativeCallSettings")?.classList.toggle("is-hidden", !native);
     if (select && profile && document.activeElement !== select) select.value = profile.status || "online";
     const status = byId("shWhatsappCallPresenceStatus");
+    if (native) {
+      const calls = window.SHNativeCapabilities;
+      setTextIfChanged(status, calls?.protocol === "sh-room-audio-v1" && calls.nativeRoomCalls === true
+        ? calls.activeCall === true ? "Call in progress on this phone" : "Calls handled by SH Chat"
+        : "Check call setup in App settings");
+      return;
+    }
     const text = !state.autoRefreshEnabled ? "Live updates are paused" : whatsappCallsRuntime.presenceError ||
       (whatsappCallsRuntime.presenceConfirmed ? (whatsappOperatorAvailable() ? "Ready in this Hub" : "Your availability is saved") : "Connecting this Hub\u2026");
     setTextIfChanged(status, text);
@@ -8940,7 +8952,7 @@ Once received, our team will prepare the quotation accordingly.`
   async function postWhatsappHubPresence({ force = false, closing = false } = {}) {
     // Enrolled Android devices already publish authenticated native presence.
     // A second browser registration would expose a duplicate, unanswerable phone.
-    if (window.SHNativeHistory?.protocol === "sh-call-history-v1") return null;
+    if (window.SHNativeHistory?.protocol === "sh-call-history-v1") { syncWhatsappPresenceUi(); return null; }
     if (!state.session?.uid || (state.destroyed && !closing)) return null;
     if (!closing && whatsappCallsRuntime.presencePromise) { if (force) whatsappCallsRuntime.presenceDirty = true; return whatsappCallsRuntime.presencePromise; }
     if (!force && Date.now() - whatsappCallsRuntime.presencePostedAt < 20000) return null;
@@ -9097,6 +9109,9 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function setWhatsappCallAvailability(value) {
+    // The browser selector cannot update an enrolled Android phone. Keep that
+    // control in App settings rather than silently changing a phantom browser.
+    if (window.SHNativeHistory?.protocol === "sh-call-history-v1") { syncWhatsappPresenceUi(); return; }
     if (!["online", "busy", "away", "dnd", "offline"].includes(value)) return;
     whatsappOperatorIdentity();
     const profile = readWhatsappOperatorProfile();
@@ -9762,6 +9777,9 @@ Once received, our team will prepare the quotation accordingly.`
       openWhatsappCallNotification(event.data.target).catch(error => showOperatorToast(error.message));
     }, options);
     byId("shWhatsappCallAvailability")?.addEventListener("change", event => setWhatsappCallAvailability(event.target.value), options);
+    byId("shWhatsappNativeCallSettings")?.addEventListener("click", () => {
+      if (window.SHNativeHistory?.protocol === "sh-call-history-v1") postHubNativeMessage({ type: "request-settings" });
+    }, options);
     window.addEventListener("storage", event => {
       if (event.key !== "sh_operator_device" || state.destroyed) return;
       readWhatsappOperatorProfile(); syncWhatsappPresenceUi(); renderWhatsappCallPanel();
