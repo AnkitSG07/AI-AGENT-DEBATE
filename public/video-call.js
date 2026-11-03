@@ -1,24 +1,36 @@
-/* No account bearer or TURN secret enters this page. The fragment carries a
- * short-lived, single-role invitation; it is never placed in an HTTP URL. */
+/* No account bearer or TURN secret enters this page. Customer short paths and
+ * legacy fragments carry only a short-lived, single-role invitation. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), parts = location.hash.slice(1).split('.');
   let [id, role, token] = parts;
   let valid = /^[A-Za-z0-9_-]{32}$/.test(id || '') && ['operator', 'customer'].includes(role) && /^[A-Za-z0-9_-]{32}$/.test(token || '');
-  const clientId = crypto.randomUUID();
+  // Safari versions before randomUUID/AbortSignal.timeout must still load the
+  // invitation and browser help. Keep identities cryptographically random.
+  const identity = () => typeof crypto.randomUUID === 'function' ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
+  const clientId = identity();
   let endpoint = `/api/sh-video/${encodeURIComponent(id || '')}`;
   let stream, pc, closed = false, joining = false, sending = Promise.resolve(), cursor = 0, readerAbort, disconnectTimer, facing = 'user', offering = false, offered = false;
   let pendingCandidates = [], processing = Promise.resolve(), expiresTimer, recoveryTimer, focusAllowed = true, joined = false, claimed = false;
   const native = value => window.SHVideoNative?.postMessage(JSON.stringify(value));
   const supported = () => !!navigator.mediaDevices?.getUserMedia && typeof RTCPeerConnection === 'function';
   const status = text => { $('status').textContent = text; $('liveStatus').textContent = text; };
-  async function request(path, body) {
-    const response = await fetch(endpoint + path, { method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
-      cache: 'no-store', keepalive: body.type === 'end', signal: AbortSignal.timeout(15000), body: JSON.stringify({clientId, ...body}) });
-    const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'The connection is unavailable.'); return data;
+  async function jsonRequest(url, options, timeoutMs) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {...options, signal: controller.signal});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'The connection is unavailable.');
+      return data;
+    } finally { clearTimeout(timer); }
+  }
+  function request(path, body) {
+    return jsonRequest(endpoint + path, { method: 'POST', headers: {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'},
+      cache: 'no-store', keepalive: body.type === 'end', body: JSON.stringify({clientId, ...body}) }, 15000);
   }
   function signal(type, fields = {}) {
-    const body = {type, messageId: crypto.randomUUID(), ...fields};
+    const body = {type, messageId: identity(), ...fields};
     const work = sending.catch(() => {}).then(async () => {
       try { return await request('/signal', body); } catch (error) {
         if (closed && type !== 'end') throw error;
@@ -31,8 +43,8 @@
     if (closed) return;
     closed = true; clearTimeout(disconnectTimer); clearTimeout(expiresTimer); clearTimeout(recoveryTimer); readerAbort?.abort();
     stream?.getTracks().forEach(track => track.stop()); pc?.close();
-    if (notify && valid && (joined || claimed)) void request('/signal', {type: 'end', messageId: crypto.randomUUID()}).catch(() => {});
-    $('controls').hidden = true; $('intro').hidden = false; $('join').hidden = true; $('play').hidden = true;
+    if (notify && valid && (joined || claimed)) void request('/signal', {type: 'end', messageId: identity()}).catch(() => {});
+    $('controls').hidden = true; $('intro').hidden = false; $('join').hidden = true; $('play').hidden = true; $('browserHelp').hidden = true;
     $('local').srcObject = null; $('remote').srcObject = null; document.body.classList.remove('joined', 'connected', 'waiting'); $('participant').textContent = 'Call ended'; $('invitation').textContent = ''; $('copy').hidden = true; status(message); native({type: 'ended'});
   }
   window.SHVideoEnd = () => stop();
@@ -88,7 +100,7 @@
   async function join() {
     if (!valid || joining || closed) return;
     if (!supported()) { status('Open this invitation in Chrome or Safari to use your camera and microphone.'); return; }
-    joining = true; $('join').disabled = true; document.body.classList.add('waiting'); status('Opening camera and microphone…');
+    joining = true; $('join').disabled = true; $('browserHelp').hidden = true; document.body.classList.add('waiting'); status('Opening camera and microphone…');
     if (window.SHVideoNative) { $('controls').hidden = false; $('join').hidden = true; }
     try {
       // Do not claim a customer's link before permission succeeds. An in-app
@@ -96,7 +108,7 @@
       const media = navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}, video: {width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 24, max: 30}, facingMode: facing}});
       const authorization = (role === 'customer' ? media : Promise.resolve()).then(() => {
         if (closed) throw new Error('Call ended');
-        return request('/join', {}).then(config => { claimed = true; if (closed) void request('/signal', {type: 'end', messageId: crypto.randomUUID()}).catch(() => {}); return config; });
+        return request('/join', {}).then(config => { claimed = true; if (closed) void request('/signal', {type: 'end', messageId: identity()}).catch(() => {}); return config; });
       });
       const results = await Promise.allSettled([media, authorization]);
       if (results[0].status === 'fulfilled') stream = results[0].value;
@@ -132,6 +144,7 @@
       if (joined) { stop('Could not connect. Please ask for a new video link.'); return; }
       status(error.name === 'NotAllowedError' ? 'Allow camera and microphone access to join.' : error.message || 'Could not join. Please try again.');
       $('join').disabled = false; $('join').hidden = false; joining = false; document.body.classList.remove('waiting');
+      if (!window.SHVideoNative && !claimed) { $('browserHelp').hidden = false; $('browserHelp').open = true; }
     }
   }
   $('minimize').onclick = () => native({type: 'minimize'});
@@ -162,27 +175,50 @@
   window.SHVideoSpeaker = enabled => { $('speaker').setAttribute('aria-pressed', String(enabled)); $('speaker').setAttribute('aria-label', enabled ? 'Use earpiece' : 'Use speaker'); };
   $('play').onclick = () => { $('remote').play().then(() => { $('play').hidden = true; }).catch(() => {}); };
   window.addEventListener('pagehide', () => stop());
+  function configureBrowserHelp() {
+    // Set up an escape route before any network lookup or media request. iOS
+    // cannot use Android intent: links; do not promise to force Safari open.
+    if (window.SHVideoNative || role === 'operator') return;
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent) || /Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+    const android = /Android/i.test(navigator.userAgent), url = location.href;
+    document.body.classList.add('browser-call'); $('browserHelp').hidden = false;
+    $('browserUrl').value = url;
+    $('browserGuide').textContent = ios
+      ? 'Copy the link, open Safari, and paste it in the address bar. You can also use Chrome if it is installed.'
+      : 'Open this link in your browser. If the button does not open it, copy the link and paste it in the address bar.';
+    $('browserCopy').textContent = ios ? 'Copy link for Safari' : 'Copy link';
+    if (ios) {
+      $('browser').href = url.replace(/^https:/, 'googlechromes:').replace(/^http:/, 'googlechrome:');
+      $('browser').textContent = 'Open in Chrome (if installed)'; $('browser').hidden = false;
+    } else if (android) {
+      $('browser').href = 'intent://' + location.host + location.pathname + location.search + location.hash + '#Intent;scheme=' + location.protocol.slice(0, -1) + ';package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+      $('browser').hidden = false;
+    }
+    $('browserCopy').onclick = async () => {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(url);
+        $('browserFeedback').textContent = ios ? 'Link copied. Paste it into Safari to join.' : 'Link copied. Paste it into your browser to join.';
+      } catch (_) {
+        $('browserUrl').hidden = false; $('browserUrl').focus(); $('browserUrl').select(); $('browserUrl').setSelectionRange(0, url.length);
+        $('browserFeedback').textContent = 'Touch and hold the selected link, then choose Copy.';
+      }
+    };
+  }
   async function initialize() {
+    configureBrowserHelp();
     const code = location.pathname.match(/^\/v\/([A-Za-z0-9_-]{24})$/)?.[1];
     if (code) {
       $('join').disabled = true; status('Opening your invitation…');
       try {
-        const response = await fetch('/api/sh-video/invitation', {method: 'POST', cache: 'no-store', headers: {Authorization: 'Bearer ' + code}, signal: AbortSignal.timeout(10000)});
-        const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'Could not open this invitation.');
+        const data = await jsonRequest('/api/sh-video/invitation', {method: 'POST', cache: 'no-store', headers: {Authorization: 'Bearer ' + code}}, 10000);
         ({id, role, token} = data); valid = /^[A-Za-z0-9_-]{32}$/.test(id) && role === 'customer' && /^[A-Za-z0-9_-]{32}$/.test(token);
         endpoint = `/api/sh-video/${encodeURIComponent(id)}`;
       } catch (error) { status(error.message || 'Could not open this invitation. Please reopen the link.'); $('join').hidden = true; return; }
     }
     if (!valid) { $('join').disabled = true; status('This private link is incomplete. Please ask for a new link.'); return; }
     $('join').disabled = false; status('Join with your camera and microphone.');
-    if (/Android/i.test(navigator.userAgent) && !window.SHVideoNative) {
-      const url = location.href;
-      $('browser').href = 'intent://' + location.host + location.pathname + location.hash + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
-      // Embedded browsers may not expose camera capture. Offer a genuine,
-      // user-clicked browser handoff instead of a silent, blocked popup.
-      $('browser').hidden = !(/; wv\)|WhatsApp|FBAN|Instagram/i.test(navigator.userAgent) || !supported());
-    }
-    if (!supported()) { status('Open this invitation in Chrome or Safari to use your camera and microphone.'); $('join').disabled = true; }
+    if (!supported()) { status('Open this invitation in Chrome or Safari to use your camera and microphone.'); $('join').disabled = true; $('browserHelp').open = true; }
     if (window.SHVideoNative && role === 'operator') {
       $('minimize').hidden = false; $('share').hidden = false; $('copy').hidden = false;
       $('participant').textContent = 'Customer'; $('invitation').textContent = 'Sending invitation…';
