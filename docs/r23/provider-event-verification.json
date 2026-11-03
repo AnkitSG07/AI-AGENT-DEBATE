@@ -1,0 +1,202 @@
+{
+  "kind": "r23-provider-event-wakeup-verification",
+  "testedSourceCommit": "f7bc9d75ce103609c5de339449fd6b8faf8100fb",
+  "testedSourceTree": "ea6873e65737c2e74152aca4531392bc1dced83b",
+  "verificationService": "srv-dbk90pajnfac739uuo00",
+  "verificationDeploy": "dep-dbkp61nb9u1s7382hl10",
+  "completed": "2026-11-03T07:58:24.808Z",
+  "passed": true,
+  "fullReportSha256": "0f4a33e9024bbe72699cfc0b28040877d19e989c55dede54081021384d852781",
+  "backendBrowser": {
+    "groups": [
+      "unit",
+      "http",
+      "browser"
+    ],
+    "pass": 1011,
+    "fail": 0,
+    "skipped": 0,
+    "changedDuringRun": []
+  },
+  "holdPrivateRecording": {
+    "passed": true,
+    "phases": [
+      {
+        "name": "hold preparation",
+        "elapsedMs": 43
+      },
+      {
+        "name": "audio worker memory",
+        "residentKiB": 103268
+      },
+      {
+        "name": "recorded duration",
+        "seconds": 32.5971875,
+        "parts": 2,
+        "customerPrivateAmplitude": 0.10485772401086227,
+        "privateOperatorAmplitude": 6.588319638253159e-06
+      }
+    ]
+  },
+  "realRoomMedia": {
+    "scope": "Actual local LiveKit SFU + Chromium audio/WebRTC + Firestore SDK/emulator + application runtime/routes/readiness/transfer controller. External WhatsApp connector and Meta events are explicitly synthetic; no real phones, Meta, FCM, cloud or production deployment.",
+    "expectedScenarioCount": 19,
+    "sourcesUnchanged": true,
+    "sourceHashes": {
+      "peer.html": "fca892a70228b22ff6e8c5d53368b500759ba21bf2d798fc6243d8560a7a438e",
+      "real-media.test.mjs": "60a102c44a58edcc047fa966519fedc2c4251e5b7473ba0122f71bd006e6fdf2",
+      "../../media/livekit-provider.mjs": "06e8274f203c06f88c7662d447e7cff7c1db7366006ed17c3eb7debb9151b05c",
+      "../../media/transfer-controller.mjs": "b66ef537aa5e555e057abf2768a11960b5215179b3b0d0413f090aa5797163ee",
+      "../../media-store/firestore-media-store.mjs": "75c0ce308f264d7f33cf8cfca9fc65e364806b77a32105777e3c547e7b75fdf4",
+      "../../call-runtime/startup.mjs": "2deecf355c71dc42a6204c7c96236e6a4935fa6a6969fad4e090e29ea0ee5a16",
+      "../../call-runtime/call-runtime.mjs": "7f8078ff1f5d2afae583e85b1262f9370a1c0cb9faecb8ed9422c0980667fea7",
+      "../../call-runtime/routes.mjs": "5a2bf4482c62c5248cee4e4025d793e1c1bc349a36892455b3638e1fd927dba0",
+      "../../call-runtime/readiness.mjs": "e09eb844272d03975e85456211586faa72c633b985290de7801022fa2b3d4fb1"
+    },
+    "checks": [
+      {
+        "name": "real incoming: exact production readiness verifies bidirectional RTP and decoded tones",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 7737.128148
+      },
+      {
+        "name": "initial acoustic silence establishes real RTP and decoded readiness before the customer speaks",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 1846.5352750000002
+      },
+      {
+        "name": "initial provider-confirmed customer mute connects transport honestly and later resumes two-way audio",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 4264.825998
+      },
+      {
+        "name": "real outgoing: customer answer, 25-second healthy call, silence, mute and immediate callback",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 35361.595602
+      },
+      {
+        "name": "competing incoming answers: actual transactions choose one owner and one customer audio leg",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 1700.4552730000069
+      },
+      {
+        "name": "decline and customer-cancel before answer never create media and release the next call",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 5462.347827000005
+      },
+      {
+        "name": "real A-to-B-to-A audio handoff survives source shutdown and rejects old-leg End",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 12567.465719999993
+      },
+      {
+        "name": "transfer decline and target missing audio preserve source media; false evidence cannot commit",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 2397.280197999993
+      },
+      {
+        "name": "runtime restart reloads Firestore ownership without creating a second customer call",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 5348.805231999999
+      },
+      {
+        "name": "customer hangs up during transfer: terminal state wins and both real operator legs disconnect",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 9604.710259
+      },
+      {
+        "name": "real route boundary rejects unauthenticated, invalid and revoked-device mutations",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 5293.858301
+      },
+      {
+        "name": "lost Accept acknowledgement resumes the original actual media leg without accepting twice",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 1657.4460810000019
+      },
+      {
+        "name": "lost Dial acknowledgement plus early answer reconnects exact original call and one audio leg",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 1748.7955109999893
+      },
+      {
+        "name": "duplicate End after an ignored HTTP acknowledgement cannot leave busy reservations or repeat customer termination",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 6859.194877999995
+      },
+      {
+        "name": "actual SDK signaling and full WebRTC reconnection restore both decoded audio directions",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 2820.4013059999997
+      },
+      {
+        "name": "real invitation timeout releases target while customer and source audio continue",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 17149.115414
+      },
+      {
+        "name": "one-way microphone publication cannot become Connected until both actual directions recover",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 3285.0451600000088
+      },
+      {
+        "name": "R23 joins real audio during a delayed Accept and wakes exact operators on transfer changes",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 3460.9401579999976
+      },
+      {
+        "name": "R23 provider Answer and Hang-up wake real joined audio without an idle poll",
+        "passed": true,
+        "status": "completed",
+        "durationMs": 1978.023371999996
+      }
+    ],
+    "wakeMeasurements": [
+      {
+        "name": "R23 verified connect event to real room wake",
+        "milliseconds": 117.40659299999243
+      },
+      {
+        "name": "R23 verified accepted event to real room wake",
+        "milliseconds": 120.89311299999827
+      },
+      {
+        "name": "R23 verified terminate event to real room wake",
+        "milliseconds": 120.78887300001225
+      }
+    ]
+  },
+  "compatibility": {
+    "requiresNewApk": false,
+    "apkVersion": "1.0-r23",
+    "apkSha256": "4a128eaa8d7a3ab4b6362b3da1f3a3bb7e9a05244d1e41c8f99a6ef63f6274ed",
+    "requiresOdooEmbedUpdate": false,
+    "aiEnabled": false
+  },
+  "notMeasured": [
+    "Physical Android handset call timings",
+    "Meta/WhatsApp transport latency",
+    "FCM delivery to sleeping physical devices",
+    "Production database quota usage"
+  ],
+  "claims": "Room-wake measurements use real isolated SFU/WebRTC transport with synthetic trusted provider events. They do not prove total physical handset latency. Scenario duration includes setup, safety/recovery waits and teardown and is not a call-connect latency.",
+  "liveCustomerActions": false
+}
