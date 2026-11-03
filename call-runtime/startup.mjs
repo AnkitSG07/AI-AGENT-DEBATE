@@ -70,7 +70,7 @@ export function createNativeCallRuntime({ store, env, authenticate, resolveDevic
     }, verifyReadiness: data => runtime.verifyTransferReadiness(data) });
   runtime = new CallRuntime({ store, provider, transferController: controller, authenticate, resolveDevice, listDevices,
     capabilities: release, roomCapabilities: roomRelease, verifyReadiness, rejectIncoming: nativeReject, notify, onWorkAvailable, phoneNumberId, tenantId, minimumNativeBuild, now, onRuntimeTiming });
-  if (callFiles) runtime.tools = new CallTools({ runtime, files: callFiles });
+  if (callFiles) runtime.tools = new CallTools({ runtime, files: callFiles, env });
   return { runtime, provider, controller,
     verifyConfiguration: async () => {
       controlVerified = false;

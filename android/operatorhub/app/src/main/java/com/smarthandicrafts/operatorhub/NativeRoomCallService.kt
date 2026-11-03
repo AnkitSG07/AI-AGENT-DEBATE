@@ -44,6 +44,7 @@ class NativeRoomCallService : Service() {
                 "speaker" -> service.engine?.setSpeaker(!service.speaker)
                 "transfer" -> service.inviteTransfer(value)
                 "consult-transfer" -> service.inviteTransfer(value, "consult")
+                "prepare-handover" -> service.prepareHandover()
                 "complete-transfer" -> service.decideTransfer("complete")
                 "merge" -> service.decideTransfer("merge")
                 "record" -> service.changeRecording()
@@ -75,9 +76,12 @@ class NativeRoomCallService : Service() {
     private var actualCustomerIdentity = ""
     private var callToolsEnabled = false
     private var recordingState = "idle"
+    private var recordingId = ""
+    private var recordingActive = false
     private var recordingError = ""
     private var recordingPending = false
     private var decisionPending = false
+    private var handoverPreparing = false
     private var channelId = 0
     private var displayName = "Customer"
     private var state = "preparing"
@@ -134,6 +138,7 @@ class NativeRoomCallService : Service() {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null || epoch != 0L) return START_NOT_STICKY
+        if (NativeVideoCallService.isRunning()) { finishLocal("failed", "Finish the video call before answering a voice call."); return START_NOT_STICKY }
         val clientAttempt = intent.getStringExtra("client_attempt_id")
         if (NativeRoomUiBinding.validAttemptId(clientAttempt)) requestId = clientAttempt!!
         callId = intent.getStringExtra("call_id") ?: ""
@@ -297,6 +302,7 @@ class NativeRoomCallService : Service() {
         val join = result.optJSONObject("join") ?: throw IllegalStateException("Call audio authorization was missing.")
         legId = join.optString("legId", result.optString("legId"))
         join.put("legId", legId)
+        join.put("sessionId", callId)
         actualCustomerIdentity = join.optString("actualCustomerIdentity", join.optString("customerIdentity"))
         updateCallTools(call)
         updateReadinessContext(call)
@@ -336,6 +342,9 @@ class NativeRoomCallService : Service() {
             override fun onMicrophoneControlUnavailable() { microphoneControlUnavailable() }
             override fun onAudioRoute(route: String, isSpeaker: Boolean) { if (current()) { audioRoute = route; speaker = isSpeaker; emit() } }
             override fun onRouteUnavailable() { audioRouteUnavailable() }
+            override fun onRecordingState(next: String, error: String) {
+                if (current()) { recordingState = next; recordingError = error; emit() }
+            }
             override fun onFailure(stage: NativeRoomAudioSetup.Stage, code: String, message: String) {
                 if (!current()) return
                 failureStage = stage.name; failureCode = code
@@ -343,7 +352,8 @@ class NativeRoomCallService : Service() {
                 endLocally(message, failed = true)
             }
         })
-        engine?.connect(join); configureCallRouting(call); emit()
+        engine?.connect(join); configureCallRouting(call)
+        call.optJSONObject("recording")?.let { engine?.configureRecording(it) }; emit()
     }
 
     private fun microphoneControlUnavailable() {
@@ -473,6 +483,7 @@ class NativeRoomCallService : Service() {
         updateReadinessContext(call)
         updateCallTools(call)
         configureCallRouting(call)
+        call.optJSONObject("recording")?.let { engine?.configureRecording(it) }
         providerCallId = NativeRoomJson.text(call,"providerCallId", providerCallId)
         if (channelId == 0) channelId = call.optInt("channelId", 0)
         val phase = call.optString("phase")
@@ -559,7 +570,13 @@ class NativeRoomCallService : Service() {
     private fun updateCallTools(call: JSONObject) {
         ownsCustomer = call.optString("ownerDeviceId") == credential.deviceId
         callToolsEnabled = call.optBoolean("callToolsEnabled")
-        call.optJSONObject("recording")?.let { recordingState = it.optString("state", "idle"); recordingError = it.optString("error") }
+        call.optJSONObject("recording")?.let {
+            recordingId = it.optString("id")
+            recordingActive = it.optBoolean("active") || it.optString("state") in listOf("starting", "recording")
+            if (it.optString("mode") != "device" || !it.optBoolean("active") || !ownsCustomer) {
+                recordingState = it.optString("state", "idle"); recordingError = it.optString("error")
+            }
+        }
         val transfer = call.optJSONObject("transfer")
         val next = if (transfer?.optString("mode") == "consult" && transfer.optString("status") in listOf("invited", "connecting")) transfer.optString("consultStage") else ""
         if (next != consultStage && transferId.isNotEmpty() && next in listOf("customer", "conference")) {
@@ -603,15 +620,29 @@ class NativeRoomCallService : Service() {
 
     private fun changeRecording() {
         if (!current() || !ownsCustomer || !readyCommitted || !callToolsEnabled || recordingPending) return
-        val action = if (recordingState in listOf("starting", "recording")) "stop" else "start"
+        val action = if (recordingActive || recordingState in listOf("starting", "recording")) "stop" else "start"
         recordingPending = true; emit()
         scope.launch {
             try {
-                val result = requestIdempotent(path("recording/$action"), JSONObject().put("requestId", UUID.randomUUID().toString()))
-                if (current()) result.optJSONObject("recording")?.let { recordingState = it.optString("state", "idle"); recordingError = it.optString("error") }
+                val result = requestIdempotent(path("recording/$action"), JSONObject().put("requestId", UUID.randomUUID().toString())
+                    .put("mode", "device").put("recordingId", recordingId))
+                if (current()) result.optJSONObject("recording")?.let {
+                    recordingId = it.optString("id"); recordingActive = it.optBoolean("active"); engine?.configureRecording(it)
+                    if (!it.optBoolean("active")) recordingState = "saved"
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (current()) { recordingError = readable(error); authFailure(error) } }
             finally { recordingPending = false; if (current()) { pollWake.trySend(Unit); emit() } }
+        }
+    }
+
+    private fun prepareHandover() {
+        if (handoverPreparing || !ownsCustomer || !readyCommitted || closed || !callToolsEnabled || sourceTransferId.isNotEmpty()) return
+        handoverPreparing = true
+        scope.launch {
+            try { request("/calls/${Uri.encode(callId)}/prepare-handover", "POST", JSONObject()) }
+            catch (_: Exception) { /* The actual invitation checks readiness and reports any failure. */ }
+            finally { handoverPreparing = false }
         }
     }
 
@@ -690,9 +721,9 @@ class NativeRoomCallService : Service() {
         .put("transportReady", readyCommitted && health.fresh() && !closed)
         .put("failureStage", failureStage).put("failureCode", failureCode)
         .put("transferPending", transferInFlight).put("cancelTransferPending", cancelTransferInFlight)
-        .put("callToolsEnabled", callToolsEnabled).put("recordingState", recordingState).put("recordingError", recordingError)
+        .put("callToolsEnabled", callToolsEnabled).put("recordingState", recordingState).put("recordingActive", recordingActive).put("recordingError", recordingError)
         .put("recordingPending", recordingPending).put("canRecord", ownsCustomer && readyCommitted && !closed && callToolsEnabled &&
-            (recordingState in listOf("starting", "recording") || consultStage !in listOf("private", "customer", "conference")))
+            (recordingActive || recordingState in listOf("starting", "recording") || consultStage !in listOf("private", "customer", "conference")))
         .put("consultStage", consultStage).put("consultReady", consultReady).put("decisionPending", decisionPending)
         .put("canCompleteTransfer", ownsCustomer && consultReady && consultStage in listOf("private", "merged") && !decisionPending && !closed)
         .put("canMerge", ownsCustomer && consultReady && consultStage == "private" && !decisionPending && !closed)

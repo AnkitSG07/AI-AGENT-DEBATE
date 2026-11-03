@@ -73,6 +73,27 @@ export class OdooCallFiles {
   async beginRecording(callId, recordingId, metadata) {
     await this.put(`${callPrefix(callId)}record-${recordingId}.json`, JSON.stringify({ callId, recordingId, ...metadata }), 'application/json');
   }
+  async recordingMetadata(callId, recordingId) {
+    const name = `${callPrefix(callId)}record-${recordingId}.json`;
+    const row = (await this.rows(name, undefined, 3)).find(row => row.name === name);
+    const value = row && parse(row);
+    return value?.callId === callId && value.recordingId === recordingId ? value : null;
+  }
+  async saveDevicePart(callId, recordingId, deviceId, metadata, pcm) {
+    const { segmentId, index, capturedAt } = metadata;
+    const suffix = `${String(capturedAt).padStart(13, '0')}-${hash(deviceId + ':' + segmentId).slice(0, 24)}-${String(index).padStart(6, '0')}`;
+    const name = `${callPrefix(callId)}audio-${recordingId}-${suffix}.wav`;
+    const description = JSON.stringify({ mode: 'device', deviceId, ...metadata, sha256: hash(pcm.toString('base64')) });
+    // Retry the exact immutable bytes. Never silently overwrite a segment.
+    return this.serial(name, async () => {
+      const old = (await this.rows(name, ['id', 'name', 'description'], 3)).find(row => row.name === name);
+      if (old) {
+        requireValue(old.description === description, 'RECORDING_PART_CONFLICT', 'Recording segment conflicts with an earlier upload.', 409);
+        return old.id;
+      }
+      return this.put(name, Buffer.concat([wavHeader(pcm.length), pcm]), 'audio/wav', description);
+    });
+  }
   async savePart(callId, recordingId, index, pcm) {
     requireValue(Buffer.isBuffer(pcm) && pcm.length > 0 && pcm.length <= 1920000 && pcm.length % 2 === 0,
       'INVALID_RECORDING_PART', 'Invalid recording audio.', 400);
@@ -85,7 +106,7 @@ export class OdooCallFiles {
       this.rows(`${callPrefix(callId)}audio-`, ['id', 'name', 'file_size'], 500)
     ]);
     return records.map(parse).filter(record => record?.callId === callId).map(record => ({
-      id: record.recordingId, startedAt: record.startedAt, deviceId: record.deviceId,
+      id: record.recordingId, startedAt: record.startedAt, deviceId: record.deviceId, mode: record.mode || 'server',
       parts: parts.filter(part => part.name.startsWith(`${callPrefix(callId)}audio-${record.recordingId}-`))
         .sort((a, b) => a.name.localeCompare(b.name)).map(part => ({ id: part.id, bytes: part.file_size,
           durationSeconds: Math.max(0, (part.file_size - 44) / 32000) }))

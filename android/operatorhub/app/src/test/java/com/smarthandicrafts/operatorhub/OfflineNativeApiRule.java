@@ -19,6 +19,15 @@ public final class OfflineNativeApiRule implements TestRule {
         return new Statement() {
             @Override public void evaluate() throws Throwable {
                 blockDefaultConnections();
+                // Robolectric does not grant an app's own signature permission
+                // at installation. Use the actual simulation package (including
+                // its suffix), just as Android's package installer does.
+                android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+                String permission = app.getPackageName() + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION";
+                android.content.pm.PermissionInfo info = app.getPackageManager().getPermissionInfo(permission, 0);
+                org.junit.Assert.assertEquals(android.content.pm.PermissionInfo.PROTECTION_SIGNATURE,
+                    info.protectionLevel & android.content.pm.PermissionInfo.PROTECTION_MASK_BASE);
+                org.robolectric.Shadows.shadowOf(app).grantPermissions(permission);
                 try { test.evaluate(); }
                 // Background cleanup may outlive a test; leave the default
                 // blocked instead of restoring a real HTTPS connection.

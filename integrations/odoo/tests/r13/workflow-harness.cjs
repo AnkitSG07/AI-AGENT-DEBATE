@@ -23,7 +23,7 @@ const instrumented = html.replace(marker, testExport);
 const evidenceDir = path.resolve(__dirname, 'workflow-evidence');
 fs.mkdirSync(evidenceDir, { recursive: true });
 const results = [];
-const doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SH Operator Hub — OFFLINE DEMO</title>
+const doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="csrf-token" content="synthetic-odoo-csrf-token-only-0001"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SH Operator Hub — OFFLINE DEMO</title>
 <style>body{margin:0}#wrapwrap{transform:translateZ(0);width:92%;margin:auto}.container{max-width:1140px;transform:translateZ(0)}#top,#bottom{height:90px;background:red}#oe_main_menu_navbar,.o-livechat-root{position:fixed;bottom:0;right:0;background:red;z-index:999999}</style></head>
 <body><div id="oe_main_menu_navbar">DEMO ODOO EDIT BAR</div><div id="wrapwrap"><header id="top">DEMO HOST HEADER</header><main id="wrap"><div class="container">${instrumented}</div></main><footer id="bottom">DEMO HOST FOOTER</footer></div><div class="o-livechat-root">DEMO HOST LIVE CHAT</div></body></html>`;
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#eadfcd"/><path d="M170 340V145q0-60 70-60h160q70 0 70 60v195z" fill="#16805e"/><circle cx="320" cy="220" r="75" fill="#c8af73"/><text x="320" y="415" font-family="sans-serif" font-size="22" text-anchor="middle" fill="#143d2c">DEMO PHOTO · NO CUSTOMER DATA</text></svg>`;

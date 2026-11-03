@@ -11,6 +11,7 @@ import io.livekit.android.room.Room
 import io.livekit.android.room.participant.AudioTrackPublishDefaults
 import io.livekit.android.room.participant.AudioTrackPublishOptions
 import io.livekit.android.room.track.LocalAudioTrack
+import io.livekit.android.room.track.AudioTrack
 import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.Track
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 
 /** Owns native media only. Neither room signaling nor a subscribed track is called Connected. */
-internal class NativeRoomEngine(context: Context, private val listener: Listener) : NativeRoomMedia {
+internal class NativeRoomEngine(private val context: Context, private val listener: Listener) : NativeRoomMedia {
     interface Listener {
         fun onTransport(state: String)
         fun onEvidence(evidence: JSONObject)
@@ -36,6 +37,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         fun onMicrophoneControlUnavailable()
         fun onAudioRoute(route: String, isSpeaker: Boolean)
         fun onRouteUnavailable()
+        fun onRecordingState(state: String, error: String) { }
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val engineCreatedAt = SystemClock.elapsedRealtime()
@@ -63,10 +65,13 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     private var routingGeneration = 0L
     private var additionalPeer = ""
     private var desiredRouting: JSONObject? = null
+    private var recorder: NativeDeviceRecorder? = null
+    private var desiredRecording: JSONObject? = null
+    private val recordingSinks = mutableMapOf<AudioTrack, AudioTrackSink>()
     private val microphoneControl = NativeRoomMicrophoneControl(scope, { closed },
         captureMute = { room.setMicrophoneMute(it || routingBusy || routingFailed || (setupStage == NativeRoomAudioSetup.Stage.AUDIO_ACTIVE && join.optString("customerIdentity").isEmpty())) },
         trackEnabled = { routingMutex.withLock { room.localParticipant.setMicrophoneEnabled(it) } },
-        changed = { muted = it; previous = null; listener.onMuteChanged(it) },
+        changed = { muted = it; recorder?.microphoneAllowed = !muted && !focusLost && !routingBusy && !routingFailed; previous = null; listener.onMuteChanged(it) },
         unavailable = { listener.onMicrophoneControlUnavailable() })
     private val routeListener = object : AudioDeviceChangeListener {
         override fun invoke(audioDevices: List<AudioDevice>, selectedAudioDevice: AudioDevice?) {
@@ -89,10 +94,12 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             if (closed) return@launch
             if (change == AudioManager.AUDIOFOCUS_GAIN) {
                 focusLost = false; previous = null
+                recorder?.microphoneAllowed = !muted && !routingBusy && !routingFailed
                 microphoneControl.focus(false); room.setSpeakerMute(false)
                 listener.onTransport("focus-gained")
             } else if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
                 focusLost = true; previous = null
+                recorder?.microphoneAllowed = false
                 // Do not mix a cellular call's audio with this customer's conversation.
                 microphoneControl.focus(true); room.setSpeakerMute(true)
                 listener.onTransport("focus-lost")
@@ -130,6 +137,8 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 if (closed) return@launch
                 android.util.Log.i("SHCallTiming", "audio-previous-disposal elapsedMs=" + (SystemClock.elapsedRealtime() - stageStartedAt))
                 room.connect(join.getString("url"), join.getString("token"), ConnectOptions(autoSubscribe = false))
+                val connectedWall = System.currentTimeMillis()
+                val connectedTick = SystemClock.elapsedRealtime()
                 if (closed) return@launch
                 stage(NativeRoomAudioSetup.Stage.IDENTITY)
                 require(room.localParticipant.identity?.value == join.getString("identity")) { "The audio identity did not match this call." }
@@ -143,6 +152,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 stage(NativeRoomAudioSetup.Stage.MICROPHONE_PUBLISH)
                 room.audioTrackPublishDefaults = AudioTrackPublishDefaults(audioBitrate = 24000, dtx = false, red = true, preconnect = false)
                 if (!room.localParticipant.setMicrophoneEnabled(true)) throw IllegalStateException("Microphone could not start.")
+                refreshRecordingTracks()
                 if (closed) return@launch
                 stage(NativeRoomAudioSetup.Stage.CUSTOMER_SUBSCRIPTION)
                 subscribeCustomer()
@@ -152,6 +162,19 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                     sample()
                     withTimeoutOrNull(if (startupEvidenceSent) 1000L else 500L) { sampleWake.receive() }
                 } }
+                // Start optional accounting only after audio setup and the
+                // readiness sampler. No recorder sinks are attached until the
+                // current operator explicitly enables recording.
+                if (HubPolicy.validCallId(join.optString("sessionId"))) {
+                    try {
+                        recorder = NativeDeviceRecorder(context, join.getString("sessionId"), NativeStore(context).credential(), join.optString("legId")) { state, error ->
+                            scope.launch { if (!closed) listener.onRecordingState(state, error) }
+                        }.also { it.connected(connectedWall, connectedTick) }
+                        desiredRecording?.let { configureRecording(it) }
+                    } catch (_: Exception) {
+                        recordingUnavailable()
+                    }
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
         }
@@ -204,6 +227,43 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
             }
             is RoomEvent.Disconnected -> listener.onTransport("disconnected")
             else -> Unit
+        }
+        refreshRecordingTracks()
+    }
+    override fun configureRecording(recording: JSONObject) {
+        if (closed) return
+        try {
+            desiredRecording = JSONObject(recording.toString())
+            recorder?.configure(recording); refreshRecordingTracks()
+        } catch (_: Exception) { recordingUnavailable() }
+    }
+    private fun recordingUnavailable() {
+        // Optional recording/accounting must never report a voice-media failure.
+        for ((track, capture) in recordingSinks) runCatching { track.removeSink(capture) }
+        recordingSinks.clear()
+        runCatching { recorder?.close() }; recorder = null
+        listener.onRecordingState("failed", "Recording is unavailable on this call. The voice call is still connected.")
+    }
+    private fun refreshRecordingTracks() {
+        if (closed || recorder == null) return
+        val tracks = mutableSetOf<AudioTrack>()
+        if (recorder?.wantsTracks() == true) {
+            room.localParticipant.trackPublications.values.mapNotNullTo(tracks) { it.track as? AudioTrack }
+            for (participant in room.remoteParticipants.values) {
+                if (participant.identity?.value != join.optString("customerIdentity") && participant.identity?.value != additionalPeer) continue
+                participant.trackPublications.values.mapNotNullTo(tracks) { it.track as? AudioTrack }
+            }
+        }
+        for (track in recordingSinks.keys.toList()) if (track !in tracks) {
+            runCatching { track.removeSink(recordingSinks.remove(track)!!) }
+        }
+        for (track in tracks) if (track !in recordingSinks) {
+            val key = "track-${System.identityHashCode(track)}"
+            val capture = AudioTrackSink { data, bits, rate, channels, _, _ ->
+                recorder?.capture(key, data, bits, rate, channels, track is LocalAudioTrack)
+            }
+            runCatching { track.addSink(capture); recordingSinks[track] = capture }
+                .onFailure { listener.onRecordingState("failed", "Recording could not attach to an audio track. The call is still connected.") }
         }
     }
     private fun clearCustomerTrack() {
@@ -309,6 +369,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
 
     override fun configureRouting(routing: JSONObject) {
         desiredRouting = JSONObject(routing.toString())
+        recorder?.routeAllowed = routing.optString("mode", "normal") in listOf("normal", "conference") && !routingBusy && !routingFailed
         if (closed || setupStage != NativeRoomAudioSetup.Stage.AUDIO_ACTIVE) return
         val mode = routing.optString("mode", "normal")
         val customer = routing.optString("customerIdentity", join.optString("actualCustomerIdentity", join.optString("customerIdentity")))
@@ -332,6 +393,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         // a fresh track; the customer's old subscription can never receive it.
         room.setMicrophoneMute(true)
         routingBusy = true
+        recorder?.routeAllowed = false
         scope.launch {
           routingMutex.withLock {
             if (closed || ticket != routingGeneration) return@withLock
@@ -351,6 +413,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 if (!published) throw IllegalStateException("Microphone routing failed.")
                 if (closed || ticket != routingGeneration) return@launch
                 routingFailed = false
+                refreshRecordingTracks()
                 room.setMicrophoneMute(muted || focusLost || primary.isEmpty())
                 if (muted) room.localParticipant.setMicrophoneEnabled(false)
                 subscribeCustomer()
@@ -361,12 +424,18 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
                 room.setMicrophoneMute(true)
                 routingFailed = true
                 listener.onMicrophoneControlUnavailable()
-            } finally { if (ticket == routingGeneration) { routingBusy = false; sampleWake.trySend(Unit) } }
+            } finally { if (ticket == routingGeneration) {
+                routingBusy = false
+                recorder?.routeAllowed = mode in listOf("normal", "conference") && !routingFailed
+                recorder?.microphoneAllowed = !muted && !focusLost && !routingFailed
+                sampleWake.trySend(Unit)
+            } }
           }
         }
     }
 
     override fun setMuted(value: Boolean) {
+        if (value) recorder?.microphoneAllowed = false
         microphoneControl.request(value)
     }
 
@@ -382,6 +451,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     }
 
     override fun silenceForClose(): Boolean {
+        recorder?.routeAllowed = false
         // The pinned SDK delegates these directly to the ADM's volatile mute
         // flags. Track.stop() instead waits on the RTC executor via Future.get().
         val microphone = runCatching { room.setMicrophoneMute(true) }.isSuccess
@@ -393,6 +463,9 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
     override fun close() {
         if (closed) return
         closed = true
+        recorder?.close()
+        val detachedRecordingSinks = recordingSinks.toMap()
+        recordingSinks.clear()
         room.audioSwitchHandler?.unregisterAudioDeviceChangeListener(routeListener)
         room.audioSwitchHandler?.unregisterOnAudioFocusChangeListener(focusListener)
         val detachedCustomerTrack = customerTrack
@@ -405,6 +478,7 @@ internal class NativeRoomEngine(context: Context, private val listener: Listener
         NativeRoomDisposal.releaseRoom(silenced,
             stopTracks = { tracks.forEach { track -> runCatching { track.stop() } } }
         ) {
+            for ((track, capture) in detachedRecordingSinks) runCatching { track.removeSink(capture) }
             runCatching { detachedCustomerTrack?.removeSink(sink) }
             room.release()
         }

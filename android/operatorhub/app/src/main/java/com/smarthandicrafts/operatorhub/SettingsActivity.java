@@ -31,6 +31,7 @@ public final class SettingsActivity extends Activity {
         panel.addView(NativeUi.text(this, "SH Chat · Smart Handicrafts · " + BuildConfig.VERSION_NAME, 14, false));
         status = NativeUi.text(this, "Checking background alert setup…", 16, false); panel.addView(status);
         panel.addView(NativeUi.button(this, "Call notes and recordings", v -> startActivity(new Intent(this, NativeCallRecordsActivity.class))));
+        panel.addView(NativeUi.button(this, "Monthly LiveKit usage", v -> showMediaUsage()));
         panel.addView(NativeUi.button(this, "Check background alerts", v -> refresh()));
         panel.addView(NativeUi.button(this, "Send Firebase test notification", v -> sendTest()));
         panel.addView(NativeUi.button(this, "Allow notifications", v -> {
@@ -59,6 +60,23 @@ public final class SettingsActivity extends Activity {
         setContentView(scroll); refresh();
     }
     private void openNotificationSettings() { startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())); }
+    private void showMediaUsage() {
+        final DeviceLeasePolicy.Credential credential = new NativeStore(this).credential();
+        HubApplication.IO.execute(() -> {
+            try {
+                JSONObject usage = NativeApi.request("/media-usage", "GET", null, credential.bearer).getJSONObject("usage");
+                String text = "Month: " + usage.optString("month") + " (UTC)\nTracked participant-minutes: "
+                    + usage.optDouble("participantMinutes") + " / " + usage.optInt("allowanceMinutes")
+                    + "\nTracked share of allowance: " + usage.optInt("percent") + "%"
+                    + "\n\nData allowance: 50 GB/month. Check LiveKit Cloud for measured data usage."
+                    + "\n\n" + usage.optString("notice") + "\n\nPending recording/usage uploads on this phone: " + NativeMediaUploads.pending(this)
+                    + "\nUploads needing attention: " + NativeMediaUploads.failed(this);
+                runOnUiThread(() -> { if (!isFinishing()) new android.app.AlertDialog.Builder(this).setTitle("Monthly LiveKit usage")
+                    .setMessage(text).setPositiveButton("Done", null).show(); });
+            } catch (Exception e) { runOnUiThread(() -> { if (!isFinishing()) android.widget.Toast.makeText(this,
+                "Usage could not be refreshed. Your calls are unaffected.", android.widget.Toast.LENGTH_LONG).show(); }); }
+        });
+    }
     private void refresh() {
         if (refreshing) return; refreshing = true; status.setText("Checking the native notification service…");
         HubApplication.IO.execute(() -> {

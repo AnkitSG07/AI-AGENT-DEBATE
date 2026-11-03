@@ -2867,6 +2867,15 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   }
 
   function redirectToOdooLogin() {
+    if (state.loginRedirecting) return;
+    state.loginRedirecting = true;
+    // Keep unsent text only in this tab and restore only for the same Odoo user.
+    // Native call audio belongs to its foreground service and is not touched.
+    try {
+      if (state.selectedChannelId) state.draftsByChannel.set(String(state.selectedChannelId), messageInput.value);
+      sessionStorage.setItem("sh-odoo-session-drafts", JSON.stringify({ uid: state.session?.uid,
+        at: Date.now(), drafts: [...state.draftsByChannel].slice(-20).map(([id, text]) => [id, String(text).slice(0, 16000)]) }));
+    } catch (_) { /* Storage may be unavailable; never block sign-in. */ }
     const returnUrl = getOperatorHubReturnUrl();
     const loginUrl = "/web/login?redirect=" + encodeURIComponent(returnUrl);
     window.location.replace(loginUrl);
@@ -2879,9 +2888,12 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       text.includes("session has expired") ||
       text.includes("no logged-in odoo user session") ||
       text.includes("no logged in odoo user session") ||
-      text.includes("authentication") ||
-      text.includes("access denied")
+      text.includes("sessionexpiredexception")
     );
+  }
+
+  function looksLikeCsrfError(message) {
+    return /(?:invalid|expired|missing|no)\s+csrf(?:\s+validation)?\s+token|csrf(?:\s+validation)?\s+token\s+(?:expired|invalid|missing)/i.test(String(message || ""));
   }
 
 
@@ -3447,7 +3459,15 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       })
     });
 
-    const data = await response.json();
+    const raw = await response.text();
+    let data;
+    try { data = JSON.parse(raw); } catch (_) {
+      if (response.status === 401 || /\/web\/login(?:[/?#]|$)/.test(response.url || "")) {
+        redirectToOdooLogin();
+        throw new Error("Sign in to Odoo again to continue. Your call stays connected.");
+      }
+      throw new Error(`Odoo returned an unavailable response (${response.status}). Please retry.`);
+    }
 
     if (!response.ok || data.error) {
       const errorMessage =
@@ -3457,8 +3477,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
 
       if (
         response.status === 401 ||
-        response.status === 403 ||
-        looksLikeSessionError(errorMessage)
+        looksLikeSessionError(data?.error?.data?.name) ||
+        looksLikeSessionError(errorMessage) && !looksLikeCsrfError(errorMessage)
       ) {
         redirectToOdooLogin();
         throw new Error("Redirecting to Odoo login\u2026");
@@ -7687,18 +7707,47 @@ Once received, our team will prepare the quotation accordingly.`
 
   function getOdooCsrfToken() {
     return (
+      state.freshCsrfToken ||
       window.odoo?.csrf_token ||
-      appRoot.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
-      appRoot.querySelector('input[name="csrf_token"]')?.value ||
+      document.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+      document.querySelector('input[name="csrf_token"]')?.value ||
       ""
     );
+  }
+
+  async function refreshOdooCsrfToken() {
+    if (state.csrfRefreshPromise) return state.csrfRefreshPromise;
+    state.csrfRefreshPromise = (async () => {
+      const session = await jsonRpc("/web/session/get_session_info", {});
+      if (!session?.uid || state.session?.uid && session.uid !== state.session.uid) {
+        redirectToOdooLogin();
+        throw new Error("Your Odoo sign-in changed. Please sign in again before uploading.");
+      }
+      // Fetch fresh same-origin markup without navigating, executing scripts,
+      // replaying a message, or waiting on the call control path.
+      const response = await appFetch(window.location.pathname, { credentials: "include", cache: "no-store" });
+      const html = await response.text();
+      if (!response.ok || /\/web\/login(?:[/?#]|$)/.test(response.url || "")) {
+        throw new Error("Could not refresh the Odoo upload session. Please try again.");
+      }
+      const page = new DOMParser().parseFromString(html, "text/html");
+      const token = page.querySelector('input[name="csrf_token"]')?.value ||
+        page.querySelector('meta[name="csrf-token"]')?.getAttribute("content") ||
+        [...page.querySelectorAll("script")].map(script => script.textContent.match(/(?:["']?csrf_token["']?\s*:|odoo\.csrf_token\s*=)\s*["']([A-Za-z0-9_=-]{20,300})["']/)?.[1]).find(Boolean);
+      if (!token || !/^[A-Za-z0-9_=-]{20,300}$/.test(token)) throw new Error("Odoo did not provide a fresh upload token. Reopen SH Chat and try again.");
+      state.freshCsrfToken = token;
+      return token;
+    })().finally(() => { state.csrfRefreshPromise = null; });
+    return state.csrfRefreshPromise;
   }
 
   async function uploadAttachmentToCurrentThread(file, channel = state.selectedChannel) {
     if (!channel) throw new Error("Select a conversation first.");
 
+    let token = getOdooCsrfToken() || await refreshOdooCsrfToken();
+    for (let attempt = 0; attempt < 2; attempt++) {
     const formData = new FormData();
-    formData.append("csrf_token", getOdooCsrfToken());
+    formData.append("csrf_token", token);
     formData.append("is_pending", "true");
     formData.append("thread_id", String(channel.id));
     formData.append("thread_model", "discuss.channel");
@@ -7710,7 +7759,19 @@ Once received, our team will prepare the quotation accordingly.`
       body: formData
     });
 
-    const payload = await response.json().catch(() => null);
+    const raw = await response.text();
+    let payload;
+    try { payload = JSON.parse(raw); } catch (_) { payload = null; }
+    // Only an explicit CSRF rejection is safe to replay: Odoo rejects it
+    // before the upload executes. Never replay an ambiguous timeout/500.
+    if ([400, 403].includes(response.status) && looksLikeCsrfError(raw)) {
+      if (attempt === 0) { token = await refreshOdooCsrfToken(); continue; }
+      throw new Error("Odoo rejected the refreshed upload token. Sign in again and retry the attachment.");
+    }
+    if (response.status === 401 || looksLikeSessionError(payload?.error?.data?.name || payload?.error) || /\/web\/login(?:[/?#]|$)/.test(response.url || "")) {
+      redirectToOdooLogin();
+      throw new Error("Sign in to Odoo again, then select your attachment again. Your call stays connected.");
+    }
     if (!response.ok) {
       throw new Error(payload?.error || `Attachment upload failed (${response.status})`);
     }
@@ -7725,6 +7786,7 @@ Once received, our team will prepare the quotation accordingly.`
     }
 
     return Number(attachmentId);
+    }
   }
 
   async function sendAttachmentsFromInput(fileList) {
@@ -7910,6 +7972,13 @@ Once received, our team will prepare the quotation accordingly.`
     }
 
     state.session = session;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem("sh-odoo-session-drafts") || "null");
+      sessionStorage.removeItem("sh-odoo-session-drafts");
+      if (saved?.uid === session.uid && Date.now() - saved.at < 30 * 60000 && Array.isArray(saved.drafts)) {
+        for (const [id, text] of saved.drafts) if (/^\d+$/.test(id) && typeof text === "string") state.draftsByChannel.set(id, text);
+      }
+    } catch (_) { /* An unavailable recovery draft does not prevent sign-in. */ }
 
     sessionChip.innerHTML = `
       <span class="dot"></span>

@@ -9,8 +9,8 @@ import { callMediaIdentity } from './livekit-provider.mjs';
 /** Optional recording/hold media runs in a separate process. Neither native
  * codec failure nor Odoo archival is on the normal call control path. */
 export class CallAudioManager {
-  constructor({ provider, files, now = Date.now, spawn = fork, maximum = 2, onHoldFailure = () => {} }) {
-    Object.assign(this, { provider, files, now, spawn, maximum, onHoldFailure });
+  constructor({ provider, files, now = Date.now, spawn = fork, maximum = 2, onHoldFailure = () => {}, onUsage = async () => {} }) {
+    Object.assign(this, { provider, files, now, spawn, maximum, onHoldFailure, onUsage });
     this.calls = new Map();
     this.starts = new Map();
   }
@@ -50,7 +50,11 @@ export class CallAudioManager {
     const connected = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => { child.kill(); reject(new Error('Audio worker did not connect.')); }, 12000);
       child.on('message', message => {
-        if (message?.type === 'ready') { clearTimeout(timeout); row.ready = true; resolve(row); }
+        if (message?.type === 'ready' && !row.ready) {
+          clearTimeout(timeout); row.ready = true; row.connectedAt = this.now(); row.usageId = randomUUID();
+          row.usageTimer = setInterval(() => this.reportUsage(row), 60000); row.usageTimer.unref?.();
+          resolve(row);
+        }
         else if (message?.type === 'part' && message.recordingId === row.recordingId && Buffer.isBuffer(message.pcm)) {
           if (row.pending >= 4 || message.pcm.length > 960000 || !Number.isSafeInteger(message.index) || message.index < 0) {
             this.fail(row, 'Recording storage is slow. Saved audio is available.'); return;
@@ -69,7 +73,10 @@ export class CallAudioManager {
         else if (message?.type === 'stopped') {
           row.recordState = row.recordState === 'failed' ? 'failed' : 'saving';
           void row.queue.finally(() => { if (row.recordState === 'saving') row.recordState = 'saved'; });
-        } else if (message?.type === 'hold') row.hold = message.active === true;
+          // PCM has already crossed IPC. Odoo uploads do not need a connected
+          // SDK participant and must not keep consuming room minutes.
+          row.captureStopped = true; this.releaseIdle(row);
+        } else if (message?.type === 'hold') { row.hold = message.active === true; this.releaseIdle(row); }
         else if (message?.type === 'error') {
           this.fail(row, 'Recording or hold audio is unavailable. Your call is still connected.');
           this.holdFailed(row);
@@ -78,6 +85,7 @@ export class CallAudioManager {
       });
       child.once('error', () => { clearTimeout(timeout); reject(new Error('Audio worker could not start.')); });
       child.once('exit', () => {
+        clearInterval(row.usageTimer); this.reportUsage(row);
         clearTimeout(timeout); row.ready = false; row.child = null;
         if (['starting', 'recording'].includes(row.recordState)) this.fail(row, 'Recording stopped. Previously saved audio is available.');
         this.holdFailed(row);
@@ -92,6 +100,14 @@ export class CallAudioManager {
     return row;
   }
   send(row, message) { if (row?.child?.connected) row.child.send(message, error => { if (error) row.ready = false; }); }
+  reportUsage(row) {
+    if (!row.connectedAt || !row.usageId) return;
+    const data = { startedAt: row.connectedAt, durationMs: Math.max(0, this.now() - row.connectedAt) };
+    // Bounded retry; persistence never delays media shutdown.
+    void Promise.resolve().then(() => this.onUsage(row.usageId, data)).catch(() => {
+      const retry = setTimeout(() => { void this.onUsage(row.usageId, data).catch(() => {}); }, 5000); retry.unref?.();
+    });
+  }
   fail(row, error) {
     row.recordState = 'failed'; row.recordError = error;
     this.send(row, { type: 'stop-record' });
@@ -122,7 +138,7 @@ export class CallAudioManager {
       'RECORDING_ACTIVE', 'This call is already being recorded.');
     const row = await this.ensure(call);
     row.recordingId = `rec_${randomUUID()}`; row.requestId = requestId;
-    row.recordState = 'starting'; row.startedAt = this.now(); row.savedParts = 0; row.recordError = '';
+    row.recordState = 'starting'; row.captureStopped = false; row.startedAt = this.now(); row.savedParts = 0; row.recordError = '';
     try {
       await this.files.beginRecording(call.id, row.recordingId, { startedAt: row.startedAt, deviceId: actor.deviceId });
       if (!row.stopping && row.recordState === 'starting') this.send(row, { type: 'record', recordingId: row.recordingId });
@@ -137,6 +153,8 @@ export class CallAudioManager {
   async prepareHold(call) {
     const row = await this.ensure(call);
     row.preparingUntil = this.now() + 20000;
+    clearTimeout(row.idleTimer);
+    row.idleTimer = setTimeout(() => this.releaseIdle(row), 20050); row.idleTimer.unref?.();
     if (!row.prepared) {
       if (!row.preparing) row.preparing = new Promise((resolve, reject) => {
           row.preparedResolve = resolve;
@@ -159,6 +177,7 @@ export class CallAudioManager {
     if (!call.active) { this.close(call.id); return; }
     if (row.initializing || !row.ready) return;
     const hold = customerOnHold(call), transfer = call.transfer;
+    if (row.holdExpected && !hold) row.preparingUntil = 0;
     row.holdExpected = hold;
     const operators = hold ? [] : [...new Set([call.owner.identity,
       ...(transfer?.consultStage === 'merged' || transfer?.consultStage === 'conference' ? [transfer.targetIdentity] : [])].filter(Boolean))];
@@ -166,12 +185,19 @@ export class CallAudioManager {
     const signature = JSON.stringify(message);
     if (signature !== row.signature) { row.signature = signature; this.send(row, message); }
     // Idle media workers are closed without touching call ownership or the customer.
-    if (!hold && (row.preparingUntil || 0) < this.now() && !['starting', 'recording', 'saving'].includes(row.recordState)) this.close(call.id);
+    this.releaseIdle(row);
+  }
+  releaseIdle(row) {
+    if (!row || row.stopping || row.initializing || !row.ready || row.holdExpected || row.hold) return;
+    if ((row.preparingUntil || 0) > this.now()) return;
+    if (['starting', 'recording'].includes(row.recordState) || row.recordState === 'saving' && !row.captureStopped) return;
+    this.close(row.id);
   }
   close(id) {
     const row = this.calls.get(id);
     if (!row || row.stopping) return;
     row.stopping = true;
+    clearTimeout(row.idleTimer);
     if (!row.child) return;
     this.send(row, { type: 'close' });
     const child = row.child;

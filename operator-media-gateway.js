@@ -272,7 +272,11 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
           void verifyConfiguration().catch(() => logger.warn?.('LiveKit configuration check will retry.'));
       }, 15000); timer.unref?.();
     },
-    async close() { if (timer) clearInterval(timer); timer = null; if (work) await work; },
+    async close() {
+      if (timer) clearInterval(timer); timer = null;
+      bundle?.runtime?.tools?.video?.close();
+      if (work) await work;
+    },
     async hasNativeCall(id) { const row = await durableLocate(id); return !!row && row.routeChoice !== 'legacy'; },
     async claimLegacyIncoming(id, operationId) {
       if (!bundle) {

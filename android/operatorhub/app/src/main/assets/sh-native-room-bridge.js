@@ -128,4 +128,21 @@
     const keys = Array.from(banner?.querySelectorAll("[data-call-key]") || []).map(node => controlCallId(node));
     if (keys.length && keys.every(value => ids.includes(value))) banner.classList.add("is-hidden");
   });
+  // Render a real action only after the server advertises video support.
+  function videoButton() {
+    const voice = document.getElementById("shWhatsappCallBtn");
+    if (!voice) return;
+    let video = document.getElementById("shNativeVideoBtn");
+    if (!video && window.SHNativeCapabilities?.videoLinks === true) {
+      video = document.createElement("button"); video.id = "shNativeVideoBtn";
+      video.type = "button"; video.className = "sh-op-head-tool";
+      video.title = "Video call link"; video.setAttribute("aria-label", "Start private video call");
+      video.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="5" width="14" height="14" rx="3"/><path d="m16 9 6-4v14l-6-4"/></svg>';
+      video.addEventListener("click", event => { if (event.isTrusted && window.SHNativeCapabilities?.videoLinks) window.SHNative.postMessage(JSON.stringify({type:"native-video"})); });
+      voice.after(video);
+    }
+    if (video) video.hidden = window.SHNativeCapabilities?.videoLinks !== true;
+  }
+  window.addEventListener("sh-native-capabilities", videoButton);
+  videoButton();
 })();
