@@ -720,3 +720,34 @@ scenario('R23 provider Answer and Hang-up wake real joined audio without an idle
   assert.equal((await f.status('a', id)).call.phase, 'ended');
   assert.equal(await f.customers.get(saved.providerCallId).peer.page.evaluate(() => window.controlHintCount()), 0);
 });
+
+scenario('customer End before ready removes real old audio and frees the enrolled phone for the next Answer and transfer', async f => {
+  const id = await f.incoming();
+  const accepted = await f.api('a', 'POST', `/calls/${id}/accept`, { requestId: 'ended-before-ready' });
+  await f.operator(accepted.join);
+  assert.equal(await f.store.get(callStoreKey(id)), undefined, 'no canonical call exists before /ready');
+  const originalTerminate = f.provider.terminateCustomer.bind(f.provider);
+  f.provider.terminateCustomer = async args => {
+    if (args.callId === id) throw Error('SIMULATED_ALREADY_DISCONNECTED_CUSTOMER');
+    return originalTerminate(args);
+  };
+  // The customer's real peer has left before its verified terminal event. The
+  // connector returns an error but the actual room API proves exact absence.
+  await f.customers.get(id).peer.close();
+  await f.event('terminate', id);
+  await f.bundle.runtime.drainSessionOutbox(id, { limit: 8 });
+  const old = await f.bundle.runtime.locate(id);
+  assert.equal(old.outbox.find(job => job.kind === 'terminate').status, 'done');
+  assert.equal(old.outbox.find(job => job.kind === 'detach').status, 'done');
+  assert.ok(!(await rooms.listParticipants(accepted.join.roomName)).some(row => row.identity === accepted.join.identity));
+  assert.equal((await f.store.get(deviceReservationKey('a'))).kind, 'cleanup', 'reproduce the saved reservation after old cleanup');
+
+  const next = await f.connected('a');
+  assert.equal(f.effects.filter(e => e.kind === 'accept' && e.callId === next.id).length, 1);
+  await audio(f.customers.get(next.id).peer, next.accepted.join.identity, 660, 'next caller hears A after pre-media End');
+  await f.recover(id);
+  assert.equal((await f.store.get(deviceReservationKey('a'))).callId, next.id, 'old recovery cannot remove the next owner');
+  f.lastAIdentity = next.accepted.join.identity;
+  const handoff = await f.handoff('a', 'b', next.id);
+  await audio(f.customers.get(next.id).peer, handoff.accepted.join.identity, 880, 'next caller hears B after subsequent transfer');
+});

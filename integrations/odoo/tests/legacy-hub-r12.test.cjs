@@ -174,6 +174,38 @@ async function check(name, run) {
     await startOutgoing(h); assert.equal(h.commands.filter(command => command.path.endsWith('/outgoing')).length, 0);
   });
 
+  await check('native call availability never waits for skipped browser registration or writes a browser preference', async h => {
+    h.ctx.window.SHNativeHistory = { protocol: 'sh-call-history-v1' };
+    h.ctx.window.SHNativeCapabilities = { protocol: 'sh-room-audio-v1', nativeRoomCalls: true };
+    await h.api.postWhatsappHubPresence({ force: true });
+    const status = h.ctx.byId('shWhatsappCallPresenceStatus');
+    assert.equal(status.textContent, 'Calls handled by SH Chat');
+    assert.equal(h.ctx.byId('shWhatsappCallAvailability').disabled, true);
+    assert.equal(h.ctx.byId('shWhatsappCallAvailability').classList.contains('is-hidden'), true);
+    assert.equal(h.ctx.byId('shWhatsappNativeCallSettings').classList.contains('is-hidden'), false);
+    await h.api.setWhatsappCallAvailability('offline');
+    assert(!h.commands.some(command => ['/api/operator-devices/heartbeat', '/api/operator-devices/status'].includes(command.path)));
+    h.ctx.window.SHNativeCapabilities.activeCall = true;
+    await h.api.postWhatsappHubPresence({ force: true });
+    assert.equal(status.textContent, 'Call in progress on this phone');
+    h.ctx.window.SHNativeCapabilities.nativeRoomCalls = false;
+    await h.api.postWhatsappHubPresence({ force: true });
+    assert.equal(status.textContent, 'Check call setup in App settings');
+  });
+
+  await check('browser availability still becomes ready only after a successful presence acknowledgement', async h => {
+    const status = h.ctx.byId('shWhatsappCallPresenceStatus');
+    h.server.heartbeatAvailable = false;
+    await h.api.postWhatsappHubPresence({ force: true });
+    assert.equal(h.api.runtime.presenceConfirmed, false);
+    assert.match(status.textContent, /could not register/);
+    assert.equal(h.ctx.byId('shWhatsappCallAvailability').disabled, false);
+    assert.equal(h.ctx.byId('shWhatsappNativeCallSettings').classList.contains('is-hidden'), true);
+    h.server.heartbeatAvailable = true;
+    await h.api.postWhatsappHubPresence({ force: true });
+    assert.equal(status.textContent, 'Ready in this Hub');
+  });
+
   await check('only explicit availability changes sync the paired base preference; closing does not persist Offline', async h => {
     await h.api.postWhatsappHubPresence({ force: true }); assert(!h.commands.some(command => command.path.endsWith('/status')));
     await h.api.setWhatsappCallAvailability('dnd');

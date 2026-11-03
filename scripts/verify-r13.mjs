@@ -23,6 +23,7 @@ const groups = {
     'tests/operator-notification-retry.test.mjs',
     'tests/operator-message-worker-priority.test.mjs',
     'tests/operator-call-cancellation-priority.test.mjs',
+    'tests/operator-ended-reservation-recovery.test.mjs',
     'tests/operator-ai-switch.test.mjs',
     'tests/operator-fcm-delivery-contract.test.mjs',
     'tests/operator-registry-latency.test.mjs',
