@@ -56,7 +56,7 @@ function fixture(names, extras = {}) {
   return {c,calls,toasts,fields,storage,channel,setClock:value=>{clock=value;}};
 }
 const windowFns=['parseOdooUtc','isWhatsappWindowOpen','postTextToChannel','sendAttachmentsFromInput'];
-const templateFns=['safeId','normalizeCreateResult','partnerIdFromChannel','buildWizardValue','isUnavailableWhatsappSendMethod','unconfirmedWhatsappTemplateSend','sendWhatsappTemplateWithFallbacks','sendWhatsappTemplateToPartnerWithFallbacks'];
+const templateFns=['beginWhatsappTemplateDelivery','confirmWhatsappTemplateDelivery','safeId','normalizeCreateResult','partnerIdFromChannel','buildWizardValue','isUnavailableWhatsappSendMethod','unconfirmedWhatsappTemplateSend','sendWhatsappTemplateWithFallbacks','sendWhatsappTemplateToPartnerWithFallbacks'];
 const aiFns=['normalizeAiMode','isAiReplyEnabledMode','syncAiModeToServer','saveAiProcessedMessageIds','markAiMessageProcessed','markCurrentInboxLatestAsProcessed','setAiMode','initializeAiModeFromServer'];
 
 test('closed WhatsApp window blocks both free text and attachments before any Odoo operation',async()=>{
@@ -136,7 +136,7 @@ for(const target of ['channel','partner']) {
   const invoke=f=>target==='channel'?f.c.sendWhatsappTemplateWithFallbacks(301,f.channel):f.c.sendWhatsappTemplateToPartnerWithFallbacks(301,{id:601,mobile:'919999000101'});
   test(`${target} template fallback advances only after an exact missing-method RPC error`,async()=>{
     const f=templateFixture();f.c.callKw=async(model,method)=>{f.calls.push({kind:'method',method});if(method==='action_send_whatsapp_template')throw dispatchMissing(method);return true;};
-    assert.equal(await invoke(f),true);assert.deepEqual(f.calls.filter(c=>c.kind==='method').map(c=>c.method),['action_send_whatsapp_template','action_send_whatsapp_message']);
+    assert.equal((await invoke(f)).status,'pending');assert.deepEqual(f.calls.filter(c=>c.kind==='method').map(c=>c.method),['action_send_whatsapp_template','action_send_whatsapp_message']);
     assert.equal(f.calls.filter(c=>c.kind==='message').length,0);
   });
   for(const kind of ['network','validation','unrelated-attribute'])test(`${target} template ${kind} failure cannot trigger a second send route`,async()=>{
@@ -152,10 +152,10 @@ test('template success cannot reopen the local reply window',async()=>{
   const f=templateFixture();f.channel.whatsapp_channel_active=false;const before=JSON.stringify(f.channel);
   await f.c.sendWhatsappTemplateWithFallbacks(301,f.channel);assert.equal(JSON.stringify(f.channel),before);
 });
-test('channel template generic fallback is reached once only after all four methods are absent',async()=>{
+test('missing template methods cannot fall back to an unverified empty WhatsApp message',async()=>{
   const f=templateFixture();f.c.callKw=async(model,method)=>{f.calls.push({kind:'method',method});throw dispatchMissing(method);};
-  await f.c.sendWhatsappTemplateWithFallbacks(301,f.channel);
-  assert.equal(f.calls.filter(c=>c.kind==='method').length,4);assert.equal(f.calls.filter(c=>c.kind==='message').length,1);
+  await assert.rejects(f.c.sendWhatsappTemplateWithFallbacks(301,f.channel),/No supported WhatsApp template send method/);
+  assert.equal(f.calls.filter(c=>c.kind==='method').length,4);assert.equal(f.calls.filter(c=>c.kind==='message').length,0);
 });
 test('template list excludes draft, rejected, unknown and missing approval statuses',async()=>{
   const f=fixture(['loadWhatsappTemplates'],{searchReadAvailable:async()=>[

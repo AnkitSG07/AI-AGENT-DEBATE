@@ -78,7 +78,7 @@ test('contact lookup failure in a broadcast is counted and cannot strand the sen
   const f=broadcastFixture();f.c.fetchPartnerByIdForDirectory=async(id)=>{if(id===601)throw new Error('Synthetic denied contact');return{id,name:'Demo B'};};
   const c=context(['sendBroadcastTemplates'],f.c);await c.sendBroadcastTemplates();
   assert.equal(c.sendBroadcastBtn.disabled,false);assert.equal(f.calls.filter(x=>x.type==='send-template').length,1);
-  assert.match(c.broadcastResult.innerHTML,/1 sent.*1 failed/);
+  assert.match(c.broadcastResult.innerHTML,/1 submitted.*1 failed/);
 });
 test('workspace destruction during a broadcast lookup prevents further sends',async()=>{
   const f=broadcastFixture(),g=deferred();f.c.fetchPartnerByIdForDirectory=()=>g.promise;

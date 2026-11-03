@@ -3526,8 +3526,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     if (state.modelFieldErrors[model]) return {};
 
     const attempts = [
-      () => callKw(model, "fields_get", [false, ["string", "type", "relation", "readonly"]], {}),
-      () => callKw(model, "fields_get", [], { attributes: ["string", "type", "relation", "readonly"] })
+      () => callKw(model, "fields_get", [false, ["string", "type", "relation", "readonly", "selection"]], {}),
+      () => callKw(model, "fields_get", [], { attributes: ["string", "type", "relation", "readonly", "selection"] })
     ];
 
     let lastError = null;
@@ -6442,6 +6442,46 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     return wrapped;
   }
 
+  async function beginWhatsappTemplateDelivery(templateId, phone) {
+    // Scope the result to this recipient and records created after this attempt.
+    // This is read only and uses Odoo; no Firebase polling or automatic resend.
+    try {
+      const fields = await loadModelFields("whatsapp.message");
+      const digits = String(phone || "").replace(/\D/g, "");
+      if (!digits || !fields.wa_template_id || !fields.mobile_number || !fields.state) return null;
+      const domain = [["wa_template_id", "=", Number(templateId)], ["mobile_number", "in", [...new Set([digits, "+" + digits, String(phone).trim()])]]];
+      const uid = currentUserId();
+      if (uid && fields.create_uid) domain.push(["create_uid", "=", uid]);
+      const rows = await searchReadAvailable("whatsapp.message", domain, ["id"], {limit: 1, order: "id desc"});
+      return {domain, after: Number(rows?.[0]?.id || 0), fields};
+    } catch (_) { return null; }
+  }
+
+  async function confirmWhatsappTemplateDelivery(tracking) {
+    const pending = {status: "pending", message: "Template submitted. Delivery is not confirmed yet."};
+    if (!tracking) return pending;
+    let rows;
+    try {
+      rows = await searchReadAvailable("whatsapp.message", [...tracking.domain, ["id", ">", tracking.after]],
+        ["id", "state", "failure_type", "failure_reason"], {limit: 2, order: "id desc"});
+    } catch (_) { return pending; } // A failed status read must never resend.
+    // Simultaneous sends cannot be reliably attributed from the wizard's return
+    // value. Report pending rather than borrowing another send's delivery status.
+    if (rows?.length !== 1) return pending;
+    const row = rows[0], status = String(row.state || "").toLowerCase();
+    if (["error", "failed", "bounced", "cancel", "cancelled"].includes(status)) {
+      const options = tracking.fields.failure_type?.selection;
+      const label = Array.isArray(options) ? options.find(option => option[0] === row.failure_type)?.[1] : "";
+      const reason = [label || String(row.failure_type || "").replace(/_/g, " "), row.failure_reason].filter(Boolean).join(" — ");
+      const error = new Error("WhatsApp did not deliver this template" + (reason ? ": " + reason : ". Odoo marked the message as " + status) + ". Check the template in Odoo/WhatsApp Manager before retrying.");
+      error.shTemplateSendAttempted = true;
+      throw error;
+    }
+    if (["delivered", "read", "replied"].includes(status)) return {status, message: "WhatsApp template delivered"};
+    if (status === "sent") return {status, message: "Template sent to WhatsApp. Customer delivery is pending."};
+    return pending;
+  }
+
   async function sendWhatsappTemplateToPartnerWithFallbacks(templateId, partner) {
     if (!templateId || !partner?.id) {
       throw new Error("Choose a valid template and contact.");
@@ -6452,6 +6492,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     const errors = [];
     const phone = partner.mobile || partner.phone || "";
     const formattedPhone = phone ? String(phone).trim() : "";
+    const delivery = await beginWhatsappTemplateDelivery(templateId, formattedPhone);
 
     try {
       const composerFields = await loadModelFields("whatsapp.composer");
@@ -6494,8 +6535,9 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
             for (const method of sendMethods) {
               try {
                 await callKw("whatsapp.composer", method, [[composerId]], {});
-                return true;
+                return await confirmWhatsappTemplateDelivery(delivery);
               } catch (error) {
+                if (error.shTemplateSendAttempted) throw error;
                 if (!isUnavailableWhatsappSendMethod(error, method)) throw unconfirmedWhatsappTemplateSend(error);
                 errors.push(`${method}: ${error.message}`);
               }
@@ -6772,13 +6814,13 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       broadcastResult.classList.remove("is-hidden");
       broadcastResult.innerHTML = `
         <strong>Broadcast result</strong>
-        <span>${sent} sent \u00b7 ${failed} failed</span>
+        <span>${sent} submitted \u00b7 ${failed} failed. Customer delivery is not confirmed for pending messages.</span>
         ${failures.length ? `<small>${escapeHtml(failures.slice(0, 4).join(" | "))}${failures.length > 4 ? " \u2026" : ""}</small>` : ""}
       `;
     }
 
     if (!state.destroyed && sent) {
-      showOperatorToast(`${sent} WhatsApp broadcast message${sent === 1 ? "" : "s"} sent`);
+      showOperatorToast(`${sent} WhatsApp broadcast message${sent === 1 ? "" : "s"} submitted`);
       await loadChannels({ preserveSelection: true });
     }
 
@@ -6957,8 +6999,9 @@ Once received, our team will prepare the quotation accordingly.`
 
     const errors = [];
     const partnerId = partnerIdFromChannel(channel);
-    const whatsappNumber = channel.whatsapp_number ? `+${channel.whatsapp_number}` : "";
+    const whatsappNumber = channel.whatsapp_number ? "+" + String(channel.whatsapp_number).replace(/\D/g, "") : "";
     const accountId = safeId(channel.wa_account_id);
+    const delivery = await beginWhatsappTemplateDelivery(templateId, whatsappNumber);
 
     try {
       const composerFields = await loadModelFields("whatsapp.composer");
@@ -7002,8 +7045,9 @@ Once received, our team will prepare the quotation accordingly.`
             for (const method of sendMethods) {
               try {
                 await callKw("whatsapp.composer", method, [[composerId]], {});
-                return true;
+                return await confirmWhatsappTemplateDelivery(delivery);
               } catch (error) {
+                if (error.shTemplateSendAttempted) throw error;
                 if (!isUnavailableWhatsappSendMethod(error, method)) throw unconfirmedWhatsappTemplateSend(error);
                 errors.push(`${method}: ${error.message}`);
               }
@@ -7016,21 +7060,8 @@ Once received, our team will prepare the quotation accordingly.`
       errors.push(`Composer: ${error.message}`);
     }
 
-    try {
-      await messagePost(channel.id, {
-        body: "",
-        message_type: "whatsapp_message",
-        subtype_xmlid: "mail.mt_comment",
-        whatsapp_template_id: templateId,
-        template_id: templateId
-      });
-      return true;
-    } catch (error) {
-      throw unconfirmedWhatsappTemplateSend(error);
-    }
-
     throw new Error(
-      "Template sending could not be completed through the generic Odoo routes available to this embedded page. " +
+      "No supported WhatsApp template send method is available. Send from Odoo WhatsApp or check the integration. " +
       (errors.length ? `Last attempts: ${errors.slice(-2).join(" | ")}` : "")
     );
   }
@@ -12563,9 +12594,9 @@ Once received, our team will prepare the quotation accordingly.`
     try {
       const templateId = Number(button.dataset.directTemplateId);
       const partner = state.directTemplateTargetPartner;
-      await sendWhatsappTemplateToPartnerWithFallbacks(templateId, partner);
+      const delivery = await sendWhatsappTemplateToPartnerWithFallbacks(templateId, partner);
       hidePanel(directTemplateModal);
-      showOperatorToast("WhatsApp template sent");
+      showOperatorToast(delivery.message);
       await tryOpenNewWhatsappChannelAfterDirectTemplate(partner);
     } catch (error) {
       showDirectTemplateError(error.message);
@@ -14103,9 +14134,9 @@ Once received, our team will prepare the quotation accordingly.`
     const templateId = Number(button.dataset.templateId);
     button.disabled = true;
     try {
-      await sendWhatsappTemplateWithFallbacks(templateId);
+      const delivery = await sendWhatsappTemplateWithFallbacks(templateId);
       hidePanel(templateModal);
-      showOperatorToast("WhatsApp template sent");
+      showOperatorToast(delivery.message);
       if (state.selectedChannelId) {
         await loadMessages(state.selectedChannelId, { scrollToBottom: true });
       }
