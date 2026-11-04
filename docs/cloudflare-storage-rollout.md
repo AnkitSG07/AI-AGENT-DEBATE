@@ -44,15 +44,26 @@ replace the Android Firebase project or require a new APK.
    workers; zero-downtime HTTP routing alone does not preserve that audio.
 4. Wait for all pre-journal Render instances and draining requests to stop before
    preparing the migration. An old process must not write after the copy begins.
+   Verify old-instance termination and all other source-writing jobs have stopped.
+   Allow the Firestore transaction/accepted-request drain (conservatively about
+   five minutes after the last old instance stops), verify no old-instance writes
+   or logs remain, and keep the new compatible source backend healthy meanwhile.
+   A new deployment showing Live or a fixed 15-second wait alone is insufficient.
 5. From the signed SUDO device-management page, prepare the migration and copy the
    source namespace. Source writes continue and append after-images/deletion
    records atomically to the source journal. Replay does not send notifications.
 6. Run the combined cutover action. Expensive inventory and checksum work happens
    while the source remains writable. The final source transaction requires a
-   quiet call state and a small bounded media inventory (at most 100 rows and
-   512 KiB; larger inventories pause before taking the gate lock), fences source operations, and catches the remaining journal
+   quiet call state, fences source operations, and catches the remaining journal
    tail before checksum sealing and activation. New requests wait briefly while
    activation finishes. Do not expose a standalone fence action.
+   Retained media history is classified from the complete replayed manifest while
+   the source remains writable. The final transaction checks a bounded journal
+   suffix at the server's snapshot read time, rather than rescanning all calls.
+   Any new mutation invalidates that proof and retries preflight outside the
+   transaction; repeated activity leaves the source selected. Legacy browser
+   claims require an exact tenant/provider terminal event before they count as
+   ended. Missing presence, age or Odoo history alone is not end evidence.
 7. Confirm the verified count/checksum and target readiness. Check existing device
    authentication, unread state, history and call controls. Verify physical phone
    notifications and two-way audio separately; FCM acceptance is not handset receipt.

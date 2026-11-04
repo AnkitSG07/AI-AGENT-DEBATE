@@ -14,6 +14,7 @@
     "test:operator-call-auth": "node operator-browser-auth.test.mjs",
     "test:operator-r13": "node scripts/verify-r13.mjs",
     "test:operator-r13:media": "node scripts/verify-r13.mjs media",
+    "test:operator-cloudflare:emulator": "node scripts/test-storage-migration-emulator.mjs",
     "test:operator-cloudflare": "node --test tests/operator-cloudflare-client.test.mjs tests/operator-cloudflare-runtime.test.mjs tests/operator-storage-journal.test.mjs tests/operator-storage-migration.test.mjs tests/operator-storage-admin.test.mjs tests/operator-storage-admin-routes.test.mjs cloudflare/operator-store/test/store.test.mjs cloudflare/operator-store/test/worker.test.mjs cloudflare/operator-store/test/migration.test.mjs"
   },
   "engines": {

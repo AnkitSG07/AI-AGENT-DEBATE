@@ -1,15 +1,11 @@
 // Server-internal migration controls. Mount only behind the existing SUDO gate.
 // This module returns operational summaries, never source rows or credentials.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { FieldPath, FieldValue } from '@google-cloud/firestore';
+import { decodeCloudflareValue } from './operator-cloudflare-client.js';
 import { createCloudflareMigrationTransport, createStorageMigrationManager } from './operator-storage-migration.js';
 
 const ACTIONS = Object.freeze({ prepare: 'prepare', copy: 'copySnapshot', replay: 'replay', cutover: 'cutover' });
-// This last fence must stay short. Larger historical inventories require a
-// separately reviewed quiet-query index; they are rejected while source writes
-// remain available rather than holding the gate through a long history scan.
-const QUIET_DOCUMENT_LIMIT = 100;
-const QUIET_BYTE_LIMIT = 512 * 1024;
 const MEDIA_KINDS = ['calls', 'sessions', 'reservations', 'events', 'jobs', 'transfers'];
 const plain = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 const code = (value, fallback = 'STORAGE_MIGRATION_FAILED') => typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,80}$/.test(value) ? value : fallback;
@@ -29,65 +25,76 @@ function summary(value) {
   };
 }
 const terminalConfirmed = row => plain(row.terminal) && Number.isSafeInteger(row.terminal.endedAt) &&
-  Number.isSafeInteger(row.terminal.confirmedAt) && row.terminal.confirmedAt >= row.terminal.endedAt;
+  row.terminal.endedAt >= 0 && Number.isSafeInteger(row.terminal.confirmedAt) && row.terminal.confirmedAt >= row.terminal.endedAt;
 const settledOutbox = row => Array.isArray(row.outbox) && row.outbox.every(item => plain(item) && item.status === 'done');
 const settledOperations = row => plain(row.operations) && Object.values(row.operations)
   .every(item => plain(item) && ['acknowledged', 'provider-ended', 'failed'].includes(item.status));
-function checkQuietBounds(results) {
-  if (results.some(result => !Array.isArray(result?.docs))) throw failure('STORAGE_QUIET_SCAN_INVALID');
-  if (results.reduce((total, result) => total + result.docs.length, 0) > QUIET_DOCUMENT_LIMIT) throw failure('STORAGE_QUIET_SCAN_LIMIT');
-  let bytes = 0;
-  for (const result of results) for (const doc of result.docs) {
-    const serialized = JSON.stringify(doc.data());
-    if (typeof serialized !== 'string' || (bytes += Buffer.byteLength(serialized)) > QUIET_BYTE_LIMIT) throw failure('STORAGE_QUIET_SCAN_LIMIT');
-  }
-}
+const exactString = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value);
+const mediaId = value => createHash('sha256').update(value).digest('hex');
+const providerBinding = (tenantId, callId) => exactString(tenantId) && exactString(callId) ? JSON.stringify([tenantId, callId]) : '';
 
-// All durable observations use the manager's SAME native source transaction.
-// Collection queries include absent rows, so a concurrent new ringing session,
-// reservation or pending answer cannot escape the source gate's atomic fence.
-function quietPointCheck({ source, prefix, migration }) {
-  return async tx => {
-    const videoQuiet = () => {
-      const result = migration.assertNoActiveVideoCalls();
-      if (result !== true && result !== false) throw failure('STORAGE_VIDEO_QUIET_CHECK_INVALID');
-      return result;
-    };
-    if (!videoQuiet()) return false;
-    const kinds = MEDIA_KINDS;
-    const results = await Promise.all(kinds.map(kind => tx.get(source.collection(`${prefix}_media_${kind}`).limit(QUIET_DOCUMENT_LIMIT + 1))));
-    checkQuietBounds(results);
-    const rows = Object.fromEntries(kinds.map((kind, index) => [kind, results[index].docs.map(doc => {
-      const row = doc.data();
+// Pure classification runs over the manager's complete, versioned live source
+// manifest AFTER journal replay, outside the final gate transaction. The
+// manager's bounded journal-suffix proof detects new/unexamined writes before
+// fencing, so lifetime history is never reread under the gate's lock.
+function classifyQuietManifest(documents, prefix) {
+    if (!Array.isArray(documents)) throw failure('STORAGE_QUIET_SCAN_INVALID');
+    const rows = Object.fromEntries(MEDIA_KINDS.map(kind => [kind, []]));
+    const seen = new Set();
+    for (const document of documents) {
+      if (!plain(document) || typeof document.path !== 'string' || seen.has(document.path)) throw failure('STORAGE_QUIET_RECORD_INVALID');
+      seen.add(document.path);
+      const [collection, id, extra] = document.path.split('/');
+      if (extra !== undefined || !id) throw failure('STORAGE_QUIET_RECORD_INVALID');
+      if (!collection.startsWith(`${prefix}_media_`)) continue;
+      const kind = collection.slice(`${prefix}_media_`.length);
+      if (!MEDIA_KINDS.includes(kind)) throw failure('STORAGE_QUIET_RECORD_UNSUPPORTED');
+      let row; try { row = decodeCloudflareValue(document.data); } catch { throw failure('STORAGE_QUIET_RECORD_INVALID'); }
       if (!plain(row)) throw failure('STORAGE_QUIET_RECORD_INVALID');
       if (['calls', 'sessions', 'reservations', 'events'].includes(kind)) {
-        if (row.schema !== 1 || row.key !== `media_${kind}/${doc.id}` || !Number.isSafeInteger(row.revision) || row.revision < 1 || !plain(row.data))
+        if (row.schema !== 1 || row.key !== `media_${kind}/${id}` || !Number.isSafeInteger(row.revision) || row.revision < 1 || !plain(row.data))
           throw failure('STORAGE_QUIET_RECORD_INVALID');
-        return row.data;
+        row = row.data;
+        if (kind !== 'reservations' && (!exactString(row.id) || mediaId(row.id) !== id)) throw failure('STORAGE_QUIET_RECORD_INVALID');
       }
-      return row;
-    })]));
+      rows[kind].push(row);
+    }
     if (rows.reservations.length) return false; // Expired or uncertain reservations still own exact media cleanup.
-    const settledCalls = new Set(), settledSessions = new Set();
+    const settledCalls = new Set(), settledSessions = new Set(), settledProviderCalls = new Set(), terminalEvents = new Set();
+    for (const event of rows.events) if (event.kind === 'terminal') {
+      const binding = providerBinding(event.tenantId, event.providerCallId);
+      if (!binding || event.id !== `terminal:${event.providerCallId}` || !Number.isSafeInteger(event.createdAt) || event.createdAt < 0)
+        throw failure('STORAGE_QUIET_RECORD_INVALID');
+      terminalEvents.add(binding);
+    }
     for (const call of rows.calls) {
-      if (typeof call.id !== 'string' || typeof call.active !== 'boolean' || !settledOutbox(call)) return false;
+      const binding = providerBinding(call.tenantId, call.id);
+      if (!binding || typeof call.active !== 'boolean' || !settledOutbox(call)) return false;
       if (call.active || !terminalConfirmed(call)) return false;
       if (call.transfer && !['completed', 'declined', 'cancelled', 'expired', 'failed'].includes(call.transfer.status)) return false;
-      settledCalls.add(call.id);
+      settledCalls.add(call.id); settledProviderCalls.add(binding);
     }
     for (const session of rows.sessions) {
-      // Native-only legacy claims do not prove that browser media has ended.
-      if (typeof session.id !== 'string' || !['ended', 'failed'].includes(session.phase) ||
-          !terminalConfirmed(session) || !settledOutbox(session) || !settledOperations(session)) return false;
+      const binding = providerBinding(session.tenantId, session.providerCallId);
+      const legacyRow = session.routeChoice === 'legacy' || session.terminal?.nativeOnly === true;
+      const legacyEnded = ['answered_elsewhere', 'ended'].includes(session.phase) && session.routeChoice === 'legacy' &&
+        session.direction === 'incoming' && plain(session.operations) && Object.keys(session.operations).length === 0 &&
+        Array.isArray(session.outbox) && session.outbox.every(item => item?.kind === 'notify') &&
+        session.terminal?.nativeOnly === true && session.terminal.reason === 'LEGACY_CLAIMED' &&
+        Number.isSafeInteger(session.terminal.endedAt) && session.terminal.endedAt >= 0 && exactString(session.legacyClaim?.operationId) &&
+        session.legacyClaim.claimedAt === session.terminal.endedAt && !session.owner && binding && terminalEvents.has(binding);
+      if (!exactString(session.id) || !exactString(session.tenantId) || !settledOutbox(session) || !settledOperations(session) ||
+          (legacyRow ? !legacyEnded : !['ended', 'failed'].includes(session.phase) || !terminalConfirmed(session))) return false;
       settledSessions.add(session.id);
-      if (typeof session.providerCallId === 'string' && session.providerCallId) settledCalls.add(session.providerCallId);
+      if (binding) { settledCalls.add(session.providerCallId); settledProviderCalls.add(binding); }
     }
-    const terminalEvents = new Set(rows.events.filter(event => event.kind === 'terminal').map(event => event.providerCallId));
     const eventKinds = new Set(['terminal', 'customer-accepted', 'pending-answer', 'route', 'provider-event', 'outgoing-cancel']);
     for (const event of rows.events) {
       if (!eventKinds.has(event.kind)) throw failure('STORAGE_QUIET_EVENT_UNSUPPORTED');
       if (['pending-answer', 'customer-accepted'].includes(event.kind) &&
-          !settledCalls.has(event.providerCallId) && !terminalEvents.has(event.providerCallId)) return false;
+          (!providerBinding(event.tenantId, event.providerCallId) ||
+           !settledProviderCalls.has(providerBinding(event.tenantId, event.providerCallId)) &&
+           !terminalEvents.has(providerBinding(event.tenantId, event.providerCallId)))) return false;
     }
     for (const projection of rows.jobs) {
       if (!plain(projection.data) || !['session', 'cleanup', 'expire'].includes(projection.workType)) throw failure('STORAGE_QUIET_JOB_UNSUPPORTED');
@@ -100,8 +107,7 @@ function quietPointCheck({ source, prefix, migration }) {
       if (!plain(projection.data) || !settledCalls.has(projection.callId) ||
           !['completed', 'declined', 'cancelled', 'expired', 'failed'].includes(projection.data.status)) return false;
     }
-    return videoQuiet();
-  };
+    return true;
 }
 
 export function createStorageMigrationAdministration({ runtime, env = process.env,
@@ -120,18 +126,16 @@ export function createStorageMigrationAdministration({ runtime, env = process.en
     manager = managerFactory({ firestore: migration.source, collectionPrefix: prefix,
       targetMigration, serverTimestamp: () => FieldValue.serverTimestamp(), documentIdField: FieldPath.documentId(),
       maxDocuments: 20000, maxBytes: 64 * 1024 * 1024, maxDurationMs: 10 * 60000, pageSize: 50, maxJournalPasses: 1000,
-      assertNoActiveCalls: async tx => {
+      classifyQuietManifest: documents => classifyQuietManifest(documents, prefix),
+      assertNoActiveCalls: () => {
         if (typeof migration.assertNoActiveVideoCalls !== 'function' || typeof migration.beginVideoCutoverGuard !== 'function')
           throw failure('STORAGE_VIDEO_QUIET_CHECK_REQUIRED');
-        return quietPointCheck({ source: migration.source, prefix, migration })(tx);
+        const result = migration.assertNoActiveVideoCalls();
+        if (result !== true && result !== false) throw failure('STORAGE_VIDEO_QUIET_CHECK_INVALID');
+        return result;
       },
       beforeFence: async () => {
         if (typeof migration.beginVideoCutoverGuard !== 'function') throw failure('STORAGE_VIDEO_QUIET_CHECK_REQUIRED');
-        // Reject a large quiet-point inventory BEFORE taking the source gate's
-        // transaction lock or pausing video admission. The transaction repeats
-        // these bounded queries to protect against new media rows/phantoms.
-        checkQuietBounds(await Promise.all(MEDIA_KINDS.map(kind =>
-          migration.source.collection(`${prefix}_media_${kind}`).limit(QUIET_DOCUMENT_LIMIT + 1).get())));
         const release = migration.beginVideoCutoverGuard();
         if (typeof release !== 'function') throw failure('STORAGE_VIDEO_QUIET_CHECK_INVALID');
         return release;

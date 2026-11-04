@@ -15,6 +15,7 @@ COPY . .
 RUN python3 tests/simulator-media-r13/prepare-tools.py
 ENV SH_PLAYWRIGHT_MODULE=/opt/r22-browser/node_modules/playwright
 RUN npm run test:operator-cloudflare
+RUN SH_FIRESTORE_EMULATOR_JAR=/work/tooling/r13-media/cloud-firestore-emulator-v1.19.8.jar SH_STORAGE_EMULATOR_OUTPUT=verification/r22/storage-migration npm run test:operator-cloudflare:emulator
 RUN SH_TEST_CHROMIUM="$(node -p 'require(process.env.SH_PLAYWRIGHT_MODULE).chromium.executablePath()')" node --test tests/operator-storage-admin-ui.test.mjs
 # Keep every previous backend, browser, iPhone handoff and actual media check.
 RUN SH_TEST_CHROMIUM="$(node -p 'require(process.env.SH_PLAYWRIGHT_MODULE).chromium.executablePath()')" SH_VERIFY_OUTPUT=verification/r22/backend node scripts/verify-r13.mjs unit http browser

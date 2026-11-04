@@ -87,7 +87,8 @@ export function validateStorageIdentityBindings(documents,prefix='sh_operator') 
 
 export function createStorageMigrationManager({firestore,collectionPrefix='sh_operator',serverTimestamp,
   targetMigration,documentIdField='__name__',clock=Date.now,maxDocuments=20000,maxBytes=64*1024*1024,
-  maxDurationMs=10*60000,pageSize=50,maxJournalPasses=1000,assertNoActiveCalls,onActivated=async()=>{},beforeFence=()=>()=>{}}={}) {
+  maxDurationMs=10*60000,pageSize=50,maxJournalPasses=1000,assertNoActiveCalls,classifyQuietManifest,
+  maxQuietProofRows=100,maxQuietProofBytes=128*1024,maxQuietRetries=3,onActivated=async()=>{},beforeFence=()=>()=>{}}={}) {
   if(!firestore?.collection||!firestore?.runTransaction||typeof firestore.listCollections!=='function'||
     typeof serverTimestamp!=='function'||typeof targetMigration!=='function'||typeof beforeFence!=='function'||
     !/^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(collectionPrefix)||
@@ -95,6 +96,10 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
     !Number.isInteger(maxBytes)||maxBytes<1024||maxBytes>256*1024*1024||
     !Number.isInteger(pageSize)||pageSize<1||pageSize>100||
     !Number.isInteger(maxJournalPasses)||maxJournalPasses<1||maxJournalPasses>4000||
+    !Number.isInteger(maxQuietProofRows)||maxQuietProofRows<1||maxQuietProofRows>500||
+    !Number.isInteger(maxQuietProofBytes)||maxQuietProofBytes<1024||maxQuietProofBytes>512*1024||
+    !Number.isInteger(maxQuietRetries)||maxQuietRetries<1||maxQuietRetries>10||
+    classifyQuietManifest!==undefined&&typeof classifyQuietManifest!=='function'||
     !Number.isInteger(maxDurationMs)||maxDurationMs<1000||maxDurationMs>30*60000)throw TypeError('Invalid storage migration configuration.');
   const gateRef=firestore.collection(`${collectionPrefix}_metadata`).doc('storage_migration');
   const journal=firestore.collection(`${collectionPrefix}_migration_journal`);
@@ -177,8 +182,32 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
       else if(compare===0n&&canonical(row)!==canonical(previous))throw fail('STORAGE_SOURCE_VERSION_MISMATCH');}};
     return {apply,live:()=>[...rows.values()].filter(row=>row.deleted!==true)};
   }
-  async function replayInternal(gate,{manifest,since}={}) {
-    const started=now();let events=0,lastCursor=null,lastCommittedAt=since;
+  const versionCompare=(left,right)=>BigInt(left.seconds)*1000000000n+BigInt(left.nanos)-
+    (BigInt(right.seconds)*1000000000n+BigInt(right.nanos));
+  function proofRecord(doc) {
+    const row=doc.data();
+    if(row?.schema!==1||row.eventId!==doc.id||!validId(row.migrationId)||!Number.isSafeInteger(row.epoch)||row.epoch<1||
+      typeof row.hash!=='string'||!/^[a-f0-9]{64}$/.test(row.hash))throw fail('STORAGE_JOURNAL_INVALID');
+    return {id:doc.id,migrationId:row.migrationId,epoch:row.epoch,hash:row.hash,committedAt:sourceStorageVersion(row.committedAt)};
+  }
+  function boundProofRecords(records) {
+    if(records.length>maxQuietProofRows||Buffer.byteLength(canonical(records))>maxQuietProofBytes)throw fail('STORAGE_QUIET_PROOF_LIMIT');
+    return records;
+  }
+  async function verifyQuietProof(tx,proof) {
+    if(!proof?.readTime||!Array.isArray(proof.records))throw fail('STORAGE_QUIET_PROOF_REQUIRED');
+    sourceStorageVersion(proof.readTime);boundProofRecords(proof.records);
+    // The replay readTime is a server snapshot boundary. A metadata projection
+    // keeps this final transaction independent of retained media/history size.
+    const query=journal.where('committedAt','>=',proof.readTime).orderBy('committedAt','asc').orderBy(documentIdField,'asc')
+      .select('schema','eventId','migrationId','epoch','hash','committedAt').limit(maxQuietProofRows+1);
+    const found=await tx.get(query);
+    if(!Array.isArray(found?.docs))throw fail('STORAGE_QUIET_PROOF_INVALID');
+    const records=boundProofRecords(found.docs.map(proofRecord));
+    if(canonical(records)!==canonical(proof.records))throw fail('STORAGE_QUIET_PROOF_CHANGED');
+  }
+  async function replayInternal(gate,{manifest,since,quietProof=false}={}) {
+    const started=now();let events=0,lastCursor=null,lastCommittedAt=since,latestVersion=null,boundaryRecords=[];
     // Starting at the beginning is deliberate: repeated copies/replays are
     // monotonic at the target and cannot miss same-timestamp events on restart.
     for(let pass=0;pass<maxJournalPasses;pass++) {
@@ -191,6 +220,9 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
       if(lastCursor)query=query.startAfter(lastCursor);
       const page=await query.get();
       for(const doc of page.docs){const event=doc.data();
+        if(quietProof){const record=proofRecord(doc),compare=latestVersion?versionCompare(record.committedAt,latestVersion):1n;
+          if(compare>0n){latestVersion=record.committedAt;boundaryRecords=[];}
+          if(compare>=0n)boundaryRecords.push(record);}
         if(event?.migrationId!==gate.migrationId)continue;
         if(event?.schema!==1||event.eventId!==doc.id||event.migrationId!==gate.migrationId||event.epoch!==gate.epoch||
           !Array.isArray(event.mutations)||event.mutations.length>450||event.hash!==storageJournalHash(event.mutations))throw fail('STORAGE_JOURNAL_INVALID');
@@ -200,7 +232,12 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
           return mutation.deleted?{path:mutation.path,deleted:true,sourceVersion}:{path:mutation.path,data:mutation.value,sourceVersion};});
         await target({op:'import',migrationId:gate.migrationId,requestId:`journal_${event.eventId}`,documents});
         manifest?.apply(documents);lastCommittedAt=event.committedAt;events++;}
-      if(page.docs.length<pageSize)return {events,drained:true,lastCommittedAt};lastCursor=page.docs.at(-1);
+      if(page.docs.length<pageSize){let proof;
+        if(quietProof){const readVersion=sourceStorageVersion(page.readTime);
+          if(latestVersion&&versionCompare(latestVersion,readVersion)>0n)throw fail('STORAGE_QUIET_READ_TIME_INVALID');
+          proof={migrationId:gate.migrationId,epoch:gate.epoch,readTime:page.readTime,
+            records:boundProofRecords(latestVersion&&versionCompare(latestVersion,readVersion)===0n?boundaryRecords:[])};}
+        return {events,drained:true,lastCommittedAt,proof};}lastCursor=page.docs.at(-1);
       if(now()-started>maxDurationMs)throw fail('STORAGE_MIGRATION_TIME_LIMIT');
     }
     throw fail('STORAGE_JOURNAL_PASS_LIMIT');
@@ -209,16 +246,19 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
     return exclusive(async()=>{const gate=await readGate();if(!['shadow','cloudflare'].includes(gate.mode))throw fail('STORAGE_SOURCE_NOT_SHADOWING');
       const result=await replayInternal(gate);const next=await updateGate(gate,{replayed:result.events,phase:gate.mode==='shadow'?'ready_to_verify':'fenced'});return safeGate(next);});
   }
-  async function fenceInternal() {
+  async function fenceInternal(proof) {
+      if(!proof)throw fail('STORAGE_QUIET_PROOF_REQUIRED');
       if(typeof assertNoActiveCalls!=='function')throw fail('STORAGE_QUIET_POINT_CHECK_REQUIRED');
       const existing=await readGate();if(existing.mode==='cloudflare')return safeGate(existing);
       const gate=await firestore.runTransaction(async tx=>{const current=readStorageMigrationGate(await tx.get(gateRef));
         if(current.mode!=='shadow'||current.snapshotComplete!==true)throw fail('STORAGE_SNAPSHOT_REQUIRED');
+        if(current.migrationId!==proof.migrationId||current.epoch!==proof.epoch)throw fail('STORAGE_MIGRATION_CHANGED');
         if(await assertNoActiveCalls(tx)!==true)throw fail('STORAGE_CALLS_STILL_ACTIVE');
+        if(proof)await verifyQuietProof(tx,proof);
+        if(proof&&await assertNoActiveCalls(tx)!==true)throw fail('STORAGE_CALLS_STILL_ACTIVE');
         const next={...current,mode:'cloudflare',phase:'fenced',targetReady:false,fencedAt:serverTimestamp(),updatedAtMs:now()};tx.set(gateRef,next);return next;});
       return safeGate(gate);
   }
-  const fence=()=>exclusive(fenceInternal);
   async function completeCutoverInternal({manifest,since}={}) {
       let gate=await readGate();if(gate.mode!=='cloudflare')throw fail('STORAGE_SOURCE_NOT_FENCED');
       if(gate.targetReady){await onActivated();return safeGate(gate);}
@@ -251,29 +291,36 @@ export function createStorageMigrationManager({firestore,collectionPrefix='sh_op
       }
       gate=await updateGate(gate,{phase:'active',targetReady:true,activatedAtMs:now()});await onActivated();return safeGate(gate);
   }
-  const completeCutover=()=>exclusive(()=>completeCutoverInternal());
   async function cutover() {
     return exclusive(async()=>{
       const gate=await readGate();
       if(gate.mode==='cloudflare')return completeCutoverInternal();
       if(gate.mode!=='shadow'||gate.snapshotComplete!==true)throw fail('STORAGE_SNAPSHOT_REQUIRED');
+      if(typeof classifyQuietManifest!=='function')throw fail('STORAGE_QUIET_PROOF_REQUIRED');
       // Expensive inventory and integrity work runs while the existing app is
       // fully usable. Only the final bounded journal tail is inside the fence.
       const manifest=versionedManifest(await scanNamespace());
-      const replay=await replayInternal(gate,{manifest});
-      validateStorageIdentityBindings(manifest.live(),collectionPrefix);
-      const summary=storageManifestSummary(manifest.live());
-      const current=await target({op:'checksum',migrationId:gate.migrationId});
-      if(current.count!==summary.count||current.checksum!==summary.checksum)throw fail('STORAGE_TARGET_MANIFEST_MISMATCH');
-      // The caller can pause admission of process-local video creates while the
-      // persisted call/session quiet-point check and durable fence commit run.
-      const release=await beforeFence();
-      if(typeof release!=='function')throw fail('STORAGE_ADMISSION_GUARD_INVALID');
-      try{await fenceInternal();return await completeCutoverInternal({manifest,since:replay.lastCommittedAt});}
-      finally{try{await release();}catch{/* durable fence remains authoritative */}}
+      let since;
+      for(let attempt=0;attempt<maxQuietRetries;attempt++){
+        const replay=await replayInternal(gate,{manifest,since,quietProof:true});
+        validateStorageIdentityBindings(manifest.live(),collectionPrefix);
+        // Full retained history is classified while source calls/messages keep
+        // working. Only an exact, bounded recent journal proof enters the fence.
+        const quiet=classifyQuietManifest(manifest.live(),{collectionPrefix,migrationId:gate.migrationId,epoch:gate.epoch});
+        if(quiet!==true)throw fail(quiet===false?'STORAGE_CALLS_STILL_ACTIVE':'STORAGE_QUIET_PROOF_INVALID');
+        const summary=storageManifestSummary(manifest.live());
+        const current=await target({op:'checksum',migrationId:gate.migrationId});
+        if(current.count!==summary.count||current.checksum!==summary.checksum)throw fail('STORAGE_TARGET_MANIFEST_MISMATCH');
+        const release=await beforeFence();
+        if(typeof release!=='function')throw fail('STORAGE_ADMISSION_GUARD_INVALID');
+        try{await fenceInternal(replay.proof);return await completeCutoverInternal({manifest,since:replay.proof.readTime});}
+        catch(error){if(!['STORAGE_QUIET_PROOF_CHANGED','STORAGE_QUIET_PROOF_LIMIT'].includes(error?.code)||attempt+1===maxQuietRetries)throw error;
+          since=replay.proof.readTime;}
+        finally{try{await release();}catch{/* durable fence remains authoritative */}}
+      }
     });
   }
-  return {prepare,copySnapshot,replay,fence,completeCutover,cutover,status:async()=>safeGate(await readGate()),
+  return {prepare,copySnapshot,replay,cutover,status:async()=>safeGate(await readGate()),
     // Private internal diagnostics for exhaustive isolated tests, never routes.
     scanNamespace};
 }

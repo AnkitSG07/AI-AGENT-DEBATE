@@ -25,7 +25,7 @@ async function fixture(t,{loseAcknowledgement='',loseRecoveryStatus=false,finalT
       if(fault===input.op&&response.ok){fault='';statusFault=loseRecoveryStatus;await response.text();throw Error('Lost acknowledgement after committed worker mutation');}
       return response;
     }});
-  const config={firestore:source.source,serverTimestamp:source.serverTimestamp,targetMigration:transport,assertNoActiveCalls:async()=>true,pageSize:2};
+  const config={firestore:source.source,serverTimestamp:source.serverTimestamp,targetMigration:transport,assertNoActiveCalls:async()=>true,classifyQuietManifest:()=>true,pageSize:2};
   const manager=createStorageMigrationManager(config);
   const client=createCloudflareFirestoreClient({endpoint:'https://private-store.example.test',secret:key,fetchImpl:(url,options)=>mf.dispatchFetch(url,options)});
   t.after(()=>client.terminate());return{...source,mf,transport,manager,config,client};

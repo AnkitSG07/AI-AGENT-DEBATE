@@ -9,9 +9,12 @@ const env = { SH_CLOUDFLARE_MIGRATION_ENABLED: 'true', SH_CLOUDFLARE_STORE_URL: 
   SH_CLOUDFLARE_STORE_SECRET: 'fixture-normal-store-secret-at-least-32-characters',
   SH_CLOUDFLARE_MIGRATION_SECRET: 'fixture-migration-secret-different-at-least-32' };
 const done = row => ({ id: 'done-job', status: 'done', ...row });
-const settledSession = (id = 'session-1') => ({ id, providerCallId: 'call-1', phase: 'ended',
+const settledSession = (id = 'session-1') => ({ id, tenantId: 'tenant-1', providerCallId: 'call-1', phase: 'ended',
   terminal: { endedAt: 10, confirmedAt: 11 }, operations: { dial: { status: 'provider-ended' } }, outbox: [done()] });
-const settledCall = (id = 'call-1') => ({ id, active: false, terminal: { endedAt: 10, confirmedAt: 11 }, outbox: [done()], transfer: null });
+const settledCall = (id = 'call-1') => ({ id, tenantId: 'tenant-1', active: false, terminal: { endedAt: 10, confirmedAt: 11 }, outbox: [done()], transfer: null });
+const legacySession = () => ({ ...settledSession(), direction: 'incoming', phase: 'answered_elsewhere', routeChoice: 'legacy',
+  terminal: { reason: 'LEGACY_CLAIMED', nativeOnly: true, endedAt: 10 }, legacyClaim: { operationId: 'legacy-operation', claimedAt: 10 },
+  operations: {}, outbox: [done({ kind: 'notify' })] });
 function fixture({ videoQuiet = () => true, operation, source = new FirestoreFake() } = {}) {
   source.listCollections = async () => [];
   let captured, held = 0, releases = 0;
@@ -25,6 +28,8 @@ function fixture({ videoQuiet = () => true, operation, source = new FirestoreFak
     return { status: async () => ({ mode: 'shadow', phase: 'replaying', epoch: 2, copied: 7, data: { secret: 'private-document' }, token: 'private-token' }),
       prepare: () => run('prepare'), copySnapshot: () => run('copy'), replay: () => run('replay'),
       cutover: async () => {
+        if (config.classifyQuietManifest(manifest(), { collectionPrefix: 'sh_operator', migrationId: 'fixture-migration', epoch: 2 }) !== true)
+          throw Object.assign(Error('Phone is in a call.'), { code: 'STORAGE_CALLS_STILL_ACTIVE' });
         const release = await config.beforeFence();
         try { const quiet = await source.runTransaction(tx => config.assertNoActiveCalls(tx));
           if (quiet !== true) throw Object.assign(Error('Phone is in a call.'), { code: 'STORAGE_CALLS_STILL_ACTIVE' });
@@ -32,14 +37,16 @@ function fixture({ videoQuiet = () => true, operation, source = new FirestoreFak
         } finally { release(); }
       } };
   };
+  const manifest = () => JSON.parse(JSON.stringify([...source.documents].map(([path, data]) => ({ path, data }))));
   const admin = createStorageMigrationAdministration({ runtime, env, managerFactory, transportFactory: () => async () => ({ ok: true }) });
   const seed = (kind, row) => {
+    if (kind === 'events') row = { tenantId: 'tenant-1', ...row };
     const id = hash(row.id || row.deviceId || 'reservation');
     source.seed(`sh_operator_media_${kind}`, id, { schema: 1, key: `media_${kind}/${id}`, revision: 1, updatedAt: 12, data: row });
     return id;
   };
-  return { source, runtime, admin, seed, quiet: () => source.runTransaction(tx => captured.assertNoActiveCalls(tx)),
-    quietIn: tx => captured.assertNoActiveCalls(tx), guard: () => captured.beforeFence(), stats: () => ({ held, releases }) };
+  return { source, runtime, admin, seed, quiet: async () => captured.classifyQuietManifest(manifest()),
+    localQuiet: tx => captured.assertNoActiveCalls(tx), guard: () => captured.beforeFence(), stats: () => ({ held, releases }) };
 }
 async function finished(admin) { for (let i = 0; i < 20; i++) { const status = await admin.status(); if (!status.running) return status;
   await new Promise(resolve => setImmediate(resolve)); } throw Error('Background action did not finish.'); }
@@ -76,7 +83,7 @@ test('configuration is fail closed without disabling the existing source runtime
   const admin = createStorageMigrationAdministration({ runtime: f.runtime, env });
   assert.equal((await admin.status()).errorCode, 'STORAGE_MIGRATION_NOT_CONFIGURED');
 });
-test('empty and fully settled source call state passes, with all six quiet queries inside the raw native transaction', async () => {
+test('empty and fully settled source call state passes pure preflight classification', async () => {
   const f = fixture(); assert.equal(await f.quiet(), true);
   f.seed('calls', settledCall()); f.seed('sessions', settledSession());
   f.seed('events', { id: 'answer:call-1', kind: 'pending-answer', providerCallId: 'call-1' });
@@ -100,31 +107,68 @@ for (const [label, kind, row] of [
   const f = fixture(); f.seed(kind, row); assert.equal(await f.quiet(), false);
   f.admin.run('cutover'); const status = await finished(f.admin);
   assert.equal(status.job.state, 'failed'); assert.equal(status.job.errorCode, 'STORAGE_CALLS_STILL_ACTIVE');
+  assert.deepEqual(f.stats(), { held: 0, releases: 0 });
+});
+test('the final gate callback only checks process-local video and never reads media history', async () => {
+  const f = fixture(); f.source.failReads = Error('No media reads are permitted under the source gate.');
+  assert.equal(f.localQuiet({ get() { throw Error('No final transaction history scan.'); } }), true);
+  f.admin.run('cutover'); assert.equal((await finished(f.admin)).job.state, 'succeeded');
   assert.deepEqual(f.stats(), { held: 0, releases: 1 });
 });
-test('a new ringing session racing the quiet check invalidates the source transaction and blocks the retry', async () => {
-  const f = fixture(); let attempts = 0;
-  const result = await f.source.runTransaction(async tx => {
-    const quiet = await f.quietIn(tx);
-    if (attempts++ === 0) f.seed('sessions', { ...settledSession(), terminal: undefined, phase: 'ringing' });
-    return quiet;
-  });
-  assert.equal(result, false); assert.ok(f.source.conflicts >= 1);
-});
-test('large media histories are rejected before pausing admission or locking the source gate', async () => {
+test('retained history beyond 100 records classifies outside the gate without blocking cutover', async () => {
   const f = fixture();
-  for (let index = 0; index < 101; index++) f.seed('events', { id: `historical-${index}`, kind: 'terminal', providerCallId: `old-${index}` });
+  for (let index = 0; index < 240; index++) {
+    f.seed('calls', settledCall(`call-${index}`));
+    f.seed('sessions', { ...settledSession(`session-${index}`), providerCallId: `call-${index}` });
+    f.seed('events', { id: `terminal:call-${index}`, kind: 'terminal', providerCallId: `call-${index}`, createdAt: 20 });
+  }
   const transactionsBefore = f.source.transactionRuns; f.admin.run('cutover');
-  assert.equal((await finished(f.admin)).job.errorCode, 'STORAGE_QUIET_SCAN_LIMIT');
-  assert.equal(f.source.transactionRuns, transactionsBefore); assert.deepEqual(f.stats(), { held: 0, releases: 0 });
+  assert.equal((await finished(f.admin)).job.state, 'succeeded');
+  assert.equal(f.source.transactionRuns, transactionsBefore + 1); assert.deepEqual(f.stats(), { held: 0, releases: 1 });
+});
+test('activity beyond the first 100 historical records is still examined and blocks cutover', async () => {
+  const f = fixture();
+  for (let index = 0; index < 240; index++)
+    f.seed('events', { id: `terminal:old-${index}`, kind: 'terminal', providerCallId: `old-${index}`, createdAt: 20 });
+  f.seed('sessions', { ...settledSession('latest-ringing'), terminal: undefined, phase: 'ringing' });
+  assert.equal(await f.quiet(), false); f.admin.run('cutover');
+  assert.equal((await finished(f.admin)).job.errorCode, 'STORAGE_CALLS_STILL_ACTIVE');
+  assert.deepEqual(f.stats(), { held: 0, releases: 0 });
 });
 test('video admission and an explicit synchronous quiet callback are required before the fence', async () => {
   const active = fixture({ videoQuiet: () => false }); active.admin.run('cutover');
   assert.equal((await finished(active.admin)).job.errorCode, 'STORAGE_CALLS_STILL_ACTIVE'); assert.equal(active.stats().held, 0);
   const invalid = fixture({ videoQuiet: async () => true });
-  await assert.rejects(invalid.quiet(), { code: 'STORAGE_VIDEO_QUIET_CHECK_INVALID' });
+  assert.throws(() => invalid.localQuiet(), { code: 'STORAGE_VIDEO_QUIET_CHECK_INVALID' });
   const absent = fixture(); delete absent.runtime.migration.beginVideoCutoverGuard;
   assert.throws(() => absent.admin.run('cutover'), { code: 'STORAGE_VIDEO_QUIET_CHECK_REQUIRED' });
+});
+test('a legacy answered-elsewhere row settles only with its exact durable tenant and provider terminal marker', async () => {
+  const f = fixture(); f.seed('sessions', legacySession());
+  f.seed('events', { id: 'terminal:call-1', kind: 'terminal', providerCallId: 'call-1', createdAt: 20 });
+  assert.equal(await f.quiet(), true); f.admin.run('cutover'); assert.equal((await finished(f.admin)).job.state, 'succeeded');
+});
+for (const [label, sessionPatch, terminal] of [
+  ['a terminal marker for another tenant', {}, { tenantId: 'other-tenant', id: 'terminal:call-1', providerCallId: 'call-1' }],
+  ['a terminal marker for another provider call', {}, { id: 'terminal:other-call', providerCallId: 'other-call' }],
+  ['a generic provider-event termination hint', {}, { id: 'event-terminate', kind: 'provider-event', eventType: 'terminate', providerCallId: 'call-1' }],
+  ['no provider call binding', { providerCallId: '' }, { id: 'terminal:call-1', providerCallId: 'call-1' }],
+  ['an uncertain media operation', { operations: { dial: { status: 'uncertain' } } }, { id: 'terminal:call-1', providerCallId: 'call-1' }],
+  ['unacknowledged notification cleanup', { outbox: [{ kind: 'notify', status: 'pending' }] }, { id: 'terminal:call-1', providerCallId: 'call-1' }],
+  ['a fabricated legacy phase without its claim', { legacyClaim: undefined }, { id: 'terminal:call-1', providerCallId: 'call-1' }]
+]) test(`legacy history remains blocking with ${label}`, async () => {
+  const f = fixture(); f.seed('sessions', { ...legacySession(), ...sessionPatch });
+  f.seed('events', { kind: 'terminal', createdAt: 20, ...terminal }); assert.equal(await f.quiet(), false);
+});
+test('a malformed terminal marker cannot fabricate provider-ended evidence', async () => {
+  const f = fixture(); f.seed('sessions', legacySession());
+  f.seed('events', { id: 'wrong-marker-id', kind: 'terminal', providerCallId: 'call-1', createdAt: 20 });
+  await assert.rejects(f.quiet(), { code: 'STORAGE_QUIET_RECORD_INVALID' });
+});
+test('a fabricated confirmed terminal field cannot replace exact provider-ended evidence for a legacy claim', async () => {
+  const f = fixture(); const legacy = legacySession();
+  f.seed('sessions', { ...legacy, phase: 'ended', terminal: { ...legacy.terminal, confirmedAt: 11 } });
+  assert.equal(await f.quiet(), false);
 });
 test('unknown or malformed durable media state cannot be treated as quiet', async () => {
   const f = fixture(); f.source.seed('sh_operator_media_sessions', 'malformed', { data: { phase: 'ended' } });

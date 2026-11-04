@@ -32,6 +32,15 @@ copy/checksum and enrolled-phone acceptance still need verification before the
 production switch. The protected quiet-point check may pause the migration
 without switching the current app.
 
+The subsequent migration-guard revision also passed the expanded 131-case
+Cloudflare suite and four actual Google Firestore SDK/emulator concurrency tests.
+Those cover empty journals with retained history, a new call after preflight,
+an already running source transaction crossing the fence, and a source call
+starting after the final proof query. Completed history no longer has a lifetime
+100-row limit. Active/uncertain calls and unproven legacy claims still block the
+switch. The underlying media implementation from the Render verification remains
+unchanged by this guard revision.
+
 ## Measured storage work
 
 The existing domain adapters and production Node client were measured against

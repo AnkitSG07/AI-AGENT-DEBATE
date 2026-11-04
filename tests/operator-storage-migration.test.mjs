@@ -8,7 +8,7 @@ import { createStorageMigrationManager, sourceStorageVersion, storageManifestSum
 const copy=value=>structuredClone(value);
 function fixture({quiet=true,failAfter='',failStatusAfterAck=false,tamperChecksum=false,importHook,targetHook}={}) {
   const {source,app,serverTimestamp,seed}=createStorageMigrationSourceFixture();
-  const rows=new Map(),live=new Map(),requests=new Set();let migration=null,mode={state:'inactive'},fault=failAfter,activations=0,statusFault=false;
+  const rows=new Map(),live=new Map(),requests=new Set();let migration=null,mode={state:'inactive'},fault=failAfter,activations=0,statusFault=false,checksumCalls=0;
   const summary=()=>storageManifestSummary([...rows].filter(([,r])=>!r.deleted).map(([path,r])=>({path,data:r.data})));
   const target=async input=>{
     if(targetHook)await targetHook({input,app,source});
@@ -20,12 +20,12 @@ function fixture({quiet=true,failAfter='',failStatusAfterAck=false,tamperChecksu
         if(cmp>0n)rows.set(doc.path,copy(doc));else if(cmp===0n)assert.deepEqual(doc,previous,'same source version cannot change payload');}requests.add(input.requestId);}
       if(importHook)await importHook({input,app,source});return {ok:true};
     }
-    if(input.op==='checksum')return {ok:true,...summary(),...(tamperChecksum?{checksum:'bad'}:{})};
+    if(input.op==='checksum')return {ok:true,...summary(),...(tamperChecksum&&++checksumCalls>1?{checksum:'bad'}:{})};
     if(input.op==='seal'){const s=summary();assert.equal(input.expectedChecksum,s.checksum);assert.equal(input.expectedCount,s.count);migration={...migration,state:'sealed',...s};if(fault==='seal'){fault='';statusFault=failStatusAfterAck;throw Error('Lost seal acknowledgement');}return {ok:true,...s};}
     if(input.op==='activate'){assert.equal(migration.state,'sealed');mode={state:'active',migrationId:migration.id,checksum:migration.checksum};migration.state='activated';for(const [path,row]of rows)if(!row.deleted)live.set(path,copy(row.data));activations++;if(fault==='activate'){fault='';statusFault=failStatusAfterAck;throw Error('Lost activation acknowledgement');}return {ok:true,mode:copy(mode)};}
     throw Error('Unsupported op');
   };
-  const config={firestore:source,serverTimestamp,targetMigration:target,assertNoActiveCalls:async()=>quiet,pageSize:2,maxJournalPasses:100};
+  const config={firestore:source,serverTimestamp,targetMigration:target,assertNoActiveCalls:async()=>quiet,classifyQuietManifest:()=>true,pageSize:2,maxJournalPasses:100};
   const manager=createStorageMigrationManager(config);
   return {source,app,manager,config,rows,live,stats:()=>({activations}),seed};
 }
@@ -35,24 +35,24 @@ test('live source writes during snapshot are replayed without changing phone ide
   const f=fixture({importHook:async({app})=>{if(changed)return;changed=true;await app.collection('sh_operator_devices').doc('phone').update({revokedAt:1800000001});}});
   f.seed('sh_operator_devices','phone',{schema:1,id:'phone',tokenHash:'same-private-digest',credentialGeneration:9,revokedAt:0});
   f.seed('sh_operator_app_messages','73',{channelId:73,manualUnread:true,pendingIds:[21]});
-  await f.manager.prepare();await f.manager.copySnapshot();await f.manager.replay();await f.manager.fence();const result=await f.manager.completeCutover();
+  await f.manager.prepare();await f.manager.copySnapshot();await f.manager.replay();const result=await f.manager.cutover();
   assert.equal(result.targetReady,true);assert.equal(f.live.get('sh_operator_devices/phone').credentialGeneration,9);assert.equal(f.live.get('sh_operator_devices/phone').revokedAt,1800000001);
   assert.deepEqual(f.live.get('sh_operator_app_messages/73').pendingIds,[21]);assert.equal(f.stats().activations,1);
   assert.equal(JSON.stringify(result).includes('same-private-digest'),false,'public status must not expose documents or credentials');
 });
 test('a deletion after snapshot cannot be resurrected by a repeated older snapshot import',async()=>{
   const f=fixture();f.seed('sh_operator_devices','retired',{schema:1,id:'retired'});await f.manager.prepare();await f.manager.copySnapshot();
-  await f.app.collection('sh_operator_devices').doc('retired').delete();await f.manager.replay();await f.manager.fence();await f.manager.completeCutover();
+  await f.app.collection('sh_operator_devices').doc('retired').delete();await f.manager.replay();await f.manager.cutover();
   assert.equal(f.live.has('sh_operator_devices/retired'),false);assert.equal(f.rows.get('sh_operator_devices/retired').deleted,true);
 });
 test('active calls block the fence while the existing backend remains writable',async()=>{
   const f=fixture({quiet:false});f.seed('sh_operator_devices','phone',{schema:1,id:'phone'});await f.manager.prepare();await f.manager.copySnapshot();
-  await assert.rejects(f.manager.fence(),{code:'STORAGE_CALLS_STILL_ACTIVE'});assert.equal((await f.manager.status()).mode,'shadow');
+  await assert.rejects(f.manager.cutover(),{code:'STORAGE_CALLS_STILL_ACTIVE'});assert.equal((await f.manager.status()).mode,'shadow');
   await f.app.collection('sh_operator_devices').doc('phone').update({label:'Still working'});assert.equal(f.source.dump()['sh_operator_devices/phone'].label,'Still working');
 });
 for(const operation of ['seal','activate'])test(`a lost ${operation} acknowledgement resumes from durable target state after process restart`,async()=>{
-  const f=fixture({failAfter:operation,failStatusAfterAck:true});f.seed('sh_operator_devices','phone',{schema:1,id:'phone'});await f.manager.prepare();await f.manager.copySnapshot();await f.manager.fence();
-  await assert.rejects(f.manager.completeCutover(),/Lost/);const replacement=createStorageMigrationManager(f.config);const status=await replacement.completeCutover();
+  const f=fixture({failAfter:operation,failStatusAfterAck:true});f.seed('sh_operator_devices','phone',{schema:1,id:'phone'});await f.manager.prepare();await f.manager.copySnapshot();
+  await assert.rejects(f.manager.cutover(),/Lost/);const replacement=createStorageMigrationManager(f.config);const status=await replacement.cutover();
   assert.equal(status.targetReady,true);assert.equal(f.stats().activations,1);
 });
 for(const operation of ['seal','activate'])test(`combined cutover finishes immediately after one lost ${operation} acknowledgement`,async()=>{
@@ -60,14 +60,14 @@ for(const operation of ['seal','activate'])test(`combined cutover finishes immed
   assert.equal((await f.manager.cutover()).targetReady,true);assert.equal(f.stats().activations,1);
 });
 test('an integrity mismatch never activates the target or silently returns to the source',async()=>{
-  const f=fixture({tamperChecksum:true});f.seed('sh_operator_devices','phone',{schema:1,id:'phone'});await f.manager.prepare();await f.manager.copySnapshot();await f.manager.fence();
-  await assert.rejects(f.manager.completeCutover(),{code:'STORAGE_TARGET_MANIFEST_MISMATCH'});assert.equal(f.stats().activations,0);
+  const f=fixture({tamperChecksum:true});f.seed('sh_operator_devices','phone',{schema:1,id:'phone'});await f.manager.prepare();await f.manager.copySnapshot();
+  await assert.rejects(f.manager.cutover(),{code:'STORAGE_TARGET_MANIFEST_MISMATCH'});assert.equal(f.stats().activations,0);
   assert.equal((await f.manager.status()).mode,'cloudflare');assert.equal((await f.manager.status()).targetReady,false);
   await assert.rejects(f.app.collection('sh_operator_devices').doc('phone').set({id:'stale overwrite'}),{code:'STORAGE_SOURCE_FENCED'});
 });
 test('empty databases can complete a verified migration and missing snapshot cannot fence',async()=>{
-  const f=fixture();await f.manager.prepare();await assert.rejects(f.manager.fence(),{code:'STORAGE_SNAPSHOT_REQUIRED'});
-  await f.manager.copySnapshot();await f.manager.fence();assert.equal((await f.manager.completeCutover()).verifiedCount,0);
+  const f=fixture();await f.manager.prepare();await assert.rejects(f.manager.cutover(),{code:'STORAGE_SNAPSHOT_REQUIRED'});
+  await f.manager.copySnapshot();assert.equal((await f.manager.cutover()).verifiedCount,0);
 });
 test('missing source update times and duplicate manifest paths fail instead of producing unverifiable snapshots',()=>{
   assert.throws(()=>sourceStorageVersion(undefined),{code:'STORAGE_SOURCE_VERSION_INVALID'});
@@ -121,4 +121,48 @@ test('video admission guard wraps the atomic quiet-point fence and releases on s
     else await assert.rejects(manager.cutover(),{code:'STORAGE_CALLS_STILL_ACTIVE'});
     assert.equal(paused,false);assert.equal(released,1);
   }
+});
+test('quiet proof checks recent metadata only after classifying a large retained media inventory',async()=>{
+  const f=fixture(),hash=value=>createHash('sha256').update(value).digest('hex');let classified=0;
+  for(let index=0;index<350;index++){const id=`old-event-${index}`,key=hash(id);
+    f.seed('sh_operator_media_events',key,{schema:1,key:`media_events/${key}`,revision:1,data:{id,kind:'terminal',providerCallId:`old-call-${index}`}});}
+  const manager=createStorageMigrationManager({...f.config,classifyQuietManifest:documents=>{classified++;assert.ok(documents.length>=350);
+    assert.equal(f.source.dump()['sh_operator_metadata/storage_migration'].mode,'shadow');return true;}});
+  await manager.prepare();await manager.copySnapshot();
+  const originalQuery=f.source.query;
+  f.source.query=(query,records)=>{assert.equal(query.path,'sh_operator_migration_journal','final native transaction must not scan media history');
+    assert.deepEqual(query.__migrationQuery.projection,['schema','eventId','migrationId','epoch','hash','committedAt']);return originalQuery(query,records);};
+  assert.equal((await manager.cutover()).targetReady,true);assert.equal(classified,1);
+});
+test('a call created after preflight is reclassified before fencing and leaves source calls working',async()=>{
+  const hash=value=>createHash('sha256').update(value).digest('hex');let created=false;
+  const f=fixture({targetHook:async({input,app})=>{if(input.op==='checksum'&&!created){created=true;const id='new-ringing',key=hash(id);
+    await app.collection('sh_operator_media_calls').doc(key).set({schema:1,key:`media_calls/${key}`,data:{id,active:true}});}}});
+  let classifications=0;
+  const manager=createStorageMigrationManager({...f.config,classifyQuietManifest:documents=>{classifications++;return !documents.some(row=>row.data.data?.active===true);}});
+  await manager.prepare();await manager.copySnapshot();
+  await assert.rejects(manager.cutover(),{code:'STORAGE_CALLS_STILL_ACTIVE'});
+  assert.equal(classifications,2);assert.equal((await manager.status()).mode,'shadow');assert.equal(f.stats().activations,0);
+  await f.app.collection('sh_operator_metadata').doc('still-writable').set({ok:true});
+});
+test('continuous journal changes exhaust a bounded proof retry without freezing current app writes',async()=>{
+  let changes=0;
+  const f=fixture({targetHook:async({input,app})=>{if(input.op==='checksum')await app.collection('sh_operator_metadata').doc('churn').set({n:++changes});}});
+  await f.manager.prepare();await f.manager.copySnapshot();
+  await assert.rejects(f.manager.cutover(),{code:'STORAGE_QUIET_PROOF_CHANGED'});assert.equal(changes,3);
+  assert.equal((await f.manager.status()).mode,'shadow');assert.equal(f.stats().activations,0);
+});
+test('combined cutover requires an explicit complete-manifest classifier',async()=>{
+  const f=fixture();const manager=createStorageMigrationManager({...f.config,classifyQuietManifest:undefined});
+  await manager.prepare();await manager.copySnapshot();await assert.rejects(manager.cutover(),{code:'STORAGE_QUIET_PROOF_REQUIRED'});
+  assert.equal((await manager.status()).mode,'shadow');
+});
+
+test('public manager cannot bypass combined quiet proof through a standalone fence or activation method',()=>{const f=fixture();assert.equal(f.manager.fence,undefined);assert.equal(f.manager.completeCutover,undefined);});
+test('a quiet proof from a superseded migration epoch cannot fence the replacement source workflow',async()=>{
+  const f=fixture();
+  const manager=createStorageMigrationManager({...f.config,beforeFence:()=>{const current=f.source.dump()['sh_operator_metadata/storage_migration'];
+    f.seed('sh_operator_metadata','storage_migration',{...current,migrationId:'replacement_migration_001',epoch:current.epoch+1});return()=>{};}});
+  await manager.prepare();await manager.copySnapshot();await assert.rejects(manager.cutover(),{code:'STORAGE_MIGRATION_CHANGED'});
+  assert.equal((await manager.status()).mode,'shadow');assert.equal(f.stats().activations,0);
 });
