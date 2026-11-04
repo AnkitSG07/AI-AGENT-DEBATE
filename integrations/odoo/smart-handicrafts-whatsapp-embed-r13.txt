@@ -173,6 +173,13 @@
             <input id="shSearchInput" aria-label="Search conversations" type="text" placeholder="Search or start a new chat" autocomplete="off">
           </label>
 
+          <label class="sh-op-account-filter" for="shWhatsappAccountFilter">
+            <span>Account</span>
+            <select id="shWhatsappAccountFilter" aria-label="Filter by WhatsApp account">
+              <option value="all">All conversations</option>
+            </select>
+          </label>
+
           <div class="sh-op-filter-row" aria-label="Conversation filters">
             <button class="sh-op-filter is-active" data-filter="all" type="button">All</button>
             <button class="sh-op-filter" data-filter="unread" type="button">Unread <span class="sh-inbox-filter-count is-hidden" id="shInboxUnreadFilterCount"></span></button>
@@ -235,6 +242,7 @@
               <button class="sh-op-selected-meta" id="shSelectedContactInfo" type="button" aria-label="Open contact info" title="Contact info">
                 <span id="shSelectedName" class="sh-chat-contact-name">Conversation</span>
                 <span class="sh-op-selected-sub" id="shSelectedSubline">&#x2014;</span>
+                <span class="sh-op-selected-account is-hidden" id="shSelectedWhatsappAccount"></span>
               </button>
             </div>
 
@@ -1450,6 +1458,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     selectedChannel: null,
     messages: [],
     currentFilter: "all",
+    whatsappAccountFilter: "all",
     searchTerm: "",
     isLoadingChannels: false,
     isLoadingMessages: false,
@@ -1568,6 +1577,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const pushBellBtn = byId("shPushBellBtn");
   const channelList = byId("shChannelList");
   const searchInput = byId("shSearchInput");
+  const whatsappAccountFilter = byId("shWhatsappAccountFilter");
   const filterButtons = Array.from(appRoot.querySelectorAll(".sh-op-filter"));
 
   const chatEmpty = byId("shChatEmpty");
@@ -1575,6 +1585,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const selectedAvatar = byId("shSelectedAvatar");
   const selectedName = byId("shSelectedName");
   const selectedSubline = byId("shSelectedSubline");
+  const selectedWhatsappAccount = byId("shSelectedWhatsappAccount");
   const selectedTypePill = byId("shSelectedTypePill");
   const selectedWindowPill = byId("shSelectedWindowPill");
   const whatsappCallBtn = byId("shWhatsappCallBtn");
@@ -8161,10 +8172,51 @@ Once received, our team will prepare the quotation accordingly.`
     }
   }
 
+  // Only accounts on conversations authorized by Odoo are offered. The customer
+  // whatsapp_number is never used as the business account's phone number.
+  function whatsappAccountIdentity(channel) {
+    if (channel?.channel_type !== "whatsapp") return null;
+    const relation = channel.wa_account_id;
+    const rawId = Array.isArray(relation) ? relation[0] : relation;
+    const id = typeof rawId === "number" || typeof rawId === "string" && /^[1-9]\d*$/.test(rawId.trim()) ? Number(rawId) : NaN;
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return { key: "unavailable", id: null, label: "WhatsApp account unavailable" };
+    }
+    const name = Array.isArray(relation) && typeof relation[1] === "string" ? relation[1].trim() : "";
+    return { key: `account:${id}`, id, label: name ? `${name} · #${id}` : `WhatsApp account #${id}` };
+  }
+
+  function whatsappInboxAccounts() {
+    const accounts = new Map();
+    for (const channel of state.channels) {
+      const account = whatsappAccountIdentity(channel);
+      if (!account) continue;
+      const previous = accounts.get(account.key);
+      if (!previous || previous.label === `WhatsApp account #${account.id}`) accounts.set(account.key, account);
+    }
+    return [...accounts.values()].sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  }
+
+  function syncWhatsappAccountFilter() {
+    const accounts = whatsappInboxAccounts();
+    if (state.whatsappAccountFilter !== "all" && !accounts.some(account => account.key === state.whatsappAccountFilter)) {
+      state.whatsappAccountFilter = "all";
+    }
+    if (!whatsappAccountFilter) return;
+    const options = '<option value="all">All conversations</option>' + accounts.map(account =>
+      `<option value="${escapeHtml(account.key)}">${escapeHtml(account.label)}</option>`
+    ).join("");
+    if (whatsappAccountFilter.innerHTML !== options) whatsappAccountFilter.innerHTML = options;
+    whatsappAccountFilter.value = state.whatsappAccountFilter;
+  }
+
   function applyFiltersAndRender() {
+    syncWhatsappAccountFilter();
     const term = state.searchTerm.trim().toLowerCase();
 
     state.filteredChannels = state.channels.filter(channel => {
+      const account = whatsappAccountIdentity(channel);
+      if (state.whatsappAccountFilter !== "all" && account?.key !== state.whatsappAccountFilter) return false;
       let matchesType = false;
 
       if (state.currentFilter === "all") {
@@ -8193,6 +8245,7 @@ Once received, our team will prepare the quotation accordingly.`
       const haystack = [
         channelDisplayName(channel),
         channelSubtitle(channel),
+        account?.label || "",
         channelLatestPreview(channel),
         channel.whatsapp_number || "",
         Array.isArray(channel.whatsapp_partner_id) ? channel.whatsapp_partner_id[1] : "",
@@ -8224,6 +8277,7 @@ Once received, our team will prepare the quotation accordingly.`
     patchKeyedChildren(channelList, state.filteredChannels.map(channel => {
       const selected = channel.id === state.selectedChannelId;
       const type = channel.channel_type;
+      const account = whatsappAccountIdentity(channel);
       const latest = state.latestMessagesByChannel?.[channel.id];
       const activity = formatInboxActivity(latest?.date || channelLastActivity(channel));
       const waOpen = type === "whatsapp" ? isWhatsappWindowOpen(channel) : null;
@@ -8254,6 +8308,7 @@ Once received, our team will prepare the quotation accordingly.`
               ${escapeHtml(channelLatestPreview(channel))}
             </div>
 
+            ${account ? `<div class="sh-op-list-account" data-whatsapp-account="${escapeHtml(account.key)}" title="${escapeHtml(account.label)}">Via ${escapeHtml(account.label)}</div>` : ""}
             ${renderHubChannelLabels(channel)}
             <div class="sh-op-list-tags">
               <span class="sh-op-list-tag ${type === "whatsapp" ? "wa" : "live"}">
@@ -8340,6 +8395,10 @@ Once received, our team will prepare the quotation accordingly.`
     setTextIfChanged(selectedSubline, type === "whatsapp"
       ? (headerPhone ? "+" + headerPhone : "WhatsApp")
       : channelSubtitle(channel));
+    const account = whatsappAccountIdentity(channel);
+    setTextIfChanged(selectedWhatsappAccount, account ? `Replying via ${account.label}` : "");
+    selectedWhatsappAccount?.classList.toggle("is-hidden", !account);
+    if (selectedWhatsappAccount) selectedWhatsappAccount.title = account?.label || "";
     byId("shTemplateShortcutBtn")?.classList.toggle("is-hidden", type !== "whatsapp");
     byId("shChatCallHistoryBtn")?.classList.toggle("is-hidden", type !== "whatsapp");
 
@@ -12766,6 +12825,11 @@ Once received, our team will prepare the quotation accordingly.`
 
   searchInput.addEventListener("input", event => {
     state.searchTerm = event.target.value || "";
+    applyFiltersAndRender();
+  });
+
+  whatsappAccountFilter?.addEventListener("change", event => {
+    state.whatsappAccountFilter = event.target.value || "all";
     applyFiltersAndRender();
   });
 
@@ -19459,5 +19523,15 @@ html.sh-operator-hub-page:has(#shOperatorApp) #shOperatorApp {
 #shOperatorApp #shWhatsappCallTransferBtn:disabled { opacity: .55; cursor: default; }
 #shOperatorApp #shWhatsappCallTransferCancelBtn { margin-top: 10px; min-height: 40px; border: 1px solid currentColor; border-radius: 999px; background: transparent; color: inherit; padding: 8px 14px; font: inherit; font-size: 13px; }
 #shOperatorApp #shWhatsappCallTransferCancelBtn.is-hidden { display: none !important; }
+</style>
+
+<style id="shWhatsappAccountStyles">
+#shOperatorApp .sh-op-account-filter { display: flex; align-items: center; gap: 8px; margin: 0 16px 12px; color: var(--sh-muted, #667781); font: 500 12px/1.4 var(--tg-font, sans-serif); }
+#shOperatorApp .sh-op-account-filter > span { flex: 0 0 auto; }
+#shOperatorApp #shWhatsappAccountFilter { flex: 1 1 auto; min-width: 0; min-height: 36px; width: 100%; padding: 6px 8px; border: 1px solid var(--sh-page-line, #dce5df); border-radius: 8px; background: var(--sh-page, #fff); color: var(--sh-ink, #17231c); font: inherit; text-overflow: ellipsis; }
+#shOperatorApp #shWhatsappAccountFilter:focus-visible { outline: 2px solid var(--sh-accent, #00876b); outline-offset: 2px; }
+#shOperatorApp .sh-op-list-account { display: block; margin-top: 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--sh-muted, #667781); font: 500 11px/1.35 var(--tg-font, sans-serif); }
+#shOperatorApp .sh-op-selected-account { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: var(--sh-muted, #667781); font: 500 10px/1.3 var(--tg-font, sans-serif); }
+#shOperatorApp .sh-op-selected-account.is-hidden { display: none !important; }
 </style>
 </section>
