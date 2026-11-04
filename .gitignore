@@ -33,3 +33,7 @@ android/operatorhub/verification/r13/
 verification/completion-current/
 android/**/build
 android/**/build.recovered-source-copy/
+
+# Private Cloudflare credentials and local Durable Object state.
+cloudflare/**/.dev.vars*
+cloudflare/**/.wrangler/

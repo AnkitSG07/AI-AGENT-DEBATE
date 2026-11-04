@@ -101,7 +101,7 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
   let sentCount = 0, failedCount = 0;
 
   async function registryCall(method, ...args) {
-    if (!deviceRegistry || !['file', 'firestore'].includes(storageMode) || typeof deviceRegistry[method] !== 'function') {
+    if (!deviceRegistry || !['file', 'firestore', 'cloudflare'].includes(storageMode) || typeof deviceRegistry[method] !== 'function') {
       throw fail(503, 'Android device storage is temporarily unavailable.');
     }
     try { return await deviceRegistry[method](...args); }
@@ -295,9 +295,9 @@ export function createAndroidPushBridge({ env = process.env, fetchImpl = globalT
       }
       return { ok: true, enabled: config.enabled, enrollmentEnabled, version: ANDROID_PUSH_VERSION,
         packageName: config.packageName, firebase: config.enabled ? config.firebase : null, storageAvailable,
-        capabilities: { enrollmentInvitations: useExternalRegistry && storageMode === 'firestore' &&
+        capabilities: { enrollmentInvitations: useExternalRegistry && ['firestore', 'cloudflare'].includes(storageMode) &&
           typeof deviceRegistry?.issueEnrollment === 'function', deviceLeaseRenewal: !useExternalRegistry ||
-          (['file', 'firestore'].includes(storageMode) && typeof deviceRegistry?.renewLease === 'function') },
+          (['file', 'firestore', 'cloudflare'].includes(storageMode) && typeof deviceRegistry?.renewLease === 'function') },
         deviceLeaseTtlMs: TOKEN_TTL_MS };
     }));
     app.post(`${PREFIX}/devices/register`, route(async req => {

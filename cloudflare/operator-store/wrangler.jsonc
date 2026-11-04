@@ -1,0 +1,16 @@
+{
+  "name": "sh-chat-state",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "OPERATOR_STORE", "class_name": "OperatorStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OperatorStore"] }],
+  "vars": {
+    "SH_STORE_PREFIX": "sh_operator",
+    "SH_STORE_TENANT": "smart-handicrafts"
+  },
+  "observability": { "enabled": false }
+}

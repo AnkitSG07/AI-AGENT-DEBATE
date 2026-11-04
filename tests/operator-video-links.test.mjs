@@ -13,6 +13,28 @@ function fixture(t, enabled = true) {
   return {service, get turnCalls() {return turnCalls;}, advance(ms) {now += ms;}};
 }
 function identity(url) { const [id, role, token] = new URL(url).hash.slice(1).split('.'); return {id, role, token, clientId: 'client-identity-' + role}; }
+test('storage cutover holds a pending room create and reauthenticates after release without ending an existing room', async t => {
+  const f = fixture(t);
+  await f.service.create({deviceId:'existing'}, {requestId:'existing-video-0001'});
+  const existing = [...f.service.rooms.values()][0];
+  let authorized = 0, revoke = false, finishFirst;
+  const first = new Promise(resolve => { finishFirst = resolve; });
+  f.service.authorize = async () => {
+    authorized++;
+    if (authorized === 1) await first;
+    if (revoke) throw Object.assign(Error('Device revoked'), {code:'DEVICE_AUTH_REQUIRED'});
+    return {deviceId:'pending', nativeBuild:25};
+  };
+  const pending = f.service.create({}, {requestId:'pending-video-0001'});
+  const release = f.service.pauseStorageAdmission(), releaseNested = f.service.pauseStorageAdmission();
+  finishFirst(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.service.rooms.size, 1); assert.equal(existing.ended, false);
+  release(); release(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(authorized, 1); assert.equal(f.service.rooms.size, 1);
+  revoke = true; releaseNested();
+  await assert.rejects(pending, {code:'DEVICE_AUTH_REQUIRED'});
+  assert.equal(authorized, 2); assert.equal(f.service.rooms.size, 1); assert.equal(existing.ended, false);
+});
 async function session(f) {
   const links = await f.service.create({}, {requestId: 'request-video-0001'});
   return {links, operator: identity(links.operatorUrl), customer: identity(links.customerUrl)};

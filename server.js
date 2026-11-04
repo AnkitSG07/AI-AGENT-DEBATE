@@ -3,7 +3,7 @@ import { createOperatorAiSwitch } from './operator-ai-switch.js';
 import { createMessageNotificationWorker } from './operator-message-worker.js';
 import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
-import { createOperatorFirestoreRuntime } from "./operator-firestore-runtime.js";
+import { createOperatorStorageRuntime } from "./operator-storage-runtime.js";
 import { createOperatorMediaGateway, nativeCallHistoryEvent } from "./operator-media-gateway.js";
 import { createNativeCallRuntime } from "./call-runtime/startup.mjs";
 import { createOperatorCallPermission } from "./operator-call-permission.js";
@@ -25371,7 +25371,7 @@ process.on("unhandledRejection", (reason) => {
 
 // Native enrollment is explicit and server authenticated. Device tokens never
 // enter the Odoo embed, and this adapter never exposes SDP through native push.
-const operatorFirestoreRuntime = createOperatorFirestoreRuntime();
+const operatorFirestoreRuntime = createOperatorStorageRuntime();
 const operatorAiReplyAuth = createOperatorAiReplyAuth({
   secret: process.env.PROFILE_SESSION_SECRET || '',
   getState: () => aiModeGlobalState,
@@ -25444,7 +25444,13 @@ operatorMediaGateway.mount(app);
 operatorCallPermission.mount(app);
 androidPushBridge.registerRoutes(app);
 operatorReportingRuntime.mount(app);
-registerOperatorAdminRoutes(app, {
+if (operatorFirestoreRuntime.migration) {
+  operatorFirestoreRuntime.migration.assertNoActiveVideoCalls =
+    () => !operatorMediaGateway.hasActiveVideoCalls();
+  operatorFirestoreRuntime.migration.beginVideoCutoverGuard =
+    () => operatorMediaGateway.beginVideoCutoverGuard();
+}
+const operatorAdminRuntime = registerOperatorAdminRoutes(app, {
   firestoreRuntime: operatorFirestoreRuntime,
   mediaGateway: operatorMediaGateway,
   authorize: authorizeOperatorAdmin
@@ -25493,6 +25499,7 @@ function closeOperatorServices() {
     ]);
     clearTimeout(drainTimeout);
     operatorHttpServer.closeAllConnections?.();
+    await operatorAdminRuntime.close();
     await operatorFirestoreRuntime.close();
     clearTimeout(forceExit);
   })().catch(() => console.warn("Operator shutdown left durable work for the next server instance."));

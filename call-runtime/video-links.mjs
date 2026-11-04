@@ -19,13 +19,36 @@ export class VideoLinks {
   enabled() {
     return this.env.SH_VIDEO_LINKS_ENABLED === 'true' && !!this.env.SH_VIDEO_TURN_KEY_ID && !!this.env.SH_VIDEO_TURN_API_TOKEN;
   }
+  // Only a supervised storage cutover uses this gate. Existing rooms keep
+  // their media/signaling; new room creation resumes with fresh device auth.
+  pauseStorageAdmission() {
+    if (!this.storageAdmission) {
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      this.storageAdmission = { promise, resolve, count: 0 };
+    }
+    const gate = this.storageAdmission; gate.count++;
+    let released = false;
+    return () => {
+      if (released) return; released = true;
+      if (--gate.count === 0) {
+        if (this.storageAdmission === gate) this.storageAdmission = null;
+        gate.resolve();
+      }
+    };
+  }
   prune() {
     for (const [id, room] of this.rooms) if (this.now() > room.expiresAt || room.ended && this.now() - room.endedAt > 60000) { this.end(room); this.rooms.delete(id); }
     for (const [id, row] of this.limits) if (this.now() > row.until) this.limits.delete(id);
   }
   async create(context, body) {
     requireValue(this.enabled(), 'VIDEO_NOT_CONFIGURED', 'Video links need the free TURN service configured first.', 501);
-    const actor = await this.authorize(context); this.prune();
+    let actor = await this.authorize(context);
+    while (this.storageAdmission) {
+      await this.storageAdmission.promise;
+      actor = await this.authorize(context);
+    }
+    this.prune();
     requireValue(actor.nativeBuild >= 24, 'VIDEO_UPDATE_REQUIRED', 'Install SH Chat R24 for video links.', 409);
     requireValue(typeof body.requestId === 'string' && /^[A-Za-z0-9_-]{8,100}$/.test(body.requestId), 'INVALID_REQUEST_ID', 'A video request identity is required.', 400);
     const prior = [...this.rooms.values()].find(r => r.deviceId === actor.deviceId && r.requestId === body.requestId);

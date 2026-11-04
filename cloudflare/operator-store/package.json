@@ -1,0 +1,11 @@
+{
+  "name": "sh-chat-operator-store",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": { "miniflare": "4.20260730.0", "wrangler": "4.157.0" }
+}

@@ -1,10 +1,13 @@
 // Administration uses the existing signed SUDO profile session. A public native
 // bearer cannot issue enrollment invitations or inspect another device token.
+import { createStorageMigrationAdministration } from './operator-storage-admin.js';
 export function registerOperatorAdminRoutes(app, { firestoreRuntime, mediaGateway,
-  authorize, env = process.env, now = Date.now } = {}) {
+  authorize, env = process.env, now = Date.now,
+  migrationAdministrationFactory = createStorageMigrationAdministration } = {}) {
   const prefix = '/api/operator-android/admin';
   const origin = new URL(env.APP_URL || 'https://ai-agent-debate.onrender.com').origin;
   const registry = firestoreRuntime?.deviceRegistry;
+  const storageMigration = migrationAdministrationFactory({ runtime: firestoreRuntime, env });
   const rates = new Map();
   const failure = (status, message) => Object.assign(new Error(message), { status, safe: true });
   const route = handler => async (req, res) => {
@@ -25,11 +28,13 @@ export function registerOperatorAdminRoutes(app, { firestoreRuntime, mediaGatewa
       }
       res.json({ ok: true, ...await handler(req) });
     } catch (error) {
-      const status = error.safe || error.registryError ? Number(error.status) || 503 : 503;
+      const status = error.safe || error.registryError || error.storageMigrationError ? Number(error.status) || 503 : 503;
       res.status(status).json({ ok: false, error: error.safe || error.registryError && status < 500 ? error.message : 'The administration service is temporarily unavailable.' });
     }
   };
   app.get('/operator-admin', (req, res) => res.redirect(302, '/operator-admin.html'));
+  app.get(`${prefix}/storage-migration`, route(() => storageMigration.status()));
+  app.post(`${prefix}/storage-migration`, route(req => storageMigration.run(req.body?.action)));
   app.get(`${prefix}/status`, route(async () => ({
     storage: firestoreRuntime.backend, storageAvailable: await registry.checkAvailability(),
     metaSignatureConfigured: mediaGateway.appSecretConfigured,
@@ -61,4 +66,5 @@ export function registerOperatorAdminRoutes(app, { firestoreRuntime, mediaGatewa
     if (req.body?.confirmDeviceId !== req.params.deviceId) throw failure(400, 'Confirm the exact registered device.');
     return registry.revokeDevice(req.params.deviceId);
   }));
+  return { close: () => storageMigration.close() };
 }

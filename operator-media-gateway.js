@@ -55,7 +55,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     env.WHATSAPP_CALL_PHONE_NUMBER_ID || env.PHONE_NUMBER_ID || '').trim();
   const unavailable = () => new MediaError('NATIVE_CALLS_UNAVAILABLE', 'Native calling is not configured on the server yet.', 503);
   let bundle = null, mediaStore = null, timer = null, work = null, probe = null, probeVerified = false, nextProbeAt = 0;
-  const persistenceExpected = env.SH_ANDROID_REGISTRY_BACKEND === 'firestore' || !!env.LIVEKIT_URL;
+  const persistenceExpected = ['firestore', 'cloudflare'].includes(env.SH_ANDROID_REGISTRY_BACKEND) || !!env.LIVEKIT_URL;
   const workerId = `render_${randomUUID()}`;
   const publishedStates = new Map();
   const historyWork = new Map();
@@ -249,6 +249,15 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
   }
   return {
     appSecretConfigured: !!appSecret,
+    // Server-only migration check. No participant identity, room token or SDP
+    // is exposed through the administration status response.
+    hasActiveVideoCalls() {
+      return !!bundle?.runtime?.tools?.video &&
+        [...bundle.runtime.tools.video.rooms.values()].some(room => !room.ended);
+    },
+    beginVideoCutoverGuard() {
+      return bundle?.runtime?.tools?.video?.pauseStorageAdmission() || (() => {});
+    },
     verifyWebhook: req => verifyMetaWebhook(req, appSecret),
     async verifyConfiguration() { return verifyConfiguration(); },
     mount(app) {
