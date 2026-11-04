@@ -59,7 +59,7 @@ export default {
       // Authenticate at the public edge before invoking a billable Durable Object.
       // The DO authenticates again rather than trusting a forgeable proxy header.
       await authenticate(request.clone(),env);
-      return await env.OPERATOR_STORE.get(env.OPERATOR_STORE.idFromName(tenant)).fetch(request);
+      return await env.OPERATOR_STORE.get(env.OPERATOR_STORE.idFromName(tenant), {locationHint:'wnam'}).fetch(request);
     }catch(error){return errorResponse(error);}
   }
 };

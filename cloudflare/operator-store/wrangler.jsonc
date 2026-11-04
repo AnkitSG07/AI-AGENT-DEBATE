@@ -11,7 +11,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["OperatorStore"] }],
   "vars": {
     "SH_STORE_PREFIX": "sh_operator",
-    "SH_STORE_TENANT": "smart-handicrafts"
+    "SH_STORE_TENANT": "smart-handicrafts-wnam-v1"
   },
   "observability": { "enabled": false }
 }
