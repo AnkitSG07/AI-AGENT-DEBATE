@@ -65,8 +65,22 @@ export function createTerminalReportCollector({ mediaStore, reportStore, source 
     return { status: result.created ? 'created' : 'exists', activitiesCreated };
   }
   async function scan({ workerId, limit = 16 } = {}) {
-    requireValue(source?.page && id(workerId) && Number.isInteger(limit) && limit >= 1 && limit <= 32,
+    requireValue(source?.page && typeof reportStore.readCollection === 'function' && id(workerId) && Number.isInteger(limit) && limit >= 1 && limit <= 32,
       'INVALID_REPORT_SOURCE', 'A bounded terminal source and worker identity are required.');
+    // Idle repair must stay read-only. This fresh bounded preflight is only a
+    // hint: any work takes the existing claim + reread path below. A new row
+    // arriving after an empty read remains discoverable on the next periodic
+    // or restarted pass because no durable cursor was advanced here.
+    const discovery = await reportStore.readCollection();
+    if (discovery.busy) return { busy: true, processed: 0 };
+    const [preview, pending] = await Promise.all([
+      source.page({ cursor: discovery.cursor, limit }), reportStore.deferredSessions(limit)
+    ]);
+    requireValue(Array.isArray(preview?.sessionIds) && preview.sessionIds.length <= limit &&
+      Array.isArray(pending) && pending.length <= limit && typeof preview.hasMore === 'boolean' &&
+      (!preview.hasMore || preview.sessionIds.length > 0),
+    'INVALID_REPORT_SOURCE', 'Terminal discovery must return a bounded page.');
+    if (!preview.sessionIds.length && !pending.length) return { busy: false, processed: 0, hasMore: false, results: [] };
     const claim = await reportStore.claimCollection(workerId);
     if (!claim) return { busy: true, processed: 0 };
     let nextCursor = claim.cursor;

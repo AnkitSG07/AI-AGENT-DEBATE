@@ -648,7 +648,7 @@ test("collector persists deferred work and cursor, retries settlement, and ignor
   const second = await restarted.scan({ workerId: "two", limit: 2 });
   assert.equal(second.results[0].status, "created");
   assert.equal(f.reportRows().length, 1);
-  assert.equal(pages, 2);
+  assert.equal(pages, 4);
   const legacy = createTerminalReportCollector({ mediaStore: { durable: true, get: /* @__PURE__ */ __name(async () => ({ ...terminal, terminal: { ...terminal.terminal, nativeOnly: true } }), "get") }, reportStore: f.store });
   assert.equal((await legacy.collectSession("legacy")).status, "ignored");
 });

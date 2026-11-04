@@ -214,14 +214,31 @@ export function createFirestoreReportStore({ firestore, tenantId = 'smart-handic
       });
     });
   }
+  function collectionState(snapshot) {
+    const state = snapshot.exists ? snapshot.data() : { schema: 1, tenantId, cursor: null, claimId: '', workerId: '', leaseUntilMs: 0, generation: 0 };
+    if (!state || state.schema !== 1 || state.tenantId !== tenantId || !time(state.leaseUntilMs) ||
+        !Number.isSafeInteger(state.generation) || state.generation < 0 ||
+        !(state.cursor === null || state.cursor && HASH.test(state.cursor.documentId) && time(state.cursor.endedAtMs)) ||
+        typeof state.claimId !== 'string' || typeof state.workerId !== 'string' ||
+        (state.leaseUntilMs > 0 ? !id(state.claimId) || !id(state.workerId) : state.claimId !== '' || state.workerId !== '')) throw unavailable();
+    return state;
+  }
+  // A fresh discovery hint only. The mutating pass still claims and rereads its
+  // durable cursor, so another worker's progress never becomes our authority.
+  async function readCollection() {
+    return guarded(async () => {
+      const state = collectionState(await collections.collector.doc('terminal_sessions').get());
+      return { cursor: clone(state.cursor), busy: state.leaseUntilMs > now() };
+    });
+  }
   async function claimCollection(workerId) {
     requireValue(id(workerId), 'INVALID_REPORT_WORKER', 'A collection worker identity is required.');
     const claimId = randomUUID();
     return guarded(() => firestore.runTransaction(async tx => {
       const reference = collections.collector.doc('terminal_sessions'), snapshot = await tx.get(reference), timestamp = now();
-      const state = snapshot.exists ? snapshot.data() : { schema: 1, tenantId, cursor: null, claimId: '', workerId: '', leaseUntilMs: 0, generation: 0 };
-      if (state.schema !== 1 || state.tenantId !== tenantId || !time(state.leaseUntilMs)) throw unavailable();
+      const state = collectionState(snapshot);
       if (state.leaseUntilMs > timestamp) return null;
+      if (!Number.isSafeInteger(state.generation + 1)) throw unavailable();
       const next = { ...state, claimId, workerId, generation: state.generation + 1, leaseUntilMs: timestamp + purgeLeaseMs };
       tx.set(reference, next); return clone(next);
     }));
@@ -230,12 +247,12 @@ export function createFirestoreReportStore({ firestore, tenantId = 'smart-handic
     return guarded(() => firestore.runTransaction(async tx => {
       const reference = collections.collector.doc('terminal_sessions'), snapshot = await tx.get(reference);
       if (!snapshot.exists) return { advanced: false };
-      const state = snapshot.data();
+      const state = collectionState(snapshot);
       if (state.claimId !== claim.claimId || state.generation !== claim.generation || state.workerId !== claim.workerId || state.leaseUntilMs <= now()) return { advanced: false };
       tx.set(reference, { ...state, cursor: clone(cursor), claimId: '', workerId: '', leaseUntilMs: 0 });
       return { advanced: true };
     }));
   }
   return Object.freeze({ durable: true, tenantId, collectionPrefix, append, select, createBatch, getBatch, readBatchRecords, markArchived,
-    claimPurge, deleteChunk, releasePurge, setDeferred, deferredSessions, claimCollection, finishCollection });
+    claimPurge, deleteChunk, releasePurge, setDeferred, deferredSessions, readCollection, claimCollection, finishCollection });
 }

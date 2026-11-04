@@ -33,3 +33,20 @@ a fixed end-to-end call latency.
 
 Provider quotas, Render cold starts, handset background restrictions and external
 media/network latency still apply. No paid plan was enabled for this migration.
+
+## Idle usage
+
+No new messages or calls does not mean zero database requests. The recovery
+watchdog performs an empty due-work read about once per minute; credential
+maintenance checks two collections every five minutes. The report collector also
+checks for missed completed sessions every thirty minutes. Visible phones may
+perform additional authorization and repair reads. The five-second Render health
+heartbeat does not access this database.
+
+An empty report scan now reads its durable cursor and bounded work candidates
+before acquiring a lease. When both the terminal page and deferred queue are
+empty, it returns without writing the lease or progress record. When work exists,
+it still obtains a fresh claim and queries again before collecting. Empty checks
+never advance the cursor, so a concurrent arrival remains recoverable by the next
+scheduled or restarted pass. Call actions and their immediate recovery wakes are
+unchanged.
