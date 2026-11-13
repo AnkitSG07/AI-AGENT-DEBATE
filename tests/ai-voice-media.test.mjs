@@ -87,26 +87,18 @@ function harness(overrides = {}) {
   const delta = (id, bytes, item = 'item', index = 0) => seen.socket.receive({ type: 'response.output_audio.delta',
     response_id: id, item_id: item, content_index: index, delta: bytes.toString('base64') });
   let inputNumber = 0;
-  const commit = () => {
+  const commit = ({ start = false, add = true } = {}) => {
     const id = `input-${++inputNumber}`;
+    if (start) seen.socket.receive({ type: 'input_audio_buffer.speech_started', item_id: id });
     seen.socket.receive({ type: 'input_audio_buffer.committed', item_id: id });
-    seen.socket.receive({ type: 'conversation.item.added', item: { id, role: 'user', content: [{ type: 'input_audio' }] } });
-    const check = sent(seen, 'response.create').at(-1).response;
-    assert.equal(check.conversation, 'none');
-    assert.deepEqual(check.input.at(-1), { type: 'item_reference', id });
-    return { id, check };
+    if (add) seen.socket.receive({ type: 'conversation.item.added', item: { id, role: 'user', content: [{ type: 'input_audio' }] } });
+    return id;
   };
-  const verdict = ({ id, check }, text = 'CALLER') => {
-    const metadata = check.metadata;
-    seen.socket.receive({ type: 'response.created', response: { id: 'check-' + id, metadata } });
-    seen.socket.receive({ type: 'response.done', response: { id: 'check-' + id, metadata, status: 'completed',
-      output: [{ content: [{ type: 'output_text', text }] }] } });
-  };
-  return { seen, start, publication, response, responseStarted, delta, commit, verdict };
+  return { seen, start, publication, response, responseStarted, delta, commit };
 }
 
 const sent = (state, type) => state.sent.filter(event => event.type === type);
-const replies = state => sent(state, 'response.create').filter(event => event.response?.conversation !== 'none');
+const replies = state => sent(state, 'response.create');
 
 await test('prepares the room and session before greeting and only forwards exact caller PCM', async () => {
   const h = harness();
@@ -190,7 +182,7 @@ await test('filters the pilot caller track before Realtime and falls back if the
   }
 });
 
-await test('preserves PCM offsets across deltas and cuts queued audio on a caller interruption', async () => {
+await test('preserves PCM offsets across deltas and leaves playback intact on overlapping speech', async () => {
   const h = harness();
   const voice = await h.start();
   const caller = h.publication();
@@ -210,20 +202,18 @@ await test('preserves PCM offsets across deltas and cuts queued audio on a calle
   assert.equal(h.seen.frames[1].data[0], -222);
   assert.equal(h.seen.frames.length, 2);
   h.seen.source.queuedDuration = 5;
-  h.seen.socket.receive({ type: 'input_audio_buffer.speech_started' });
-  assert.equal(h.seen.cleared, 0, 'unconfirmed speech cannot cut playout');
-  h.verdict(h.commit());
-  assert.equal(h.seen.cleared, 1);
-  assert.equal(sent(h.seen, 'response.cancel')[0].response_id, 'greet');
-  assert.deepEqual(sent(h.seen, 'conversation.item.truncate'), [{ type: 'conversation.item.truncate', event_id: 'ai-voice-truncate',
-    item_id: 'item', content_index: 0, audio_end_ms: 15 }]);
+  const overlap = h.commit({ start: true });
+  assert.equal(h.seen.cleared, 0);
+  assert.deepEqual(sent(h.seen, 'response.cancel'), []);
+  assert.deepEqual(sent(h.seen, 'conversation.item.truncate'), []);
+  assert.equal(sent(h.seen, 'conversation.item.delete')[0].item_id, overlap);
+  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: overlap });
   pendingCapture.resolve();
-  h.delta('greet', pcm);
   assert.equal(replies(h.seen).length, 1);
-  h.seen.socket.receive({ type: 'response.done', response: { id: 'greet', status: 'cancelled', output: [] } });
+  h.response('greet');
   await setImmediate();
-  assert.equal(h.seen.frames.length, 2);
-  assert.equal(replies(h.seen).length, 2);
+  assert.equal(h.seen.frames.length, 14);
+  assert.equal(replies(h.seen).length, 1);
   await voice.close();
 });
 
@@ -259,47 +249,36 @@ await test('side talk stays silent while a reply plays, and its audio is removed
   voice.speak();
   await setImmediate();
   h.responseStarted('greet');
-  h.seen.socket.receive({ type: 'input_audio_buffer.speech_started' });
   h.delta('greet', Buffer.alloc(960 * 13));
   await setImmediate();
   assert.equal(h.seen.frames.length, 14);
-  const noise = h.commit();
-  h.verdict(noise, 'IGNORE');
+  const noise = h.commit({ start: true });
   assert.equal(h.seen.cleared, 0);
   assert.deepEqual(sent(h.seen, 'response.cancel'), []);
-  assert.deepEqual(sent(h.seen, 'conversation.item.delete').map(event => event.item_id), [noise.id]);
+  assert.deepEqual(sent(h.seen, 'conversation.item.delete').map(event => event.item_id), [noise]);
   h.response('greet');
-  const question = h.commit();
-  h.verdict(question);
+  h.commit();
   assert.equal(replies(h.seen).length, 1, 'wait until the unwanted item has been removed');
-  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: noise.id });
+  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: noise });
   assert.equal(replies(h.seen).length, 2);
-  const following = h.commit();
-  assert.deepEqual(following.check.input, [{ type: 'item_reference', id: question.id }, { type: 'item_reference', id: following.id }]);
-  h.verdict(following, 'IGNORE');
   await voice.close();
-  assert.deepEqual(stats, [{ rebufferCount: 0, interruptions: 0, ignoredTurns: 2, callerCheckFailures: 0 }]);
+  assert.deepEqual(stats, [{ rebufferCount: 0, ignoredTurns: 1, callerTurns: 1 }]);
 });
 
-await test('a timed-out caller check does not cancel the voice or block the next accepted question', async () => {
+await test('a caller question after the greeting starts a normal audio reply without a second model request', async () => {
   const h = harness();
-  const voice = await h.start({ callerCheckTimeoutMs: 15 });
+  const voice = await h.start();
   const caller = h.publication();
   caller.subscribe();
   caller.frame();
   voice.speak();
   await setImmediate();
   h.responseStarted('greet');
-  const expired = h.commit();
-  await setTimeout(30);
-  assert.deepEqual(sent(h.seen, 'conversation.item.delete').map(event => event.item_id), [expired.id]);
-  h.verdict(expired);
-  assert.equal(replies(h.seen).length, 1);
-  assert.deepEqual(sent(h.seen, 'response.cancel'), []);
-  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: expired.id });
   h.response('greet');
-  h.verdict(h.commit());
+  h.commit({ add: false });
   assert.equal(replies(h.seen).length, 2);
+  assert.equal(replies(h.seen)[1].response, undefined);
+  assert.deepEqual(sent(h.seen, 'response.cancel'), []);
   await voice.close();
 });
 
@@ -323,7 +302,7 @@ await test('a source underrun re-buffers before feeding the next partial burst',
   await setImmediate();
   assert.equal(h.seen.frames.length, 27);
   await voice.close();
-  assert.deepEqual(stats, [{ rebufferCount: 1, interruptions: 0, ignoredTurns: 0, callerCheckFailures: 0 }]);
+  assert.deepEqual(stats, [{ rebufferCount: 1, ignoredTurns: 0, callerTurns: 0 }]);
 });
 
 await test('passes tool arguments once, denies unlisted names, and follows a completed tool result', async () => {
@@ -336,7 +315,7 @@ await test('passes tool arguments once, denies unlisted names, and follows a com
   await setImmediate();
   h.responseStarted('greet');
   h.response('greet');
-  h.verdict(h.commit());
+  h.commit();
   h.responseStarted('lookup');
   const calls = [
     { type: 'function_call', name: 'lookup_catalog', arguments: '{"query":"lamp"}', call_id: 'allowed' },
@@ -365,7 +344,6 @@ await test('background conversation gets no audible follow-up or business tool e
   h.responseStarted('greet');
   h.response('greet');
   const noise = h.commit();
-  h.verdict(noise);
   h.responseStarted('background');
   h.response('background', [
     { type: 'function_call', name: 'wait_for_user', arguments: '{}', call_id: 'wait' },
@@ -375,9 +353,9 @@ await test('background conversation gets no audible follow-up or business tool e
   assert.equal(replies(h.seen).length, 2);
   assert.deepEqual(h.seen.tool, []);
   assert.equal(sent(h.seen, 'conversation.item.create')[0].item.output, '{"status":"listening"}');
-  assert.deepEqual(sent(h.seen, 'conversation.item.delete').map(event => event.item_id), [noise.id]);
-  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: noise.id });
-  h.verdict(h.commit());
+  assert.deepEqual(sent(h.seen, 'conversation.item.delete').map(event => event.item_id), [noise]);
+  h.seen.socket.receive({ type: 'conversation.item.deleted', item_id: noise });
+  h.commit();
   assert.equal(replies(h.seen).length, 3);
   await voice.close();
 });
@@ -393,13 +371,13 @@ await test('invalidates a second pending tool when the caller interrupts the fir
   await setImmediate();
   h.responseStarted('greet');
   h.response('greet');
-  h.verdict(h.commit());
+  h.commit();
   h.responseStarted('lookup');
   h.response('lookup', ['first', 'second'].map(call_id => ({ type: 'function_call', name: 'lookup_catalog', arguments: '{}', call_id })));
   assert.equal(h.seen.tool[0].signal.aborted, false);
   h.seen.socket.receive({ type: 'input_audio_buffer.speech_started' });
   assert.equal(h.seen.tool[0].signal.aborted, false);
-  h.verdict(h.commit());
+  h.commit();
   assert.equal(h.seen.tool[0].signal.aborted, true);
   held.resolve({ status: 'ok' });
   await setImmediate();
