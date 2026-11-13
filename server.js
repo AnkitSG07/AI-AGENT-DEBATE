@@ -22558,8 +22558,10 @@ function whatsappCallCandidateNames(row = {}) {
   out.push(row?.raw?.odoo_call_log?.x_studio_x_customer_name);
   out.push(Array.isArray(row?.raw?.odoo_call_log?.x_studio_x_partner_id) ? row.raw.odoo_call_log.x_studio_x_partner_id[1] : "");
   const contacts = row?.raw?.contacts || row?.raw?.call?.contacts || [];
-  if (Array.isArray(contacts)) {
-    for (const c of contacts) out.push(c?.profile?.name || c?.name || "");
+  const phone = whatsappCallCleanPhone(row.customer_phone || row.customerPhone || row.wa_id);
+  if (phone && Array.isArray(contacts)) {
+    const contact = contacts.find((entry) => whatsappCallCleanPhone(entry?.wa_id) === phone);
+    out.push(contact?.profile?.name || contact?.name);
   }
   return out.filter(Boolean);
 }
@@ -22697,6 +22699,32 @@ function whatsappCallProviderId(row = {}) {
   // not another provider ID which happens to start with the same characters.
   const suffix = event && /^\d+$/.test(stamp) ? `-${event}-${stamp}` : "";
   return suffix && id.endsWith(suffix) ? id.slice(0, -suffix.length) : id;
+}
+
+function whatsappCallLogsWithVerifiedCaller(rows) {
+  const callers = new Map();
+  for (const row of rows) {
+    if (row?.meta_verified !== true) continue;
+    const id = whatsappCallProviderId(row);
+    const phone = whatsappCallCleanPhone(row.customer_phone || row.wa_id);
+    if (!id || !/^[1-9]\d{6,14}$/.test(phone)) continue;
+    const caller = callers.get(id);
+    if (!caller) callers.set(id, { phone, names: [] });
+    else if (caller.phone !== phone) callers.set(id, { phone: "", names: [] });
+  }
+  for (const row of rows) {
+    const caller = callers.get(whatsappCallProviderId(row));
+    if (caller?.phone && caller.phone === whatsappCallCleanPhone(row.customer_phone || row.wa_id)) caller.names.push(row);
+  }
+  for (const caller of callers.values()) {
+    if (!caller.phone) continue;
+    const name = whatsappCallBestNameFromRows(caller.names, caller.phone);
+    caller.label = whatsappCallValidDisplayName(name, caller.phone) || `+${caller.phone}`;
+  }
+  return rows.map((row) => {
+    const caller = callers.get(whatsappCallProviderId(row));
+    return caller?.label ? { ...row, customer_phone: caller.phone, customer_name: caller.label } : row;
+  });
 }
 
 function whatsappCallMatchesId(row = {}, callId = "") {
@@ -25293,13 +25321,13 @@ app.get("/api/whatsapp-calls/logs", async (req, res) => {
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
     const phone = whatsappCallCleanPhone(req.query.phone || req.query.wa_id || "");
     const channelId = Number(req.query.channelId || req.query.channel_id || 0);
-    let calls = await readWhatsappCallLogs();
+    let calls = whatsappCallLogsWithVerifiedCaller(await readWhatsappCallLogs());
 
     if (phone) {
       const last10 = phone.slice(-10);
       calls = calls.filter((row) => {
         const rowPhone = whatsappCallCleanPhone(row?.customer_phone || row?.wa_id || row?.from || row?.to || "");
-        return rowPhone.endsWith(last10) || last10.endsWith(rowPhone.slice(-10));
+        return !!rowPhone && (rowPhone.endsWith(last10) || last10.endsWith(rowPhone.slice(-10)));
       });
     }
 

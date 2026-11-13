@@ -413,6 +413,31 @@ test('signed WhatsApp call history links the exact caller and preserves identity
   assert.fail('The exact verified caller was not projected onto both history rows: ' + JSON.stringify(observed));
 });
 
+test('signed call history shows a verified number before Odoo has a caller name', async t => {
+  const f = await startFixture({ callbacks: true }); t.after(f.close);
+  const token = await f.grant(await f.login()), timestamp = Math.floor(Date.now() / 1000);
+  const caller = '919000000011', callId = 'fixture-unnamed-caller';
+  await f.scenario({ callerChannels: [] });
+  const send = async call => {
+    const body = { field: 'calls', value: {
+      metadata: { display_phone_number: '+919000000002', phone_number_id: '789001' },
+      contacts: [{ wa_id: '919000000012', profile: { name: 'Unrelated contact' } }], calls: [call] } };
+    const signature = 'sha256=' + createHmac('sha256', 'fixture-meta-app-secret').update(JSON.stringify(body)).digest('hex');
+    const response = await f.request('/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': signature } });
+    assert.equal(response.status, 200, response.text);
+  };
+  await send({ id: callId, event: 'connect', direction: 'USER_INITIATED', from: caller, to: '919000000002', timestamp });
+  await send({ id: callId, event: 'terminate', direction: 'USER_INITIATED', to: '919000000002', timestamp: timestamp + 1 });
+  const history = await f.request(`/api/whatsapp-calls/logs?limit=10&phone=${caller}`, { token });
+  assert.equal(history.status, 200, history.text);
+  const rows = history.data.calls.filter(row => row.call_id === callId);
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(row.customer_phone, caller);
+    assert.equal(row.customer_name, `+${caller}`);
+  }
+});
+
 test('actual training routes require administrator approval and public feedback remains pending/public', async t => {
   const f = await startFixture(); t.after(f.close); const sudo = await f.login('SUDO'), ordinary = await f.login();
   const body = { ruleText: 'Fixture rule only', approvedBy: 'forged-admin' };

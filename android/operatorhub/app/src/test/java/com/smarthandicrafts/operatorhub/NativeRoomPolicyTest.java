@@ -4,6 +4,17 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NativeRoomPolicyTest {
+    @Test public void callerTitleShowsVerifiedNumberWithOrWithoutAContactName() {
+        String phone = "919000000011", number = "+" + phone;
+        assertEquals(number, NativeRoomPolicy.callerLabel(phone, "", "Customer"));
+        assertEquals(number, NativeRoomPolicy.callerLabel(phone, "", "Customer · " + number));
+        assertEquals(number, NativeRoomPolicy.callerLabel(phone, "", number));
+        assertEquals("Exact caller · " + number, NativeRoomPolicy.callerLabel(phone, "Exact caller", "Customer"));
+        assertEquals("Exact caller · " + number, NativeRoomPolicy.callerLabel(phone, "", "Exact caller"));
+        assertEquals("Exact caller · " + number, NativeRoomPolicy.callerLabel(phone, "", "Exact caller · " + number));
+        assertEquals("", NativeRoomPolicy.callerLabel("invalid", "", "Customer"));
+    }
+
     @Test public void explicitlyMutedSubscribedCustomerCanEstablishTransportWithoutInventedInboundAudio() {
         assertTrue(NativeRoomPolicy.customerMutedTransportReady(1000,10,4,160,0,0,0,true,true,true,true));
         assertFalse(NativeRoomPolicy.mediaReady(1000,10,4,160,0,0,0,true,true));

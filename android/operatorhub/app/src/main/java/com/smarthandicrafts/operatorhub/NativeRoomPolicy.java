@@ -11,6 +11,23 @@ public final class NativeRoomPolicy {
     public static boolean validPhone(String value) {
         return value != null && value.matches("[1-9][0-9]{6,14}");
     }
+    public static String callerLabel(String phone, String contact, String legacyLabel) {
+        String number = validPhone(phone) ? "+" + phone : "";
+        String name = callerName(contact);
+        String label = callerName(legacyLabel);
+        if (number.isEmpty()) return name.isEmpty() ? label : name;
+        String suffix = " · " + number;
+        if (name.isEmpty()) {
+            name = label.endsWith(suffix) ? callerName(label.substring(0, label.length() - suffix.length())) : label;
+        }
+        if (name.isEmpty() || name.equals(number) || name.equals(phone)) return number;
+        return name.endsWith(suffix) ? name : name + suffix;
+    }
+    private static String callerName(String value) {
+        String name = value == null ? "" : value.trim();
+        if (name.matches("(?i)(customer|whatsapp (caller|customer)|unknown.*)")) return "";
+        return name;
+    }
     public static boolean validRoomUrl(String value) {
         try {
             URI uri = new URI(value);

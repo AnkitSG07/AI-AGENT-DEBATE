@@ -85,7 +85,12 @@ test('pilot waits for operators, rechecks freshness and skips other callers', as
   assert.deepEqual(p.events, ['prepared', 'greeting']);
   const session = await f.runtime.locate(callId);
   assert.equal(session.phase, 'ai_connected');
-  assert.equal(nativeCallHistoryEvent({ session, view: await f.runtime.view(session) }).status, 'connected');
+  const view = await f.runtime.view(session);
+  assert.equal(view.customerPhone, callerPhone);
+  assert.equal(view.customerName, `+${callerPhone}`);
+  const history = nativeCallHistoryEvent({ session, view });
+  assert.equal(history.status, 'connected');
+  assert.equal(history.customer_phone, callerPhone);
   await f.runtime.dispatchRingCancellation(callId);
   assert.deepEqual(f.effects.filter(effect => effect.kind === 'notify').map(effect => effect.event), ['incoming', 'ended']);
   await p.fire([...p.timers][0]);

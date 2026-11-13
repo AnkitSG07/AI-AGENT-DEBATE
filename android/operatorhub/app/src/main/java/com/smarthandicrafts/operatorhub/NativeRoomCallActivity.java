@@ -39,6 +39,8 @@ import java.util.UUID;
 
 /** A genuine native call screen; the Odoo WebView can sleep without owning the audio. */
 public final class NativeRoomCallActivity extends Activity {
+    private static final int CALLER_STATUS_ATTEMPTS = 3;
+    private static final long CALLER_STATUS_RETRY_MS = 400;
     private String callId = "", transferId = "", action = "show", phone = "", displayName = "Customer";
     private int channelId;
     private String expectedAttemptId = "";
@@ -324,31 +326,53 @@ public final class NativeRoomCallActivity extends Activity {
 
     private void verifyWaitingCall() {
         if (!HubPolicy.validCallId(callId)) { status.setText("This call is no longer available."); accept.setEnabled(false); return; }
-        NativeStore store = new NativeStore(this); DeviceLeasePolicy.Credential credential = store.credential(); long generation = ++uiGeneration;
-        String selectedId = callId;
+        NativeStore store = new NativeStore(this);
+        verifyWaitingCall(store, store.credential(), ++uiGeneration, callId, 1);
+    }
+
+    private void verifyWaitingCall(NativeStore store, DeviceLeasePolicy.Credential credential, long generation,
+                                   String selectedId, int attempt) {
         HubApplication.IO.execute(() -> {
+            JSONObject result = null;
             try {
-                JSONObject result = callApi.request("/calls/" + Uri.encode(selectedId) + "/status", "GET", null, credential.bearer);
-                JSONObject call = result.optJSONObject("call");
-                runOnUiThread(() -> {
-                    if (isFinishing() || generation != uiGeneration || !store.matchesCredential(credential) || call == null) return;
-                    if (HubPolicy.terminal(call.optString("phase"))) {
-                        String destination = call.optString("customerPhone");
-                        if (NativeRoomPolicy.validPhone(destination)) { phone = destination; dialInput.setText(phone); action = "dial"; showDialer("Call ended. You can call this customer again."); }
-                        else { status.setText("Call ended"); accept.setEnabled(false); }
+                result = callApi.request("/calls/" + Uri.encode(selectedId) + "/status", "GET", null, credential.bearer);
+            } catch (Exception ignored) { }
+            JSONObject call = result == null ? null : result.optJSONObject("call");
+            runOnUiThread(() -> {
+                if (isFinishing() || generation != uiGeneration || !store.matchesCredential(credential)) return;
+                String phase = NativeRoomJson.text(call, "phase");
+                String destination = NativeRoomJson.text(call, "customerPhone");
+                String contact = NativeRoomJson.text(call, "customerContactName");
+                String label = NativeRoomPolicy.callerLabel(destination, contact, NativeRoomJson.text(call, "customerName", NativeRoomJson.text(call, "callerName")));
+                if (!label.isEmpty()) { displayName = label; title.setText(label); }
+                if (NativeRoomPolicy.validPhone(destination)) phone = destination;
+                if (call == null || ("ringing".equals(phase) && !NativeRoomPolicy.validPhone(destination))) {
+                    if (attempt < CALLER_STATUS_ATTEMPTS) {
+                        handler.postDelayed(() -> {
+                            if (!isFinishing() && generation == uiGeneration && store.matchesCredential(credential))
+                                verifyWaitingCall(store, credential, generation, selectedId, attempt + 1);
+                        }, CALLER_STATUS_RETRY_MS);
+                    } else if (call == null) {
+                        status.setText("Check your connection, then tap Accept to verify this call.");
                     }
-                    String customer = call.optString("customerName", call.optString("callerName"));
-                    if (!customer.isEmpty()) { displayName = customer; title.setText(customer); }
-                    JSONObject incomingTransfer = call.optJSONObject("transfer");
-                    if (!transferId.isEmpty() && incomingTransfer != null && "consult".equals(incomingTransfer.optString("mode")))
-                        status.setText("Private handover · customer on hold");
-                    String owner = NativeRoomJson.text(call,"ownerDeviceId");
-                    if (!HubPolicy.terminal(call.optString("phase")) && !owner.isEmpty() && transferId.isEmpty()) {
-                        if (owner.equals(credential.deviceId)) { accept.setText("Resume call"); status.setText("Resume this phone's call audio"); }
-                        else { accept.setEnabled(false); status.setText("This call was answered on another phone."); }
-                    }
-                });
-            } catch (Exception error) { runOnUiThread(() -> { if (!isFinishing() && generation == uiGeneration) status.setText("Check your connection, then tap Accept to verify this call."); }); }
+                }
+                if (call == null) return;
+                if (HubPolicy.terminal(phase)) {
+                    if (NativeRoomPolicy.validPhone(destination)) showDialer("Call ended. You can call this customer again.");
+                    else { status.setText("Call ended"); accept.setEnabled(false); }
+                    return;
+                }
+                JSONObject incomingTransfer = call.optJSONObject("transfer");
+                if (!transferId.isEmpty() && incomingTransfer != null && "consult".equals(incomingTransfer.optString("mode")))
+                    status.setText("Private handover · customer on hold");
+                String owner = NativeRoomJson.text(call, "ownerDeviceId");
+                if ("ai_connected".equals(phase) && transferId.isEmpty()) {
+                    accept.setEnabled(false); status.setText("The automated product desk answered this call.");
+                } else if (!owner.isEmpty() && transferId.isEmpty()) {
+                    if (owner.equals(credential.deviceId)) { accept.setText("Resume call"); status.setText("Resume this phone's call audio"); }
+                    else { accept.setEnabled(false); status.setText("This call was answered on another phone."); }
+                }
+            });
         });
     }
     private void showDialer(String message) {
