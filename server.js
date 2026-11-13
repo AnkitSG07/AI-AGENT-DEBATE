@@ -22620,13 +22620,12 @@ function whatsappCallNameMapFromRows(rows = []) {
   const candidatesByPhone = new Map();
   for (const row of rows || []) {
     for (const phone of whatsappCallPhoneCandidatesFromRow(row)) {
-      const key = whatsappCallLast10(phone);
-      if (!key || whatsappCallIsOwnNumber(phone)) continue;
+      if (whatsappCallIsOwnNumber(phone)) continue;
       for (const candidate of whatsappCallCandidateNames(row)) {
         const item = whatsappCallCandidateNameScore(candidate, row, phone);
         if (!item) continue;
-        const existing = candidatesByPhone.get(key);
-        if (!existing || item.score > existing.score) candidatesByPhone.set(key, item);
+        const existing = candidatesByPhone.get(phone);
+        if (!existing || item.score > existing.score) candidatesByPhone.set(phone, item);
       }
     }
   }
@@ -22701,25 +22700,29 @@ function whatsappCallProviderId(row = {}) {
   return suffix && id.endsWith(suffix) ? id.slice(0, -suffix.length) : id;
 }
 
+function whatsappCallVerifiedCaller(rows) {
+  const phones = new Set(rows.filter((row) => row?.meta_verified === true)
+    .map((row) => whatsappCallCleanPhone(row.customer_phone || row.wa_id))
+    .filter((phone) => /^[1-9]\d{6,14}$/.test(phone)));
+  if (phones.size !== 1) return null;
+  const [phone] = phones;
+  const matches = rows.filter((row) => whatsappCallCleanPhone(row.customer_phone || row.wa_id) === phone);
+  const name = whatsappCallValidDisplayName(whatsappCallBestNameFromRows(matches, phone), phone);
+  return { phone, label: name || `+${phone}` };
+}
+
 function whatsappCallLogsWithVerifiedCaller(rows) {
-  const callers = new Map();
+  const grouped = new Map();
   for (const row of rows) {
-    if (row?.meta_verified !== true) continue;
     const id = whatsappCallProviderId(row);
-    const phone = whatsappCallCleanPhone(row.customer_phone || row.wa_id);
-    if (!id || !/^[1-9]\d{6,14}$/.test(phone)) continue;
-    const caller = callers.get(id);
-    if (!caller) callers.set(id, { phone, names: [] });
-    else if (caller.phone !== phone) callers.set(id, { phone: "", names: [] });
+    if (!id) continue;
+    if (!grouped.has(id)) grouped.set(id, []);
+    grouped.get(id).push(row);
   }
-  for (const row of rows) {
-    const caller = callers.get(whatsappCallProviderId(row));
-    if (caller?.phone && caller.phone === whatsappCallCleanPhone(row.customer_phone || row.wa_id)) caller.names.push(row);
-  }
-  for (const caller of callers.values()) {
-    if (!caller.phone) continue;
-    const name = whatsappCallBestNameFromRows(caller.names, caller.phone);
-    caller.label = whatsappCallValidDisplayName(name, caller.phone) || `+${caller.phone}`;
+  const callers = new Map();
+  for (const [id, group] of grouped) {
+    const caller = whatsappCallVerifiedCaller(group);
+    if (caller) callers.set(id, caller);
   }
   return rows.map((row) => {
     const caller = callers.get(whatsappCallProviderId(row));
@@ -22951,7 +22954,8 @@ function whatsappCallLifecycleFromRows(rows = []) {
   const sdpRow = direction === "outgoing"
     ? (validRows.find(whatsappCallRowHasRemoteAnswerSdp) || validRows.find(whatsappCallHasSdp) || null)
     : (validRows.find(whatsappCallHasSdp) || null);
-  const customerPhone = whatsappCallCustomerPhoneFromRows(validRows, direction);
+  const verifiedCaller = whatsappCallVerifiedCaller(validRows);
+  const customerPhone = verifiedCaller?.phone || whatsappCallCustomerPhoneFromRows(validRows, direction);
   const nowMs = Date.now();
   const latestMs = whatsappCallTimestampMs(latest) || nowMs;
   const terminalStatuses = new Set(["ended", "missed", "declined", "rejected", "failed", "busy", "no_answer"]);
@@ -22972,7 +22976,7 @@ function whatsappCallLifecycleFromRows(rows = []) {
     active,
     answerable,
     customer_phone: customerPhone,
-    customer_name: aiModeSafeString(whatsappCallBestNameFromRows(validRows, customerPhone), 160),
+    customer_name: aiModeSafeString(verifiedCaller?.label || whatsappCallBestNameFromRows(validRows, customerPhone), 160),
     phone_number_id: aiModeSafeString(validRows.find((r) => r?.phone_number_id)?.phone_number_id || latest?.raw?.metadata?.phone_number_id || WHATSAPP_CALL_DEFAULT_PHONE_NUMBER_ID || "", 120),
     has_sdp: !!sdpRow,
     session: sdpRow?.session || sdpRow?.raw?.call?.session || sdpRow?.raw?.call?.connect?.session || sdpRow?.raw?.call?.answer?.session || null,
@@ -23031,8 +23035,8 @@ function collapseWhatsappCallLifecycles(calls = []) {
     .map(whatsappCallLifecycleFromRows)
     .filter(Boolean)
     .map((call) => {
-      const key = whatsappCallLast10(call.customer_phone || "");
-      const bestName = key ? bestNameByPhone.get(key) : "";
+      const bestName = whatsappCallValidDisplayName(call.customer_name, call.customer_phone)
+        ? "" : bestNameByPhone.get(call.customer_phone);
       return bestName ? { ...call, customer_name: bestName } : call;
     })
     .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));

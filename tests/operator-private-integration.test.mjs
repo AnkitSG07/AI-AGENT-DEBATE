@@ -427,6 +427,18 @@ test('signed call history shows a verified number before Odoo has a caller name'
     assert.equal(response.status, 200, response.text);
   };
   await send({ id: callId, event: 'connect', direction: 'USER_INITIATED', from: caller, to: '919000000002', timestamp });
+  const otherCaller = `44${caller.slice(-10)}`;
+  const other = { field: 'calls', value: {
+    metadata: { display_phone_number: '+919000000002', phone_number_id: '789001' },
+    contacts: [{ wa_id: otherCaller, profile: { name: 'Other country caller' } }], calls: [{
+      id: 'fixture-caller-other-country', event: 'connect', direction: 'USER_INITIATED',
+      from: otherCaller, to: '919000000002', timestamp
+    }] } };
+  const otherSignature = 'sha256=' + createHmac('sha256', 'fixture-meta-app-secret').update(JSON.stringify(other)).digest('hex');
+  assert.equal((await f.request('/webhook', { method: 'POST', body: other, headers: { 'x-hub-signature-256': otherSignature } })).status, 200);
+  const incoming = await f.request('/api/whatsapp-calls/incoming', { token });
+  assert.equal(incoming.status, 200, incoming.text);
+  assert.equal(incoming.data.calls.find(row => row.call_id === callId)?.customer_name, `+${caller}`);
   await send({ id: callId, event: 'terminate', direction: 'USER_INITIATED', to: '919000000002', timestamp: timestamp + 1 });
   const history = await f.request(`/api/whatsapp-calls/logs?limit=10&phone=${caller}`, { token });
   assert.equal(history.status, 200, history.text);
@@ -435,6 +447,13 @@ test('signed call history shows a verified number before Odoo has a caller name'
   for (const row of rows) {
     assert.equal(row.customer_phone, caller);
     assert.equal(row.customer_name, `+${caller}`);
+  }
+  for (const path of [`/api/whatsapp-calls/${callId}`, '/api/whatsapp-calls/recent?live=1']) {
+    const result = await f.request(path, { token });
+    assert.equal(result.status, 200, result.text);
+    const call = result.data.call || result.data.calls.find(row => row.call_id === callId);
+    assert.equal(call?.customer_phone, caller);
+    assert.equal(call?.customer_name, `+${caller}`);
   }
 });
 
