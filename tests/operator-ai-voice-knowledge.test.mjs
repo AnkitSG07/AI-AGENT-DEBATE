@@ -7,7 +7,9 @@ test('voice instructions load Smart Handicrafts product and handover rules under
   const instructions = await loadVoiceInstructions();
   for (const pattern of [/English, Hindi, or Hinglish/, /ask one genuinely missing question/i,
     /recorded enquiry does not schedule a callback/, /Odoo pricelist authority/, /AS-B-201-SLD/,
-    /2600mAh battery should be the primary/, /205 is the fast-charging option/, /Khushagra/, /Vibhu/]) {
+    /2600mAh battery should be the primary/, /205 is the fast-charging option/, /Khushagra/, /Vibhu/,
+    /team couldn’t pick up just now/, /call wait_for_user before producing any spoken reply/,
+    /try to answer directly from supported product facts first/i, /if the tool returns captured/i]) {
     assert.match(instructions, pattern);
   }
   assert.doesNotMatch(instructions, /AI Modes|WhatsApp number if missing/);

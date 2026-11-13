@@ -38,7 +38,11 @@ function harness(overrides = {}) {
     constructor(data, sampleRate, channels, samplesPerChannel) { Object.assign(this, { data, sampleRate, channels, samplesPerChannel }); }
   }
   class AudioStream {
-    constructor(track, options) { seen.streamOptions = options; return track.stream; }
+    constructor(track, options) {
+      if (options.noiseCancellation && overrides.rejectVoiceFilter) throw Error('filter unavailable');
+      seen.streamOptions = options;
+      return track.stream;
+    }
   }
   class WebSocketClient extends EventTarget {
     constructor(url, options) {
@@ -65,7 +69,7 @@ function harness(overrides = {}) {
     instructions: 'Use the customer-facing knowledge file.', tools: [tool],
     onMediaReady: () => seen.ready++, onError: error => seen.errors.push(error), onDisconnect: error => seen.disconnects.push(error),
     onToolCall: async request => { seen.tool.push(request); return { status: 'ok' }; }, ...options
-  }, { rtc, WebSocketClient });
+  }, { rtc, WebSocketClient, loadVoiceFilter: overrides.loadVoiceFilter });
   const publication = (participant = CUSTOMER, sid = 'track-a') => {
     let controller;
     const stream = new ReadableStream({ start(value) { controller = value; } });
@@ -99,6 +103,7 @@ await test('prepares the room and session before greeting and only forwards exac
   assert.equal(sent(h.seen, 'session.update')[0].session.audio.output.voice, 'cedar');
   assert.equal(sent(h.seen, 'session.update')[0].session.audio.input.turn_detection.threshold, 0.65);
   assert.deepEqual(sent(h.seen, 'session.update')[0].session.audio.input.noise_reduction, { type: 'near_field' });
+  assert.ok(sent(h.seen, 'session.update')[0].session.tools.some(value => value.name === 'wait_for_user'));
   assert.ok(h.seen.source.queueSize >= 180);
   assert.equal(h.seen.ready, 0);
   assert.equal(voice.speak('Greet in Hindi.'), undefined);
@@ -144,6 +149,27 @@ await test('reports exact caller readiness before speak and leaves the microphon
   voice.speak();
   assert.equal(sent(h.seen, 'response.create').length, 1);
   await voice.close();
+});
+
+await test('filters the pilot caller track before Realtime and falls back if the native filter fails', async () => {
+  const filter = { moduleId: 'test-filter', options: {} };
+  for (const rejectVoiceFilter of [false, true]) {
+    const h = harness({ rejectVoiceFilter, loadVoiceFilter: async () => filter });
+    const isolation = [];
+    const voice = await h.start({ isolateCallerVoice: true, onVoiceIsolation: value => isolation.push(value) });
+    voice.speak();
+    const caller = h.publication();
+    caller.subscribe();
+    caller.frame();
+    await setImmediate();
+    assert.equal(h.seen.streamOptions.noiseCancellation, rejectVoiceFilter ? undefined : filter);
+    const configs = sent(h.seen, 'session.update');
+    assert.equal(configs[0].session.audio.input.noise_reduction, null);
+    if (rejectVoiceFilter) assert.deepEqual(configs[1].session.audio.input.noise_reduction, { type: 'near_field' });
+    assert.deepEqual(isolation, [!rejectVoiceFilter]);
+    assert.equal(sent(h.seen, 'input_audio_buffer.append').length, 1);
+    await voice.close();
+  }
 });
 
 await test('preserves PCM offsets across deltas and cuts queued audio on a caller interruption', async () => {
@@ -252,6 +278,31 @@ await test('passes tool arguments once, denies unlisted names, and follows a com
   assert.equal(sent(h.seen, 'response.create').length, 3);
   await voice.close();
   assert.equal(h.seen.tool[0].signal.aborted, true);
+});
+
+await test('background conversation gets no audible follow-up or business tool effects', async () => {
+  const h = harness();
+  const voice = await h.start();
+  voice.speak();
+  const caller = h.publication();
+  caller.subscribe();
+  caller.frame();
+  await setImmediate();
+  h.responseStarted('greet');
+  h.response('greet');
+  h.seen.socket.receive({ type: 'input_audio_buffer.committed' });
+  h.responseStarted('background');
+  h.response('background', [
+    { type: 'function_call', name: 'wait_for_user', arguments: '{}', call_id: 'wait' },
+    { type: 'function_call', name: 'lookup_catalog', arguments: '{"query":"lamp"}', call_id: 'ignore' }
+  ]);
+  assert.match(sent(h.seen, 'response.create')[0].response.instructions, /Smart Handicrafts’ automated product desk/);
+  assert.equal(sent(h.seen, 'response.create').length, 2);
+  assert.deepEqual(h.seen.tool, []);
+  assert.equal(sent(h.seen, 'conversation.item.create')[0].item.output, '{"status":"listening"}');
+  h.seen.socket.receive({ type: 'input_audio_buffer.committed' });
+  assert.equal(sent(h.seen, 'response.create').length, 3);
+  await voice.close();
 });
 
 await test('invalidates a second pending tool when the caller interrupts the first', async () => {

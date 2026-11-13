@@ -4,7 +4,6 @@ import { startAiVoiceMedia } from './ai-voice-media.mjs';
 const phone = value => String(value || '').trim().replace(/^\+/, '');
 const validPhone = value => /^[1-9]\d{6,14}$/.test(value);
 const maxOfferAgeMs = 25000;
-const greeting = 'Open naturally: “Hi, you’ve reached Smart Handicrafts’ automated product desk. How can I help?” If the caller has already spoken in Hindi or Hinglish, use the equivalent in their language. Say it once and leave space for an answer.';
 
 /** Arm only verified, recent incoming calls covered by the server's rollout. */
 export function createAiVoiceFallback({ env = process.env, loadInstructions, tools, callTool, saveEnquiry,
@@ -64,9 +63,11 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       const media = await startMedia({ roomName: session.roomName, customerIdentity: session.customerIdentity,
         identity, livekitUrl: config.wsUrl, livekitApiKey: config.apiKey, livekitApiSecret: config.apiSecret,
         openaiApiKey: apiKey, model: env.SH_AI_VOICE_MODEL || 'gpt-realtime', voice: env.SH_AI_VOICE_NAME || 'cedar',
+        isolateCallerVoice: allowed.has(entry.caller) && env.SH_AI_VOICE_ISOLATION !== 'false',
         instructions: prompt, tools, signal: controller.signal, timeoutMs: 6000,
         onMediaReady: onReady,
         onPlaybackStats: stats => log('playback', stats),
+        onVoiceIsolation: configured => log(configured ? 'caller_filter_configured' : 'caller_filter_unavailable'),
         onError: error => {
           if (/^AI_VOICE_[A-Z_]+$/.test(error?.code || '')) log(error.code);
         },
@@ -90,7 +91,7 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       if (callerAudio) onReady();
       entry.timer = setTimer(() => void end(entry, 'AI_VOICE_TIME_LIMIT'), Math.max(1, result.deadlineAt - now()));
       entry.timer?.unref?.();
-      await media.speak(greeting);
+      await media.speak();
       if (!current()) return;
       entry.keepOpen = true;
       log('answered');

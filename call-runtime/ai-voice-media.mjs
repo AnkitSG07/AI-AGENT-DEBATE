@@ -3,6 +3,7 @@ import { endianness } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AccessToken, TrackSource as GrantTrackSource } from 'livekit-server-sdk';
 import { MediaError, identifier, requireValue } from '../media/errors.mjs';
+import { VOICE_GREETING } from './ai-voice-knowledge.mjs';
 
 const RATE = 24_000;
 const FRAME_MS = 20;
@@ -13,8 +14,10 @@ const SOURCE_QUEUE_MS = 260;
 const MAX_OUTPUT_BYTES = RATE * 2 * 30;
 const MAX_INPUT_BACKLOG = 192 * 1024;
 const PCM_FORMAT = { type: 'audio/pcm', rate: RATE };
-const DEFAULT_GREETING = 'Say: “Hi, you’ve reached Smart Handicrafts’ automated product desk. How can I help?”';
 const LITTLE_ENDIAN = endianness() === 'LE';
+const WAIT_FOR_USER = { type: 'function', name: 'wait_for_user',
+  description: 'Stay quiet when nobody is addressing you. Use for background conversation, TV, music, or unrelated speech. Do not speak before using this tool.',
+  parameters: { type: 'object', properties: {}, additionalProperties: false } };
 
 function mediaError(code, message) {
   return new MediaError(`AI_VOICE_${code}`, message, 502);
@@ -40,11 +43,14 @@ function pcmSamples(bytes) {
 }
 
 /** Prepare the LiveKit audio publisher and configure Realtime before accepting the call. */
-export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketClient = globalThis.WebSocket } = {}) {
+export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketClient = globalThis.WebSocket,
+  loadVoiceFilter = async () => (await import('@livekit/noise-cancellation-node')).BackgroundVoiceCancellation()
+} = {}) {
   const {
     roomName, customerIdentity, livekitUrl, livekitApiKey, livekitApiSecret, livekitToken,
     openaiApiKey, model = 'gpt-realtime', voice = 'cedar', instructions, tools = [],
-    onToolCall, onError, onDisconnect, onMediaReady, onPlaybackStats, signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000
+    onToolCall, onError, onDisconnect, onMediaReady, onPlaybackStats, onVoiceIsolation, isolateCallerVoice = false,
+    signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000
   } = options;
   const identity = options.identity || `sh-ai-${createHash('sha256').update(identifier(roomName, 'room')).digest('hex').slice(0, 40)}`;
   identifier(roomName, 'room');
@@ -69,6 +75,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   })().catch(() => { throw mediaError('LIVEKIT_TOKEN', 'The AI participant token could not be created.'); });
   if (signal?.aborted) throw mediaError('ABORTED', 'AI voice startup was cancelled.');
 
+  const voiceFilter = isolateCallerVoice ? Promise.resolve().then(loadVoiceFilter).catch(() => null) : null;
   const room = new rtc.Room();
   const lifecycle = new AbortController();
   let toolTurn = new AbortController();
@@ -104,7 +111,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   function stopReader() {
     const current = reader;
     reader = undefined;
-    if (current) void current.reader.cancel().catch(() => {});
+    if (current?.reader) void current.reader.cancel().catch(() => {});
   }
 
   function close() {
@@ -201,11 +208,24 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
 
   function receiveTrack(track, publication, participant) {
     if (closed || reader || participant?.identity !== customerIdentity || publication?.kind !== rtc.TrackKind.KIND_AUDIO) return;
-    const stream = new rtc.AudioStream(track, { sampleRate: RATE, numChannels: 1, frameSizeMs: FRAME_MS });
-    const current = { sid: publication.sid, reader: stream.getReader() };
+    const current = { sid: publication.sid, reader: null };
     reader = current;
     void (async () => {
       try {
+        const streamOptions = { sampleRate: RATE, numChannels: 1, frameSizeMs: FRAME_MS };
+        const filter = voiceFilter && await voiceFilter;
+        if (closed || reader !== current) return;
+        if (filter) {
+          try {
+            current.reader = new rtc.AudioStream(track, { ...streamOptions, noiseCancellation: filter }).getReader();
+          } catch {
+            // Fall back to the original caller audio and Realtime suppression.
+            send({ type: 'session.update', session: { type: 'realtime',
+              audio: { input: { noise_reduction: { type: 'near_field' } } } } });
+          }
+        }
+        if (isolateCallerVoice) notify(onVoiceIsolation, !!current.reader);
+        current.reader ||= new rtc.AudioStream(track, streamOptions).getReader();
         while (!closed && reader === current) {
           const { value: frame, done } = await current.reader.read();
           if (done || closed || reader !== current) break;
@@ -224,8 +244,10 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
         if (reader === current) fail(mediaError('CALLER_AUDIO', 'The AI assistant lost the caller audio.'));
       } finally {
         if (reader === current) loseTrack(publication);
-        await current.reader.cancel().catch(() => {});
-        current.reader.releaseLock();
+        if (current.reader) {
+          await current.reader.cancel().catch(() => {});
+          current.reader.releaseLock();
+        }
       }
     })();
   }
@@ -362,11 +384,13 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     if (!calls.length) return;
     const toolSignal = AbortSignal.any([lifecycle.signal, toolTurn.signal]);
     for (const item of calls) handledToolCalls.add(item.call_id);
+    const wait = calls.some(item => item.name === WAIT_FOR_USER.name);
     for (const item of calls) {
       if (closed) return;
       let result = '{"status":"unavailable"}';
       try {
-        if (!toolSignal.aborted && toolNames.has(item.name) && typeof onToolCall === 'function' &&
+        if (item.name === WAIT_FOR_USER.name) result = '{"status":"listening"}';
+        else if (!wait && !toolSignal.aborted && toolNames.has(item.name) && typeof onToolCall === 'function' &&
             Buffer.byteLength(item.arguments || '') <= 4096) {
           const args = JSON.parse(item.arguments);
           if (args && typeof args === 'object' && !Array.isArray(args)) {
@@ -378,7 +402,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
       } catch { /* Let the caller know the requested information is unavailable. */ }
       if (!closed) send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: result } });
     }
-    if (!closed && responseTurn === turn && !speaking) {
+    if (!wait && !closed && responseTurn === turn && !speaking) {
       replyPending = true;
       requestResponse();
     }
@@ -499,11 +523,13 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     } catch {
       throw mediaError('REALTIME_CONNECT', 'The AI assistant could not connect to OpenAI Realtime.');
     }
-    socket.addEventListener('open', () => {
+    socket.addEventListener('open', async () => {
+      const filter = voiceFilter && await voiceFilter;
+      if (closed) return;
       if (!send({ type: 'session.update', event_id: 'ai-voice-session', session: {
         type: 'realtime', instructions, output_modalities: ['audio'], max_output_tokens: 512,
-        tools, tool_choice: 'auto', audio: {
-          input: { format: PCM_FORMAT, noise_reduction: { type: 'near_field' },
+        tools: [...tools, WAIT_FOR_USER], tool_choice: 'auto', audio: {
+          input: { format: PCM_FORMAT, noise_reduction: filter ? null : { type: 'near_field' },
             turn_detection: { type: 'server_vad', threshold: 0.65, prefix_padding_ms: 300,
               silence_duration_ms: 450, create_response: false, interrupt_response: true } },
           output: { format: PCM_FORMAT, voice }
@@ -539,11 +565,11 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
 
   return {
     get ready() { return !closed; },
-    speak(greetingInstructions = DEFAULT_GREETING) {
+    speak(greetingInstructions = VOICE_GREETING) {
       if (closed) throw mediaError('CLOSED', 'The AI voice connection is closed.');
       if (activated) return;
       activated = true;
-      greeting = greetingInstructions || DEFAULT_GREETING;
+      greeting = greetingInstructions || VOICE_GREETING;
       if (!callerHasAudio || !mediaReady) waitForCallerMedia();
       checkMediaReady();
     },
