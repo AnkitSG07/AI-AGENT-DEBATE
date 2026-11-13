@@ -253,7 +253,7 @@ export class CallRuntime {
 
   /** Server-only result of the existing verified Odoo call/contact lookup.
    * Linking metadata must not invalidate an in-flight readiness version. */
-  async attachVerifiedChannel(id, channelId) {
+  async attachVerifiedChannel(id, channelId, { customerPhone, customerName } = {}) {
     identifier(id);
     requireValue(Number.isSafeInteger(channelId) && channelId > 0,
       'INVALID_CHANNEL_ID', 'A verified positive Odoo channel ID is required.', 400);
@@ -262,11 +262,20 @@ export class CallRuntime {
     return this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(located.id)); this.requireSession(session);
       if (session.channelId && session.channelId !== channelId) return { attached: false, reason: 'already_linked', channelId: session.channelId };
-      if (session.channelId !== channelId) {
-        session.channelId = channelId; session.updatedAt = this.now();
+      if (customerPhone && (!/^[1-9]\d{6,14}$/.test(customerPhone) ||
+        session.customerPhone && customerPhone !== session.customerPhone))
+        return { attached: false, reason: 'customer_mismatch' };
+      const name = customerPhone && typeof customerName === 'string' ? customerName.trim().slice(0, 160) : '';
+      const changed = session.channelId !== channelId || !!(name && session.customerName !== name) ||
+        !!(customerPhone && !session.customerPhone);
+      if (changed) {
+        session.channelId = channelId;
+        if (customerPhone && !session.customerPhone) session.customerPhone = customerPhone;
+        if (name) session.customerName = name;
+        session.updatedAt = this.now();
         tx.set(sessionKey(session.id), session);
       }
-      return { attached: true, sessionId: session.id, channelId };
+      return { attached: true, changed, sessionId: session.id, channelId };
     });
   }
 
@@ -302,6 +311,12 @@ export class CallRuntime {
     const call = observedCall !== undefined ? observedCall :
       session.providerCallId ? await this.store.get(callStoreKey(session.providerCallId)) : null;
     const terminal = call?.terminal || session.terminal || null;
+    const customerContactName = session.customerName || '', customerPhone = session.customerPhone || '';
+    const numberLabel = /^[1-9]\d{6,14}$/.test(customerPhone) ? `+${customerPhone}` : '';
+    // The installed Android call screen uses customerName as its entire title.
+    const customerName = session.direction === 'incoming' && numberLabel
+      ? customerContactName ? `${customerContactName.slice(0, 140)} · ${numberLabel}` : numberLabel
+      : customerContactName;
     return { sessionId: session.id, callId: session.providerCallId || session.id, providerCallId: session.providerCallId || null,
       phase: call ? call.status : session.phase, version: call?.version || session.version, sessionVersion: session.version,
       direction: session.direction, ownerDeviceId: call?.owner?.deviceId || session.owner?.deviceId || null,
@@ -314,7 +329,7 @@ export class CallRuntime {
       customerAcceptedAt: session.customerAcceptedAt || null,
       cleanupPending: session.outbox.some(item => item.status !== 'done') || !!call?.outbox.some(item => item.status !== 'done') ||
         (!!terminal && operationPending(session)), terminal,
-      customerPhone: session.customerPhone || '', customerName: session.customerName || '',
+      customerPhone, customerName, customerContactName,
       channelId: Number.isSafeInteger(session.channelId) && session.channelId > 0 ? session.channelId : 0,
       transfer: call?.transfer ? { id: call.transfer.id, status: call.transfer.status, fromDeviceId: call.transfer.fromDeviceId,
         toDeviceId: call.transfer.toDeviceId, expiresAt: transferDeadline(call.transfer), reason: call.transfer.reason || null, mode: call.transfer.mode || 'instant',

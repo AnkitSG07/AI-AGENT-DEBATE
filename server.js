@@ -21916,11 +21916,10 @@ function whatsappCallValueFromPayload(body = {}) {
 
 function whatsappCallContactName(value = {}, waId = "") {
   const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
-  const match =
-    contacts.find((c) => whatsappCallCleanPhone(c?.wa_id) === whatsappCallCleanPhone(waId)) ||
-    contacts[0] ||
-    null;
-  return aiModeSafeString(match?.profile?.name || "", 160);
+  const phone = whatsappCallCleanPhone(waId);
+  if (!phone) return "";
+  const match = contacts.find((c) => whatsappCallCleanPhone(c?.wa_id) === phone);
+  return whatsappCallValidDisplayName(match?.profile?.name, phone);
 }
 
 function whatsappCallBusinessNumbersFromValue(value = {}) {
@@ -21944,15 +21943,17 @@ function normalizeWhatsappCallEvent(call = {}, value = {}) {
   const from = whatsappCallCleanPhone(call?.from || (statusOnly ? businessDisplay : ""));
   const to = whatsappCallCleanPhone(call?.to || call?.recipient_id || "");
   const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
-  const contactPhone = whatsappCallCleanPhone(contacts[0]?.wa_id || "");
   const eventName = aiModeSafeString(call?.event || providerStatus.toLowerCase() || "unknown", 80).toLowerCase();
+  const contactPhone = contacts.length === 1 && value?.calls?.length === 1 && ["connect", "ringing", "incoming"].includes(eventName)
+    ? whatsappCallCleanPhone(contacts[0]?.wa_id) : "";
   const declaredDirection = String(call?.direction || "").toUpperCase();
   const fromIsBusiness = !!(from && businessNumbers.includes(from));
   const toIsBusiness = !!(to && businessNumbers.includes(to));
   const isOutgoing = declaredDirection === "BUSINESS_INITIATED" || declaredDirection === "OUTGOING" || statusOnly ||
     (declaredDirection !== "USER_INITIATED" && (fromIsBusiness || /outgoing|dial|connect_requested/.test(eventName)));
   const isIncoming = !isOutgoing && (declaredDirection === "USER_INITIATED" || toIsBusiness || !!from || !!contactPhone);
-  const customerPhone = isOutgoing ? (to || contactPhone || from) : (from || contactPhone || to);
+  const customerPhone = (isOutgoing ? [to, contactPhone] : isIncoming ? [from, contactPhone] : []).find((phone) =>
+    /^[1-9]\d{6,14}$/.test(phone) && phone !== businessPhoneId && !businessNumbers.includes(phone)) || "";
   const rawTimestamp = Number(call?.timestamp || 0);
   const timestampSeconds = Number.isFinite(rawTimestamp) && rawTimestamp > 0 && rawTimestamp < 8640000000000
     ? rawTimestamp : Math.floor(Date.now() / 1000);
@@ -22024,20 +22025,28 @@ function mutateWhatsappCallLogs(update) {
 }
 
 async function enrichStoredWhatsappCallEvents(events = []) {
-  const byId = new Map(events.filter((row) => row?.id && row?.odoo_channel_id).map((row) => [String(row.id), row]));
-  if (!byId.size) return;
+  const byCall = new Map(events.filter((row) => row?.call_id && row?.odoo_channel_id).map((row) => [row.call_id, row]));
+  if (!byCall.size) return;
+  const updated = [];
   await mutateWhatsappCallLogs((rows) => {
-    let changed = false;
     const next = rows.map((row) => {
-      const patch = byId.get(String(row?.id || ""));
-      if (!patch || (row.odoo_channel_id === patch.odoo_channel_id && row.odoo_channel_name === patch.odoo_channel_name)) return row;
-      changed = true;
-      return { ...row, odoo_channel_id: patch.odoo_channel_id, odoo_channel_name: patch.odoo_channel_name || "" };
+      const patch = byCall.get(row?.call_id);
+      if (!patch || (row.customer_phone && row.customer_phone !== patch.customer_phone)) return row;
+      const customerName = patch.customer_name || row.customer_name || "";
+      if (row.odoo_channel_id === patch.odoo_channel_id && row.odoo_channel_name === patch.odoo_channel_name &&
+        row.customer_phone === patch.customer_phone && row.customer_name === customerName) return row;
+      const enriched = { ...row, customer_phone: patch.customer_phone, customer_name: customerName,
+        odoo_channel_id: patch.odoo_channel_id, odoo_channel_name: patch.odoo_channel_name };
+      updated.push(enriched);
+      return enriched;
     });
-    return changed ? next : rows;
+    return updated.length ? next : rows;
   });
-  await Promise.allSettled([...byId.values()].map(row =>
-    operatorMediaGateway.attachVerifiedChannel(row.call_id, Number(row.odoo_channel_id))));
+  publishWhatsappCallHints(updated);
+  await Promise.allSettled([...byCall.values()].filter(row => row.meta_verified).map(row =>
+    operatorMediaGateway.attachVerifiedChannel(row.call_id, Number(row.odoo_channel_id), {
+      customerPhone: row.customer_phone, customerName: row.customer_name
+    })));
 }
 
 async function storeWhatsappCallEvents(events = []) {
@@ -22045,11 +22054,22 @@ async function storeWhatsappCallEvents(events = []) {
   const added = [];
   await mutateWhatsappCallLogs((existing) => {
     const existingKeys = new Set(existing.map((row) => aiModeSafeString(row?.id || row?.call_id || "", 500)).filter(Boolean));
+    const verifiedCallers = new Map();
+    for (const row of [...events, ...existing]) {
+      if (row?.meta_verified && row.customer_phone && !verifiedCallers.has(row.call_id)) verifiedCallers.set(row.call_id, row);
+    }
     for (const event of events) {
       const key = aiModeSafeString(event?.id || event?.call_id || "", 500);
       if (!key || existingKeys.has(key) || whatsappCallSeenIds.has(key)) continue;
       existingKeys.add(key);
-      added.push({ ...event, received_at: now(), _odoo_sync_pending: true });
+      const previous = event.meta_verified ? verifiedCallers.get(event.call_id) : null;
+      const sameCaller = previous && (!event.customer_phone || event.customer_phone === previous.customer_phone);
+      added.push({ ...event, ...(sameCaller ? {
+        customer_phone: event.customer_phone || previous.customer_phone,
+        customer_name: event.customer_name || previous.customer_name,
+        ...(previous.odoo_channel_id ? { odoo_channel_id: previous.odoo_channel_id,
+          odoo_channel_name: previous.odoo_channel_name } : {})
+      } : {}), received_at: now(), _odoo_sync_pending: true });
     }
     return added.length ? [...added, ...existing] : existing;
   });
@@ -22063,7 +22083,7 @@ async function storeWhatsappCallEvents(events = []) {
 
 async function findOdooWhatsappChannelForCall(event = {}) {
   if (!odooConfigured) return null;
-  const phone = whatsappCallCleanPhone(event?.customer_phone || event?.wa_id || event?.from);
+  const phone = whatsappCallCleanPhone(event?.customer_phone);
   if (!phone) return null;
 
   try {
@@ -22078,9 +22098,17 @@ async function findOdooWhatsappChannelForCall(event = {}) {
       "discuss.channel",
       "search_read",
       [domain, fields],
-      { limit: 1, order: "last_interest_dt desc, write_date desc, id desc" }
+      { limit: 10, order: "last_interest_dt desc, write_date desc, id desc" }
     );
-    return rows?.[0] || null;
+    const channels = Array.isArray(rows) ? rows : [];
+    const exact = channels.find((row) => whatsappCallCleanPhone(row.whatsapp_number) === phone);
+    if (exact) return exact;
+    // An Odoo number stored without the country code may match only one channel.
+    const local = channels.filter((row) => {
+      const number = whatsappCallCleanPhone(row.whatsapp_number);
+      return number.length === 10 && phone.length > 10 && phone.length <= 13 && phone.endsWith(number);
+    });
+    return local.length === 1 ? local[0] : null;
   } catch (error) {
     console.warn("WhatsApp call channel lookup failed:", error?.message || error);
     return null;
@@ -22243,19 +22271,27 @@ async function processWhatsappCallWebhook(body = {}, { deferSideEffects = false,
     });
   }
 
-  // Odoo enrichment follows alert dispatch; only channel metadata is merged back.
-  for (const event of events) {
-    const channel = await findOdooWhatsappChannelForCall(event);
+  // Caller enrichment runs after alert dispatch and never gates ringing or pickup.
+  const channelsByPhone = new Map();
+  const identityRows = [...new Map([...events, ...stored.calls].map((row) => [row.id, row])).values()];
+  for (const event of identityRows.filter((row) => row.meta_verified && row.customer_phone)) {
+    if (!channelsByPhone.has(event.customer_phone))
+      channelsByPhone.set(event.customer_phone, await findOdooWhatsappChannelForCall(event));
+    const channel = channelsByPhone.get(event.customer_phone);
     if (channel?.id) {
       event.odoo_channel_id = channel.id;
       event.odoo_channel_name = channel.display_name || channel.name || "";
+      const partnerName = Array.isArray(channel.whatsapp_partner_id) ? channel.whatsapp_partner_id[1] : "";
+      event.customer_name = whatsappCallValidDisplayName(partnerName, event.customer_phone) ||
+        whatsappCallValidDisplayName(channel.name || channel.display_name, event.customer_phone) || event.customer_name;
     }
   }
-  await enrichStoredWhatsappCallEvents(events);
-  const eventById = new Map(events.map((event) => [event.id, event]));
+  await enrichStoredWhatsappCallEvents(identityRows);
+  const eventById = new Map(identityRows.map((event) => [event.id, event]));
   stored.calls = stored.calls.map((row) => {
     const event = eventById.get(row.id);
-    return event?.odoo_channel_id ? { ...row, odoo_channel_id: event.odoo_channel_id, odoo_channel_name: event.odoo_channel_name } : row;
+    return event?.odoo_channel_id ? { ...row, customer_name: event.customer_name, odoo_channel_id: event.odoo_channel_id,
+      odoo_channel_name: event.odoo_channel_name } : row;
   });
   const odooSaveResults = await queueWhatsappCallHistorySync(stored.calls);
   return { ok: true, received: events.length, added: stored.added, calls: stored.calls, call_push_results: pushResults, odoo_save_results: odooSaveResults };
@@ -22502,7 +22538,7 @@ function whatsappCallValidDisplayName(value = "", phone = "") {
   const cleanName = whatsappCallCleanPhone(name);
   const cleanPhone = whatsappCallCleanPhone(phone);
   if (!name) return "";
-  if (/^whatsapp caller$/i.test(name)) return "";
+  if (/^(?:whatsapp (?:caller|customer)|customer)$/i.test(name)) return "";
   if (/^unknown/i.test(name)) return "";
   if (cleanPhone && (cleanName === cleanPhone || whatsappCallLast10(cleanName) === whatsappCallLast10(cleanPhone))) return "";
   if (/^\+?\d{7,15}$/.test(name.replace(/\s+/g, ""))) return "";

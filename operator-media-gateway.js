@@ -36,7 +36,8 @@ export function nativeCallHistoryEvent({ session, view }, at = Date.now()) {
     connected_at: connectedAt ? new Date(connectedAt).toISOString() : '',
     ended_at: endedAt ? new Date(endedAt).toISOString() : '',
     duration_seconds: connectedAt && endedAt >= connectedAt ? Math.floor((endedAt - connectedAt) / 1000) : 0 };
-  return { id: `native_${createHash('sha256').update(JSON.stringify([session.id, session.version, view.version, status, view.ownerDeviceId, view.endConfirmed])).digest('hex')}`,
+  return { id: `native_${createHash('sha256').update(JSON.stringify([session.id, session.version, view.version, status,
+    view.ownerDeviceId, view.endConfirmed, session.channelId, session.customerPhone, session.customerName])).digest('hex')}`,
     call_id: session.providerCallId, event: status, status, direction: session.direction,
     customer_phone: session.customerPhone || '', customer_name: session.customerName || '',
     phone_number_id: session.phoneNumberId, odoo_channel_id: session.channelId || 0,
@@ -155,7 +156,8 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     const session = await bundle.runtime.locate(id);
     if (session && session.routeChoice !== 'legacy' && session.providerCallId) {
       const view = await bundle.runtime.view(session);
-      const stamp = JSON.stringify([session.version, view.version, view.phase, view.ownerDeviceId, view.endConfirmed]);
+      const stamp = JSON.stringify([session.version, view.version, view.phase, view.ownerDeviceId, view.endConfirmed,
+        session.channelId, session.customerPhone, session.customerName]);
       if (publishedStates.get(session.id) !== stamp) {
         await onCallState({ session, view });
         publishedStates.set(session.id, stamp);
@@ -309,9 +311,11 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
       if (row && row.routeChoice !== 'legacy')
         throw new MediaError('NATIVE_CALL_OWNED', 'Use SH Chat native call controls for this call.', 409);
     },
-    async attachVerifiedChannel(callId, channelId) {
+    async attachVerifiedChannel(callId, channelId, customer) {
       if (!bundle || !Number.isSafeInteger(channelId) || channelId <= 0) return;
-      return bundle.runtime.attachVerifiedChannel(callId, channelId);
+      const result = await bundle.runtime.attachVerifiedChannel(callId, channelId, customer);
+      if (result?.changed) queueHistoryProjection(result.sessionId);
+      return result;
     },
     async ingestVerifiedEvents(events = []) {
       if (!bundle) return { handled: 0 };

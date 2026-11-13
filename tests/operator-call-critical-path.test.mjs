@@ -6,6 +6,7 @@ import { callStoreKey } from '../media/transfer-controller.mjs';
 import { LiveKitWhatsAppProvider } from '../media/livekit-provider.mjs';
 import { createNativeReadinessVerifier } from '../call-runtime/readiness.mjs';
 import { ParticipantInfo_State, TrackType } from 'livekit-server-sdk';
+import { nativeCallHistoryEvent } from '../operator-media-gateway.js';
 
 async function pilot(f) {
   let policyChecks = 0;
@@ -34,6 +35,30 @@ test('pilot invite evaluates policy once and has only its two authority-changing
   });
   assert.equal(result.call.transfer.status, 'invited'); assert.equal(service.checks(), 1);
   assert.equal(f.db.transactionRuns - before, 2, 'claim invitation and bind its exact enrollment; no expire/sync no-op commits');
+});
+
+test('authenticated caller display falls back to the number and picks up verified contact details without staling readiness', async () => {
+  const f = fixture(); await f.incoming();
+  const accepted = await f.accept(), phone = '919999999999';
+  const before = await f.runtime.locate('call-in-1');
+  assert.equal(accepted.call.customerPhone, phone);
+  assert.equal(accepted.call.customerName, '+' + phone);
+  assert.equal(accepted.call.customerContactName, '');
+  assert.equal((await f.runtime.attachVerifiedChannel('call-in-1', 4,
+    { customerPhone: '919111111111', customerName: 'Other caller' })).attached, false);
+  assert.equal((await f.runtime.attachVerifiedChannel('call-in-1', 4,
+    { customerPhone: phone, customerName: 'Sample buyer' })).changed, true);
+  const connected = await f.ready(accepted);
+  assert.equal(connected.call.customerPhone, phone);
+  assert.equal(connected.call.customerName, 'Sample buyer · +' + phone);
+  assert.equal(connected.call.customerContactName, 'Sample buyer');
+  await f.runtime.ingestVerifiedMetaEvent({ verified: true, eventId: 'caller-terminal', type: 'terminate',
+    callId: 'call-in-1', phoneNumberId: 'business-1' });
+  const after = await f.runtime.locate('call-in-1');
+  const history = nativeCallHistoryEvent({ session: after, view: await f.runtime.view(after) });
+  assert.equal(history.customer_name, 'Sample buyer');
+  assert.equal(history.customer_phone, phone);
+  assert.notEqual(history.id, nativeCallHistoryEvent({ session: before, view: await f.runtime.view(before) }).id);
 });
 
 test('pilot accept evaluates policy once and has only its target claim transaction', async () => {

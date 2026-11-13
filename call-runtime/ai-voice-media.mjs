@@ -8,13 +8,15 @@ import { VOICE_GREETING } from './ai-voice-knowledge.mjs';
 const RATE = 24_000;
 const FRAME_MS = 20;
 const FRAME_BYTES = RATE * FRAME_MS / 1000 * 2;
-const START_BUFFER_MS = 180;
+const START_BUFFER_MS = 260;
 const START_BUFFER_BYTES = START_BUFFER_MS / FRAME_MS * FRAME_BYTES;
-const SOURCE_QUEUE_MS = 260;
+const SOURCE_QUEUE_MS = 340;
 const MAX_OUTPUT_BYTES = RATE * 2 * 30;
 const MAX_INPUT_BACKLOG = 192 * 1024;
 const PCM_FORMAT = { type: 'audio/pcm', rate: RATE };
 const LITTLE_ENDIAN = endianness() === 'LE';
+const CALLER_CHECK_TIMEOUT_MS = 3500;
+const CALLER_CHECK = 'Decide whether the last audio item is the caller addressing the Smart Handicrafts product desk. Earlier audio, when supplied, is only conversational context. Return exactly CALLER or IGNORE. CALLER includes short clear answers such as yes, haan, or a quantity, and questions or corrections directed to the desk in English, Hindi, or Hinglish. IGNORE includes side conversations, television, echo of the desk, overlapping speakers with no clear caller, or speech directed to somebody else. If you cannot tell, return IGNORE. Do not transcribe or answer the audio.';
 const WAIT_FOR_USER = { type: 'function', name: 'wait_for_user',
   description: 'Stay quiet when nobody is addressing you. Use for background conversation, TV, music, or unrelated speech. Do not speak before using this tool.',
   parameters: { type: 'object', properties: {}, additionalProperties: false } };
@@ -50,7 +52,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     roomName, customerIdentity, livekitUrl, livekitApiKey, livekitApiSecret, livekitToken,
     openaiApiKey, model = 'gpt-realtime', voice = 'cedar', instructions, tools = [],
     onToolCall, onError, onDisconnect, onMediaReady, onPlaybackStats, onVoiceIsolation, isolateCallerVoice = false,
-    signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000
+    signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000, callerCheckTimeoutMs = CALLER_CHECK_TIMEOUT_MS
   } = options;
   const identity = options.identity || `sh-ai-${createHash('sha256').update(identifier(roomName, 'room')).digest('hex').slice(0, 40)}`;
   identifier(roomName, 'room');
@@ -84,12 +86,16 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   const requestedPublications = new WeakSet();
   const audioParts = new Map();
   const output = [];
+  const callerItems = new Map();
+  const deletingItems = new Set();
+  const finishedCallerItems = new Set();
   let socket, source, localTrack, reader, closeTask, disconnectTask, mediaTimer;
   let connected = false, published = false, configured = false, started = false, closed = false;
   let callerHasAudio = false, mediaReady = false, activated = false, greeting = '', queuedBytes = 0;
   let playbackGeneration = 0, pumping = false, priming = false, playbackStarted = false;
-  let rebufferCount = 0, interruptions = 0;
+  let rebufferCount = 0, interruptions = 0, ignoredTurns = 0, callerCheckFailures = 0;
   let turn = 0, speaking = false, replyPending = false, responding, responseNumber = 0;
+  let callerCheck, callerCheckNumber = 0, activeCallerItem;
   const configuration = Promise.withResolvers();
   const stopped = Promise.withResolvers();
 
@@ -118,12 +124,16 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     if (closed) return closeTask || Promise.resolve();
     closed = true;
     clearTimeout(mediaTimer);
+    clearTimeout(callerCheck?.timer);
+    callerItems.clear();
+    deletingItems.clear();
+    finishedCallerItems.clear();
     signal?.removeEventListener('abort', abort);
     lifecycle.abort();
     stopReader();
     output.length = 0;
     audioParts.clear();
-    if (activated) notify(onPlaybackStats, { rebufferCount, interruptions });
+    if (activated) notify(onPlaybackStats, { rebufferCount, interruptions, ignoredTurns, callerCheckFailures });
     try { source?.clearQueue(); } catch { /* The room may already be disconnected. */ }
     try { socket?.close(); } catch { /* The socket may already be closed. */ }
     const disconnect = detachRoom();
@@ -148,7 +158,8 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   }
 
   function requestResponse() {
-    if (!activated || !callerHasAudio || !mediaReady || speaking || responding || closed || !(greeting || replyPending)) return;
+    if (!activated || !callerHasAudio || !mediaReady || speaking || callerItems.size || deletingItems.size ||
+        responding || closed || !(greeting || replyPending)) return;
     const event = { type: 'response.create', event_id: `ai-voice-response-${++responseNumber}` };
     if (greeting) {
       event.response = { instructions: `${instructions}\n\n${greeting}`, tool_choice: 'none' };
@@ -156,7 +167,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     } else {
       replyPending = false;
     }
-    responding = { turn, eventId: event.event_id };
+    responding = { turn, callerItemId: activeCallerItem };
     if (!send(event)) fail(mediaError('REALTIME_DISCONNECTED', 'The AI voice connection was lost.'));
   }
 
@@ -271,6 +282,10 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     stopReader();
     callerHasAudio = false;
     if (activated) waitForCallerMedia();
+    forgetCallerCheck();
+    for (const [id, item] of callerItems) if (item.added) discardCallerItem(id);
+    callerItems.clear();
+    activeCallerItem = undefined;
     // Keep the call attached while LiveKit delivers a replacement publication.
     // Discard old output and invalidate its pending response while audio is unavailable.
     interruptTurn();
@@ -285,6 +300,73 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     turn++;
     toolTurn.abort();
     toolTurn = new AbortController();
+  }
+
+  function discardCallerItem(id) {
+    ignoredTurns++;
+    deletingItems.add(id);
+    if (!send({ type: 'conversation.item.delete', event_id: `sh-drop-${id}`, item_id: id }))
+      fail(mediaError('REALTIME_DISCONNECTED', 'The AI voice connection was lost.'));
+  }
+
+  function forgetCallerCheck() {
+    if (!callerCheck) return;
+    clearTimeout(callerCheck.timer);
+    if (callerCheck.responseId) send({ type: 'response.cancel', event_id: 'ai-voice-cancel', response_id: callerCheck.responseId });
+    callerCheck = undefined;
+  }
+
+  function verifyNextCaller() {
+    if (closed || callerCheck || !callerItems.size) return;
+    const [id, item] = callerItems.entries().next().value;
+    if (!item.committed || !item.added) return;
+    if (callerItems.size > 3) {
+      callerItems.delete(id);
+      discardCallerItem(id);
+      verifyNextCaller();
+      return;
+    }
+    const eventId = `sh-caller-check-${++callerCheckNumber}`;
+    callerCheck = { id, eventId, timer: setTimeout(() => finishCallerCheck(false, true), callerCheckTimeoutMs) };
+    callerCheck.timer.unref?.();
+    const input = [activeCallerItem, id].filter(Boolean).map(id => ({ type: 'item_reference', id }));
+    const request = { type: 'response.create', event_id: eventId, response: {
+      conversation: 'none', metadata: { sh_caller_check: eventId }, output_modalities: ['text'],
+      input, instructions: CALLER_CHECK, tool_choice: 'none', max_output_tokens: 8
+    } };
+    if (!send(request)) fail(mediaError('REALTIME_DISCONNECTED', 'The AI voice connection was lost.'));
+  }
+
+  function finishCallerCheck(confirmed, failed = false) {
+    if (!callerCheck) return;
+    const { id } = callerCheck;
+    forgetCallerCheck();
+    callerItems.delete(id);
+    finishedCallerItems.add(id);
+    if (finishedCallerItems.size > 64) finishedCallerItems.delete(finishedCallerItems.values().next().value);
+    if (failed) callerCheckFailures++;
+    if (!confirmed) discardCallerItem(id);
+    else {
+      if (responding || output.length || source?.queuedDuration > FRAME_MS) {
+        interruptions++;
+        discardPlayback();
+        if (responding?.id) send({ type: 'response.cancel', event_id: 'ai-voice-cancel', response_id: responding.id });
+      }
+      interruptTurn();
+      activeCallerItem = id;
+      greeting = '';
+      replyPending = true;
+    }
+    verifyNextCaller();
+    requestResponse();
+  }
+
+  function observeCallerItem(id, stage) {
+    if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id) || deletingItems.has(id) || finishedCallerItems.has(id)) return;
+    const item = callerItems.get(id) || {};
+    item[stage] = true;
+    callerItems.set(id, item);
+    verifyNextCaller();
   }
 
   function pruneAudio() {
@@ -336,7 +418,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   }
 
   function appendOutput(event) {
-    if (!callerHasAudio || !responding || responding.id !== event.response_id || responding.turn !== turn || speaking) return;
+    if (!callerHasAudio || !responding || responding.id !== event.response_id || responding.turn !== turn) return;
     pruneAudio();
     const key = `${event.item_id}:${event.content_index}`;
     let part = audioParts.get(key);
@@ -379,12 +461,16 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     playAvailableAudio();
   }
 
-  async function executeTools(response, responseTurn) {
+  async function executeTools(response, { turn: responseTurn, callerItemId }) {
     const calls = (response.output || []).filter(item => item.type === 'function_call' && item.call_id && !handledToolCalls.has(item.call_id));
     if (!calls.length) return;
     const toolSignal = AbortSignal.any([lifecycle.signal, toolTurn.signal]);
     for (const item of calls) handledToolCalls.add(item.call_id);
     const wait = calls.some(item => item.name === WAIT_FOR_USER.name);
+    if (wait && callerItemId) {
+      if (activeCallerItem === callerItemId) activeCallerItem = undefined;
+      discardCallerItem(callerItemId);
+    }
     for (const item of calls) {
       if (closed) return;
       let result = '{"status":"unavailable"}';
@@ -402,7 +488,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
       } catch { /* Let the caller know the requested information is unavailable. */ }
       if (!closed) send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: item.call_id, output: result } });
     }
-    if (!wait && !closed && responseTurn === turn && !speaking) {
+    if (!wait && !closed && responseTurn === turn) {
       replyPending = true;
       requestResponse();
     }
@@ -417,20 +503,27 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
         break;
       case 'input_audio_buffer.speech_started':
         if (!activated) break;
-        if (responding || output.length || source.queuedDuration > 0) interruptions++;
-        interruptTurn();
         speaking = true;
-        replyPending = false;
-        greeting = '';
-        discardPlayback();
         break;
       case 'input_audio_buffer.committed':
         if (!activated) break;
         speaking = false;
-        replyPending = true;
+        observeCallerItem(event.item_id, 'committed');
         requestResponse();
         break;
+      case 'conversation.item.added':
+      case 'conversation.item.created':
+        if (activated && event.item?.role === 'user' && event.item.content?.some(part => part.type === 'input_audio'))
+          observeCallerItem(event.item.id, 'added');
+        break;
+      case 'conversation.item.deleted':
+        if (deletingItems.delete(event.item_id)) requestResponse();
+        break;
       case 'response.created':
+        if (event.response?.metadata?.sh_caller_check) {
+          if (event.response.metadata.sh_caller_check === callerCheck?.eventId) callerCheck.responseId = event.response.id;
+          break;
+        }
         if (responding) {
           responding.id = event.response.id;
           if (responding.turn !== turn) {
@@ -446,8 +539,18 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
         break;
       case 'response.done': {
         const response = event.response;
+        if (response?.metadata?.sh_caller_check) {
+          if (response.metadata.sh_caller_check === callerCheck?.eventId) {
+            callerCheck.responseId = undefined;
+            const text = response.output?.flatMap(item => item.content || []).map(part => part.text || '').join('').trim();
+            const valid = response.status === 'completed' && (text === 'CALLER' || text === 'IGNORE');
+            finishCallerCheck(valid && text === 'CALLER', !valid);
+          }
+          break;
+        }
         if (!responding || responding.id !== response?.id) break;
-        const responseTurn = responding.turn;
+        const completed = responding;
+        const responseTurn = completed.turn;
         responding = undefined;
         finishOutput(response.id);
         if (response.status === 'failed' && responseTurn === turn) {
@@ -455,13 +558,15 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
           break;
         }
         if (response.status === 'completed' && responseTurn === turn) {
-          void executeTools(response, responseTurn).catch(() => fail(mediaError('REALTIME_TOOL', 'The AI assistant could not complete a tool response.')));
+          void executeTools(response, completed).catch(() => fail(mediaError('REALTIME_TOOL', 'The AI assistant could not complete a tool response.')));
         }
         requestResponse();
         break;
       }
       case 'error':
-        if (!configured) fail(mediaError('REALTIME_SESSION', 'OpenAI did not accept the AI voice session configuration.'));
+        if (callerCheck && event.error?.event_id === callerCheck.eventId) finishCallerCheck(false, true);
+        else if (event.error?.event_id?.startsWith('sh-caller-check-')) break;
+        else if (!configured) fail(mediaError('REALTIME_SESSION', 'OpenAI did not accept the AI voice session configuration.'));
         else if (!['ai-voice-truncate', 'ai-voice-cancel'].includes(event.error?.event_id)) {
           fail(mediaError('REALTIME_EVENT', 'OpenAI rejected an AI voice operation.'));
         }
@@ -531,7 +636,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
         tools: [...tools, WAIT_FOR_USER], tool_choice: 'auto', audio: {
           input: { format: PCM_FORMAT, noise_reduction: filter ? null : { type: 'near_field' },
             turn_detection: { type: 'server_vad', threshold: 0.65, prefix_padding_ms: 300,
-              silence_duration_ms: 450, create_response: false, interrupt_response: true } },
+              silence_duration_ms: 450, create_response: false, interrupt_response: false } },
           output: { format: PCM_FORMAT, voice }
         }
       } })) {

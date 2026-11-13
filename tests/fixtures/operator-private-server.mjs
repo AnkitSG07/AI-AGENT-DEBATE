@@ -55,6 +55,8 @@ globalThis.fetch = async (value, options = {}) => {
       channel_type: scenario.livechat ? 'livechat' : 'whatsapp', active: true,
       whatsapp_channel_active: true,
       whatsapp_channel_valid_until: new Date(Date.now() + (scenario.closedWindow ? -1000 : 60000)).toISOString() }] });
+    if (model === 'discuss.channel' && operation === 'search_read' && scenario.callerChannels)
+      return result({ result: scenario.callerChannels });
     if (model === 'discuss.channel' && operation === 'message_post') {
       if (scenario.messagePostLost) throw new Error('Synthetic Odoo acknowledgement lost after accepting message');
       return result({ result: Object.hasOwn(scenario, 'messagePostResult') ? scenario.messagePostResult : 920 });

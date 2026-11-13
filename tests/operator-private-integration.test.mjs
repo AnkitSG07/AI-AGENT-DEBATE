@@ -376,6 +376,43 @@ test('actual Meta webhook aliases require configured signature and accept a vali
   assert.equal((await configured.calls()).length, 0, 'Fixture has provider forwarding explicitly disabled');
 });
 
+test('signed WhatsApp call history links the exact caller and preserves identity on a sparse terminal event', async t => {
+  const f = await startFixture({ callbacks: true }); t.after(f.close);
+  const token = await f.grant(await f.login()), timestamp = Math.floor(Date.now() / 1000);
+  const caller = '919000000001', callId = 'fixture-call-identity';
+  await f.scenario({ callerChannels: [
+    { id: 21, name: 'Wrong country prefix', whatsapp_number: '449000000001', whatsapp_partner_id: [50, 'Wrong caller'] },
+    { id: 22, name: 'Fixture WhatsApp conversation', whatsapp_number: '+91 90000 00001', whatsapp_partner_id: [51, 'Exact caller'] }
+  ] });
+  const metadata = { display_phone_number: '+919000000002', phone_number_id: '789001' };
+  const send = call => {
+    const body = { field: 'calls', value: { metadata,
+      contacts: [{ wa_id: '919000000003', profile: { name: 'Unrelated contact' } }], calls: [call] } };
+    const signature = 'sha256=' + createHmac('sha256', 'fixture-meta-app-secret').update(JSON.stringify(body)).digest('hex');
+    return f.request('/webhook', { method: 'POST', body, headers: { 'x-hub-signature-256': signature } });
+  };
+  const opened = await send({ id: callId, event: 'connect', direction: 'USER_INITIATED', from: caller,
+    to: '919000000002', timestamp });
+  assert.equal(opened.status, 200, opened.text);
+  assert.equal(opened.data.calls[0].customer_phone, caller);
+  assert.equal(opened.data.calls[0].customer_name, '');
+  const ended = await send({ id: callId, event: 'terminate', direction: 'USER_INITIATED', to: '919000000002', timestamp: timestamp + 1 });
+  assert.equal(ended.status, 200, ended.text);
+  let observed = [];
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const history = await f.request('/api/whatsapp-calls/logs?limit=10', { token });
+    assert.equal(history.status, 200, history.text);
+    const rows = history.data.calls.filter(row => row.call_id === callId);
+    observed = rows.map(row => ({ event: row.event, phone: row.customer_phone, name: row.customer_name, channel: row.odoo_channel_id }));
+    if (rows.length === 2 && rows.every(row => row.customer_name === 'Exact caller')) {
+      assert.ok(rows.every(row => row.customer_phone === caller && row.odoo_channel_id === 22));
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail('The exact verified caller was not projected onto both history rows: ' + JSON.stringify(observed));
+});
+
 test('actual training routes require administrator approval and public feedback remains pending/public', async t => {
   const f = await startFixture(); t.after(f.close); const sudo = await f.login('SUDO'), ordinary = await f.login();
   const body = { ruleText: 'Fixture rule only', approvedBy: 'forged-admin' };
