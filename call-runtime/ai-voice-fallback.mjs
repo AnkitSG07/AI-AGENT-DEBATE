@@ -4,7 +4,7 @@ import { startAiVoiceMedia } from './ai-voice-media.mjs';
 const phone = value => String(value || '').trim().replace(/^\+/, '');
 const validPhone = value => /^[1-9]\d{6,14}$/.test(value);
 const maxOfferAgeMs = 25000;
-const greeting = 'Greet the caller in one brief sentence. Say you are the Smart Handicrafts AI assistant, then ask what you can help them with. Use the caller’s language when clear.';
+const greeting = 'Open naturally: “Hi, you’ve reached Smart Handicrafts’ automated product desk. How can I help?” If the caller has already spoken in Hindi or Hinglish, use the equivalent in their language. Say it once and leave space for an answer.';
 
 /** Arm only verified, recent incoming calls covered by the server's rollout. */
 export function createAiVoiceFallback({ env = process.env, loadInstructions, tools, callTool, saveEnquiry,
@@ -23,7 +23,7 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
   }
   const active = new Map();
   let instructions, closed = false;
-  const log = stage => logger.info?.('SH_AI_VOICE', JSON.stringify({ stage }));
+  const log = (stage, stats) => logger.info?.('SH_AI_VOICE', JSON.stringify({ stage, ...stats }));
 
   function release(entry) {
     if (active.get(entry.id) === entry) active.delete(entry.id);
@@ -63,9 +63,10 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       };
       const media = await startMedia({ roomName: session.roomName, customerIdentity: session.customerIdentity,
         identity, livekitUrl: config.wsUrl, livekitApiKey: config.apiKey, livekitApiSecret: config.apiSecret,
-        openaiApiKey: apiKey, model: env.SH_AI_VOICE_MODEL || 'gpt-realtime', voice: env.SH_AI_VOICE_NAME || 'marin',
+        openaiApiKey: apiKey, model: env.SH_AI_VOICE_MODEL || 'gpt-realtime', voice: env.SH_AI_VOICE_NAME || 'cedar',
         instructions: prompt, tools, signal: controller.signal, timeoutMs: 6000,
         onMediaReady: onReady,
+        onPlaybackStats: stats => log('playback', stats),
         onError: error => {
           if (/^AI_VOICE_[A-Z_]+$/.test(error?.code || '')) log(error.code);
         },

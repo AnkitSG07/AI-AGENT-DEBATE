@@ -96,6 +96,10 @@ await test('prepares the room and session before greeting and only forwards exac
   assert.equal(h.seen.websocket.options.headers.Authorization, 'Bearer fake-key');
   assert.equal(h.seen.published.options.source, 1);
   assert.deepEqual(sent(h.seen, 'session.update')[0].session.audio.input.format, { type: 'audio/pcm', rate: 24000 });
+  assert.equal(sent(h.seen, 'session.update')[0].session.audio.output.voice, 'cedar');
+  assert.equal(sent(h.seen, 'session.update')[0].session.audio.input.turn_detection.threshold, 0.65);
+  assert.deepEqual(sent(h.seen, 'session.update')[0].session.audio.input.noise_reduction, { type: 'near_field' });
+  assert.ok(h.seen.source.queueSize >= 180);
   assert.equal(h.seen.ready, 0);
   assert.equal(voice.speak('Greet in Hindi.'), undefined);
   const other = h.publication(OTHER);
@@ -151,12 +155,13 @@ await test('preserves PCM offsets across deltas and cuts queued audio on a calle
   voice.speak();
   await setImmediate();
   h.responseStarted('greet');
-  const pcm = Buffer.alloc(1920);
+  const pcm = Buffer.alloc(960 * 9);
   pcm.writeInt16LE(-222, 0);
   pcm.writeInt16LE(345, 960);
   const pendingCapture = Promise.withResolvers();
   h.seen.capture = () => pendingCapture.promise;
   h.delta('greet', pcm.subarray(0, 101));
+  assert.equal(h.seen.frames.length, 1, 'short first burst is held before playout');
   h.delta('greet', pcm.subarray(101));
   assert.equal(h.seen.frames[1].data[0], -222);
   assert.equal(h.seen.frames.length, 2);
@@ -174,6 +179,51 @@ await test('preserves PCM offsets across deltas and cuts queued audio on a calle
   assert.equal(h.seen.frames.length, 2);
   assert.equal(sent(h.seen, 'response.create').length, 2);
   await voice.close();
+});
+
+await test('a short reply flushes when complete and pads the final audio frame', async () => {
+  const h = harness();
+  const voice = await h.start();
+  const caller = h.publication();
+  caller.subscribe();
+  caller.frame();
+  voice.speak();
+  await setImmediate();
+  h.responseStarted('short');
+  const pcm = Buffer.alloc(960 + 240);
+  pcm.writeInt16LE(-222, 0);
+  pcm.writeInt16LE(345, 960);
+  h.delta('short', pcm.subarray(0, 101));
+  h.delta('short', pcm.subarray(101));
+  assert.equal(h.seen.frames.length, 1);
+  h.response('short');
+  await setImmediate();
+  assert.deepEqual(h.seen.frames.slice(1).map(frame => [frame.samplesPerChannel, frame.data[0]]), [[480, -222], [480, 345]]);
+  assert.ok(h.seen.frames[2].data.subarray(120).every(sample => sample === 0));
+  await voice.close();
+});
+
+await test('a source underrun re-buffers before feeding the next partial burst', async () => {
+  const h = harness();
+  const stats = [];
+  const voice = await h.start({ onPlaybackStats: value => stats.push(value) });
+  const caller = h.publication();
+  caller.subscribe();
+  caller.frame();
+  voice.speak();
+  await setImmediate();
+  h.responseStarted('bursty');
+  h.delta('bursty', Buffer.alloc(960 * 9));
+  await setImmediate();
+  assert.equal(h.seen.frames.length, 10);
+  h.seen.source.queuedDuration = 0;
+  h.delta('bursty', Buffer.alloc(960 * 2));
+  assert.equal(h.seen.frames.length, 10);
+  h.delta('bursty', Buffer.alloc(960 * 7));
+  await setImmediate();
+  assert.equal(h.seen.frames.length, 19);
+  await voice.close();
+  assert.deepEqual(stats, [{ rebufferCount: 1, interruptions: 0 }]);
 });
 
 await test('passes tool arguments once, denies unlisted names, and follows a completed tool result', async () => {

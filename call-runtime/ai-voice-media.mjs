@@ -7,10 +7,13 @@ import { MediaError, identifier, requireValue } from '../media/errors.mjs';
 const RATE = 24_000;
 const FRAME_MS = 20;
 const FRAME_BYTES = RATE * FRAME_MS / 1000 * 2;
+const START_BUFFER_MS = 180;
+const START_BUFFER_BYTES = START_BUFFER_MS / FRAME_MS * FRAME_BYTES;
+const SOURCE_QUEUE_MS = 260;
 const MAX_OUTPUT_BYTES = RATE * 2 * 30;
 const MAX_INPUT_BACKLOG = 192 * 1024;
 const PCM_FORMAT = { type: 'audio/pcm', rate: RATE };
-const DEFAULT_GREETING = 'Give a brief greeting and introduce yourself as the AI assistant.';
+const DEFAULT_GREETING = 'Say: “Hi, you’ve reached Smart Handicrafts’ automated product desk. How can I help?”';
 const LITTLE_ENDIAN = endianness() === 'LE';
 
 function mediaError(code, message) {
@@ -40,8 +43,8 @@ function pcmSamples(bytes) {
 export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketClient = globalThis.WebSocket } = {}) {
   const {
     roomName, customerIdentity, livekitUrl, livekitApiKey, livekitApiSecret, livekitToken,
-    openaiApiKey, model = 'gpt-realtime', voice = 'marin', instructions, tools = [],
-    onToolCall, onError, onDisconnect, onMediaReady, signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000
+    openaiApiKey, model = 'gpt-realtime', voice = 'cedar', instructions, tools = [],
+    onToolCall, onError, onDisconnect, onMediaReady, onPlaybackStats, signal, timeoutMs = 8_000, mediaTimeoutMs = 15_000
   } = options;
   const identity = options.identity || `sh-ai-${createHash('sha256').update(identifier(roomName, 'room')).digest('hex').slice(0, 40)}`;
   identifier(roomName, 'room');
@@ -77,7 +80,8 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   let socket, source, localTrack, reader, closeTask, disconnectTask, mediaTimer;
   let connected = false, published = false, configured = false, started = false, closed = false;
   let callerHasAudio = false, mediaReady = false, activated = false, greeting = '', queuedBytes = 0;
-  let playbackGeneration = 0, pumping = false, priming = false;
+  let playbackGeneration = 0, pumping = false, priming = false, playbackStarted = false;
+  let rebufferCount = 0, interruptions = 0;
   let turn = 0, speaking = false, replyPending = false, responding, responseNumber = 0;
   const configuration = Promise.withResolvers();
   const stopped = Promise.withResolvers();
@@ -112,6 +116,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     stopReader();
     output.length = 0;
     audioParts.clear();
+    if (activated) notify(onPlaybackStats, { rebufferCount, interruptions });
     try { source?.clearQueue(); } catch { /* The room may already be disconnected. */ }
     try { socket?.close(); } catch { /* The socket may already be closed. */ }
     const disconnect = detachRoom();
@@ -178,14 +183,15 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     let queuedSamples = Math.ceil((source?.queuedDuration || 0) * RATE / 1000);
     const pending = [...audioParts.values()].reverse();
     playbackGeneration++;
+    playbackStarted = false;
     output.length = 0;
     queuedBytes = 0;
     audioParts.clear();
     source?.clearQueue();
     for (const part of pending) {
-      const unplayed = Math.min(queuedSamples, part.sent);
+      const unplayed = Math.min(queuedSamples, part.sent + part.padding);
       queuedSamples -= unplayed;
-      const played = part.sent - unplayed;
+      const played = part.sent - Math.max(0, unplayed - part.padding);
       if (played < part.received || !part.done) {
         send({ type: 'conversation.item.truncate', event_id: 'ai-voice-truncate', item_id: part.itemId,
           content_index: part.contentIndex, audio_end_ms: Math.floor(played * 1000 / RATE) });
@@ -262,7 +268,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
   function pruneAudio() {
     let queued = Math.ceil((source?.queuedDuration || 0) * RATE / 1000);
     for (const [key, part] of [...audioParts.entries()].reverse()) {
-      const unplayed = Math.min(queued, part.sent);
+      const unplayed = Math.min(queued, part.sent + part.padding);
       queued -= unplayed;
       if (!unplayed && part.done && part.sent === part.received) audioParts.delete(key);
     }
@@ -274,10 +280,11 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     try {
       while (output.length && !closed) {
         const generation = playbackGeneration;
-        const { part, bytes } = output.shift();
+        const { part, bytes, realSamples } = output.shift();
         queuedBytes -= bytes.length;
         const samples = pcmSamples(bytes);
-        part.sent += samples.length;
+        part.sent += realSamples;
+        part.padding += samples.length - realSamples;
         try {
           await source.captureFrame(new rtc.AudioFrame(samples, RATE, 1, samples.length));
         } catch {
@@ -293,6 +300,19 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     }
   }
 
+  function playAvailableAudio() {
+    if (pumping || closed || !output.length) return;
+    if (playbackStarted && source.queuedDuration < FRAME_MS / 2) {
+      // A fresh burst after the native queue drained mid-reply needs a
+      // prebuffer again. A completed short reply can play immediately.
+      playbackStarted = false;
+      if (output[0].part.sent && !output[0].part.done) rebufferCount++;
+    }
+    if (!playbackStarted && queuedBytes < START_BUFFER_BYTES && !output[0].part.done) return;
+    playbackStarted = true;
+    void pumpOutput().catch(() => fail(mediaError('LIVEKIT_AUDIO_OUTPUT', 'The AI assistant could not play audio to the caller.')));
+  }
+
   function appendOutput(event) {
     if (!callerHasAudio || !responding || responding.id !== event.response_id || responding.turn !== turn || speaking) return;
     pruneAudio();
@@ -300,7 +320,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     let part = audioParts.get(key);
     if (!part) {
       part = { itemId: event.item_id, contentIndex: event.content_index, responseId: event.response_id,
-        sent: 0, received: 0, done: false, remainder: Buffer.alloc(0) };
+        sent: 0, padding: 0, received: 0, done: false, remainder: Buffer.alloc(0) };
       audioParts.set(key, part);
     }
     const bytes = Buffer.concat([part.remainder, Buffer.from(event.delta, 'base64')]);
@@ -311,12 +331,12 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     }
     let offset = 0;
     while (offset + FRAME_BYTES <= bytes.length) {
-      output.push({ part, bytes: bytes.subarray(offset, offset + FRAME_BYTES) });
+      output.push({ part, bytes: bytes.subarray(offset, offset + FRAME_BYTES), realSamples: FRAME_BYTES / 2 });
       queuedBytes += FRAME_BYTES;
       offset += FRAME_BYTES;
     }
     part.remainder = bytes.subarray(offset);
-    void pumpOutput().catch(() => fail(mediaError('LIVEKIT_AUDIO_OUTPUT', 'The AI assistant could not play audio to the caller.')));
+    playAvailableAudio();
   }
 
   function finishOutput(responseId) {
@@ -326,11 +346,15 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
       const tail = part.remainder.subarray(0, part.remainder.length & ~1);
       part.remainder = Buffer.alloc(0);
       if (tail.length) {
-        output.push({ part, bytes: tail });
-        queuedBytes += tail.length;
+        // LiveKit packetizes in whole audio blocks. Pad the last frame so
+        // short word endings play now instead of being held for the next turn.
+        const frame = Buffer.alloc(FRAME_BYTES);
+        tail.copy(frame);
+        output.push({ part, bytes: frame, realSamples: tail.length / 2 });
+        queuedBytes += frame.length;
       }
     }
-    void pumpOutput().catch(() => fail(mediaError('LIVEKIT_AUDIO_OUTPUT', 'The AI assistant could not play audio to the caller.')));
+    playAvailableAudio();
   }
 
   async function executeTools(response, responseTurn) {
@@ -369,6 +393,7 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
         break;
       case 'input_audio_buffer.speech_started':
         if (!activated) break;
+        if (responding || output.length || source.queuedDuration > 0) interruptions++;
         interruptTurn();
         speaking = true;
         replyPending = false;
@@ -454,8 +479,8 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
     if (closed) { void detachRoom(); return; }
     try {
       subscribeExisting();
-      source = new rtc.AudioSource(RATE, 1, 60);
-      localTrack = rtc.LocalAudioTrack.createAudioTrack('AI assistant', source);
+      source = new rtc.AudioSource(RATE, 1, SOURCE_QUEUE_MS);
+      localTrack = rtc.LocalAudioTrack.createAudioTrack('Smart Handicrafts voice', source);
       await room.localParticipant.publishTrack(localTrack, new rtc.TrackPublishOptions({ source: rtc.TrackSource.SOURCE_MICROPHONE }));
     } catch {
       throw mediaError('LIVEKIT_PUBLISH', 'The AI assistant could not publish call audio.');
@@ -478,7 +503,9 @@ export async function startAiVoiceMedia(options, { rtc: injectedRtc, WebSocketCl
       if (!send({ type: 'session.update', event_id: 'ai-voice-session', session: {
         type: 'realtime', instructions, output_modalities: ['audio'], max_output_tokens: 512,
         tools, tool_choice: 'auto', audio: {
-          input: { format: PCM_FORMAT, turn_detection: { type: 'server_vad', create_response: false, interrupt_response: true } },
+          input: { format: PCM_FORMAT, noise_reduction: { type: 'near_field' },
+            turn_detection: { type: 'server_vad', threshold: 0.65, prefix_padding_ms: 300,
+              silence_duration_ms: 450, create_response: false, interrupt_response: true } },
           output: { format: PCM_FORMAT, voice }
         }
       } })) {
