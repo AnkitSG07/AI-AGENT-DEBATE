@@ -13,6 +13,7 @@ const groups = {
   unit: [
     'tests/operator-r10.test.mjs', 'tests/operator-r12.test.mjs',
     'reporting/test/operator-reporting.test.mjs', 'operator-browser-auth.test.mjs',
+    'operator-android-access.test.mjs',
     'tests/operator-call-security.test.mjs', 'tests/operator-ai-r13.test.mjs',
     'tests/operator-call-permission.test.mjs',
     'tests/operator-call-latency.test.mjs',
@@ -68,7 +69,8 @@ const groups = {
     'integrations/odoo/tests/native-embed-r12.test.cjs',
     'integrations/odoo/tests/hub-ui-r12.test.cjs', 'integrations/odoo/tests/transport-r12.test.cjs',
     'integrations/odoo/tests/notification-setup-r12.test.cjs',
-    'integrations/odoo/tests/r13/workflow-browser.test.cjs'],
+    'integrations/odoo/tests/r13/workflow-browser.test.cjs',
+    'integrations/odoo/tests/r13/enrolled-operator-access.test.cjs'],
   firestore: ['tests/operator-r12-emulator.test.mjs', 'tests/operator-ai-r13-emulator.test.mjs'],
   media: ['tests/simulator-media-r13/real-media.test.mjs']
 };

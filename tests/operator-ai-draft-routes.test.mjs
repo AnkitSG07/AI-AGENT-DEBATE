@@ -21,7 +21,7 @@ function signedClaims(claims) {
   return `shb1.${payload}.${createHmac('sha256', key).update(`shb1.${payload}`).digest('base64url')}`;
 }
 
-async function fixture(t, { enabled = true, configured = true, generate = async () => RESULT } = {}) {
+async function fixture(t, { enabled = true, configured = true, generate = async () => RESULT, authOptions = {} } = {}) {
   let now = START;
   const calls = [];
   const app = express();
@@ -30,7 +30,8 @@ async function fixture(t, { enabled = true, configured = true, generate = async 
     allowedHubOrigins: [HUB], clock: () => now,
     readProfileSession: req => req.headers['x-test-profile-session'] === 'synthetic-session'
       ? { profile: 'Smart handicrafts', exp: START + 7200000 } : null,
-    authenticateNative: async () => { throw new Error('Native inference must be rejected before device lookup.'); }
+    authenticateNative: async () => { throw new Error('Native inference must be rejected before device lookup.'); },
+    ...authOptions
   });
   auth.registerRoutes(app);
   app.use(auth.guard);
@@ -48,11 +49,11 @@ async function fixture(t, { enabled = true, configured = true, generate = async 
   });
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  async function request(path = DRAFT_PATH, { token, origin = HUB, body = INPUT, headers = {}, signal } = {}) {
-    const response = await fetch(base + path, { method: 'POST',
+  async function request(path = DRAFT_PATH, { token, origin = HUB, body = INPUT, headers = {}, signal, method = 'POST' } = {}) {
+    const response = await fetch(base + path, { method,
       headers: { 'Content-Type': 'application/json', ...(origin ? { Origin: origin } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers },
-      body: JSON.stringify(body), signal: signal || AbortSignal.timeout(3000)
+      ...(method !== 'GET' ? { body: JSON.stringify(body) } : {}), signal: signal || AbortSignal.timeout(3000)
     });
     return { status: response.status, headers: response.headers, data: await response.json() };
   }
@@ -103,6 +104,41 @@ test('manual drafting succeeds through the real guard while global automated inf
   const legacy = await f.request('/api/ai-mode/chat', { token });
   assert.equal(legacy.status, 503);
   assert.equal(legacy.data.code, 'AI_DISABLED');
+  assert.equal(f.calls.length, 1);
+});
+
+test('enrolled-device proof grants manual drafting, reauthorization keeps admission identity, and revocation blocks inference', async t => {
+  const id = 'android_11111111-2222-3333-4444-555555555555', nativeToken = `${id}.${'A'.repeat(43)}`;
+  let current = { id, credentialGeneration: 1, revokedAt: 0, tokenExpiresAt: START + 3600000 };
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const f = await fixture(t, { generate: async () => { entered.resolve(); await release.promise; return RESULT; },
+    authOptions: { androidAccessEnabled: true,
+      authenticateNative: async raw => { assert.equal(raw, nativeToken); return current; },
+      verifyAndroidCapability: async () => current } });
+  async function enrolledGrant() {
+    const challenge = await f.request('/api/operator-browser-auth/android/challenge', { body: {} });
+    assert.equal(challenge.status, 200);
+    const marker = await f.request(`/api/whatsapp-calls/recent?operator_device_id=sh_proof_${challenge.data.challenge}`,
+      { method: 'GET', token: nativeToken, origin: null });
+    assert.equal(marker.status, 200); assert.deepEqual(marker.data, { ok: true, calls: [] });
+    const grant = await f.request('/api/operator-browser-auth/android/token', {
+      body: { challenge: challenge.data.challenge, verifier: challenge.data.verifier } });
+    assert.equal(grant.status, 200); return grant.data;
+  }
+  const first = await enrolledGrant(), browserToken = await f.issue();
+  const pending = f.request(DRAFT_PATH, { token: first.token });
+  t.after(() => release.resolve());
+  await entered.promise;
+  const second = await enrolledGrant();
+  assert.equal(second.baseDeviceId, first.baseDeviceId);
+  assert.notEqual(second.operatorSessionId, first.operatorSessionId);
+  assert.equal((await f.request(DRAFT_PATH, { token: second.token, body: { ...INPUT, deviceId: 'spoofed' } })).status, 429);
+  assert.equal((await f.request('/api/whatsapp-calls/terminate', { token: browserToken, body: {} })).status, 200);
+  assert.equal((await f.request('/api/ai-mode/chat', { token: second.token })).status, 403);
+  release.resolve();
+  assert.deepEqual((await pending).data, { ok: true, channelId: 42, ...RESULT });
+  current = { ...current, revokedAt: START };
+  assert.equal((await f.request(DRAFT_PATH, { token: second.token })).status, 401);
   assert.equal(f.calls.length, 1);
 });
 

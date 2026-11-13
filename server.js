@@ -110,6 +110,12 @@ const operatorBrowserAuth = createOperatorBrowserAuth({
   readProfileSession,
   allowedHubOrigins: allowedOrigins,
   authorizeDocumentLink: operatorDocumentLinks.authorize,
+  androidAccessEnabled: process.env.SH_ANDROID_OPERATOR_ACCESS_ENABLED === 'true',
+  verifyAndroidCapability: async ({ deviceId, credentialGeneration }) => {
+    const registry = operatorFirestoreRuntime.deviceRegistry;
+    if (!registry) throw new Error('Device authentication is unavailable.');
+    return registry.verifyCapability({ deviceId, credentialGeneration });
+  },
   authenticateNative: async rawBearer => {
     if (!operatorFirestoreRuntime.deviceRegistry) throw new Error("Device authentication is unavailable.");
     return operatorFirestoreRuntime.deviceRegistry.authenticate(rawBearer);

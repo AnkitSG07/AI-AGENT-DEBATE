@@ -9,7 +9,8 @@ export function registerOperatorAiDraftRoutes(app, { provider, enabled = false, 
   app.post('/api/ai-mode/draft', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const actor = req.operatorAuth;
-    if (actor?.kind !== 'browser' || !actor.scopes?.includes('ai:write') || !actor.baseDeviceId) {
+    const draftScope = actor?.source === 'android' ? 'ai:draft' : 'ai:write';
+    if (actor?.kind !== 'browser' || !actor.scopes?.includes(draftScope) || !actor.baseDeviceId) {
       return res.status(401).json({ ok: false, code: 'OPERATOR_AUTH_REQUIRED',
         error: 'Connect operator services to prepare an AI reply.' });
     }

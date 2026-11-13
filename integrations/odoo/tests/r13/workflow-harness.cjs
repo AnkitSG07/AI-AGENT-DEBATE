@@ -51,10 +51,11 @@ function messagesFor(channelId) {
   ];
 }
 
-async function fixture({ width = 390, height = 844, mobile = true, rights = true, services = null, connect = false } = {}) {
+async function fixture({ width = 390, height = 844, mobile = true, rights = true, services = null, connect = false, initScript = '' } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, isMobile: mobile,
     hasTouch: mobile, colorScheme:'light', serviceWorkers:'block',
     userAgent: mobile ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' : undefined });
+  if (initScript) await context.addInitScript({ content: initScript });
   const page = await context.newPage(), errors = [], requests = [], held = new Map();
   const config = { rights, failMessages: false, holdMessages: new Set(), labels: [{id:501,name:'Demo customer',color:4}],
     assignments: new Map([[101,[501]],[102,[]]]), messages: new Map([[101,messagesFor(101)],[102,messagesFor(102)]]) };

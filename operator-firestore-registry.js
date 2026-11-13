@@ -412,6 +412,20 @@ export function createFirestoreDeviceRegistry({
     if (!ID_PATTERN.test(deviceId || '')) throw badInput('A valid device ID is required.');
     return guarded(async () => deviceRow(await collections.devices.doc(deviceId).get()));
   }
+  // Verify a server-signed browser capability against the current enrollment.
+  // This never accepts a device ID alone as authority; the HTTP adapter first
+  // verifies the signed grant, then supplies its bound credential generation.
+  async function verifyCapability({ deviceId, credentialGeneration } = {}) {
+    if (!ID_PATTERN.test(deviceId || '') || !Number.isSafeInteger(credentialGeneration) || credentialGeneration < 1)
+      throw badInput('A valid enrolled device capability is required.');
+    return guarded(() => firestore.runTransaction(async tx => {
+      const row = deviceRow(await tx.get(collections.devices.doc(deviceId)));
+      if (!row || row.credentialGeneration !== credentialGeneration) throw unauthorized();
+      const snapshot = await tx.get(collections.credentials.doc(row.tokenHash));
+      const index = snapshot.exists ? snapshot.data() : null;
+      return validateCurrent(row, index, row.tokenHash, nowMs());
+    }, { readOnly: true }), 'verify-capability');
+  }
   const observeAppMessages = input => guarded(() => appMessages.observe(input));
   const listAppMessageState = channelIds => guarded(() => appMessages.list(channelIds));
   const closeAppMessageState = () => appMessages.close();
@@ -533,7 +547,7 @@ export function createFirestoreDeviceRegistry({
   return Object.freeze({
     version: FIRESTORE_REGISTRY_VERSION, collectionPrefix,
     checkAvailability, isEnrollmentAvailable, issueEnrollment, enroll, authenticate, updateNativeClient, updateToken, renewLease, closeAppMessageState,
-    rotateCredential, revoke, revokeDevice, listDevices, getDevice, clearFcmToken,
+    rotateCredential, revoke, revokeDevice, listDevices, getDevice, verifyCapability, clearFcmToken,
     getDeliveries, claimDelivery, finishDelivery, pruneExpiredRecoveries,
     observeAppMessages, listAppMessageState, changeAppMessageState
   });

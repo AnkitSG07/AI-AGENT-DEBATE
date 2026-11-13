@@ -2,6 +2,7 @@
 // Odoo uid, device label, presence heartbeat or native build is never identity.
 import { createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createAndroidAccessChallenges } from './operator-android-access.js';
 
 export const OPERATOR_BROWSER_AUTH_VERSION = 'sh-operator-browser-auth-v1';
 export const OPERATOR_BROWSER_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -13,6 +14,11 @@ export const OPERATOR_BROWSER_SCOPES = Object.freeze(['calls:read', 'calls:write
   'mail:read', 'mail:write', 'contacts:read', 'contacts:write',
   'documents:read', 'documents:write', 'ai:read', 'ai:write']);
 const SCOPES = OPERATOR_BROWSER_SCOPES;
+export const ANDROID_OPERATOR_SCOPES = Object.freeze(['mail:read', 'mail:write',
+  'documents:read', 'documents:write', 'ai:draft']);
+const ANDROID_HUB_ORIGIN = 'https://www.smarthandicrafts.com';
+const ANDROID_DEVICE_ID = /^android_[A-Za-z0-9_-]{16,100}$/;
+const ANDROID_SESSION_ID = /^[a-f0-9]{24}$/;
 const AUTH_HEADER = 'x-sh-operator-auth';
 const DEFAULT_ORIGINS = ['https://www.smarthandicrafts.com', 'https://smarthandicrafts.com', 'https://vaidahi-kala-pvt-ltd.odoo.com'];
 const PUSH_HELPERS = new Set(['/api/push/subscribe', '/api/push/unsubscribe', '/api/push/status', '/api/push/test', '/api/push/test-call']);
@@ -93,6 +99,20 @@ function nativeReadPath(path) {
   if (!match || ['events', 'diagnostics', 'test', 'note', 'outgoing', 'accept', 'reject', 'terminate', 'cancel-pending-outgoing'].includes(match[1])) return false;
   try { return OPAQUE.test(decodeURIComponent(match[1])); } catch { return false; }
 }
+const ANDROID_MAIL_READ_PATHS = new Set(['/api/zoho-mail/status', '/api/zoho-mail/account',
+  '/api/zoho-mail/folders', '/api/zoho-mail/messages']);
+function androidOperatorScope(path, method) {
+  if (READ_METHODS.has(method)) {
+    if (ANDROID_MAIL_READ_PATHS.has(path) || /^\/api\/zoho-mail\/message\/[^/]{1,240}$/.test(path)) return 'mail:read';
+    if (path === '/api/odoo-documents/tree' || /^\/api\/odoo-documents\/(?:folder|file|view|download)\/[1-9][0-9]{0,15}$/.test(path)) return 'documents:read';
+  }
+  if (method === 'POST') {
+    if (['/api/zoho-mail/send', '/api/zoho-mail/reply'].includes(path)) return 'mail:write';
+    if (path === '/api/odoo-documents/share') return 'documents:write';
+    if (path === '/api/ai-mode/draft') return 'ai:draft';
+  }
+  return null;
+}
 
 const STRING_FIELDS = new Set(['id', 'call_id', 'callId', 'provider_call_id', 'providerCallId', 'session_id', 'sessionId',
   'direction', 'event', 'status', 'state', 'source', 'customer_name', 'customerName', 'caller_name', 'customer_phone',
@@ -151,6 +171,7 @@ export function createProfileLoginLimiter({ clock = Date.now, maxAttempts = 8, w
 }
 
 export function createOperatorBrowserAuth({ secret, readProfileSession, authenticateNative, authorizeDocumentLink,
+  androidAccessEnabled = false, verifyAndroidCapability,
   allowedHubOrigins = DEFAULT_ORIGINS, backendOrigin = 'https://ai-agent-debate.onrender.com', clock = Date.now } = {}) {
   const origins = new Set(Array.isArray(allowedHubOrigins) ? allowedHubOrigins.map(origin).filter(Boolean) : []);
   const backend = origin(backendOrigin);
@@ -158,12 +179,18 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   const signingKey = configured ? Buffer.from(hkdfSync('sha256', Buffer.from(secret),
     Buffer.from('sh-operator-browser-auth'), Buffer.from('capability-signature-v1'), 32)) : null;
   const issuerRates = new Map();
+  const activeAndroidChecks = new Map();
+  let totalAndroidChecks = 0;
+  const androidChallenges = createAndroidAccessChallenges({ clock });
   function ready() { requireAuth(configured, 503, 'BROWSER_AUTH_NOT_CONFIGURED', 'Browser call sign-in is not configured. Ask the administrator to configure the operator session secret.'); }
   function publicConfig() { return { ok: true, version: OPERATOR_BROWSER_AUTH_VERSION, authRequired: true,
     browserAuthReady: configured, browserTokenTtlMs: OPERATOR_BROWSER_TOKEN_TTL_MS, authenticatedEventStream: true }; }
   function sign(claims) {
     const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
     return `${PREFIX}.${payload}.${createHmac('sha256', signingKey).update(`${PREFIX}.${payload}`).digest('base64url')}`;
+  }
+  function androidBaseDeviceId(deviceId) {
+    return `web_${createHmac('sha256', signingKey).update(`android-operator:${deviceId}`).digest('hex').slice(0, 32)}`;
   }
   function verifyClaims(token, { expectedOrigin, recoverExpiredAccess = false } = {}) {
     ready();
@@ -177,15 +204,23 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     let claims;
     try { claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); } catch { throw failure(401, 'INVALID_BROWSER_CAPABILITY', 'The browser authorization is invalid.'); }
     const now = clock();
+    const android = safeObject(claims) && claims.source === 'android';
+    const acceptedScopes = android ? ANDROID_OPERATOR_SCOPES : SCOPES;
+    const acceptedIdentity = android
+      ? claims.profile === 'Android operator' && claims.hubOrigin === ANDROID_HUB_ORIGIN &&
+        ANDROID_DEVICE_ID.test(claims.nativeDeviceId || '') && Number.isSafeInteger(claims.nativeCredentialGeneration) &&
+        claims.nativeCredentialGeneration > 0 && claims.baseDeviceId === androidBaseDeviceId(claims.nativeDeviceId)
+      : safeObject(claims) && claims.source === undefined && claims.nativeDeviceId === undefined &&
+        claims.nativeCredentialGeneration === undefined && PROFILES.has(claims.profile);
     requireAuth(safeObject(claims) && claims.v === 1 && claims.aud === AUDIENCE && claims.iss === backend &&
-      PROFILES.has(claims.profile) && origins.has(claims.hubOrigin) && BASE_ID.test(claims.baseDeviceId || '') &&
+      acceptedIdentity && origins.has(claims.hubOrigin) && BASE_ID.test(claims.baseDeviceId || '') &&
       SESSION_ID.test(claims.operatorSessionId || '') && claims.operatorDeviceId === `${claims.baseDeviceId}::${claims.operatorSessionId}` &&
       typeof claims.jti === 'string' && /^[a-f0-9]{32}$/.test(claims.jti) && Array.isArray(claims.scopes) &&
-      claims.scopes.length >= 1 && claims.scopes.length <= SCOPES.length && new Set(claims.scopes).size === claims.scopes.length &&
-      claims.scopes.every(scope => SCOPES.includes(scope)) && time(claims.iat) && time(claims.exp) &&
+      claims.scopes.length >= 1 && claims.scopes.length <= acceptedScopes.length && new Set(claims.scopes).size === claims.scopes.length &&
+      claims.scopes.every(scope => acceptedScopes.includes(scope)) && time(claims.iat) && time(claims.exp) &&
       time(claims.grantIssuedAt) && time(claims.authExpiresAt) && claims.grantIssuedAt <= claims.iat &&
       claims.iat <= now + 30000 && claims.exp > claims.iat && claims.exp - claims.iat <= OPERATOR_BROWSER_TOKEN_TTL_MS &&
-      claims.exp <= claims.authExpiresAt && claims.authExpiresAt - claims.grantIssuedAt <= PROFILE_MAX_MS,
+      claims.exp <= claims.authExpiresAt && claims.authExpiresAt - claims.grantIssuedAt <= (android ? OPERATOR_BROWSER_TOKEN_TTL_MS : PROFILE_MAX_MS),
     401, 'INVALID_BROWSER_CAPABILITY', 'The browser authorization is invalid.');
     requireAuth((recoverExpiredAccess || now < claims.exp) && now < claims.authExpiresAt,
       401, 'BROWSER_CAPABILITY_EXPIRED', 'Operator authorization expired. Connect your operator profile again.');
@@ -197,7 +232,8 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   // Render profile, and only within the original absolute authorization lease.
   function verifyToken(token, { expectedOrigin } = {}) { return verifyClaims(token, { expectedOrigin }); }
   function result(claims) { return { ok: true, token: sign(claims), expiresAt: claims.exp, authExpiresAt: claims.authExpiresAt,
-    operatorDeviceId: claims.operatorDeviceId, baseDeviceId: claims.baseDeviceId, operatorSessionId: claims.operatorSessionId }; }
+    operatorDeviceId: claims.operatorDeviceId, baseDeviceId: claims.baseDeviceId, operatorSessionId: claims.operatorSessionId,
+    ...(claims.source === 'android' ? { source: 'android', scopes: [...claims.scopes] } : {}) }; }
   function rateIssue(req, profile) {
     const now = clock();
     for (const [id, row] of issuerRates) if (row.until <= now) issuerRates.delete(id);
@@ -215,6 +251,89 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   function sameOriginWrite(req) {
     requireAuth(req.headers?.origin === backend && req.headers?.[AUTH_HEADER] === '1',
       403, 'SAME_ORIGIN_ACTION_REQUIRED', 'Open this action from the operator sign-in page.');
+  }
+  function androidReady() {
+    requireAuth(androidAccessEnabled === true && typeof authenticateNative === 'function' &&
+      typeof verifyAndroidCapability === 'function', 503, 'ANDROID_OPERATOR_ACCESS_DISABLED',
+    'Enrolled-device operator access is not enabled.');
+  }
+  function androidRequest(req, keys) {
+    ready(); androidReady();
+    requireAuth(origins.has(ANDROID_HUB_ORIGIN) && req.headers?.origin === ANDROID_HUB_ORIGIN,
+      403, 'ANDROID_CHALLENGE_INVALID', 'Open this action from the SH Chat Hub.');
+    const url = new URL(String(req.originalUrl || req.url || req.path || ''), backend);
+    requireAuth(req.method === 'POST' && /^application\/json(?:\s*;|$)/i.test(req.headers?.['content-type'] || '') &&
+      !url.search && safeObject(req.body) && Object.keys(req.body).every(key => keys.includes(key)) && JSON.stringify(req.body).length <= 1000,
+      400, 'INVALID_ANDROID_AUTH_REQUEST', 'The device sign-in request is invalid.');
+    return { origin: ANDROID_HUB_ORIGIN, ip: req.ip || req.socket?.remoteAddress || 'unknown' };
+  }
+  function checkCurrentAndroid(device, { deviceId, credentialGeneration } = {}) {
+    requireAuth(device && ANDROID_DEVICE_ID.test(device.id || '') && device.id === deviceId &&
+      Number.isSafeInteger(device.credentialGeneration) && device.credentialGeneration > 0 &&
+      (credentialGeneration === undefined || device.credentialGeneration === credentialGeneration) &&
+      !device.revokedAt && !device.revoked && time(device.tokenExpiresAt) && device.tokenExpiresAt > clock(),
+      401, 'DEVICE_AUTH_REQUIRED', 'Device enrollment expired or was revoked.');
+    return device;
+  }
+  function androidRegistryFailure(error) {
+    const denied = error?.registryError && [400, 401, 403].includes(error.status);
+    return failure(denied ? 401 : 503, denied ? 'DEVICE_AUTH_REQUIRED' : 'DEVICE_AUTH_UNAVAILABLE',
+      denied ? 'Device enrollment expired or was revoked.' : 'Device authentication is temporarily unavailable.');
+  }
+  async function checkAndroidCapability(proof) {
+    androidReady();
+    const count = activeAndroidChecks.get(proof.deviceId) || 0;
+    requireAuth(count < 8 && totalAndroidChecks < 64, 429, 'ANDROID_AUTH_RATE_LIMITED', 'Device verification is busy. Please try again.');
+    activeAndroidChecks.set(proof.deviceId, count + 1); totalAndroidChecks++;
+    try {
+      let device;
+      try { device = await verifyAndroidCapability(proof); } catch (error) { throw androidRegistryFailure(error); }
+      return checkCurrentAndroid(device, proof);
+    } finally {
+      const remaining = (activeAndroidChecks.get(proof.deviceId) || 1) - 1;
+      if (remaining) activeAndroidChecks.set(proof.deviceId, remaining); else activeAndroidChecks.delete(proof.deviceId);
+      totalAndroidChecks--;
+    }
+  }
+  function androidMarker(req) {
+    const url = new URL(String(req.originalUrl || req.url || req.path || ''), backend);
+    const entries = [...url.searchParams];
+    if (!entries.some(([key, value]) => key === 'operator_device_id' && value.startsWith('sh_proof_'))) return null;
+    requireAuth(req.method === 'GET' && url.pathname === '/api/whatsapp-calls/recent' && entries.length === 1 &&
+      entries[0][0] === 'operator_device_id' && /^sh_proof_[A-Za-z0-9_-]{43}$/.test(entries[0][1]),
+      400, 'INVALID_ANDROID_AUTH_REQUEST', 'The device sign-in marker is invalid.');
+    return entries[0][1].slice('sh_proof_'.length);
+  }
+  async function acknowledgeAndroid(req, res, challenge) {
+    ready(); androidReady();
+    const raw = bearer(req);
+    requireAuth(raw && !raw.startsWith(`${PREFIX}.`), 403, 'NATIVE_MARKER_AUTH_REQUIRED', 'The enrolled SH Chat app must confirm this sign-in request.');
+    requireAuth(/^android_[A-Za-z0-9_-]{16,100}\.[A-Za-z0-9_-]{32,100}$/.test(raw),
+      401, 'DEVICE_AUTH_REQUIRED', 'A valid enrolled device is required.');
+    androidChallenges.inspectMarker({ challenge, ip: req.ip || req.socket?.remoteAddress || 'unknown' });
+    let device;
+    try { device = await authenticateNative(raw, req); } catch (error) { throw androidRegistryFailure(error); }
+    checkCurrentAndroid(device, { deviceId: raw.split('.')[0] });
+    androidChallenges.acknowledge({ challenge, deviceId: device.id, credentialGeneration: device.credentialGeneration });
+    res.setHeader('X-SH-Call-History', 'sh-call-history-v1');
+    return res.json({ ok: true, calls: [] });
+  }
+  async function issueAndroidChallenge(req) {
+    return { ok: true, ...androidChallenges.issue(androidRequest(req, [])) };
+  }
+  async function issueAndroidToken(req) {
+    const context = androidRequest(req, ['challenge', 'verifier']);
+    const proof = androidChallenges.consume({ ...context, challenge: req.body.challenge, verifier: req.body.verifier });
+    const device = await checkAndroidCapability({ deviceId: proof.deviceId, credentialGeneration: proof.credentialGeneration });
+    requireAuth(clock() < proof.expiresAt, 410, 'ANDROID_CHALLENGE_EXPIRED', 'This device sign-in request expired. Please try again.');
+    const now = clock(), authExpiresAt = Math.min(device.tokenExpiresAt, now + OPERATOR_BROWSER_TOKEN_TTL_MS);
+    requireAuth(authExpiresAt > now, 401, 'DEVICE_AUTH_REQUIRED', 'Device enrollment expired or was revoked.');
+    const baseDeviceId = androidBaseDeviceId(device.id), operatorSessionId = `tab_${randomBytes(12).toString('hex')}`;
+    return result({ v: 1, aud: AUDIENCE, iss: backend, hubOrigin: ANDROID_HUB_ORIGIN,
+      source: 'android', profile: 'Android operator', nativeDeviceId: device.id,
+      nativeCredentialGeneration: device.credentialGeneration, scopes: [...ANDROID_OPERATOR_SCOPES],
+      baseDeviceId, operatorSessionId, operatorDeviceId: `${baseDeviceId}::${operatorSessionId}`,
+      jti: randomBytes(16).toString('hex'), grantIssuedAt: now, authExpiresAt, iat: now, exp: authExpiresAt });
   }
   async function issue(req) {
     ready(); sameOriginWrite(req); rejectQueryCredentials(req);
@@ -235,6 +354,7 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   async function refresh(req) {
     ready(); rejectQueryCredentials(req);
     const previous = verifyToken(bearer(req), { expectedOrigin: req.headers?.origin || '' });
+    requireAuth(previous.source !== 'android', 401, 'ANDROID_ENROLLMENT_PROOF_REQUIRED', 'Reconnect through the enrolled SH Chat app to renew operator services.');
     const now = clock();
     // This renews only the existing signed grant. No profile, scope, actor,
     // origin or absolute authorization expiry can be supplied by the caller.
@@ -292,6 +412,8 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     headers(res);
     try {
       rejectQueryCredentials(req);
+      const marker = androidMarker(req);
+      if (marker !== null) return await acknowledgeAndroid(req, res, marker);
       if (READ_METHODS.has(req.method) && /^\/api\/odoo-documents\/(?:view|download)\/[1-9][0-9]*$/.test(path) &&
           typeof authorizeDocumentLink === 'function' && await authorizeDocumentLink(req)) return next();
       // Only an authenticated browser may reach the existing operational
@@ -310,10 +432,15 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
         actor = await privateProfileActor(req, { erp: isPrivateErpPath(path) });
       } else if (raw.startsWith(`${PREFIX}.`)) {
         const claims = verifyToken(raw, { expectedOrigin: req.headers?.origin || '' });
-        const needed = requiredOperatorScope(path, req.method);
+        const needed = claims.source === 'android' ? androidOperatorScope(path, req.method) : requiredOperatorScope(path, req.method);
+        requireAuth(needed, 403, 'ANDROID_OPERATION_NOT_PERMITTED', 'Use the native SH Chat controls for this operation.');
         requireAuth(claims.scopes.includes(needed), 403, 'OPERATOR_SCOPE_REQUIRED', 'This authorization does not permit that operator operation.');
         if (path === '/api/odoo-documents/share' && String(req.body?.channel || req.body?.mode || '').trim().toLowerCase() === 'email')
           requireAuth(claims.scopes.includes('mail:write'), 403, 'OPERATOR_SCOPE_REQUIRED', 'Email permission is required to send this document.');
+        if (claims.source === 'android') {
+          await checkAndroidCapability({ deviceId: claims.nativeDeviceId, credentialGeneration: claims.nativeCredentialGeneration });
+          requireAuth(clock() < claims.exp, 401, 'BROWSER_CAPABILITY_EXPIRED', 'Operator authorization expired. Reconnect through the SH Chat app.');
+        }
         actor = { ...claims, kind: 'browser' };
       } else if (raw) {
         requireAuth(READ_METHODS.has(req.method) && nativeReadPath(path), 403, 'NATIVE_LEGACY_CONTROL_FORBIDDEN', 'Use the authenticated native call controls for this operation.');
@@ -373,6 +500,8 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     app.get('/operator-auth.html', popup);
     app.post('/api/operator-browser-auth/token', handler(issue));
     app.post('/api/operator-browser-auth/refresh', handler(refresh));
+    app.post('/api/operator-browser-auth/android/challenge', handler(issueAndroidChallenge));
+    app.post('/api/operator-browser-auth/android/token', handler(issueAndroidToken));
   }
   return Object.freeze({ guard, registerRoutes, verifyToken, publicConfig });
 }

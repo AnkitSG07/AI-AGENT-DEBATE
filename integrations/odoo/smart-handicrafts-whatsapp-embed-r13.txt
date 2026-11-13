@@ -1189,6 +1189,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const backend = "https://ai-agent-debate.onrender.com", originalFetch = window.fetch.bind(window);
   let capability = null, reconnectCapability = null, refreshPromise = null, connection = null, refreshTimer = null;
   let cancelConnection = null, authGeneration = 0;
+  let deviceAccess = null, deviceConnection = null, deviceController = null;
   const activeStreams = new Set();
   const callPrefix = "/api/whatsapp-calls/";
   const pushPaths = new Set(["/api/push/subscribe", "/api/push/unsubscribe", "/api/push/status", "/api/push/test", "/api/push/test-call"]);
@@ -1200,6 +1201,70 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
         .some(prefix => path === prefix || path.startsWith(prefix + "/"));
   }
   function valid() { return !!capability && capability.expiresAt > Date.now() + 1000; }
+  function supportsDeviceAccess() {
+    return window.SHNativeHistory?.protocol === "sh-call-history-v1" && typeof window.SHNative?.postMessage === "function";
+  }
+  function deviceServicePath(path, method) {
+    return method === "POST" && path === "/api/ai-mode/draft" ||
+      ["GET", "POST"].includes(method) && (path.startsWith("/api/zoho-mail/") || path.startsWith("/api/odoo-documents/"));
+  }
+  function deviceAccessValid() { return !!deviceAccess && deviceAccess.expiresAt > Date.now() + 1000; }
+  function deviceAuthError(code, message) { return Object.assign(new Error(message), { code }); }
+  async function postDeviceAuthorization(action, body, signal) {
+    const response = await originalFetch(backend + "/api/operator-browser-auth/android/" + action, {
+      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || result?.ok !== true) {
+      if (response.status === 401 || result?.code === "ANDROID_DEVICE_REVOKED")
+        throw deviceAuthError("DEVICE_AUTH_REQUIRED", "Enroll this device in App settings to use operator services.");
+      throw deviceAuthError("DEVICE_AUTH_UNAVAILABLE", "Device authorization is temporarily unavailable. Try again shortly.");
+    }
+    return result;
+  }
+  function connectDeviceAccess() {
+    if (deviceAccessValid()) return Promise.resolve(deviceAccess);
+    if (deviceConnection) return deviceConnection;
+    const generation = authGeneration, controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 18000);
+    deviceController = controller;
+    const pending = (async () => {
+      const { challenge, verifier, expiresAt } = await postDeviceAuthorization("challenge", {}, controller.signal);
+      const nonce = /^[A-Za-z0-9_-]{43}$/;
+      if (typeof challenge !== "string" || typeof verifier !== "string" || !nonce.test(challenge) ||
+          !nonce.test(verifier) || challenge === verifier || !Number.isSafeInteger(expiresAt))
+        throw deviceAuthError("DEVICE_AUTH_UNAVAILABLE", "Device authorization is temporarily unavailable. Try again shortly.");
+      // The installed app authenticates this exact read with its native
+      // enrollment credential. Only the public challenge crosses the bridge.
+      const path = callPrefix + "recent?operator_device_id=sh_proof_" + challenge;
+      const proof = await window.fetch(backend + path, { method: "GET", cache: "no-store", signal: controller.signal });
+      if (proof.status === 401)
+        throw deviceAuthError("DEVICE_AUTH_REQUIRED", "Enroll this device in App settings to use operator services.");
+      if (!proof.ok || (await proof.json().catch(() => null))?.ok !== true)
+        throw deviceAuthError("DEVICE_AUTH_UNAVAILABLE", "Device authorization is temporarily unavailable. Try again shortly.");
+      const result = await postDeviceAuthorization("token", { challenge, verifier }, controller.signal);
+      if (generation !== authGeneration || controller.signal.aborted) throw new DOMException("Device authorization cancelled", "AbortError");
+      if (result.source !== "android" || typeof result.token !== "string" || !result.token.startsWith("shb1.") ||
+          result.token.length < 40 || result.token.length > 4096 || !Number.isSafeInteger(result.expiresAt) ||
+          result.expiresAt <= Date.now() + 1000 || result.expiresAt > Date.now() + 660000)
+        throw deviceAuthError("DEVICE_AUTH_UNAVAILABLE", "Device authorization is temporarily unavailable. Try again shortly.");
+      deviceAccess = { token: result.token, expiresAt: result.expiresAt };
+      return deviceAccess;
+    })().catch(error => {
+      if (error?.code === "DEVICE_AUTH_REQUIRED" || error?.code === "DEVICE_AUTH_UNAVAILABLE" || error?.name === "AbortError") throw error;
+      throw deviceAuthError("DEVICE_AUTH_UNAVAILABLE", "Device authorization is temporarily unavailable. Try again shortly.");
+    }).finally(() => {
+      clearTimeout(timer);
+      if (deviceController === controller) { deviceController = null; deviceConnection = null; }
+    });
+    deviceConnection = pending;
+    return pending;
+  }
+  function clearDeviceAccess() {
+    deviceAccess = null;
+    deviceController?.abort(); deviceController = null; deviceConnection = null;
+  }
   function publish(type) { window.dispatchEvent(new CustomEvent(type, { detail: { connected: valid(), expiresAt: capability?.expiresAt || 0 } })); }
   function required() {
     publish("sh-operator-auth-required");
@@ -1248,6 +1313,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     return refreshPromise;
   }
   function connect() {
+    if (supportsDeviceAccess()) return connectDeviceAccess().then(() => undefined);
     if (valid() && capability.expiresAt > Date.now() + 120000) return Promise.resolve();
     if (connection) return connection;
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -1290,6 +1356,17 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     // never exposed here, and native call controls use their separate protocol.
     if (window.SHNativeHistory?.protocol === "sh-call-history-v1" && method === "GET" &&
         url.pathname.startsWith(callPrefix) && !url.pathname.endsWith("/events")) return originalFetch(input, options);
+    if (supportsDeviceAccess() && deviceServicePath(url.pathname, method)) {
+      const signal = options.signal || (input instanceof Request ? input.signal : undefined);
+      if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+      const used = await connectDeviceAccess();
+      if (signal?.aborted || used !== deviceAccess) throw new DOMException("Request cancelled", "AbortError");
+      const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+      headers.set("Authorization", "Bearer " + used.token);
+      const response = await originalFetch(input, { ...options, credentials: "omit", redirect: "error", headers });
+      if ((response.status === 401 || response.status === 403) && deviceAccess === used) deviceAccess = null;
+      return response;
+    }
     if (!valid() && url.pathname === callPrefix + "config" && method === "GET") return originalFetch(input, options);
     if (!valid()) throw required();
     if (capability.expiresAt < Date.now() + 120000 && !options.keepalive) {
@@ -1356,16 +1433,18 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     return source;
   }
   window.fetch = authenticatedFetch;
-  window.SHOperatorAuth = Object.freeze({ connect, connected: valid, openCallEvents,
+  window.SHOperatorAuth = Object.freeze({ connect, connected: valid, openCallEvents, supportsDeviceAccess,
+    deviceConnected: deviceAccessValid,
     identity: () => valid() ? { operatorDeviceId: capability.operatorDeviceId, baseDeviceId: capability.baseDeviceId,
       operatorSessionId: capability.operatorSessionId } : null,
     clear: () => {
       authGeneration++; capability = null; reconnectCapability = null;
+      clearDeviceAccess();
       for (const source of Array.from(activeStreams)) source.close();
       cancelConnection?.(); clearTimeout(refreshTimer); publish("sh-operator-auth-required");
     }
   });
-  window.addEventListener("pagehide", () => { clearTimeout(refreshTimer); for (const source of Array.from(activeStreams)) source.close(); });
+  window.addEventListener("pagehide", () => { clearDeviceAccess(); clearTimeout(refreshTimer); for (const source of Array.from(activeStreams)) source.close(); });
 })();
 </script>
 <!-- SH_OPERATOR_AUTH_R13_END -->
@@ -2873,6 +2952,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   function redirectToOdooLogin() {
     if (state.loginRedirecting) return;
     state.loginRedirecting = true;
+    window.SHOperatorAuth?.clear?.();
     // Keep unsent text only in this tab and restore only for the same Odoo user.
     // Native call audio belongs to its foreground service and is not touched.
     try {
@@ -4813,20 +4893,22 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     let odooUnreadCount = 0;
 
     try {
-      await ensureZohoMailReady();
-      const unread = await zohoMailFetch("/api/zoho-mail/messages", {
-        query: {
-          folderType: "Inbox",
-          start: 1,
-          limit: 99,
-          status: "unread",
-          sortBy: "date",
-          sortorder: "false",
-          includeto: "true",
-          threadedMails: "true"
-        }
-      });
-      zohoUnreadCount = zohoArray(unread?.messages).length;
+      if (!window.SHOperatorAuth?.supportsDeviceAccess?.() || window.SHOperatorAuth.deviceConnected()) {
+        await ensureZohoMailReady();
+        const unread = await zohoMailFetch("/api/zoho-mail/messages", {
+          query: {
+            folderType: "Inbox",
+            start: 1,
+            limit: 99,
+            status: "unread",
+            sortBy: "date",
+            sortorder: "false",
+            includeto: "true",
+            threadedMails: "true"
+          }
+        });
+        zohoUnreadCount = zohoArray(unread?.messages).length;
+      }
     } catch (error) {
       console.warn("Zoho unread badge load failed:", error);
     }
@@ -14795,7 +14877,8 @@ Once received, our team will prepare the quotation accordingly.`
     const buttons = () => appRoot.querySelectorAll("[data-operator-auth-connect]");
     const update = () => {
       const connected = window.SHOperatorAuth?.connected?.() === true;
-      buttons().forEach(button => { button.hidden = connected; button.textContent = "Connect operator services"; });
+      const native = window.SHOperatorAuth?.supportsDeviceAccess?.() === true;
+      buttons().forEach(button => { button.hidden = connected || native; button.textContent = "Connect operator services"; });
     };
     appRoot.addEventListener("click", async event => {
       const button = event.target.closest?.("[data-operator-auth-connect]");
@@ -14806,6 +14889,7 @@ Once received, our team will prepare the quotation accordingly.`
       finally { button.disabled = false; update(); }
     }, { signal });
     window.addEventListener("sh-operator-auth-required", update, { signal });
+    window.addEventListener("sh-native-capabilities", update, { signal });
     window.addEventListener("sh-operator-auth-connected", () => {
       update();
       whatsappCallsRuntime.callConfig = null;

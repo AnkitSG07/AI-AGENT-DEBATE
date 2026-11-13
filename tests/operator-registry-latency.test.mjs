@@ -45,6 +45,52 @@ test('a revocation after a successful authentication is visible on the next auth
   await assert.rejects(() => f.registry.authenticate(token), { status: 401 });
 });
 
+test('capability verification reads current device and credential index without writes or raw credentials', async () => {
+  const f = registryFixture(), enrolled = await f.enroll(), id = enrolled.result.body.deviceId;
+  const original = f.db.runTransaction.bind(f.db); let snapshots = 0, reads = 0;
+  f.db.runTransaction = (callback, options) => {
+    assert.deepEqual(options, { readOnly: true }); snapshots++;
+    return original(tx => {
+      const get = tx.get.bind(tx); tx.get = ref => { reads++; return get(ref); };
+      tx.set = tx.create = tx.delete = () => { throw Error('Capability verification must never write'); };
+      return callback(tx);
+    });
+  };
+  const proof = { deviceId: id, credentialGeneration: 1 };
+  assert.equal((await f.registry.verifyCapability(proof)).id, id);
+  assert.equal((await f.registry.verifyCapability(proof)).id, id);
+  assert.equal(snapshots, 2); assert.equal(reads, 4);
+});
+
+test('capability verification observes revocation, blocked IDs, generation and inactive credential index', async () => {
+  for (const mutation of ['revoked', 'rotated', 'inactive', 'index-generation', 'blocked', 'expired']) {
+    const f = registryFixture(), enrolled = await f.enroll(), id = enrolled.result.body.deviceId;
+    const proof = { deviceId: id, credentialGeneration: 1 };
+    let registry = f.registry;
+    assert.ok(await registry.verifyCapability(proof));
+    const row = f.db.dump()['sh_operator_devices/' + id], key = hash(enrolled.result.body.deviceToken);
+    if (mutation === 'revoked') await registry.revokeDevice(id);
+    if (mutation === 'rotated') f.db.seed('sh_operator_devices', id, { ...row, credentialGeneration: 2 });
+    if (mutation === 'expired') f.db.seed('sh_operator_devices', id, { ...row, tokenExpiresAt: 1800000000000 });
+    if (mutation === 'inactive' || mutation === 'index-generation')
+      f.db.seed('sh_operator_credentials', key, { ...f.db.dump()['sh_operator_credentials/' + key],
+        ...(mutation === 'inactive' ? { active: false } : { generation: 2 }) });
+    if (mutation === 'blocked') registry = createFirestoreDeviceRegistry({ firestore: f.db,
+      clock: () => 1800000000000, revokedIds: [id] });
+    await assert.rejects(() => registry.verifyCapability(proof), { status: 401, code: 'DEVICE_UNAUTHORIZED' }, mutation);
+  }
+});
+
+test('capability verification fails closed for malformed input or unavailable storage', async () => {
+  const f = registryFixture(), enrolled = await f.enroll();
+  for (const input of [{}, { deviceId: enrolled.result.body.deviceId, credentialGeneration: 0 },
+    { deviceId: enrolled.result.body.deviceId, credentialGeneration: '1' }])
+    await assert.rejects(() => f.registry.verifyCapability(input), { status: 400 });
+  f.db.failReads = Error('Private SDK credential value');
+  await assert.rejects(() => f.registry.verifyCapability({ deviceId: enrolled.result.body.deviceId, credentialGeneration: 1 }),
+    error => error.status === 503 && !error.message.includes('Private'));
+});
+
 test('existing opaque imported credentials keep the indexed lookup and fresh revocation checks', async () => {
   const f = registryFixture(), enrollment = await f.enroll(), id = enrollment.result.body.deviceId;
   const original = enrollment.result.body.deviceToken, opaque = 'opaque_imported_credential_'.repeat(3), digest = hash(opaque);
