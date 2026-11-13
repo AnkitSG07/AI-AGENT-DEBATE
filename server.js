@@ -1,5 +1,7 @@
 import { OdooCallFiles } from './call-runtime/odoo-call-files.mjs';
 import { createOperatorAiSwitch } from './operator-ai-switch.js';
+import { createOperatorOpenAiDraft } from './operator-openai-draft.js';
+import { registerOperatorAiDraftRoutes } from './operator-ai-draft-routes.js';
 import { createMessageNotificationWorker } from './operator-message-worker.js';
 import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
@@ -20191,6 +20193,11 @@ Safe no-reply fallback applied.`.trim()
     });
   }
 }
+// Explicit operator drafts work independently of legacy automatic replies.
+registerOperatorAiDraftRoutes(app, {
+  enabled: String(process.env.SH_CHAT_AI_DRAFTS_ENABLED || 'false').toLowerCase() === 'true',
+  provider: createOperatorOpenAiDraft({ apiKey: process.env.OPENAI_API_KEY || '' })
+});
 app.use(createOperatorAiSwitch({ enabled: SH_CHAT_AI_ENABLED }));
 app.post("/api/ai-mode/chat", handleAiModeChat);
 

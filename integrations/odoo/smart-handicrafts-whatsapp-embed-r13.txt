@@ -256,6 +256,7 @@
             <div id="shThreadSyncStatus" class="sh-thread-sync-status is-hidden" role="status"></div>
             <div class="sh-op-composer-warning is-hidden" id="shComposerWarning"></div>
             <button class="sh-op-mini-action is-hidden" id="shTemplateOpenBtn" type="button" title="Send an approved WhatsApp template">Send WhatsApp Template</button>
+            <button class="sh-op-mini-action" id="shAiDraftBtn" type="button" title="Draft a reply from this conversation with AI for you to review" disabled>AI draft</button>
 
             
 
@@ -1541,6 +1542,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
 
     aiMode: "manual",
     aiLastResult: null,
+    aiDraftRequest: null,
     aiIsThinking: false,
     aiProcessedMessageIds: (() => {
       try {
@@ -1675,6 +1677,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const addCustomerBtn = byId("shAddCustomerBtn");
   const templateOpenBtn = byId("shTemplateOpenBtn");
 
+  const aiDraftBtn = byId("shAiDraftBtn");
   const aiModeControl = byId("shAiModeControl");
   const aiReplyToggle = byId("shAiReplyToggle");
   const aiReplyStatus = byId("shAiReplyStatus");
@@ -2813,6 +2816,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   function destroyOperatorApp() {
     if (state.destroyed) return;
     state.destroyed = true;
+    cancelAiDraft();
     closeHubCallsPage();
     hubScreenStack.length = 0;
     appRoot.classList.remove("sh-call-minimized");
@@ -8287,6 +8291,7 @@ Once received, our team will prepare the quotation accordingly.`
     closeCompositionPanels();
     closeHubCallsPage();
     if (changed) {
+      cancelAiDraft();
       closeConversationCollection();
       hidePanel(customerDrawer);
       if (state.selectedChannelId) state.draftsByChannel.set(String(state.selectedChannelId), messageInput.value);
@@ -11283,6 +11288,7 @@ Once received, our team will prepare the quotation accordingly.`
 
   function renderMessages({ scrollToBottom = false } = {}) {
     if (state.destroyed || !state.selectedChannelId) return;
+    reconcileAiDraft();
     const channelId = String(state.selectedChannelId);
     // A call poll must never relabel the previous chat's messages as this chat.
     const messages = state.messages.filter(message => !message.res_id || String(message.res_id) === channelId);
@@ -11679,6 +11685,7 @@ Once received, our team will prepare the quotation accordingly.`
 
     if (aiModeBadge) {
       aiModeBadge.textContent =
+        state.aiDraftRequest || state.aiLastResult?.draftContext ? "Review" :
         mode === "zapier" ? "Zapier Mode" :
         mode === "chat" ? "AI Chat Mode" :
         mode === "assist" ? "AI Assist Mode" :
@@ -11807,7 +11814,14 @@ Once received, our team will prepare the quotation accordingly.`
     aiModePanel.classList.remove("is-hidden");
 
     if (aiModeUseBtn) aiModeUseBtn.disabled = !(customerReply || suggestedReply);
-    if (aiModeSendBtn) aiModeSendBtn.disabled = !(customerReply || suggestedReply);
+    if (aiModeSendBtn) {
+      aiModeSendBtn.disabled = !!result?.draftContext || !(customerReply || suggestedReply);
+      aiModeSendBtn.classList.toggle("is-hidden", !!result?.draftContext);
+    }
+    if (result?.draftContext) {
+      aiModeBadge.textContent = "Review";
+      aiModeLevel.textContent = suggestedReply ? "Ready to edit" : "Try again";
+    }
     if (aiModeCopyBtn) aiModeCopyBtn.disabled = !(customerReply || suggestedReply || internalNotification);
   }
 
@@ -11944,6 +11958,109 @@ Once received, our team will prepare the quotation accordingly.`
 
   function aiCustomerReplyFromResult(result) {
     return String(result?.customer_reply || result?.suggested_customer_reply || "").trim();
+  }
+
+  function buildAiDraftConversation() {
+    return buildAiConversationHistory(18).map(row =>
+      `${row.role === "operator" ? "Operator" : "Customer"}: ${row.text}`
+    ).join("\n\n").slice(-24000);
+  }
+
+  function aiDraftContextCurrent(context) {
+    return !!context && !state.destroyed && state.session?.uid === context.uid &&
+      state.selectionEpoch === context.epoch && Number(state.selectedChannelId) === context.channelId &&
+      state.messages[state.messages.length - 1]?.id === context.sourceMessageId &&
+      buildAiDraftConversation() === context.conversation;
+  }
+
+  function syncAiDraftButton() {
+    if (!aiDraftBtn) return;
+    aiDraftBtn.disabled = state.destroyed || !state.session?.uid || !state.selectedChannelId ||
+      state.isLoadingMessages || !!state.aiDraftRequest;
+    aiDraftBtn.textContent = state.aiDraftRequest ? "Drafting\u2026" : "AI draft";
+  }
+
+  function cancelAiDraft() {
+    const active = !!state.aiDraftRequest || !!state.aiLastResult?.draftContext;
+    state.aiDraftRequest?.controller.abort();
+    state.aiDraftRequest = null;
+    if (state.aiLastResult?.draftContext) state.aiLastResult = null;
+    if (active) aiModePanel?.classList.add("is-hidden");
+    syncAiDraftButton();
+  }
+
+  function reconcileAiDraft() {
+    const context = state.aiDraftRequest || state.aiLastResult?.draftContext;
+    if (context && !aiDraftContextCurrent(context)) {
+      cancelAiDraft();
+      if (!state.destroyed) showOperatorToast("Conversation changed. Tap AI draft for an updated reply.");
+    }
+    syncAiDraftButton();
+  }
+
+  async function runAiDraft() {
+    if (state.destroyed || state.aiDraftRequest || state.isLoadingMessages || !state.session?.uid) return;
+    const channelId = Number(state.selectedChannelId);
+    const conversation = buildAiDraftConversation();
+    if (!Number.isSafeInteger(channelId) || channelId <= 0 || !conversation.trim()) {
+      showOperatorToast("Open a conversation with a message first.");
+      return;
+    }
+    cancelAiDraft();
+    const request = { channelId, conversation, uid: state.session.uid, epoch: state.selectionEpoch,
+      sourceMessageId: state.messages[state.messages.length - 1]?.id, controller: new AbortController() };
+    state.aiDraftRequest = request;
+    state.aiLastResult = null;
+    syncAiDraftButton();
+    showAiModeThinking("Preparing a reply for you to review\u2026");
+    aiModePanelTitle.textContent = "AI reply draft";
+    aiModeBadge.textContent = "Review";
+    aiModeUseBtn.disabled = true;
+    aiModeCopyBtn.disabled = true;
+    aiModeSendBtn.disabled = true;
+    aiModeSendBtn.classList.add("is-hidden");
+    try {
+      const response = await appFetch(`${AI_MODE_BACKEND_BASE}/api/ai-mode/draft`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: request.controller.signal,
+        body: JSON.stringify({ channelId, conversation })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (state.aiDraftRequest !== request) return;
+      if (!aiDraftContextCurrent(request)) { cancelAiDraft(); return; }
+      if (!response.ok || data?.ok !== true) throw new Error(data?.error || "AI could not prepare a draft. Try again.");
+      if (data.channelId !== channelId || typeof data.draft !== "string" || !data.draft.trim() || data.draft.length > 8000) {
+        throw new Error("AI returned an invalid draft. Try again.");
+      }
+      showAiModePanel({ suggested_customer_reply: data.draft.trim(), draftContext: request }, { title: "AI reply draft" });
+    } catch (error) {
+      if (state.aiDraftRequest === request && aiDraftContextCurrent(request) && !request.controller.signal.aborted) {
+        showAiModePanel({ reason: error?.message || "AI could not prepare a draft. Try again.", draftContext: request },
+          { title: "AI draft unavailable" });
+      }
+    } finally {
+      if (state.aiDraftRequest === request) state.aiDraftRequest = null;
+      syncAiDraftButton();
+    }
+  }
+
+  function useAiReply() {
+    const result = state.aiLastResult;
+    const reply = aiCustomerReplyFromResult(result);
+    if (!reply) return;
+    if (result?.draftContext) {
+      if (!aiDraftContextCurrent(result.draftContext)) {
+        cancelAiDraft();
+        showOperatorToast("Conversation changed. Tap AI draft for an updated reply.");
+        return;
+      }
+      if (messageInput.value.trim() && messageInput.value !== reply &&
+          !window.confirm("Replace the text you have typed with this AI draft?")) return;
+    }
+    messageInput.value = reply;
+    state.draftsByChannel.set(String(state.selectedChannelId), reply);
+    autoGrowTextarea();
+    syncMobileComposerMode();
+    showOperatorToast("AI reply placed in composer");
   }
 
   async function runAiModeManually() {
@@ -12143,6 +12260,7 @@ Once received, our team will prepare the quotation accordingly.`
   // ---------- Composer ----------
   function updateComposerState() {
     const channel = state.selectedChannel;
+    syncAiDraftButton();
 
     composerWarning.classList.add("is-hidden");
     composerWarning.textContent = "";
@@ -12789,24 +12907,19 @@ Once received, our team will prepare the quotation accordingly.`
     }
   });
 
+  aiDraftBtn?.addEventListener("click", runAiDraft);
   aiModeRunBtn?.addEventListener("click", runAiModeManually);
 
   aiModePanelClose?.addEventListener("click", () => {
+    cancelAiDraft();
     aiModePanel?.classList.add("is-hidden");
   });
 
-  aiModeUseBtn?.addEventListener("click", () => {
-    const reply = aiCustomerReplyFromResult(state.aiLastResult);
-    if (!reply) return;
-    messageInput.value = reply;
-    autoGrowTextarea();
-    syncMobileComposerMode();
-    showOperatorToast("AI reply placed in composer");
-  });
+  aiModeUseBtn?.addEventListener("click", useAiReply);
 
   aiModeSendBtn?.addEventListener("click", async () => {
     const reply = aiCustomerReplyFromResult(state.aiLastResult);
-    if (!reply || state.isSending) return;
+    if (!reply || state.isSending || state.aiLastResult?.draftContext) return;
 
     try {
       state.isSending = true;
