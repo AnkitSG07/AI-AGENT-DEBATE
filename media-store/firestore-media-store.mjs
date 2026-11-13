@@ -226,7 +226,20 @@ function validateSession(value, key, before) {
     ['deviceId', 'userId', 'legId', 'identity'].every(field => identifier(session.owner[field])), 'Invalid session owner binding.');
   if (session.nextActionAtMs !== undefined && session.nextActionAtMs !== null) requireInput(validTime(session.nextActionAtMs), 'Invalid session recovery deadline.');
   if (session.customerAcceptedAt !== undefined && session.customerAcceptedAt !== null) requireInput(validTime(session.customerAcceptedAt), 'Invalid provider acceptance timestamp.');
-  if (session.routeChoice !== undefined) requireInput(['native', 'legacy'].includes(session.routeChoice), 'Invalid immutable call route selection.');
+  if (session.routeChoice !== undefined) requireInput(['native', 'legacy', 'ai'].includes(session.routeChoice), 'Invalid immutable call route selection.');
+  if (session.routeChoice === 'ai' || session.aiVoice !== undefined) {
+    const voice = session.aiVoice;
+    requireInput(session.routeChoice === 'ai' && session.direction === 'incoming' && !session.owner &&
+      isObject(voice) && identifier(voice.operationId) && /^sh-voice-[a-f0-9]{32}$/.test(voice.identity) &&
+      session.operations.accept?.id === voice.operationId &&
+      (voice.mediaReadyAt === undefined || validTime(voice.mediaReadyAt)),
+    'A voice fallback requires its exact incoming call and one accept operation.');
+    if (voice.enquiry !== undefined) requireInput(isObject(voice.enquiry) && validTime(voice.enquiry.claimedAt) &&
+      /^[a-f0-9]{64}$/.test(voice.enquiry.enquiryHash || '') &&
+      ['processing', 'created', 'uncertain'].includes(voice.enquiry.status) &&
+      (voice.enquiry.status !== 'created' || Number.isSafeInteger(voice.enquiry.leadId) && voice.enquiry.leadId > 0),
+    'An enquiry requires an exact durable CRM creation receipt.');
+  }
   if (session.legacyClaim !== undefined) requireInput(isObject(session.legacyClaim) && identifier(session.legacyClaim.operationId) &&
     validTime(session.legacyClaim.claimedAt) && session.routeChoice === 'legacy', 'A legacy route claim needs an exact operation and timestamp.');
   if (session.routeChoice === 'legacy') requireInput(session.legacyClaim && !session.owner && session.terminal?.nativeOnly === true &&
@@ -251,6 +264,13 @@ function validateSession(value, key, before) {
       before.legacyClaim !== undefined && canonical(session.legacyClaim || null) !== canonical(before.legacyClaim)) {
     fail('SESSION_ROUTE_IMMUTABLE', 'An assigned browser/native call route and its exact claim cannot change.');
   }
+  if (before.aiVoice && (session.aiVoice?.identity !== before.aiVoice.identity ||
+      session.aiVoice.operationId !== before.aiVoice.operationId ||
+      before.aiVoice.mediaReadyAt !== undefined && session.aiVoice.mediaReadyAt !== before.aiVoice.mediaReadyAt ||
+      before.aiVoice.enquiry && (session.aiVoice.enquiry?.claimedAt !== before.aiVoice.enquiry.claimedAt ||
+        session.aiVoice.enquiry.enquiryHash !== before.aiVoice.enquiry.enquiryHash ||
+        before.aiVoice.enquiry.status !== 'processing' && canonical(session.aiVoice.enquiry) !== canonical(before.aiVoice.enquiry))))
+    fail('SESSION_ROUTE_IMMUTABLE', 'A voice claim, media proof, or settled enquiry cannot be replaced.');
   if (before.terminal) {
     if (!session.terminal || session.terminal.endedAt !== before.terminal.endedAt || session.terminal.reason !== before.terminal.reason ||
         (before.terminal.confirmedAt !== undefined && session.terminal.confirmedAt !== before.terminal.confirmedAt) ||

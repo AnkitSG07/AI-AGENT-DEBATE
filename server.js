@@ -1,4 +1,8 @@
 import { OdooCallFiles } from './call-runtime/odoo-call-files.mjs';
+import { createAiVoiceFallback } from './call-runtime/ai-voice-fallback.mjs';
+import { createAiVoiceHandoff } from './call-runtime/ai-voice-handoff.mjs';
+import { createVoiceCatalogLookup, createVoiceEnquiryCapture, loadVoiceInstructions,
+  VOICE_CATALOG_TOOL, VOICE_ENQUIRY_TOOL } from './call-runtime/ai-voice-knowledge.mjs';
 import { createOperatorAiSwitch } from './operator-ai-switch.js';
 import { createOperatorOpenAiDraft } from './operator-openai-draft.js';
 import { registerOperatorAiDraftRoutes } from './operator-ai-draft-routes.js';
@@ -6466,6 +6470,24 @@ async function searchReadLiveProductsWithFallback(uid) {
   }
 
   throw lastError || new Error("Unable to fetch live Odoo website products.");
+}
+
+async function searchVoiceOdooCatalog(query) {
+  if (!odooConfigured) return { ok: false, products: [] };
+  const words = [...new Set(query.match(/[\p{L}\p{N}-]+/gu) || [])].slice(0, 6);
+  if (!words.length) return { ok: true, products: [] };
+  const nameMatches = words.map(word => ["name", "ilike", word]);
+  const matches = ["|", ["default_code", "=ilike", query], ...Array(words.length - 1).fill("&"), ...nameMatches];
+  const uid = await odooLoginCached();
+  for (const published of ["website_published", "is_published"]) {
+    try {
+      const rows = await odooExecute(uid, "product.product", "search_read", [[
+        ["product_tmpl_id." + published, "=", true], ["sale_ok", "=", true], ...matches
+      ], ["display_name", "default_code"]], { limit: 24, order: "id asc" });
+      return { ok: true, products: Array.isArray(rows) ? rows : [] };
+    } catch { /* An older or customized Odoo can expose the alternate publication field. */ }
+  }
+  return { ok: false, products: [] };
 }
 
 async function fetchVariantSkuMapForTemplates(uid, templateIds = []) {
@@ -25427,8 +25449,31 @@ const operatorCallPermission = createOperatorCallPermission({
   getFirestore: () => operatorFirestoreRuntime.firestore,
   collectionPrefix: () => operatorFirestoreRuntime.collectionPrefix || 'sh_operator'
 });
+const voiceCatalogLookup = createVoiceCatalogLookup({ getCatalog: searchVoiceOdooCatalog });
+const operatorVoiceFallback = createAiVoiceFallback({
+  loadInstructions: loadVoiceInstructions,
+  tools: [VOICE_CATALOG_TOOL, VOICE_ENQUIRY_TOOL],
+  callTool: ({ name, arguments: args }) => name === VOICE_CATALOG_TOOL.name ?
+    voiceCatalogLookup(args) : { status: 'unavailable' },
+  humanAnswerInProgress: callId => !!getOperatorCallLock(callId),
+  saveEnquiry: ({ request, session, operationId, runtime }) => {
+    if (!odooConfigured) return { status: 'unavailable' };
+    const handoff = createAiVoiceHandoff({
+      execute: async (model, method, params, kwargs) => odooExecute(await odooLoginCached(), model, method, params, kwargs),
+      claim: async ({ enquiryHash }) => {
+        const receipt = await runtime.claimAiEnquiry(session.id, operationId, enquiryHash);
+        return receipt?.claimed ? 'claimed' : receipt?.status === 'created' &&
+          receipt.enquiryHash === enquiryHash ? 'complete' : 'unavailable';
+      },
+      settle: ({ status, leadId }) => runtime.settleAiEnquiry(session.id, operationId,
+        status === 'complete' ? { status: 'created', leadId } : { status: 'uncertain' })
+    });
+    return createVoiceEnquiryCapture({ onCapture: enquiry => handoff({ session, operationId, enquiry }) })(request.arguments);
+  }
+});
 const operatorMediaGateway = createOperatorMediaGateway({
   firestoreRuntime: operatorFirestoreRuntime,
+  voiceFallback: operatorVoiceFallback,
   runtimeFactory: options => {
     const bundle = createNativeCallRuntime({ ...options, callFiles: odooConfigured ? new OdooCallFiles({
       execute: async (model, method, params, kwargs = {}) => odooExecute(await odooLoginCached(), model, method, params, kwargs)

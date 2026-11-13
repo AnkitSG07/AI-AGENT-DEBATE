@@ -89,10 +89,11 @@ export function callReportFromSettled({ session, call = null, operatorLabel = ''
     (!call || (call.outbox || []).every(job => job.status === 'done')) &&
     !Object.values(session.operations || {}).some(operation => ['issued', 'uncertain'].includes(operation.status)),
   'CALL_NOT_SETTLED', 'A call must have confirmed termination and finished cleanup before its immutable report is finalized.', 409);
-  const connectedAtMs = session.mediaReadyAt ?? null;
+  const connectedAtMs = session.mediaReadyAt ?? session.aiVoice?.mediaReadyAt ?? null;
   const reason = session.terminal?.reason || terminal.policyReason || terminal.reason;
   const outcome = connectedAtMs !== null ? 'completed' : reason === 'REJECTED' ? 'rejected' :
-    reason === 'FAILED' ? 'failed' : reason === 'TIMED_OUT' || session.direction === 'incoming' && reason === 'USER_INITIATED' ? 'missed' : 'cancelled';
+    reason === 'FAILED' || ['AI_VOICE_FAILED', 'AI_VOICE_DISCONNECTED'].includes(reason) ? 'failed' :
+      reason === 'TIMED_OUT' || session.direction === 'incoming' && reason === 'USER_INITIATED' ? 'missed' : 'cancelled';
   const historical = Object.values(call?.transferHistory || {}), current = call?.transfer;
   const transfers = new Map([...historical, ...(current ? [current] : [])].map(transfer => [transfer.id, transfer]));
   return { kind: 'calls', recordId: session.providerCallId || session.id,

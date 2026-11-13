@@ -61,10 +61,12 @@ function terminalize(session, reason, now, { confirmed = false } = {}) {
   if (confirmed && !session.terminal.confirmedAt) session.terminal.confirmedAt = now;
   session.phase = session.terminal.confirmedAt ? 'ended' : 'ending';
   session.version++; session.updatedAt = now;
-  if (session.providerCallId && !session.mediaReadyAt && (session.direction === 'outgoing' || session.owner))
+  const voiceDispatched = session.routeChoice === 'ai' && session.operations.accept?.errorCode !== 'NOT_DISPATCHED';
+  if (session.providerCallId && (voiceDispatched ||
+      !session.mediaReadyAt && (session.direction === 'outgoing' || session.owner)))
     job(session, { id: `terminate:${session.providerCallId.length <= 210 ? session.providerCallId : hash(session.providerCallId)}`, kind: 'terminate', callId: session.providerCallId,
     reason: confirmed ? 'USER_INITIATED' : 'BUSINESS_INITIATED' });
-  if (session.direction === 'incoming' && !session.owner && !confirmed && session.routeChoice !== 'legacy')
+  if (session.direction === 'incoming' && !session.owner && !confirmed && session.routeChoice !== 'legacy' && !voiceDispatched)
     job(session, { id: 'reject-incoming', kind: 'reject', callId: session.providerCallId });
   if (session.owner && !session.mediaReadyAt) job(session, { id: `detach:${session.owner.identity}`, kind: 'detach', roomName: session.roomName,
     identity: session.owner.identity, deviceId: session.owner.deviceId, revokeBeforeMs: now });
@@ -304,7 +306,8 @@ export class CallRuntime {
       phase: call ? call.status : session.phase, version: call?.version || session.version, sessionVersion: session.version,
       direction: session.direction, ownerDeviceId: call?.owner?.deviceId || session.owner?.deviceId || null,
       ownerLegId: call?.owner?.legId || session.owner?.legId || null,
-      roomReady: !!call?.active && call.status === 'connected', endConfirmed: !!terminal?.confirmedAt,
+      roomReady: !!call?.active && call.status === 'connected' || !!session.aiVoice?.mediaReadyAt && !terminal,
+      endConfirmed: !!terminal?.confirmedAt,
       callToolsEnabled: !!this.tools, recording: this.tools ? this.tools.view(call) : null,
       // Historical readiness proof; current mute UI comes from the native track.
       mediaReadiness: call?.mediaReadiness || null,
@@ -456,7 +459,8 @@ export class CallRuntime {
       }
       requireValue(!route || route.sessionId === resolvedSessionId, 'CALL_ROUTE_CONFLICT', 'The provider call is already bound to another session.');
       let next = session;
-      if (!next && event.type === 'incoming') {
+      const newIncoming = !next && event.type === 'incoming';
+      if (newIncoming) {
         next = { id: sessionId, tenantId: this.tenantId, provider: this.provider.kind, providerFingerprint: this.provider.config.fingerprint,
           phoneNumberId: this.phoneNumberId, providerCallId: event.callId, direction: 'incoming', phase: 'ringing', version: 1,
           roomName: roomNameFor(sessionId), customerIdentity: customerIdentity(sessionId), owner: null,
@@ -557,6 +561,7 @@ export class CallRuntime {
       if (!existingMarker) tx.set(eventKey(marker), { id: marker, kind: 'provider-event', eventType: event.type, providerCallId: event.callId,
         sessionId: next?.id || '', tenantId: this.tenantId, createdAt: now });
       return { handled: !!next || event.type === 'connect', sessionId: next?.id, terminal: event.type === 'terminate',
+        ...(newIncoming && !next.terminal ? { newIncoming: true } : {}),
         ...(controlChanged ? { controlState: { session: next, call: canonical } } : {}) };
     });
     // Snapshot delivery is strictly after the durable commit. Failed/retried
@@ -574,6 +579,7 @@ export class CallRuntime {
       snapshot = await this.locate(id); this.requireSession(snapshot);
     }
     if (snapshot.mediaReadyAt) return this.resume(context, snapshot, actor);
+    requireValue(snapshot.routeChoice !== 'ai', 'CALL_ANSWERED_ELSEWHERE', 'The voice assistant already claimed this call.');
     if (!snapshot.owner) await this.requireEnabled();
     const legId = `leg_${randomUUID()}`, readinessNonce = randomUUID();
     const prepared = await this.#claimAnswer(snapshot.id, () => this.claimWithEndedReservationRecovery(context, actor, () => this.store.transaction(async tx => {
@@ -582,7 +588,7 @@ export class CallRuntime {
       ]);
       this.requireSession(session);
       requireValue(!session.terminal && session.deadlineAt > this.now(), 'CALL_ENDED', 'This call is no longer answerable.');
-      requireValue(session.routeChoice !== 'legacy', 'CALL_ANSWERED_ELSEWHERE', 'The browser operator already claimed this call.');
+      requireValue(!['legacy', 'ai'].includes(session.routeChoice), 'CALL_ANSWERED_ELSEWHERE', 'Another operator already claimed this call.');
       if (session.owner) {
         requireValue(sameBinding(actor, session.owner), 'CALL_ANSWERED_ELSEWHERE', 'Another enrolled device owns this call.');
         requireValue(reservation?.sessionId === session.id && ['pending', 'owner'].includes(reservation.kind),
@@ -640,6 +646,99 @@ export class CallRuntime {
       } else current = await operation();
     }
     return this.join(context, current, actor);
+  }
+
+  /** Server-only fallback. Prepare audio before invoking this method so both
+   * human answer paths remain available until the same durable claim commits. */
+  async acceptAiIncoming(id, { operationId, identity, maxCallMs, mayClaim, canDispatch }) {
+    identifier(operationId, 'voice operation'); identifier(identity, 'voice participant');
+    requireValue(Number.isSafeInteger(maxCallMs) && maxCallMs >= 30000 && maxCallMs <= 300000,
+      'INVALID_VOICE_DURATION', 'The voice call duration is invalid.', 400);
+    const prepared = await this.#claimAnswer(id, () => this.store.transaction(async tx => {
+      const session = await tx.get(sessionKey(id)), now = this.now();
+      if (!session || session.tenantId !== this.tenantId || session.direction !== 'incoming' ||
+          session.terminal || session.routeChoice || session.owner || session.phase !== 'ringing' ||
+          session.deadlineAt <= now || Object.keys(session.operations).length || !mayClaim()) return null;
+      session.routeChoice = 'ai';
+      session.aiVoice = { operationId, identity };
+      session.operations.accept = { id: operationId, status: 'issued', issuedAt: now, leaseUntil: now + 45000 };
+      session.phase = 'accepting'; session.version++; session.updatedAt = now;
+      session.deadlineAt = now + maxCallMs;
+      job(session, { id: 'ended-notification', kind: 'notify', event: 'ended' });
+      schedule(session, now); tx.set(sessionKey(id), session);
+      return session;
+    }));
+    if (!prepared) return null;
+    this.signalWork(id);
+    let dispatched = false;
+    try {
+      const provider = this.providerFor(prepared);
+      const current = await this.store.get(sessionKey(id));
+      if (current.terminal || !canDispatch()) {
+        await this.failProviderOperation(id, 'accept', null, { notDispatched: true });
+        return null;
+      }
+      dispatched = true;
+      const result = await provider.acceptIncoming({ callId: prepared.providerCallId, phoneNumberId: this.phoneNumberId,
+        offerSdp: prepared.offerSdp, roomName: prepared.roomName });
+      const accepted = await this.finishProviderOperation(id, 'accept', result);
+      return accepted.terminal ? null : accepted;
+    } catch (error) {
+      await this.failProviderOperation(id, 'accept', error, { notDispatched: !dispatched });
+      // Never repeat a possibly delivered Accept. An exact disconnect and the
+      // verified Meta terminal webhook settle the old leg.
+      await this.endAiIncoming(id, operationId, 'AI_VOICE_FAILED');
+      throw this.publicProviderError(error);
+    } finally { this.signalWork(id); }
+  }
+
+  async markAiIncomingReady(id, operationId) {
+    const ready = await this.store.transaction(async tx => {
+      const session = await tx.get(sessionKey(id)), now = this.now();
+      if (!session || session.terminal || session.aiVoice?.operationId !== operationId ||
+          session.operations.accept?.status !== 'acknowledged' || session.deadlineAt <= now ||
+          session.aiVoice.mediaReadyAt) return false;
+      session.aiVoice.mediaReadyAt = now;
+      session.phase = 'ai_connected'; session.updatedAt = now; session.version++;
+      schedule(session, now); tx.set(sessionKey(id), session);
+      return true;
+    });
+    if (ready) this.signalWork(id);
+  }
+
+  async claimAiEnquiry(id, operationId, enquiryHash) {
+    return this.store.transaction(async tx => {
+      const session = await tx.get(sessionKey(id));
+      if (!session || session.terminal || session.aiVoice?.operationId !== operationId || !session.aiVoice.mediaReadyAt)
+        return null;
+      if (session.aiVoice.enquiry) return { ...session.aiVoice.enquiry, claimed: false };
+      const enquiry = { status: 'processing', claimedAt: this.now(), enquiryHash };
+      session.aiVoice.enquiry = enquiry;
+      tx.set(sessionKey(id), session);
+      return { ...enquiry, claimed: true };
+    });
+  }
+
+  async settleAiEnquiry(id, operationId, result) {
+    return this.store.transaction(async tx => {
+      const session = await tx.get(sessionKey(id));
+      if (!session || session.aiVoice?.operationId !== operationId || session.aiVoice.enquiry?.status !== 'processing')
+        return false;
+      session.aiVoice.enquiry = { ...session.aiVoice.enquiry, ...result };
+      tx.set(sessionKey(id), session);
+      return true;
+    });
+  }
+
+  async endAiIncoming(id, operationId, reason) {
+    const ended = await this.store.transaction(async tx => {
+      const session = await tx.get(sessionKey(id));
+      if (!session || session.terminal || session.aiVoice?.operationId !== operationId) return false;
+      terminalize(session, reason, this.now());
+      tx.set(sessionKey(id), session);
+      return true;
+    });
+    if (ended) this.signalWork(id);
   }
 
   async resume(context, session, actor) {
@@ -839,7 +938,8 @@ export class CallRuntime {
       current.failedAt = this.now(); current.errorCode = notDispatched ? 'NOT_DISPATCHED' : error?.outcomeUnknown === false ? 'PROVIDER_REJECTED' : 'OUTCOME_UNCERTAIN';
       if (current.status === 'failed') {
         terminalize(session, 'FAILED', this.now(), { confirmed: operation === 'dial' && !session.providerCallId });
-        if (operation === 'accept') job(session, { id: 'reject-after-failure', kind: 'reject', callId: session.providerCallId });
+        if (operation === 'accept' && session.routeChoice !== 'ai')
+          job(session, { id: 'reject-after-failure', kind: 'reject', callId: session.providerCallId });
       } else if (!session.terminal) { session.phase = 'uncertain'; session.version++; session.updatedAt = this.now(); }
       schedule(session, this.now()); tx.set(sessionKey(id), session);
     });
@@ -929,6 +1029,8 @@ export class CallRuntime {
       ]);
       const call = session.providerCallId === snapshot.providerCallId ? observedCall :
         session.providerCallId ? await tx.get(callStoreKey(session.providerCallId)) : null;
+      requireValue(session.routeChoice !== 'ai' || session.terminal,
+        'NOT_CALL_OWNER', 'The voice assistant owns this call.', 403);
       const owner = call?.owner || session.owner;
       const identities = new Map(owner ? [[owner.deviceId, owner.identity]] : []);
       if (call?.transfer?.sourceIdentity) identities.set(call.transfer.fromDeviceId, call.transfer.sourceIdentity);
@@ -1271,11 +1373,11 @@ export class CallRuntime {
   async dispatchRealtimeWork(id, { onCommittedControlState = () => {} } = {}) {
     const session = await this.store.get(sessionKey(id));
     if (!session || session.routeChoice === 'legacy') return;
-    if (session.terminal || session.owner) onCommittedControlState();
+    if (session.terminal || session.owner || session.routeChoice === 'ai') onCommittedControlState(session);
     const work = [session.terminal ? this.dispatchCriticalCleanup(id, session) : this.dispatchSetupSignals(id, session)];
     // Stop ringing on all other phones immediately after committed Answer/End.
     // A slow provider disconnect must not hold its separate FCM cancellation.
-    if ((session.terminal || session.owner) && session.outbox.some(item =>
+    if ((session.terminal || session.owner || session.routeChoice === 'ai') && session.outbox.some(item =>
         item.kind === 'notify' && item.event === 'ended' && isDue(item, this.now())))
       work.push(this.dispatchRingCancellation(id));
     if (!session.owner && session.phase === 'ringing' &&
@@ -1309,7 +1411,7 @@ export class CallRuntime {
         if (!current) return null;
         if (incomingOnly && (current.direction !== 'incoming' || current.terminal || current.owner ||
             current.phase !== 'ringing' || current.deadlineAt <= this.now())) return null;
-        if (endedOnly && !current.terminal && !current.owner) return null;
+        if (endedOnly && !current.terminal && !current.owner && current.routeChoice !== 'ai') return null;
         let changed = false;
         for (const item of current.outbox.filter(row => row.kind === 'notify' && row.status !== 'done')) {
           if (item.notificationExpiresAtMs !== undefined && item.notificationExpiresAtMs <= this.now() ||

@@ -23,7 +23,7 @@ export function verifyMetaWebhook(req, secret) {
 // room token or SDP, and Connected requires the coordinator's media readiness.
 export function nativeCallHistoryEvent({ session, view }, at = Date.now()) {
   if (!session?.providerCallId || session.routeChoice === 'legacy') return null;
-  const connectedAt = Number(session.mediaReadyAt || 0), ended = !!view.terminal;
+  const connectedAt = Number(session.mediaReadyAt || session.aiVoice?.mediaReadyAt || 0), ended = !!view.terminal;
   const reason = String(view.terminal?.reason || '').toLowerCase();
   let status = connectedAt && view.roomReady ? 'connected' : session.direction === 'outgoing' ? 'outgoing_ringing' :
     !view.ownerDeviceId && view.phase === 'ringing' ? 'incoming_ringing' : 'connecting';
@@ -48,7 +48,7 @@ export function nativeCallHistoryEvent({ session, view }, at = Date.now()) {
 export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejectIncoming,
   env = process.env, logger = console, now = Date.now,
   storeFactory = createFirestoreMediaStore, runtimeFactory = createNativeCallRuntime,
-  onCallState = async () => {} } = {}) {
+  onCallState = async () => {}, voiceFallback } = {}) {
   const registry = firestoreRuntime?.deviceRegistry;
   const appSecret = String(env.META_WHATSAPP_APP_SECRET || env.WHATSAPP_APP_SECRET || env.META_APP_SECRET || '').trim();
   const phoneNumberId = String(env.WHATSAPP_PHONE_NUMBER_ID || env.META_WHATSAPP_PHONE_NUMBER_ID ||
@@ -187,7 +187,10 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     // Committed Answer/End hints cannot wait for provider acknowledgement.
     // New incoming alerts still take priority over compatibility history I/O.
     if (bundle.runtime.dispatchRealtimeWork) await bundle.runtime.dispatchRealtimeWork(id,
-      { onCommittedControlState: () => queueHistoryProjection(id) });
+      { onCommittedControlState: session => {
+        if (session?.terminal || session?.owner) voiceFallback?.stop(id);
+        queueHistoryProjection(id);
+      } });
     else await bundle.runtime.dispatchIncomingAlert(id);
     // Publish committed intent before slower provider cleanup so the browser
     // inbox stops ringing immediately when native ownership/end is recorded.
@@ -284,6 +287,7 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
     async close() {
       if (timer) clearInterval(timer); timer = null;
       bundle?.runtime?.tools?.video?.close();
+      await voiceFallback?.close();
       if (work) await work;
     },
     async hasNativeCall(id) { const row = await durableLocate(id); return !!row && row.routeChoice !== 'legacy'; },
@@ -294,7 +298,10 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
         return { allowed: true, claimed: !!row, managed: !!row };
       }
       const result = await bundle.runtime.claimLegacyIncoming(id, operationId);
-      if (result.sessionId) queueRecovery(result.sessionId);
+      if (result.sessionId) {
+        voiceFallback?.stop(result.sessionId);
+        queueRecovery(result.sessionId);
+      }
       return result;
     },
     async assertLegacyControl(id) {
@@ -339,7 +346,17 @@ export function createOperatorMediaGateway({ firestoreRuntime, pushBridge, rejec
           ...(Number.isFinite(timestamp) && timestamp > 0 ? { providerAgeAtReceiveMs: Math.max(0, receivedAt - timestamp) } : {}),
           handled: result.handled === true }));
         if (result.handled) handled++;
-        if (result.sessionId) queueRecovery(result.sessionId);
+        if (result.sessionId) {
+          queueRecovery(result.sessionId);
+          if (voiceFallback && type === 'terminate') voiceFallback.stop(result.sessionId);
+          if (voiceFallback && result.newIncoming) {
+            const caller = String(raw.from || '').trim().replace(/^\+/, '');
+            const business = String(row.business_display_phone_number || '').replace(/\D/g, '');
+            if (caller && caller !== business && caller !== phoneNumberId)
+              voiceFallback.schedule({ id: result.sessionId, callId: row.call_id, callerPhone: caller,
+                occurredAtMs: Number(raw.timestamp) * 1000, runtime: bundle.runtime });
+          }
+        }
         }
       }
       return { handled };
