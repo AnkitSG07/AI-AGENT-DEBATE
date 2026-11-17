@@ -2,7 +2,7 @@
 // no message sender, database dependency or background work.
 import { OPERATOR_OPENAI_CONVERSATION_LIMIT, OPERATOR_OPENAI_INSTRUCTION_LIMIT } from './operator-openai-draft.js';
 
-export function registerOperatorAiDraftRoutes(app, { provider, enabled = false, clock = Date.now } = {}) {
+export function registerOperatorAiDraftRoutes(app, { provider, enabled = false, startRequest, clock = Date.now } = {}) {
   const attempts = new Map();
   const active = new Set();
 
@@ -36,22 +36,32 @@ export function registerOperatorAiDraftRoutes(app, { provider, enabled = false, 
       return res.status(429).json({ ok: false, code: 'AI_DRAFT_BUSY',
         error: 'Please wait for the current reply draft before trying again.' });
     }
+    const lease = startRequest?.('drafts');
+    if (startRequest && !lease) {
+      return res.status(409).json({ ok: false, code: 'AI_FEATURE_DISABLED',
+        error: 'AI reply drafts are off in SH AI settings.' });
+    }
     row.count++;
     attempts.set(key, row);
     active.add(key);
     const controller = new AbortController();
+    const signal = lease ? AbortSignal.any([controller.signal, lease.signal]) : controller.signal;
     const cancel = () => { if (!res.writableEnded) controller.abort(); };
     res.once('close', cancel);
     try {
-      const result = await provider.generate({ conversation, instruction, signal: controller.signal });
-      if (!controller.signal.aborted) return res.json({ ok: true, channelId, ...result });
+      const result = await provider.generate({ conversation, instruction, signal });
+      signal.throwIfAborted();
+      return res.json({ ok: true, channelId, ...result });
     } catch (error) {
       if (controller.signal.aborted) return;
+      if (lease?.signal.aborted) return res.status(409).json({ ok: false, code: 'AI_FEATURE_DISABLED',
+        error: 'AI reply drafts are off in SH AI settings.' });
       const known = error?.operatorAiDraftError === true;
       return res.status(known ? error.status : 503).json({ ok: false,
         code: known ? error.code : 'AI_DRAFT_UNAVAILABLE',
         error: known ? error.message : 'AI reply drafts are temporarily unavailable. Please try again.' });
     } finally {
+      lease?.finish();
       res.removeListener('close', cancel);
       active.delete(key);
     }

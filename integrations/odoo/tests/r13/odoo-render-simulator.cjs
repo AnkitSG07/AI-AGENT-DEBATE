@@ -26,6 +26,8 @@ function matches(row,domain=[]) {
 class Simulator {
   constructor(){
     this.calls=[];this.unexpected=[];this.holds=new Map();this.faults=[];this.nextId=2000;this.backendReads=[];this.backendWrites=[];this.aiMode='manual';this.aiRevision=1;
+    this.aiSettings = null;
+    this.aiAvailableFeatures = { drafts: true, productSuggestions: true, voiceFallback: true, autoReplies: true };
     const now=new Date().toISOString();
     this.models={
       'res.partner':[
@@ -133,15 +135,29 @@ class Simulator {
             await json({ok:false,code:'INVALID_AI_REVISION',error:'Reload the current AI mode before changing it.'},400);return true;
           }
           if(item.body.expectedEpoch!=='offline-ai'||item.body.expectedRevision!==this.aiRevision){
-            await json({ok:false,code:'AI_MODE_CHANGED',mode:this.aiMode,epoch:'offline-ai',revision:this.aiRevision},409);return true;
+            await json({...this.aiSnapshot(),ok:false,code:'AI_MODE_CHANGED'},409);return true;
           }
-          this.aiMode=item.body.mode;this.aiRevision++;
+          if (typeof item.body.masterEnabled === 'boolean') {
+            this.aiSettings = { masterEnabled: item.body.masterEnabled, features: item.body.features };
+            this.aiMode = item.body.masterEnabled && item.body.features.autoReplies ? 'zapier' : 'manual';
+          } else {
+            this.aiMode = item.body.mode;
+            this.aiSettings = null;
+          }
+          this.aiRevision++;
         }
-        data={ok:true,mode:this.aiMode,epoch:'offline-ai',revision:this.aiRevision};break;
+        data=this.aiSnapshot();break;
       case '/api/whatsapp-calls/config':data={ok:true,auth_required:true};break;
       default:if(url.pathname.startsWith('/api/zoho-mail/message/'))data={ok:true,message:{content:'<p>Demo email content</p>',fromAddress:'a@example.invalid',toAddress:'care@smarthandicrafts.com'}};else if(/\/api\/(whatsapp-calls|operator-devices|push|operator-call-locks)\//.test(url.pathname))data={ok:true,logs:[],calls:[]};else{this.unexpected.push({path:url.pathname});data={ok:false,error:'Unimplemented simulator API'};}
     }
     await json(data,data.ok?200:503);return true;
+  }
+  aiSnapshot() {
+    const autoReplies = this.aiMode === 'zapier';
+    const settings = this.aiSettings || { masterEnabled: autoReplies,
+      features: { drafts: false, productSuggestions: false, voiceFallback: false, autoReplies } };
+    return { ok: true, mode: this.aiMode, epoch: 'offline-ai', revision: this.aiRevision,
+      ...settings, availableFeatures: this.aiAvailableFeatures };
   }
 }
 module.exports={Simulator,matches};

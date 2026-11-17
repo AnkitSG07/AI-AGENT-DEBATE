@@ -57,7 +57,7 @@ function fixture(names, extras = {}) {
 }
 const windowFns=['parseOdooUtc','isWhatsappWindowOpen','postTextToChannel','sendAttachmentsFromInput'];
 const templateFns=['beginWhatsappTemplateDelivery','confirmWhatsappTemplateDelivery','safeId','normalizeCreateResult','partnerIdFromChannel','buildWizardValue','isUnavailableWhatsappSendMethod','unconfirmedWhatsappTemplateSend','sendWhatsappTemplateWithFallbacks','sendWhatsappTemplateToPartnerWithFallbacks'];
-const aiFns=['normalizeAiMode','isAiReplyEnabledMode','syncAiModeToServer','saveAiProcessedMessageIds','markAiMessageProcessed','markCurrentInboxLatestAsProcessed','setAiMode','initializeAiModeFromServer'];
+const aiFns=['normalizeAiMode','isAiReplyEnabledMode','syncAiModeToServer','saveAiProcessedMessageIds','markAiMessageProcessed','markCurrentInboxLatestAsProcessed','setAiMode','initializeAiModeFromServer','operatorAiFeatureEnabled'];
 
 test('closed WhatsApp window blocks both free text and attachments before any Odoo operation',async()=>{
   const f=fixture(windowFns);f.channel.whatsapp_channel_active=false;
@@ -270,6 +270,28 @@ test('contradictory AI mode, enable flag or version representations never confir
     {...valid,global:{mode:'zapier',epoch:'demo-ai',revision:2}},
     {...valid,global:{mode:'zapier',aiEnabled:false,epoch:'demo-ai',revision:1}}
   ])assert.equal(f.c.aiModeSnapshot(body),null);
+});
+test('shared AI settings require both the master switch and an available selected feature', async()=>{
+  const features={drafts:true,productSuggestions:false,voiceFallback:true,autoReplies:false};
+  const availableFeatures={drafts:true,productSuggestions:true,voiceFallback:false,autoReplies:true};
+  const global={mode:'manual',epoch:'demo-ai',revision:3,masterEnabled:true,features};
+  const f=fixture(aiFns,{appFetch:async (url,options)=>{
+    if (options.method==='GET') return {ok:true,json:async()=>({ok:true,global,availableFeatures})};
+    const requested=JSON.parse(options.body);
+    assert.deepEqual(requested,{masterEnabled:false,features,expectedEpoch:'demo-ai',expectedRevision:3,source:'operator_hub_embed'});
+    assert.equal(f.c.operatorAiFeatureEnabled('drafts'),false,'Stop local features as soon as the operator turns off the master');
+    return {ok:true,json:async()=>({ok:true,global:{...global,revision:4,masterEnabled:false},availableFeatures})};
+  }});
+  await f.c.loadAiModeFromServer();
+  assert.equal(f.c.operatorAiFeatureEnabled('drafts'),true);
+  assert.equal(f.c.operatorAiFeatureEnabled('productSuggestions'),false);
+  assert.equal(f.c.operatorAiFeatureEnabled('voiceFallback'),false);
+  assert.equal(f.c.operatorAiFeatureEnabled('autoReplies'),false);
+  assert.equal(await f.c.setAiMode({masterEnabled:false,features}),true);
+  assert.equal(f.c.operatorAiFeatureEnabled('drafts'),false);
+  assert.deepEqual(f.c.state.aiServerGlobal.features,features);
+  assert.equal(f.c.aiModeSnapshot({ok:true,global,availableFeatures,masterEnabled:false}),null);
+  assert.equal(f.c.aiModeSnapshot({ok:true,global,availableFeatures,settingsReady:false}),null);
 });
 test('destroying the Hub during a first-toggle status lookup prevents the queued mutation',async()=>{
   const gate=deferred(),methods=[],f=fixture(aiFns,{appFetch:async(url,options)=>{methods.push(options.method);return gate.promise;}});

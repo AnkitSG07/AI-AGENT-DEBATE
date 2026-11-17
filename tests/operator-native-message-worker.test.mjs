@@ -8,11 +8,12 @@ function extract(name) {
   assert.ok(at > 0); const end = /^\}$/m.exec(source.slice(at)); assert.ok(end);
   return source.slice(start, at + end.index + 1);
 }
-function fixture({ ai = false, native = true, messages = [] } = {}) {
+function fixture({ ai = false, master = true, native = true, messages = [] } = {}) {
   const events = [], queried = [], state = { running: false, tick_count: 0 };
   const channels = [...new Set(messages.map(message => message.res_id))].map(id => ({ id, channel_type: id === 76 ? 'chat' : 'whatsapp' }));
   const context = { AI_MODE_BACKGROUND_WORKER_ENABLED: ai, AI_MODE_BACKGROUND_INTERVAL_MS: 4000, odooConfigured: true,
     aiModeGlobalState: { mode: 'zapier' }, aiModeBackgroundState: state, console: { log() {}, warn() {} }, Date,
+    operatorAiControls: { enabled: feature => feature === 'autoReplies' && master }, webPushConfigured: () => false,
     now: () => 'synthetic-time',
     androidPushBridge: { status: () => ({ enabled: native }), observeIncomingMessages: input => { events.push(['observe', input.channel.id]); return new Promise(() => {}); },
       publishMessage: async input => { events.push(['push', input.message.id]); return { ok: true }; } },
@@ -47,6 +48,12 @@ test('disabled AI worker performs no discovery or AI work; the independent notif
   assert.deepEqual(f.events, []);
   assert.equal(f.state.running, false);
   f.context.startAiModeBackgroundWorker(); assert.equal(f.state.timer, undefined);
+});
+test('the shared master switch stops legacy discovery even when automation is configured', async () => {
+  const f = fixture({ ai: true, master: false, messages: [message(11, 74)] });
+  await f.context.aiModeBackgroundTick();
+  assert.deepEqual(f.events, []);
+  assert.deepEqual(f.queried, []);
 });
 test('raw native candidates survive AI processed/preboot filters even when another AI-eligible channel exists', async () => {
   const f = fixture({ ai: true, messages: [message(10, 73), message(11, 74), message(12, 76)] });

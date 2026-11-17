@@ -15,7 +15,7 @@ export const OPERATOR_BROWSER_SCOPES = Object.freeze(['calls:read', 'calls:write
   'documents:read', 'documents:write', 'ai:read', 'ai:write']);
 const SCOPES = OPERATOR_BROWSER_SCOPES;
 export const ANDROID_OPERATOR_SCOPES = Object.freeze(['mail:read', 'mail:write',
-  'documents:read', 'documents:write', 'ai:draft']);
+  'documents:read', 'documents:write', 'ai:draft', 'ai:settings']);
 const ANDROID_HUB_ORIGIN = 'https://www.smarthandicrafts.com';
 const ANDROID_DEVICE_ID = /^android_[A-Za-z0-9_-]{16,100}$/;
 const ANDROID_SESSION_ID = /^[a-f0-9]{24}$/;
@@ -102,6 +102,7 @@ function nativeReadPath(path) {
 const ANDROID_MAIL_READ_PATHS = new Set(['/api/zoho-mail/status', '/api/zoho-mail/account',
   '/api/zoho-mail/folders', '/api/zoho-mail/messages']);
 function androidOperatorScope(path, method) {
+  if (path === '/api/ai-mode' && (READ_METHODS.has(method) || method === 'POST')) return 'ai:settings';
   if (READ_METHODS.has(method)) {
     if (ANDROID_MAIL_READ_PATHS.has(path) || /^\/api\/zoho-mail\/message\/[^/]{1,240}$/.test(path)) return 'mail:read';
     if (path === '/api/odoo-documents/tree' || /^\/api\/odoo-documents\/(?:folder|file|view|download)\/[1-9][0-9]{0,15}$/.test(path)) return 'documents:read';
@@ -109,7 +110,7 @@ function androidOperatorScope(path, method) {
   if (method === 'POST') {
     if (['/api/zoho-mail/send', '/api/zoho-mail/reply'].includes(path)) return 'mail:write';
     if (path === '/api/odoo-documents/share') return 'documents:write';
-    if (path === '/api/ai-mode/draft') return 'ai:draft';
+    if (path === '/api/ai-mode/draft' || path === '/api/ai-mode/product-suggestions') return 'ai:draft';
   }
   return null;
 }

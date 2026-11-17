@@ -90,6 +90,14 @@ globalThis.fetch = async (value, options = {}) => {
   if (url.hostname === 'people.googleapis.com') return result({ connections: [
     { resourceName: 'people/fixture', names: [{ displayName: 'Fixture contact' }], emailAddresses: [{ value: 'fixture@example.invalid' }], phoneNumbers: [{ value: '+919000000001' }] }
   ], results: [{ person: { resourceName: 'people/fixture', names: [{ displayName: 'Fixture contact' }] } }] });
+  if (url.hostname === 'api.openai.com' && url.pathname === '/v1/responses' && scenario.acceptAiDraft) {
+    if (scenario.waitForDraftCancellation) {
+      options.signal.throwIfAborted();
+      await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+    }
+    return result({ status: 'completed', output: [{ type: 'message', role: 'assistant',
+      content: [{ type: 'output_text', text: 'Fixture reviewed draft' }] }] });
+  }
   throw new Error(`External networking disabled by fixture: ${url.origin}${url.pathname}`);
 };
 

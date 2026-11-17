@@ -15,22 +15,24 @@ const historyScript = fs.readFileSync(path.resolve(__dirname,
 const challengePath = '/api/operator-browser-auth/android/challenge';
 const tokenPath = '/api/operator-browser-auth/android/token';
 const draftPath = '/api/ai-mode/draft';
+const aiSettingsPath = '/api/ai-mode';
 const mailPath = '/api/zoho-mail/status';
 const documentPath = '/api/odoo-documents/tree';
 const sendPath = '/api/zoho-mail/send';
 const proofPath = challenge => `/api/whatsapp-calls/recent?operator_device_id=sh_proof_${challenge}`;
-const scopes = ['mail:read', 'mail:write', 'documents:read', 'documents:write', 'ai:draft'];
+const scopes = ['mail:read', 'mail:write', 'documents:read', 'documents:write', 'ai:draft', 'ai:settings'];
 const baseDeviceId = `web_${'a'.repeat(32)}`;
 const operatorSessionId = `tab_${'b'.repeat(24)}`;
 
 test.before(launch);
 test.after(finish);
 
-async function accessFixture({ native = true, nativeStatus = 200, holdProof = false, revokeWrite = false } = {}) {
+async function accessFixture({ native = true, nativeStatus = 200, revokeWrite = false } = {}) {
   const simulator = new Simulator();
+  simulator.aiSettings = { masterEnabled: true, features: { drafts: true, productSuggestions: false, voiceFallback: false, autoReplies: false } };
   simulator.models['mail.message'].push(...messagesFor(103));
   const seen = { challenges: [], exchanges: [], protected: [], legacy: 0, directHistory: [] };
-  const protectedPaths = new Set([draftPath, mailPath, documentPath, sendPath]);
+  const protectedPaths = new Set([aiSettingsPath, draftPath, mailPath, documentPath, sendPath]);
   const initScript = native ? `
     window.nativeReads = [];
     window.finishNativeRead = function (request, status) {
@@ -43,7 +45,7 @@ async function accessFixture({ native = true, nativeStatus = 200, holdProof = fa
       const request = JSON.parse(message);
       if (request.type !== 'hub-call-read') return;
       window.nativeReads.push(request);
-      if (${holdProof} && request.path.includes('operator_device_id=sh_proof_')) return;
+      if (window.holdNativeProof && request.path.includes('operator_device_id=sh_proof_')) return;
       const status = request.path.includes('operator_device_id=sh_proof_') ? ${nativeStatus} : 200;
       queueMicrotask(() => window.finishNativeRead(request, status));
     } };
@@ -79,6 +81,13 @@ async function accessFixture({ native = true, nativeStatus = 200, holdProof = fa
       else if (url.pathname === draftPath) {
         const { channelId } = req.postDataJSON();
         await json({ ok: true, channelId, draft: 'Thanks for asking. What size would you like?' });
+      } else if (url.pathname === aiSettingsPath) {
+        if (req.method() === 'POST') {
+          const { masterEnabled, features } = req.postDataJSON();
+          simulator.aiSettings = { masterEnabled, features };
+          simulator.aiRevision++;
+        }
+        await json(simulator.aiSnapshot());
       } else await json({ ok: true });
       return true;
     }
@@ -127,16 +136,26 @@ test('AI draft on an existing enrolled APK proves the device without opening a p
     await f.page.evaluate(() => __hubUiTest.selectChannel(103));
     assert.equal(await f.page.evaluate(() => window.SHNativeHistory.protocol), 'sh-call-history-v1');
     assert.equal(f.seen.challenges.length, 0);
+    await f.page.evaluate(() => __hubUiTest.loadAiModeFromServer());
     await f.page.locator('#shAiDraftBtn').click();
     await f.page.waitForFunction(() => !__hubUiTest.state.aiDraftRequest);
     assert.match(await f.page.locator('#shAiModeBody').innerText(), /What size would you like/);
     const token = await assertExchange(f);
     assert.equal(f.seen.challenges.length, 1);
     assert.equal(f.seen.exchanges.length, 1);
-    assert.deepEqual(f.seen.protected, [{ path: draftPath, method: 'POST', authorization: `Bearer ${token}` }]);
+    assert.deepEqual(f.seen.protected, [
+      { path: aiSettingsPath, method: 'GET', authorization: `Bearer ${token}` },
+      { path: draftPath, method: 'POST', authorization: `Bearer ${token}` }
+    ]);
     assert.equal(f.seen.legacy, 0);
     assert.equal(await f.page.locator('#shMessageInput').inputValue(), '');
     assert.equal(f.simulator.calls.filter(call => call.method === 'message_post').length, 0);
+    const saved = await f.page.evaluate(() => __hubUiTest.setAiMode({ masterEnabled: false,
+      features: __hubUiTest.state.aiServerGlobal.features }));
+    assert.equal(saved, true);
+    assert.deepEqual(f.seen.protected.at(-1), { path: aiSettingsPath, method: 'POST', authorization: `Bearer ${token}` });
+    assert.equal(f.seen.challenges.length, 1);
+    assert.equal(await f.page.locator('#shAiDraftBtn').isVisible(), false);
     assert.deepEqual(f.errors, []);
   } finally { await f.close(); }
 });
@@ -168,11 +187,11 @@ test('an unenrolled device leaves the current reply intact and does not open leg
   try {
     await f.page.evaluate(() => __hubUiTest.selectChannel(103));
     await f.page.locator('#shMessageInput').fill('My original reply');
-    await f.page.locator('#shAiDraftBtn').click();
-    await f.page.waitForFunction(() => !__hubUiTest.state.aiDraftRequest);
-    assert.match(await f.page.locator('#shAiModeBody').innerText(), /enroll|app settings/i);
+    await f.page.evaluate(() => __hubUiTest.loadAiModeFromServer());
+    assert.equal(await f.page.locator('#shAiDraftBtn').isVisible(), false);
+    assert.match(await f.page.locator('#shAiReplyStatus').textContent(), /enroll|app settings/i);
     assert.equal(await f.page.locator('#shMessageInput').inputValue(), 'My original reply');
-    assert.equal(await f.page.locator('#shAiModeUseBtn').isDisabled(), true);
+    assert.equal(await f.page.locator('#shAiModePanel').isVisible(), false);
     assert.equal(f.seen.challenges.length, 1);
     assert.equal((await nativeProofs(f.page)).length, 1);
     assert.equal(f.seen.exchanges.length + f.seen.protected.length + f.seen.legacy, 0);
@@ -180,18 +199,23 @@ test('an unenrolled device leaves the current reply intact and does not open leg
 });
 
 test('closing a draft while native proof is pending prevents the stale draft from being sent', async () => {
-  const f = await accessFixture({ holdProof: true });
+  const f = await accessFixture();
   try {
     await f.page.evaluate(() => __hubUiTest.selectChannel(103));
+    await f.page.evaluate(async () => {
+      await __hubUiTest.loadAiModeFromServer();
+      window.SHOperatorAuth.clear();
+      window.holdNativeProof = true;
+    });
     await f.page.locator('#shAiDraftBtn').click();
-    await f.page.waitForFunction(() => window.nativeReads.some(r => r.path.includes('operator_device_id=sh_proof_')));
+    await f.page.waitForFunction(() => window.nativeReads.filter(r => r.path.includes('operator_device_id=sh_proof_')).length === 2);
     await f.page.locator('#shAiModePanelClose').click();
     await f.page.evaluate(() => {
-      const request = window.nativeReads.find(r => r.path.includes('operator_device_id=sh_proof_'));
+      const request = window.nativeReads.filter(r => r.path.includes('operator_device_id=sh_proof_')).at(-1);
       window.finishNativeRead(request, 200);
     });
     assert.deepEqual(await fetchProtected(f.page, [mailPath]), [{ status: 200 }]);
-    assert.deepEqual(f.seen.protected.map(item => item.path), [mailPath]);
+    assert.deepEqual(f.seen.protected.map(item => item.path), [aiSettingsPath, mailPath]);
     assert.equal(f.seen.legacy, 0);
     assert.equal(await f.page.locator('#shAiModePanel').isVisible(), false);
   } finally { await f.close(); }

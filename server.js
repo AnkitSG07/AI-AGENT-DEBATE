@@ -4,8 +4,10 @@ import { createAiVoiceHandoff } from './call-runtime/ai-voice-handoff.mjs';
 import { createVoiceCatalogLookup, createVoiceEnquiryCapture, loadVoiceInstructions,
   VOICE_CATALOG_TOOL, VOICE_ENQUIRY_TOOL } from './call-runtime/ai-voice-knowledge.mjs';
 import { createOperatorAiSwitch } from './operator-ai-switch.js';
+import { createOperatorAiControls, validOperatorAiFeatures } from './operator-ai-controls.js';
 import { createOperatorOpenAiDraft } from './operator-openai-draft.js';
 import { registerOperatorAiDraftRoutes } from './operator-ai-draft-routes.js';
+import { createOperatorProductSuggestions, registerOperatorProductSuggestionRoutes } from './operator-product-suggestions.js';
 import { createMessageNotificationWorker } from './operator-message-worker.js';
 import express from "express";
 import { createAndroidPushBridge } from "./operator-android-push.js";
@@ -1794,11 +1796,37 @@ function aiModeSleep(ms = 0) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
 }
 
-async function callGemini(system, prompt, debateText) {
+// The installed SDK has no caller-controlled abort signal. Lease-bound SH Chat
+// calls use its same Gemini API so switching AI off can cancel local transport.
+async function requestCancellableGemini(model, action, body, signal) {
+  signal.throwIfAborted();
+  const name = String(model);
+  const path = /^(?:models|tunedModels)\//.test(name) ? name : `models/${name}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/${path.split("/").map(encodeURIComponent).join("/")}:${action}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
+    body: JSON.stringify(body),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(AI_MODEL_TIMEOUT_MS)])
+  });
+  if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
+  return await response.json();
+}
+
+async function callGemini(system, prompt, debateText, signal) {
   if (!genAI) throw new Error("Gemini is not configured (missing GEMINI_API_KEY).");
   const fullPrompt =
     `${system}\n\nUSER PROMPT:\n${prompt}\n\n` +
     (debateText ? `DEBATE SO FAR:\n${debateText}` : "");
+
+  if (signal) {
+    const response = await requestCancellableGemini(GEMINI_MODEL, "generateContent", {
+      contents: [{ role: "user", parts: [{ text: fullPrompt }] }]
+    }, signal);
+    return (response?.candidates?.[0]?.content?.parts || [])
+      .filter(part => typeof part.text === "string" && !part.thought)
+      .map(part => part.text).join("").trim();
+  }
 
   const response = await withTimeout(
     genAI.models.generateContent({
@@ -1812,12 +1840,12 @@ async function callGemini(system, prompt, debateText) {
   return response.text?.trim() || "";
 }
 
-async function callGeminiWithFallback(system, prompt, debateText, openRouterModel) {
+async function callGeminiWithFallback(system, prompt, debateText, openRouterModel, signal) {
   let geminiError = null;
 
   if (genAI) {
     try {
-      const text = await callGemini(system, prompt, debateText);
+      const text = await callGemini(system, prompt, debateText, signal);
       return {
         text,
         provider: "gemini",
@@ -1825,6 +1853,7 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
         fallback_from: null
       };
     } catch (e) {
+      signal?.throwIfAborted();
       geminiError = e;
       const fallbackWorthy = isRateLimitOrQuotaError(e);
       if (!fallbackWorthy) throw e;
@@ -1835,8 +1864,9 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
         for (let attempt = 1; attempt <= AI_MODE_GEMINI_RETRY_COUNT; attempt += 1) {
           try {
             await aiModeSleep(500 * attempt);
+            signal?.throwIfAborted();
             console.warn(`Retrying Gemini after temporary failure. Attempt ${attempt}/${AI_MODE_GEMINI_RETRY_COUNT}:`, e?.message || e);
-            const text = await callGemini(system, prompt, debateText);
+            const text = await callGemini(system, prompt, debateText, signal);
             return {
               text,
               provider: "gemini_retry",
@@ -1844,6 +1874,7 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
               fallback_from: GEMINI_MODEL
             };
           } catch (retryErr) {
+            signal?.throwIfAborted();
             geminiError = retryErr;
             console.warn("Gemini retry failed:", retryErr?.message || retryErr);
           }
@@ -1858,7 +1889,7 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
     throw geminiError || new Error("No LLM provider configured.");
   }
 
-  const openRouterResult = await callOpenRouterWithMeta(system, prompt, debateText, openRouterModel || PRODUCT_BOT_OR_MODEL);
+  const openRouterResult = await callOpenRouterWithMeta(system, prompt, debateText, openRouterModel || PRODUCT_BOT_OR_MODEL, signal);
   return {
     text: openRouterResult.text,
     provider: "openrouter",
@@ -1867,7 +1898,7 @@ async function callGeminiWithFallback(system, prompt, debateText, openRouterMode
   };
 }
 
-async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
+async function callOpenRouterWithMeta(system, prompt, debateText, modelName, signal) {
   if (!OPENROUTER_API_KEY) throw new Error("OpenRouter not configured (missing OPENROUTER_API_KEY).");
 
   const fallbacks = [
@@ -1881,6 +1912,7 @@ async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
   let lastErr = null;
 
   for (const m of fallbacks) {
+    signal?.throwIfAborted();
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), AI_MODEL_OPENROUTER_TIMEOUT_MS);
@@ -1888,7 +1920,7 @@ async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
       try {
         response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
-          signal: controller.signal,
+          signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
           headers: {
             Authorization: `Bearer ${OPENROUTER_API_KEY}`,
             "Content-Type": "application/json",
@@ -1923,6 +1955,7 @@ async function callOpenRouterWithMeta(system, prompt, debateText, modelName) {
       if (!text) throw new Error("Empty response from provider");
       return { text, model_used: m };
     } catch (e) {
+      signal?.throwIfAborted();
       lastErr = e;
     }
   }
@@ -1968,8 +2001,8 @@ function isRateLimitOrQuotaError(err) {
   );
 }
 
-async function callProductBotModel(system, prompt) {
-  return await callGeminiWithFallback(system, prompt, "", PRODUCT_BOT_OR_MODEL);
+async function callProductBotModel(system, prompt, signal) {
+  return await callGeminiWithFallback(system, prompt, "", PRODUCT_BOT_OR_MODEL, signal);
 }
 
 function historyToText(history) {
@@ -2494,7 +2527,14 @@ function cosine(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-async function embedText(text) {
+async function embedText(text, signal) {
+  if (signal && genAI) {
+    const model = `models/${String(PRODUCT_BOT_EMBED_MODEL).replace(/^models\//, "")}`;
+    const out = await requestCancellableGemini(model, "batchEmbedContents", {
+      requests: [{ model, content: { role: "user", parts: [{ text }] } }]
+    }, signal);
+    return out?.embeddings?.[0]?.values || null;
+  }
   const out = await genAI.models.embedContent({
     model: PRODUCT_BOT_EMBED_MODEL,
     contents: text
@@ -4360,7 +4400,8 @@ function formatKitIntegrationChunksForPrompt(chunks = []) {
     .join("\n\n---\n\n");
 }
 
-async function ensureKnowledgeIndex(knowledgeText) {
+async function ensureKnowledgeIndex(knowledgeText, signal) {
+  signal?.throwIfAborted();
   const raw = normalizeText(knowledgeText);
   if (!raw) return;
   if (productKnowledgeCache.raw === raw && productKnowledgeCache.chunks.length) return;
@@ -4378,13 +4419,20 @@ async function ensureKnowledgeIndex(knowledgeText) {
   try {
     const vectors = [];
     for (const chunk of chunks) {
-      const vec = await embedText(`${chunk.title}\n${chunk.content}`);
+      const vec = await embedText(`${chunk.title}\n${chunk.content}`, signal);
       vectors.push(vec);
     }
     if (vectors.some((v) => !Array.isArray(v))) throw new Error("Embedding response did not include vectors.");
-    productKnowledgeCache.vectors = vectors;
+    if (productKnowledgeCache.chunks === chunks) {
+      signal?.throwIfAborted();
+      productKnowledgeCache.vectors = vectors;
+    }
   } catch (e) {
-    productKnowledgeCache.embedError = e.message;
+    if (productKnowledgeCache.chunks === chunks) {
+      productKnowledgeCache.embedError = e.message;
+      if (signal?.aborted) productKnowledgeCache.raw = "";
+    }
+    signal?.throwIfAborted();
   }
 }
 
@@ -4552,7 +4600,8 @@ function buildDeterministicPricingReply({ sku, title, qty, tiers }) {
   return `${sku} (${title}) for ${qty} pieces: ₹${applicable.price} per unit (${applicable.label} tier).\n\nFull tiers:\n${tierRows}`;
 }
 
-async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
+async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K, signal) {
+  signal?.throwIfAborted();
   const chunks = productKnowledgeCache.chunks || [];
   if (!chunks.length) return [];
 
@@ -4566,9 +4615,10 @@ async function retrieveRelevantChunks(query, topK = PRODUCT_BOT_TOP_K) {
 
   if (productKnowledgeCache.vectors.length === chunks.length) {
     try {
-      const qVec = await embedText(effectiveQuery);
+      const qVec = await embedText(effectiveQuery, signal);
       vectorScores = chunks.map((chunk, i) => ({ chunk, vectorScore: cosine(qVec, productKnowledgeCache.vectors[i]) }));
     } catch {
+      signal?.throwIfAborted();
       // fallback to lexical retrieval
     }
   }
@@ -15990,12 +16040,9 @@ function aiModeNormalizeOperationalMode(value) {
   return "manual";
 }
 
-// UI toggle mapping:
-// - ON  => Zapier AI auto-reply by default
-// - OFF => Manual/human reply only
-// Gemini/server AI mode is hidden and blocked unless AI_MODE_ALLOW_HIDDEN_CHAT_MODE=true.
+// Compatibility for Hub versions with the original automation-only controls.
 const AI_MODE_TOGGLE_ON_MODE = SH_CHAT_AI_ENABLED ? aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_ON_MODE || "zapier") : 'manual';
-const AI_MODE_TOGGLE_OFF_MODE = aiModeNormalizeOperationalMode(process.env.AI_MODE_TOGGLE_OFF_MODE || "manual");
+const AI_MODE_TOGGLE_OFF_MODE = 'manual';
 
 function aiModeIsAutoReplyMode(mode) {
   const normalized = aiModeNormalizeOperationalMode(mode);
@@ -16022,8 +16069,10 @@ function aiModeResolveRequestedMode(body = {}) {
 
 function aiModePublicToggleState() {
   const currentMode = aiModeNormalizeOperationalMode(aiModeGlobalState?.mode || AI_MODE_TOGGLE_OFF_MODE);
+  const settings = operatorAiControls.view();
   return {
     ok: true,
+    ...settings,
     aiEnabled: aiModeIsAutoReplyMode(currentMode),
     ai_enabled: aiModeIsAutoReplyMode(currentMode),
     mode: currentMode,
@@ -16032,10 +16081,8 @@ function aiModePublicToggleState() {
     hiddenModesAvailable: AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ["chat", "assist"] : [],
     toggleOnMode: AI_MODE_TOGGLE_ON_MODE,
     toggleOffMode: AI_MODE_TOGGLE_OFF_MODE,
-    epoch: aiModeGlobalState.epoch,
-    revision: aiModeGlobalState.revision,
     updated_at: aiModeGlobalState.updated_at,
-    global: aiModeGlobalState
+    global: { ...aiModeGlobalState }
   };
 }
 
@@ -16063,14 +16110,17 @@ function aiModeZapierConfiguration() {
     ready: issue === null, issue };
 }
 
-function aiModeApplyToggle(req, res, globalOnly = false) {
+async function aiModeApplyToggle(req, res, globalOnly = false) {
   const body = req.body || {};
   const toggleKeys = ['aiEnabled', 'ai_enabled', 'aiOn', 'ai_on', 'enabled'].filter(key => Object.prototype.hasOwnProperty.call(body, key));
   const modes = ['aiMode', 'mode'].filter(key => Object.prototype.hasOwnProperty.call(body, key));
   const validBoolean = value => typeof value === 'boolean' || value === 0 || value === 1 || ['true','false','0','1'].includes(value);
   const requestedModes = modes.map(key => String(body[key]).toLowerCase());
   const allowedModes = AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ['manual','zapier','chat','assist'] : ['manual','zapier'];
-  if ((!toggleKeys.length && !modes.length) || toggleKeys.some(key => !validBoolean(body[key])) ||
+  const hasSettings = Object.hasOwn(body, 'masterEnabled') || Object.hasOwn(body, 'features');
+  const invalidSettings = hasSettings && (toggleKeys.length || modes.length ||
+    typeof body.masterEnabled !== 'boolean' || !validOperatorAiFeatures(body.features));
+  if (invalidSettings || (!hasSettings && !toggleKeys.length && !modes.length) || toggleKeys.some(key => !validBoolean(body[key])) ||
       requestedModes.some(mode => !allowedModes.includes(mode)) ||
       new Set(toggleKeys.map(key => ['true','1'].includes(String(body[key]).toLowerCase()))).size > 1 ||
       new Set(requestedModes).size > 1 || (toggleKeys.length && modes.length))
@@ -16080,20 +16130,39 @@ function aiModeApplyToggle(req, res, globalOnly = false) {
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0 ||
       typeof body.expectedEpoch !== 'string' || !body.expectedEpoch)
     return res.status(400).json({ ok: false, code: 'INVALID_AI_REVISION', error: 'Reload the current AI mode before changing it.' });
-  if (body.expectedRevision !== aiModeGlobalState.revision || body.expectedEpoch !== aiModeGlobalState.epoch)
-    return res.status(409).json({ ...aiModePublicToggleState(), ok: false, code: 'AI_MODE_CHANGED', error: 'Another device changed SH AI. Review the current mode and try again.' });
-  const previousMode = aiModeGlobalState.mode, nextMode = aiModeResolveRequestedMode(body);
-  if (nextMode === 'zapier') {
+  await operatorAiControls.ready();
+  const current = operatorAiControls.view();
+  if (!current.settingsReady) return aiModeSettingsUnavailable(res);
+  const conflict = () => res.status(409).json({ ...aiModePublicToggleState(), ok: false,
+    code: 'AI_MODE_CHANGED', error: 'Another device changed SH AI. Review the current mode and try again.' });
+  if (body.expectedRevision !== current.revision || body.expectedEpoch !== current.epoch) return conflict();
+
+  const previousMode = aiModeGlobalState.mode;
+  const legacyRequested = hasSettings ? AI_MODE_TOGGLE_ON_MODE : aiModeResolveRequestedMode(body);
+  const legacyMode = hasSettings && current.legacyMode !== 'manual'
+    ? aiModeNormalizeOperationalMode(current.legacyMode) : legacyRequested;
+  const masterEnabled = hasSettings ? body.masterEnabled : toggleKeys.length
+    ? ['true', '1'].includes(String(body[toggleKeys[0]]).toLowerCase()) : legacyRequested !== 'manual';
+  const features = hasSettings ? body.features : { ...current.features,
+    autoReplies: legacyRequested === 'manual' ? current.features.autoReplies : true };
+  if (!hasSettings && masterEnabled && features.autoReplies && legacyMode === 'zapier') {
     const configuration = aiModeZapierConfiguration();
     if (configuration.issue) return res.status(503).json({ ok: false, ...configuration.issue });
   }
-  aiModeGlobalState.mode = nextMode;
-  aiModeGlobalState.revision += 1;
-  aiModeGlobalState.updated_at = now();
+  const result = await operatorAiControls.update({ masterEnabled, features,
+    legacyMode: hasSettings || legacyRequested !== 'manual' ? legacyMode : current.legacyMode,
+    expectedEpoch: body.expectedEpoch, expectedRevision: body.expectedRevision });
+  if (result === 'conflict') return conflict();
+  if (result !== 'saved') return aiModeSettingsUnavailable(res);
   aiModeGlobalState.updated_by = aiModeSafeString(req.operatorAuth?.operatorDeviceId || 'authorized_operator', 160);
-  if (previousMode !== nextMode) aiModeGlobalState.enabled_since_ms = Date.now();
-  return res.json(globalOnly ? { ok: true, previousMode, epoch: aiModeGlobalState.epoch,
-    revision: aiModeGlobalState.revision, global: aiModeGlobalState } : { ...aiModePublicToggleState(), previousMode });
+  const settings = aiModePublicToggleState();
+  return res.json(globalOnly ? { ok: true, previousMode, epoch: settings.epoch,
+    revision: settings.revision, global: { ...settings.global, revision: settings.revision } } : { ...settings, previousMode });
+}
+
+function aiModeSettingsUnavailable(res) {
+  return res.status(503).json({ ...aiModePublicToggleState(), ok: false, code: 'AI_SETTINGS_UNAVAILABLE',
+    error: 'SH AI settings are temporarily unavailable. Try again shortly.' });
 }
 
 function aiModeCaptureLease() {
@@ -16855,7 +16924,7 @@ function aiModeZapierChannelLabel(channel = {}) {
 
 async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messageText = "", aiMode = "" } = {}) {
   const modeLease = aiModeCaptureLease();
-  if (modeLease.mode !== 'zapier') return { ok: false, skipped: 'ai_mode_off' };
+  if (!operatorAiControls.enabled('autoReplies') || modeLease.mode !== 'zapier') return { ok: false, skipped: 'ai_mode_off' };
   if (!ZAPIER_INCOMING_WHATSAPP_ENABLED) return { ok: false, skipped: "disabled" };
   if (!ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL) return { ok: false, skipped: "missing_webhook_url" };
   if (!aiModeLooksLikeExternalCustomerChannel(channel)) return { ok: false, skipped: "not_customer_chat_channel", channel_type: channel?.channel_type || "" };
@@ -16902,15 +16971,16 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
     rawOdooChannel: channel
   };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS);
+  const request = operatorAiControls.startRequest('autoReplies');
+  if (!request) return { ok: false, skipped: 'ai_mode_off' };
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS)]);
 
   try {
     const response = await fetch(ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: controller.signal
+      signal
     });
     const responseText = await response.text().catch(() => "");
 
@@ -16950,12 +17020,13 @@ async function sendIncomingWhatsAppToZapier({ channel = {}, message = {}, messag
 
     return { ok: true, status: response.status, responseText: responseText.slice(0, 300), pushNotifyResult };
   } catch (error) {
+    if (request.signal.aborted) return { ok: false, skipped: 'ai_mode_changed_during_forward' };
     zapierIncomingWhatsAppState.failed_count += 1;
     zapierIncomingWhatsAppState.last_error = error?.message || String(error);
     console.warn("Incoming chat -> Zapier failed:", zapierIncomingWhatsAppState.last_error);
     return { ok: false, error: zapierIncomingWhatsAppState.last_error };
   } finally {
-    clearTimeout(timeout);
+    request.finish();
   }
 }
 
@@ -17925,7 +17996,8 @@ async function aiModeOdooUpsertMemory({
   channel,
   message,
   aiResult,
-  odooChannelId
+  odooChannelId,
+  signal
 } = {}) {
   if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
   const cleanChatId = aiModeSafeString(chatId, 160);
@@ -17967,6 +18039,7 @@ async function aiModeOdooUpsertMemory({
     }
 
     const existing = await aiModeOdooFindMemoryRecord(uid, cleanChatId);
+    signal?.throwIfAborted();
     if (existing?.id) {
       await odooExecute(uid, AI_MODE_MEMORY_MODEL, "write", [[existing.id], payload]);
       return { ok: true, action: "updated", id: existing.id };
@@ -17975,6 +18048,7 @@ async function aiModeOdooUpsertMemory({
     const id = await odooExecute(uid, AI_MODE_MEMORY_MODEL, "create", [payload]);
     return { ok: true, action: "created", id };
   } catch (error) {
+    signal?.throwIfAborted();
     console.warn("AI Mode Odoo memory upsert failed:", error?.message || error);
     return { ok: false, error: error?.message || String(error) };
   }
@@ -17987,7 +18061,8 @@ async function aiModeOdooCreateHandoverLog({
   aiResult,
   odooChannelId,
   sourceMessageId,
-  kind = "handover"
+  kind = "handover",
+  signal
 } = {}) {
   if (!aiModeOdooEnabled()) return { ok: false, skipped: true, reason: "odoo_disabled" };
   if (!aiResult?.handover_required && !aiResult?.clarification_required && aiResult?.level < 2) {
@@ -18024,11 +18099,14 @@ async function aiModeOdooCreateHandoverLog({
       payload[AI_MODE_HANDOVER_FIELDS.odooChannelId] = safeOdooChannelId;
     }
 
+    signal?.throwIfAborted();
     const id = await odooExecute(uid, AI_MODE_HANDOVER_MODEL, "create", [payload]);
+    signal?.throwIfAborted();
     const delivery = await operatorHandoverDispatcher.dispatch({ handoverId: id, sourceMessageId: Number(sourceMessageId || 0),
-      channelId: safeOdooChannelId, assignedTo, summary: title, note: notification || reason });
+      channelId: safeOdooChannelId, assignedTo, summary: title, note: notification || reason, signal });
     return { ok: true, action: "created", id, kind, delivery, needs_notification: !delivery.activity_created };
   } catch (error) {
+    signal?.throwIfAborted();
     console.warn("AI Mode Odoo handover create failed:", error?.message || error);
     return { ok: false, error: error?.message || String(error) };
   }
@@ -18200,7 +18278,8 @@ async function aiModeOdooCreateTrainingRule({ rule, fromMessage = "", status = "
   }
 }
 
-async function aiModeHandleInternalInstruction({ message, chatId = "internal", customerName = "", memory = {} } = {}) {
+async function aiModeHandleInternalInstruction({ message, chatId = "internal", customerName = "", memory = {}, signal } = {}) {
+  signal?.throwIfAborted();
   const cleanMessage = aiModeSafeString(message, 3000);
   const lower = cleanMessage.toLowerCase();
 
@@ -18217,6 +18296,7 @@ async function aiModeHandleInternalInstruction({ message, chatId = "internal", c
     const oldRules = await aiModeReadTextFile(APPROVED_TRAINING_RULES_PATH, "# Smart Handicrafts AI Approved Training Rules\n\n");
     const newRule = `\n- ${pending.rule}\n`;
     try {
+      signal?.throwIfAborted();
       await writeFile(APPROVED_TRAINING_RULES_PATH, `${oldRules.trim()}
 ${newRule}`, "utf8");
       await aiModeOdooCreateTrainingRule({
@@ -18265,7 +18345,7 @@ ${cleanMessage}`;
     let rule = cleanMessage;
     let confidence = 0.65;
     try {
-      const result = await callProductBotModel("You extract concise permanent training rules. Return only JSON.", rulePrompt);
+      const result = await callProductBotModel("You extract concise permanent training rules. Return only JSON.", rulePrompt, signal);
       const parsed = aiModeExtractJsonObject(result?.text);
       if (parsed?.rule) {
         rule = aiModeSafeString(parsed.rule, 1000);
@@ -18273,6 +18353,7 @@ ${cleanMessage}`;
       }
     } catch {}
 
+    signal?.throwIfAborted();
     memory._pending_training_rule = {
       rule,
       from_message: cleanMessage,
@@ -18476,7 +18557,8 @@ ${latestMessage}
 `.trim();
 }
 
-async function aiModeInterpretConversationContext({ history = [], latestMessage = "", heuristicProfile = {}, chatMemory = {} } = {}) {
+async function aiModeInterpretConversationContext({ history = [], latestMessage = "", heuristicProfile = {}, chatMemory = {}, signal } = {}) {
+  signal?.throwIfAborted();
   const previousContext = chatMemory?.active_context || chatMemory?.context_state || chatMemory?.requirement_profile || {};
   const fallback = aiModeBuildDefaultContextState(heuristicProfile, previousContext);
   const recentConversation = aiModeRecentHistoryText(history, 8);
@@ -18513,11 +18595,13 @@ async function aiModeInterpretConversationContext({ history = [], latestMessage 
     });
     const result = await callProductBotModel(
       "You are a strict JSON-only conversation interpreter. Return JSON only. No markdown.",
-      prompt
+      prompt,
+      signal
     );
     const parsed = aiModeExtractJsonObject(result?.text) || {};
     return aiModeNormalizeContextObject(parsed, heuristicProfile, previousContext);
   } catch (error) {
+    signal?.throwIfAborted();
     console.warn("AI Mode interpreter failed; using heuristic context:", error?.message || error);
     return aiModeNormalizeContextObject({ latest_customer_message: latestMessage }, heuristicProfile, previousContext);
   }
@@ -19653,8 +19737,13 @@ async function aiModeApplyFinalReplySafetyGuard(normalized = {}, { aiMode, sourc
 }
 
 async function handleAiModeChat(req, res) {
+  const aiMode = aiModeNormalizeMode(req.body?.aiMode);
+  const request = aiMode === "manual" ? null : operatorAiControls.startRequest('autoReplies');
+  const signal = request?.signal;
+  const disabled = () => res.status(409).json({ ok: false, code: 'AI_MODE_OFF', error: 'Automatic replies are off in SH Chat.' });
+  const respond = value => { signal?.throwIfAborted(); return res.json(value); };
   try {
-    const aiMode = aiModeNormalizeMode(req.body?.aiMode);
+    if (aiMode !== "manual" && (!request || aiMode !== aiModeGlobalState.mode || aiModeNormalizeOperationalMode(aiMode) !== aiMode)) return disabled();
     const source = aiModeSafeString(req.body?.source || "operator_hub", 80);
     const channel = aiModeSafeString(req.body?.channel || "whatsapp", 80);
     const chatId = aiModeSafeString(req.body?.chatId || req.body?.conversationId || "", 160);
@@ -19673,14 +19762,14 @@ async function handleAiModeChat(req, res) {
     }
 
     if (aiMode === "manual") {
-      return res.json(aiModeNormalizeAiJson(
+      return respond(aiModeNormalizeAiJson(
         { level: 0, action: "no_ai_action", next_action: "manual_mode" },
         { aiMode, source, message }
       ));
     }
 
     if (aiMode === "zapier") {
-      return res.json(aiModeNormalizeAiJson(
+      return respond(aiModeNormalizeAiJson(
         {
           level: 0,
           action: "forward_to_zapier",
@@ -19707,9 +19796,10 @@ async function handleAiModeChat(req, res) {
         message,
         chatId,
         customerName,
-        memory
+        memory,
+        signal
       });
-      return res.json(internalResult);
+      return respond(internalResult);
     }
 
     // SPEED FIX: answer clear follow-ups locally before any file retrieval, Odoo memory load,
@@ -19741,7 +19831,7 @@ async function handleAiModeChat(req, res) {
           activeContext: {},
           requirementProfile: earlyHeuristicProfile
         });
-        return res.json(safeEarly);
+        return respond(safeEarly);
       }
 
       if (earlyIsPriceIntent) {
@@ -19771,7 +19861,7 @@ async function handleAiModeChat(req, res) {
           activeContext: {},
           requirementProfile: earlyHeuristicProfile
         });
-        return res.json(safeEarly);
+        return respond(safeEarly);
       }
 
       
@@ -19792,11 +19882,13 @@ async function handleAiModeChat(req, res) {
           summary: "Fast local deterministic reply used before product retrieval/Odoo/Gemini."
         });
 
-        // Save minimal local context asynchronously; never delay the WhatsApp reply for memory writes.
+        // Tie the best-effort context save to the same settings revision as this reply.
         if (chatId) {
+          const modeLease = aiModeCaptureLease();
           Promise.resolve().then(async () => {
             try {
               const latestMemory = await aiModeReadJsonFile(OPERATOR_MEMORY_PATH, {});
+              if (!operatorAiControls.enabled('autoReplies') || !aiModeLeaseCurrent(modeLease) || signal?.aborted) return;
               latestMemory[chatId] = {
                 ...(latestMemory[chatId] || {}),
                 requirement_profile: earlyHeuristicProfile,
@@ -19819,13 +19911,13 @@ async function handleAiModeChat(req, res) {
           activeContext: {},
           requirementProfile: earlyHeuristicProfile
         });
-        return res.json(safeEarly);
+        return respond(safeEarly);
       }
     }
 
     const productKnowledge = await readProductKnowledge();
     if (productKnowledge) {
-      await ensureKnowledgeIndex(productKnowledge);
+      await ensureKnowledgeIndex(productKnowledge, signal);
     }
 
     const queryForRetrieval = [
@@ -19835,7 +19927,7 @@ async function handleAiModeChat(req, res) {
     ].filter(Boolean).join("\n");
 
     const productChunks = productKnowledge
-      ? await retrieveRelevantChunks(queryForRetrieval, 4)
+      ? await retrieveRelevantChunks(queryForRetrieval, 4, signal)
       : [];
 
     const integrationChunks = await retrieveRelevantKitIntegrationChunks({
@@ -19867,7 +19959,8 @@ async function handleAiModeChat(req, res) {
       history,
       latestMessage: message,
       heuristicProfile,
-      chatMemory
+      chatMemory,
+      signal
     });
     const requirementProfile = aiModeContextToLegacyProfile(activeContext, heuristicProfile);
 
@@ -19934,12 +20027,14 @@ async function handleAiModeChat(req, res) {
     try {
       const result = await callProductBotModel(
         "You are Smart Handicrafts AI Mode JSON engine. Return valid JSON only, no markdown.",
-        prompt
+        prompt,
+        signal
       );
       modelProvider = result?.provider || "";
       modelUsed = result?.model_used || "";
       parsed = aiModeExtractJsonObject(result?.text);
     } catch (modelErr) {
+      signal?.throwIfAborted();
       // Do not use old profile/kit recommendation when the model fails. That created
       // repeated broken replies like "Recommended setup... aap sample chahte hain?".
       // Use a safe model-failure reply only, and hand over pricing cases.
@@ -20142,6 +20237,7 @@ Safe no-reply fallback applied.`.trim()
     // Memory model: x_ai_operator_memory
     // Handover model: x_ai_handover_log
     const odooPersistence = { memory: null, handover: null, error: null, local_memory_error: null };
+    signal?.throwIfAborted();
     if (chatId) {
       try {
         odooPersistence.memory = await aiModeOdooUpsertMemory({
@@ -20151,10 +20247,12 @@ Safe no-reply fallback applied.`.trim()
           channel,
           message,
           aiResult: normalized,
-          odooChannelId
+          odooChannelId,
+          signal
         });
 
         if (normalized.clarification_required || normalized.handover_required || normalized.level >= 2) {
+          signal?.throwIfAborted();
           odooPersistence.handover = await aiModeOdooCreateHandoverLog({
             chatId,
             customerName,
@@ -20162,16 +20260,19 @@ Safe no-reply fallback applied.`.trim()
             aiResult: normalized,
             odooChannelId,
             sourceMessageId,
-            kind: normalized.handover_required ? "handover" : "clarification"
+            kind: normalized.handover_required ? "handover" : "clarification",
+            signal
           });
         }
       } catch (odooErr) {
+        signal?.throwIfAborted();
         odooPersistence.error = odooErr?.message || String(odooErr);
         console.warn("AI Mode Odoo persistence failed; returning customer reply anyway:", odooPersistence.error);
       }
     }
 
     if (chatId) {
+      signal?.throwIfAborted();
       try {
         memory[chatId] = {
           ...(memory[chatId] || {}),
@@ -20195,7 +20296,7 @@ Safe no-reply fallback applied.`.trim()
       }
     }
 
-    return res.json({
+    return respond({
       ...normalized,
       provider: modelProvider,
       model_used: modelUsed,
@@ -20210,6 +20311,7 @@ Safe no-reply fallback applied.`.trim()
       }
     });
   } catch (error) {
+    if (signal?.aborted) return disabled();
     console.error("AI Mode chat error:", error);
     return res.status(500).json({
       ok: false,
@@ -20219,13 +20321,30 @@ Safe no-reply fallback applied.`.trim()
       customer_reply: "",
       internal_notification: "AI Mode error. Please handle this chat manually."
     });
+  } finally {
+    request?.finish();
   }
 }
-// Explicit operator drafts work independently of legacy automatic replies.
+const operatorDraftsConfigured = String(process.env.SH_CHAT_AI_DRAFTS_ENABLED || 'false').toLowerCase() === 'true';
+const operatorDraftProvider = createOperatorOpenAiDraft({ apiKey: process.env.OPENAI_API_KEY || '' });
+const operatorProductSuggestions = createOperatorProductSuggestions({ login: odooLoginCached, execute: odooExecute,
+  apiKey: process.env.OPENAI_API_KEY, websiteOrigin: 'https://www.smarthandicrafts.com' });
+
 registerOperatorAiDraftRoutes(app, {
-  enabled: String(process.env.SH_CHAT_AI_DRAFTS_ENABLED || 'false').toLowerCase() === 'true',
-  provider: createOperatorOpenAiDraft({ apiKey: process.env.OPENAI_API_KEY || '' })
+  enabled: operatorDraftsConfigured,
+  provider: operatorDraftProvider,
+  startRequest: feature => operatorAiControls.startRequest(feature)
 });
+registerOperatorProductSuggestionRoutes(app, {
+  provider: operatorProductSuggestions,
+  startRequest: feature => operatorAiControls.startRequest(feature)
+});
+app.get('/api/ai-mode', async (req, res) => {
+  await operatorAiControls.ready();
+  if (!operatorAiControls.view().settingsReady) return aiModeSettingsUnavailable(res);
+  return res.json(aiModePublicToggleState());
+});
+app.post('/api/ai-mode', (req, res) => aiModeApplyToggle(req, res));
 app.use(createOperatorAiSwitch({ enabled: SH_CHAT_AI_ENABLED }));
 app.post("/api/ai-mode/chat", handleAiModeChat);
 
@@ -20847,7 +20966,8 @@ app.post("/api/zapier/reply", async (req, res) => {
     if (!constantTimePasswordEqual(incomingSecret, ZAPIER_REPLY_SECRET))
       return res.status(401).json({ ok: false, error: "Invalid Zapier secret" });
     const modeLease = aiModeCaptureLease();
-    if (modeLease.mode !== 'zapier') return res.status(409).json({ ok: false, code: 'AI_MODE_OFF', error: 'SH AI is not enabled for Zapier replies.' });
+    if (!operatorAiControls.enabled('autoReplies') || modeLease.mode !== 'zapier')
+      return res.status(409).json({ ok: false, code: 'AI_MODE_OFF', error: 'SH AI is not enabled for Zapier replies.' });
     if ((req.body?.ai_epoch !== undefined && req.body.ai_epoch !== modeLease.epoch) ||
         (req.body?.ai_revision !== undefined && req.body.ai_revision !== modeLease.revision))
       return res.status(409).json({ ok: false, code: 'AI_MODE_CHANGED', error: 'This reply belongs to an earlier AI session.' });
@@ -20927,7 +21047,8 @@ app.post("/api/zapier/reply", async (req, res) => {
     receipt = await operatorAiReplyAuth.claim({ token: req.body.ai_reply_grant, channelId: odooChannelId, reply });
     if (receipt.replay) return res.json({ ok: true, posted: true, duplicate: true, odooChannelId, messageId: receipt.messageId });
     const postResult = await aiModePostTextToOdooChannel(uid, channel, reply,
-      () => aiModeLeaseCurrent(modeLease) && operatorAiReplyAuth.current(grant) && Date.now() < grant.expiresAt);
+      () => operatorAiControls.enabled('autoReplies') && aiModeLeaseCurrent(modeLease) &&
+        operatorAiReplyAuth.current(grant) && Date.now() < grant.expiresAt);
     if (!postResult?.ok) {
       await operatorAiReplyAuth.finish(receipt, 'blocked'); receipt = null;
       return res.status(409).json({ ok: false, error: postResult?.reason || "Could not post reply" });
@@ -21239,9 +21360,12 @@ function startNativeMessageWorker() {
 
 async function aiModeBackgroundTick() {
   if (!AI_MODE_BACKGROUND_WORKER_ENABLED) return;
+  const aiProcessingEnabled = operatorAiControls.enabled('autoReplies') && aiModeGlobalState.mode !== "manual";
+  const webNotificationsEnabled = webPushConfigured();
+  // Native inbox and push discovery have their own worker. When AI is off,
+  // this legacy scanner only needs to run for configured browser notifications.
+  if (!aiProcessingEnabled && !webNotificationsEnabled) return;
   const nativeMessageEnabled = nativeMessageBackgroundEnabled();
-  const aiProcessingEnabled = AI_MODE_BACKGROUND_WORKER_ENABLED && !!aiModeGlobalState && ["manual", "assist", "chat", "zapier"].includes(aiModeGlobalState.mode);
-  if (!aiProcessingEnabled && !nativeMessageEnabled) return;
   if (!odooConfigured) return;
   if (aiModeBackgroundState.running) return;
 
@@ -21250,7 +21374,7 @@ async function aiModeBackgroundTick() {
   aiModeBackgroundState.last_tick_at = now();
 
   try {
-    if (aiProcessingEnabled) await aiModeBackgroundLoadProcessedIds();
+    await aiModeBackgroundLoadProcessedIds();
     const userContext = await aiModeGetOdooUserContext();
     const uid = userContext.uid;
 
@@ -21351,7 +21475,7 @@ async function aiModeBackgroundTick() {
       if (recentCandidateDebug.length < 8) recentCandidateDebug.push(debugBase);
     }
 
-    if (aiProcessingEnabled && prebootProcessedIds.length) {
+    if (prebootProcessedIds.length) {
       await aiModeBackgroundRememberProcessedIds(prebootProcessedIds);
       aiModeBackgroundState.preboot_marked_processed_count += prebootProcessedIds.length;
     }
@@ -21375,7 +21499,7 @@ async function aiModeBackgroundTick() {
     // Odoo may not promote old WhatsApp discuss.channel rows until an operator opens the UI,
     // so channel-order scans can miss old customers. Active memory keeps their channel IDs known.
     let activeMemoryChannelIds = [];
-    if (aiProcessingEnabled) try {
+    if (aiProcessingEnabled && operatorAiControls.enabled('autoReplies')) try {
       activeMemoryChannelIds = await aiModeFetchActiveMemoryChannelIds(uid);
       aiModeBackgroundState.active_memory_channel_scan_count += 1;
       aiModeBackgroundState.active_memory_channel_count = activeMemoryChannelIds.length;
@@ -21400,6 +21524,7 @@ async function aiModeBackgroundTick() {
     }
 
     for (const channel of channels || []) {
+      if (!webNotificationsEnabled && !operatorAiControls.enabled('autoReplies')) break;
       if (!channel?.id || !["whatsapp", "livechat", "chat"].includes(channel.channel_type)) continue;
 
       const messages = await aiModeFetchWorkerMessages(uid, channel.id).catch((error) => {
@@ -21431,7 +21556,7 @@ async function aiModeBackgroundTick() {
           }
         }));
       }
-      if (channel.channel_type === "chat" || !aiProcessingEnabled) {
+      if (channel.channel_type === "chat" || (!webNotificationsEnabled && !operatorAiControls.enabled('autoReplies'))) {
         // Internal/direct Odoo messages may notify operators, but must never
         // enter the customer AI reply workflow. Freshness/durable FCM dedupe
         // remain enforced by the same native bridge.
@@ -21753,23 +21878,11 @@ app.post("/api/push/test-call", async (req, res) => {
   }
 });
 
-// Simple frontend API for the new single toggle UI.
-// GET returns whether AI auto-reply is ON/OFF.
-// POST accepts { aiEnabled: true/false }.
-// Hidden fallback remains available: POST { mode: "chat" } enables Gemini/server AI,
-// POST { mode: "zapier" } enables Zapier, POST { mode: "manual" } disables AI.
-app.get("/api/ai-mode", (req, res) => {
-  res.json(aiModePublicToggleState());
-});
-
-app.post("/api/ai-mode", (req, res) => {
-  return aiModeApplyToggle(req, res);
-});
-
 app.get("/api/ai-mode/global", (req, res) => {
+  const settings = aiModePublicToggleState();
   res.json({
     ok: true,
-    global: aiModeGlobalState,
+    global: { ...settings.global, revision: settings.revision },
     worker: {
       enabled: AI_MODE_BACKGROUND_WORKER_ENABLED,
       running: aiModeBackgroundState.running,
@@ -25475,6 +25588,35 @@ process.on("unhandledRejection", (reason) => {
 // Native enrollment is explicit and server authenticated. Device tokens never
 // enter the Odoo embed, and this adapter never exposes SDP through native push.
 const operatorFirestoreRuntime = createOperatorStorageRuntime();
+const operatorAiControls = createOperatorAiControls({
+  epoch: aiModeGlobalState.epoch,
+  getStore: () => {
+    const db = operatorFirestoreRuntime.firestore;
+    const ref = db.collection(`${operatorFirestoreRuntime.collectionPrefix}_metadata`).doc('ai_settings');
+    return { db, ref };
+  },
+  getAvailability: legacyMode => {
+    const storedMode = aiModeNormalizeOperationalMode(legacyMode);
+    const mode = storedMode === 'manual' ? AI_MODE_TOGGLE_ON_MODE : storedMode;
+    return {
+      drafts: operatorDraftsConfigured && operatorDraftProvider.configured(),
+      productSuggestions: odooConfigured && operatorProductSuggestions.configured(),
+      voiceFallback: !!operatorVoiceFallback,
+      autoReplies: AI_MODE_BACKGROUND_WORKER_ENABLED && (mode === 'zapier'
+        ? aiModeZapierConfiguration().ready : AI_MODE_ALLOW_HIDDEN_CHAT_MODE && ['chat', 'assist'].includes(mode))
+    };
+  },
+  onChange: settings => {
+    const mode = settings.masterEnabled && settings.features.autoReplies && settings.availableFeatures.autoReplies
+      ? aiModeNormalizeOperationalMode(settings.legacyMode) : 'manual';
+    if (mode !== aiModeGlobalState.mode) {
+      aiModeGlobalState.mode = mode;
+      aiModeGlobalState.enabled_since_ms = Date.now();
+    }
+    aiModeGlobalState.revision = settings.revision;
+    aiModeGlobalState.updated_at = now();
+  }
+});
 const operatorAiReplyAuth = createOperatorAiReplyAuth({
   secret: process.env.PROFILE_SESSION_SECRET || '',
   getState: () => aiModeGlobalState,
@@ -25485,7 +25627,11 @@ const operatorHandoverDispatcher = createOdooHandoverDispatcher({
   userIdsJson: process.env.SH_AI_HANDOVER_USER_IDS_JSON || '',
   getFirestore: () => operatorFirestoreRuntime.firestore,
   collectionPrefix: () => operatorFirestoreRuntime.collectionPrefix || 'sh_operator',
-  execute: async (model, method, params, kwargs = {}) => odooExecute(await odooLoginCached(), model, method, params, kwargs)
+  execute: async (model, method, params, kwargs = {}, signal) => {
+    const uid = await odooLoginCached();
+    signal?.throwIfAborted();
+    return odooExecute(uid, model, method, params, kwargs);
+  }
 });
 const authorizeOperatorAdmin = req => readProfileSession(req)?.profile === "SUDO";
 const operatorReportingRuntime = createOperatorReportingRuntime({
@@ -25519,15 +25665,20 @@ const operatorCallPermission = createOperatorCallPermission({
 });
 const voiceCatalogLookup = createVoiceCatalogLookup({ getCatalog: searchVoiceOdooCatalog });
 const operatorVoiceFallback = createAiVoiceFallback({
+  startRequest: feature => operatorAiControls.startRequest(feature),
   loadInstructions: loadVoiceInstructions,
   tools: [VOICE_CATALOG_TOOL, VOICE_ENQUIRY_TOOL],
   callTool: ({ name, arguments: args }) => name === VOICE_CATALOG_TOOL.name ?
     voiceCatalogLookup(args) : { status: 'unavailable' },
   humanAnswerInProgress: callId => !!getOperatorCallLock(callId),
-  saveEnquiry: ({ request, session, operationId, runtime }) => {
+  saveEnquiry: ({ request, session, operationId, runtime, policySignal }) => {
     if (!odooConfigured) return { status: 'unavailable' };
     const handoff = createAiVoiceHandoff({
-      execute: async (model, method, params, kwargs) => odooExecute(await odooLoginCached(), model, method, params, kwargs),
+      execute: async (model, method, params, kwargs) => {
+        const uid = await odooLoginCached();
+        policySignal?.throwIfAborted();
+        return odooExecute(uid, model, method, params, kwargs);
+      },
       claim: async ({ enquiryHash }) => {
         const receipt = await runtime.claimAiEnquiry(session.id, operationId, enquiryHash);
         return receipt?.claimed ? 'claimed' : receipt?.status === 'created' &&
@@ -25536,7 +25687,7 @@ const operatorVoiceFallback = createAiVoiceFallback({
       settle: ({ status, leadId }) => runtime.settleAiEnquiry(session.id, operationId,
         status === 'complete' ? { status: 'created', leadId } : { status: 'uncertain' })
     });
-    return createVoiceEnquiryCapture({ onCapture: enquiry => handoff({ session, operationId, enquiry }) })(request.arguments);
+    return createVoiceEnquiryCapture({ onCapture: enquiry => handoff({ session, operationId, enquiry, signal: policySignal }) })(request.arguments);
   }
 });
 const operatorMediaGateway = createOperatorMediaGateway({
@@ -25582,6 +25733,18 @@ const operatorAdminRuntime = registerOperatorAdminRoutes(app, {
   authorize: authorizeOperatorAdmin
 });
 
+async function loadOperatorAiSettingsAtStartup() {
+  if (operatorShutdown) return;
+  await operatorAiControls.ready();
+  if (operatorAiControls.view().settingsReady) {
+    console.log('SH AI settings loaded.');
+    return;
+  }
+  console.warn('SH AI settings are unavailable.');
+  if (operatorFirestoreRuntime.configured && !operatorShutdown)
+    setTimeout(loadOperatorAiSettingsAtStartup, 30000).unref();
+}
+
 const operatorHttpServer = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   operatorKeepAlive.start();
@@ -25589,6 +25752,7 @@ const operatorHttpServer = app.listen(PORT, () => {
   void androidPushBridge.warm();
   operatorMediaGateway.start();
   operatorReportingRuntime.start();
+  void loadOperatorAiSettingsAtStartup();
 
   // Start the heavy Odoo/AI background worker after the web port is already open.
   // This prevents Render deploy health checks from failing if the worker has a

@@ -87,3 +87,19 @@ test('missing verified caller identity and invalid enquiries are rejected before
   assert.deepEqual(operations, []);
   assert.equal(receipt(), undefined);
 });
+
+test('disabling voice while the enquiry claim is pending prevents CRM dispatch', async () => {
+  const controller = new AbortController();
+  const effects = [];
+  let resolveClaim;
+  const claimPending = new Promise(resolve => { resolveClaim = resolve; });
+  const handoff = createAiVoiceHandoff({
+    execute: () => { effects.push('execute'); return 23; },
+    claim: () => claimPending,
+    settle: () => { effects.push('settle'); return true; }
+  });
+  const pending = handoff({ session, operationId: 'tool-1', enquiry, signal: controller.signal });
+  controller.abort(); resolveClaim('claimed');
+  assert.equal(await pending, false);
+  assert.deepEqual(effects, []);
+});

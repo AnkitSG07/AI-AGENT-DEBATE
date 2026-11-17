@@ -101,21 +101,32 @@
             <em>WhatsApp templates</em>
           </button>
         </nav>
-          <div class="sh-workspace-settings">              <div class="sh-ai-global-row" id="shAiGlobalRow">
-                <div class="sh-ai-toggle-control sh-ai-global-control" id="shAiModeControl" title="SH AI Mode controls automatic replies for WhatsApp, Live Chat, and customer chats">
+          <div class="sh-workspace-settings">
+              <div class="sh-ai-global-row" id="shAiGlobalRow">
+                <div class="sh-ai-toggle-control sh-ai-global-control" id="shAiModeControl">
                   <div class="sh-ai-toggle-copy">
                     <div class="sh-ai-titleline">
                       <span class="sh-gemini-ai-icon" aria-hidden="true"><span></span></span>
                       <span class="sh-ai-mode-label">SH AI</span>
                     </div>
-                    <strong id="shAiReplyStatus" class="sh-sr-only">Manual reply mode</strong>
+                    <p id="shAiReplyStatus" class="sh-ai-settings-status" role="status">Checking shared AI settings…</p>
                   </div>
 
-                  <label class="sh-ai-reply-switch" title="Turn SH AI automatic replies on or off">
-                    <input id="shAiReplyToggle" type="checkbox" aria-label="Turn SH AI Mode on or off">
+                  <label class="sh-ai-reply-switch" title="Turn SH Chat AI on or off">
+                    <input id="shAiReplyToggle" type="checkbox" role="switch" aria-label="Turn SH Chat AI on or off" aria-describedby="shAiReplyStatus" disabled>
                     <span class="sh-ai-reply-slider"></span>
                   </label>
                 </div>
+                <fieldset class="sh-ai-feature-options" id="shAiFeatureOptions" disabled>
+                  <legend>AI features</legend>
+                  <label><input type="checkbox" data-ai-feature="drafts"> Reply drafts <small hidden>Unavailable</small></label>
+                  <label><input type="checkbox" data-ai-feature="productSuggestions"> Product suggestions <small hidden>Unavailable</small></label>
+                  <label><input type="checkbox" data-ai-feature="voiceFallback"> AI call fallback <small hidden>Unavailable</small></label>
+                  <label><input type="checkbox" data-ai-feature="autoReplies"> Automatic customer replies <small hidden>Unavailable</small></label>
+                  <button id="shAiEnableAll" type="button">Turn all on</button>
+                </fieldset>
+                <button class="sh-ai-status-retry" id="shAiStatusRetry" type="button" hidden>Refresh AI status</button>
+                <button class="sh-ai-status-retry" type="button" data-operator-auth-connect hidden>Connect operator services</button>
               </div>
 <button class="sh-mobile-live-top" id="shAutoRefreshToggle" type="button" title="Auto-refresh is on" aria-label="Toggle auto refresh">
               <span></span><span></span><span></span><span></span><span></span>
@@ -256,7 +267,8 @@
             <div id="shThreadSyncStatus" class="sh-thread-sync-status is-hidden" role="status"></div>
             <div class="sh-op-composer-warning is-hidden" id="shComposerWarning"></div>
             <button class="sh-op-mini-action is-hidden" id="shTemplateOpenBtn" type="button" title="Send an approved WhatsApp template">Send WhatsApp Template</button>
-            <button class="sh-op-mini-action" id="shAiDraftBtn" type="button" title="Draft a reply from this conversation with AI for you to review" disabled>AI draft</button>
+            <section class="sh-product-suggestions is-hidden" id="shAiProductSuggestions" aria-label="Suggested products"></section>
+            <button class="sh-op-mini-action is-hidden" id="shAiDraftBtn" type="button" title="Draft a reply from this conversation with AI for you to review" disabled>AI draft</button>
 
             
 
@@ -277,6 +289,7 @@
               </div>
             </div>
 
+            <div class="sh-product-attachment is-hidden" id="shProductAttachment" aria-label="Product photo attachment"></div>
             <div class="sh-op-composer">
               <button class="sh-op-composer-icon-action" id="shAttachFileBtn" type="button" title="Attach file/photo from this device" aria-label="Attach file/photo"><svg class="sh-ui-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 4v16M4 12h16"/></svg></button>
               <div class="sh-wa-mobile-input-shell">
@@ -1205,8 +1218,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     return window.SHNativeHistory?.protocol === "sh-call-history-v1" && typeof window.SHNative?.postMessage === "function";
   }
   function deviceServicePath(path, method) {
-    return method === "POST" && path === "/api/ai-mode/draft" ||
-      ["GET", "POST"].includes(method) && (path.startsWith("/api/zoho-mail/") || path.startsWith("/api/odoo-documents/"));
+    return method === "POST" && ["/api/ai-mode/draft", "/api/ai-mode/product-suggestions"].includes(path) ||
+      ["GET", "POST"].includes(method) && (path === "/api/ai-mode" || path.startsWith("/api/zoho-mail/") || path.startsWith("/api/odoo-documents/"));
   }
   function deviceAccessValid() { return !!deviceAccess && deviceAccess.expiresAt > Date.now() + 1000; }
   function deviceAuthError(code, message) { return Object.assign(new Error(message), { code }); }
@@ -1516,6 +1529,8 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     loadingMoreChannels: false,
     messageRequests: new Map(),
     draftsByChannel: new Map(),
+    productAttachmentsByChannel: new Map(),
+    productSuggestions: { context: null, results: new Map() },
     customerLinksByChannel: new Map(),
     followupContext: null,
     failedMedia: new Set(),
@@ -1760,6 +1775,10 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const aiModeControl = byId("shAiModeControl");
   const aiReplyToggle = byId("shAiReplyToggle");
   const aiReplyStatus = byId("shAiReplyStatus");
+  const aiFeatureOptions = byId("shAiFeatureOptions");
+  const aiFeatureInputs = Array.from(aiFeatureOptions?.querySelectorAll("[data-ai-feature]") || []);
+  const aiEnableAll = byId("shAiEnableAll");
+  const aiStatusRetry = byId("shAiStatusRetry");
   const aiModeSelect = byId("shAiModeSelect"); // Hidden/legacy only; dropdown removed from UI.
   const aiModeRunBtn = byId("shAiModeRunBtn"); // Hidden/legacy manual AI action; not shown in compact UI.
   const aiModePanel = byId("shAiModePanel");
@@ -2074,12 +2093,13 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
 
   function syncMobileComposerMode() {
     const hasText = !!String(messageInput?.value || "").trim();
+    const hasProductPhoto = state.productAttachmentsByChannel.has(String(state.selectedChannelId));
     if (sendButton) {
-      sendButton.classList.toggle("has-text", hasText);
-      sendButton.title = "Send message";
-      sendButton.setAttribute("aria-label", "Send message");
+      sendButton.classList.toggle("has-text", hasText || hasProductPhoto);
+      sendButton.title = hasProductPhoto ? "Send product photo" : "Send message";
+      sendButton.setAttribute("aria-label", sendButton.title);
       const channel = state.selectedChannel;
-      sendButton.disabled = !hasText || !!state.isSending || !channel ||
+      sendButton.disabled = (!hasText && !hasProductPhoto) || !!state.isSending || !channel ||
         (channel.channel_type === "whatsapp" && !isWhatsappWindowOpen(channel));
     }
   }
@@ -2664,6 +2684,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       startMessageRefreshTimer();
       startCallRefreshTimer();
       refreshInboxAndThread().catch(() => {});
+      void loadAiModeFromServer();
       pollRecentWhatsappCalls().catch(() => {});
       showOperatorToast("Live refresh resumed");
     } else {
@@ -2895,6 +2916,7 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   function destroyOperatorApp() {
     if (state.destroyed) return;
     state.destroyed = true;
+    cancelAiProductSuggestions();
     cancelAiDraft();
     closeHubCallsPage();
     hubScreenStack.length = 0;
@@ -2922,13 +2944,18 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       } else destroyOperatorApp();
     }, options);
     const resume = () => {
-      if (!state.session || !state.extendedCapabilitiesLoaded || !canRefresh()) return;
+      if (!state.session || !state.extendedCapabilitiesLoaded || state.destroyed || document.hidden) return;
+      void loadAiModeFromServer();
+      if (!canRefresh()) return;
       startChannelRefreshTimer(); startMessageRefreshTimer(); startCallRefreshTimer();
       refreshInboxAndThread().catch(() => {});
       pollRecentWhatsappCalls().catch(() => {});
     };
     window.addEventListener("pageshow", event => { if (event.persisted) resume(); }, options);
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) resume(); }, options);
+    document.addEventListener("visibilitychange", () => {
+      reconcileAiProductSuggestions();
+      if (!document.hidden) resume();
+    }, options);
     window.addEventListener("online", resume, options);
     setupOperatorHubAppShell(options);
   }
@@ -7906,12 +7933,12 @@ Once received, our team will prepare the quotation accordingly.`
     }
   }
 
-  async function sendAttachmentsFromInput(fileList) {
+  async function sendAttachmentsFromInput(fileList, options = {}) {
+    const { channel = state.selectedChannel, body = messageInput.value.trim(), onPosted } = options;
     const files = Array.from(fileList || []);
     if (!files.length) return;
     if (state.isUploadingAttachment) { showOperatorToast("The previous attachment is still uploading"); return; }
 
-    const channel = state.selectedChannel;
     if (!channel) {
       showOperatorToast("Select a conversation first");
       return;
@@ -7930,7 +7957,6 @@ Once received, our team will prepare the quotation accordingly.`
         throw new Error("The WhatsApp reply window closed before this attachment could be sent. Use an approved template.");
       }
     };
-    const body = messageInput.value.trim();
     state.isUploadingAttachment = true;
     attachFileBtn.disabled = true;
     showOperatorToast("Uploading attachment\u2026");
@@ -7958,15 +7984,17 @@ Once received, our team will prepare the quotation accordingly.`
 
       requireOpenWindow();
       await messagePost(channel.id, kwargs);
+      onPosted?.();
 
       if (Number(state.selectedChannelId) === Number(channel.id)) {
         if (messageInput.value.trim() === body) messageInput.value = "";
         autoGrowTextarea();
-        await loadMessages(channel.id, { scrollToBottom: true, force: true });
+        await loadMessages(channel.id, { scrollToBottom: true, force: true }).catch(() => {});
       }
-      await loadChannels({ preserveSelection: true });
+      await loadChannels({ preserveSelection: true }).catch(() => {});
       showOperatorToast("Attachment sent");
     } catch (error) {
+      if (onPosted) throw error;
       if (Number(state.selectedChannelId) === Number(channel.id)) {
         composerWarning.classList.remove("is-hidden");
         composerWarning.textContent = "Attachment failed: " + error.message;
@@ -8373,6 +8401,7 @@ Once received, our team will prepare the quotation accordingly.`
     closeCompositionPanels();
     closeHubCallsPage();
     if (changed) {
+      cancelAiProductSuggestions();
       cancelAiDraft();
       closeConversationCollection();
       hidePanel(customerDrawer);
@@ -11371,6 +11400,7 @@ Once received, our team will prepare the quotation accordingly.`
   function renderMessages({ scrollToBottom = false } = {}) {
     if (state.destroyed || !state.selectedChannelId) return;
     reconcileAiDraft();
+    reconcileAiProductSuggestions();
     const channelId = String(state.selectedChannelId);
     // A call poll must never relabel the previous chat's messages as this chat.
     const messages = state.messages.filter(message => !message.res_id || String(message.res_id) === channelId);
@@ -11511,16 +11541,23 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   // ---------- AI Mode ----------
-  // The server starts with AI OFF. Opening another operator's app only reads
-  // the shared mode; only an explicit operator toggle changes it.
-  const shAiRuntime = { syncQueue: Promise.resolve(), revision: 0, readRevision: 0, confirmedMode: null, pending: false };
+  const shAiRuntime = { syncQueue: Promise.resolve(), revision: 0, readRevision: 0, confirmedMode: null,
+    pending: false, pendingSettings: null };
+
+  function operatorAiFeatureEnabled(feature) {
+    const settings = state.aiServerGlobal;
+    const pending = shAiRuntime.pendingSettings;
+    return !state.destroyed && !state.aiModeSyncError && settings?.masterEnabled === true &&
+      settings.features?.[feature] === true && settings.availableFeatures?.[feature] === true &&
+      (!pending || pending.masterEnabled === true && pending.features[feature] === true);
+  }
 
   function initializeAiModeFromServer() {
     if (shAiRuntime.pending || state.destroyed) return Promise.resolve(null);
     state.aiMode = "manual";
     state.aiServerGlobal = null;
     shAiRuntime.confirmedMode = null;
-    state.aiModeSyncError = "Checking shared AI status\u2026";
+    state.aiModeSyncError = "";
     try { localStorage.setItem("sh_ai_mode", "manual"); localStorage.removeItem("sh_ai_mode_enabled_at"); } catch {}
     syncAiModeUi();
     return loadAiModeFromServer();
@@ -11557,7 +11594,8 @@ Once received, our team will prepare the quotation accordingly.`
   function aiModeSnapshot(data) {
     const mode = confirmedAiMode(data);
     const snapshot = data?.global || data;
-    if (mode === null || typeof snapshot?.epoch !== "string" || !snapshot.epoch ||
+    if (mode === null || data?.settingsReady === false || snapshot?.settingsReady === false ||
+        typeof snapshot?.epoch !== "string" || !snapshot.epoch ||
         !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0) return null;
     for (const representation of [data, data?.global].filter(Boolean)) {
       for (const name of ["mode", "aiMode"]) {
@@ -11570,7 +11608,20 @@ Once received, our team will prepare the quotation accordingly.`
       if (representation.epoch !== undefined && representation.epoch !== snapshot.epoch) return null;
       if (representation.revision !== undefined && representation.revision !== snapshot.revision) return null;
     }
-    return { ...snapshot, mode };
+    const settingsNames = ["masterEnabled", "features", "availableFeatures"];
+    if (!settingsNames.some(name => data[name] !== undefined || snapshot[name] !== undefined)) return { ...snapshot, mode };
+    const masterEnabled = snapshot.masterEnabled ?? data.masterEnabled;
+    const features = snapshot.features ?? data.features;
+    const availableFeatures = snapshot.availableFeatures ?? data.availableFeatures;
+    const names = ["drafts", "productSuggestions", "voiceFallback", "autoReplies"];
+    if (typeof masterEnabled !== "boolean" ||
+        names.some(name => typeof features?.[name] !== "boolean" || typeof availableFeatures?.[name] !== "boolean")) return null;
+    for (const representation of [data, data?.global].filter(Boolean)) {
+      if (representation.masterEnabled !== undefined && representation.masterEnabled !== masterEnabled) return null;
+      if (representation.features !== undefined && names.some(name => representation.features?.[name] !== features[name])) return null;
+      if (representation.availableFeatures !== undefined && names.some(name => representation.availableFeatures?.[name] !== availableFeatures[name])) return null;
+    }
+    return { ...snapshot, mode, masterEnabled, features, availableFeatures };
   }
 
   async function loadAiModeFromServer({ silent = true } = {}) {
@@ -11604,16 +11655,19 @@ Once received, our team will prepare the quotation accordingly.`
     } catch (error) {
       if (!current()) return null;
       console.warn("AI Mode server load failed:", error);
-      state.aiModeSyncError = "Shared AI status is unavailable. Connect operator services and refresh before relying on the switch.";
+      state.aiModeSyncError = ["DEVICE_AUTH_REQUIRED", "DEVICE_AUTH_UNAVAILABLE"].includes(error?.code)
+        ? error.message
+        : "Shared AI status is unavailable. Refresh to check the current settings.";
       if (!silent) showOperatorToast("AI Mode status load failed");
       syncAiModeUi();
       return null;
     }
   }
 
-  async function syncAiModeToServer(mode, { silent = true } = {}) {
+  async function syncAiModeToServer(mode) {
     if (!AI_MODE_SERVER_BACKGROUND) return { ok: true };
-    const safeMode = normalizeAiMode(mode);
+    const settings = mode && typeof mode === "object" ? mode : null;
+    const requested = settings || { mode: normalizeAiMode(mode) };
     const write = async () => {
       if (state.destroyed) throw new Error("Workspace closed before AI status was saved.");
       let known = aiModeSnapshot({ ...state.aiServerGlobal, ok: true });
@@ -11633,7 +11687,7 @@ Once received, our team will prepare the quotation accordingly.`
       const expected = { expectedEpoch: known.epoch, expectedRevision: known.revision };
       const response = await appFetch(`${AI_MODE_BACKEND_BASE}/api/ai-mode`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: safeMode, ...expected, source: "operator_hub_embed" })
+        body: JSON.stringify({ ...requested, ...expected, source: "operator_hub_embed" })
       });
       const data = await response.json().catch(() => ({}));
       if (response.status === 409 && data.code === "AI_MODE_CHANGED") {
@@ -11641,13 +11695,16 @@ Once received, our team will prepare the quotation accordingly.`
         if (actual) {
           state.aiServerGlobal = actual;
           shAiRuntime.confirmedMode = actual.mode;
-          const error = new Error("Another device changed SH AI. Review the current mode and try again.");
+          const error = new Error("Another device changed SH AI. Review the current settings and try again.");
           error.aiModeConflict = true;
           throw error;
         }
       }
       const confirmed = aiModeSnapshot(data);
-      if (!response.ok || !confirmed || confirmed.mode !== safeMode || confirmed.epoch !== known.epoch || confirmed.revision <= known.revision)
+      const matches = settings && confirmed
+        ? confirmed.masterEnabled === settings.masterEnabled && Object.keys(settings.features).every(name => confirmed.features?.[name] === settings.features[name])
+        : confirmed?.mode === requested.mode;
+      if (!response.ok || !matches || !confirmed || confirmed.epoch !== known.epoch || confirmed.revision <= known.revision)
         throw new Error(data?.error || data?.message || "AI Mode change was not confirmed by the server. Check its status before relying on the toggle.");
       state.aiServerGlobal = confirmed;
       return data;
@@ -11690,10 +11747,13 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function setAiMode(mode, { initial = false } = {}) {
+    if (shAiRuntime.pending || state.destroyed) return false;
+    const settings = mode && typeof mode === "object" ? mode : null;
     const previousMode = normalizeAiMode(state.aiMode || "manual");
-    const requestedMode = normalizeAiMode(mode);
+    const requestedMode = settings ? previousMode : normalizeAiMode(mode);
     const revision = ++shAiRuntime.revision;
     shAiRuntime.pending = true;
+    shAiRuntime.pendingSettings = settings;
     state.aiModeSyncError = "";
     state.aiMode = requestedMode;
     try { localStorage.setItem("sh_ai_mode", requestedMode); } catch {}
@@ -11703,9 +11763,11 @@ Once received, our team will prepare the quotation accordingly.`
     }
     syncAiModeUi();
     try {
-      await syncAiModeToServer(requestedMode);
-      shAiRuntime.confirmedMode = requestedMode;
+      await syncAiModeToServer(settings || requestedMode);
       if (state.destroyed || revision !== shAiRuntime.revision) return false;
+      shAiRuntime.confirmedMode = state.aiServerGlobal?.mode || requestedMode;
+      state.aiMode = shAiRuntime.confirmedMode;
+      try { localStorage.setItem("sh_ai_mode", state.aiMode); } catch {}
       state.aiModeSyncError = "";
       return true;
     } catch (error) {
@@ -11723,11 +11785,12 @@ Once received, our team will prepare the quotation accordingly.`
       state.aiModeSyncError = initial
         ? "Default OFF could not be confirmed on the server. AI status is unconfirmed."
         : "AI status could not be confirmed on the server. Try the switch again to set the intended mode.";
-      showOperatorToast(state.aiModeSyncError);
+      showOperatorToast(settings && error?.message ? error.message : state.aiModeSyncError);
       return false;
     } finally {
       if (!state.destroyed && revision === shAiRuntime.revision) {
         shAiRuntime.pending = false;
+        shAiRuntime.pendingSettings = null;
         syncAiModeUi();
       }
     }
@@ -11735,34 +11798,43 @@ Once received, our team will prepare the quotation accordingly.`
 
   function syncAiModeUi() {
     const mode = getAiMode();
-    const isEnabled = isAiReplyEnabledMode(mode);
+    const confirmed = state.aiServerGlobal;
+    const shown = shAiRuntime.pendingSettings || confirmed;
+    const hasSettings = typeof confirmed?.masterEnabled === "boolean" && !state.aiModeSyncError;
+    const isEnabled = shown?.masterEnabled === true;
+    const available = aiFeatureInputs.filter(input => confirmed?.availableFeatures?.[input.dataset.aiFeature]);
+    const selectedCount = available.filter(input => shown?.features?.[input.dataset.aiFeature]).length;
+    const canChange = hasSettings && !shAiRuntime.pending;
 
     if (aiModeSelect) aiModeSelect.value = mode;
 
     if (aiReplyToggle) {
-      aiReplyToggle.checked = isEnabled;
-      aiReplyToggle.disabled = shAiRuntime.pending;
+      aiReplyToggle.checked = hasSettings && isEnabled;
+      aiReplyToggle.disabled = !canChange;
       aiReplyToggle.setAttribute("aria-busy", String(shAiRuntime.pending));
-      aiReplyToggle.title = state.aiModeSyncError || (shAiRuntime.pending ? "Saving AI status\u2026" : "Turn SH AI Mode on or off");
     }
 
     if (aiReplyStatus) {
-      aiReplyStatus.textContent =
-        state.aiModeSyncError ? state.aiModeSyncError :
-        shAiRuntime.pending ? "Saving AI status\u2026" :
-        mode === "zapier" ? "SH AI Mode on" :
-        mode === "chat" ? "SH AI fallback mode on" :
-        mode === "assist" ? "SH AI assist mode on" :
-        "SH AI Mode off";
+      const status = state.aiModeSyncError || (shAiRuntime.pending ? "Saving AI settings…" :
+        !hasSettings ? (confirmed ? "Shared AI settings are unavailable." : "Checking shared AI settings…") :
+        isEnabled ? `${selectedCount} of ${available.length} available features on` : "Off for all operators");
+      if (aiReplyStatus.textContent !== status) aiReplyStatus.textContent = status;
     }
+    if (aiStatusRetry) aiStatusRetry.hidden = shAiRuntime.pending || (hasSettings || !state.aiModeSyncError && !confirmed);
+    if (aiFeatureOptions) aiFeatureOptions.disabled = !canChange;
+    for (const input of aiFeatureInputs) {
+      const feature = input.dataset.aiFeature;
+      const configured = confirmed?.availableFeatures?.[feature] === true;
+      input.checked = hasSettings && shown?.features?.[feature] === true;
+      input.disabled = !configured;
+      input.parentElement.querySelector("small").hidden = !hasSettings || configured;
+    }
+    if (aiEnableAll) aiEnableAll.disabled = !canChange || !available.length || (isEnabled && selectedCount === available.length);
 
-    const visibleLabel = appRoot.querySelector(".sh-ai-mode-label");
-    if (visibleLabel) visibleLabel.textContent = state.aiModeSyncError ? "SH AI ?" : "SH AI";
     if (aiModeControl) {
-      aiModeControl.dataset.syncStatus = state.aiModeSyncError ? "unconfirmed" : shAiRuntime.pending ? "pending" : "confirmed";
-      aiModeControl.title = state.aiModeSyncError || "SH AI automatic replies";
+      aiModeControl.dataset.syncStatus = shAiRuntime.pending ? "pending" : hasSettings ? "confirmed" : "unconfirmed";
       aiModeControl.classList.remove("is-manual", "is-assist", "is-chat", "is-zapier", "is-on", "is-off");
-      aiModeControl.classList.add(`is-${mode}`, isEnabled ? "is-on" : "is-off");
+      aiModeControl.classList.add(`is-${mode}`, hasSettings && isEnabled ? "is-on" : "is-off");
     }
 
     if (aiModeBadge) {
@@ -11775,6 +11847,13 @@ Once received, our team will prepare the quotation accordingly.`
       aiModeBadge.className = "";
       aiModeBadge.classList.add(`is-${mode}`);
     }
+    if (operatorAiFeatureEnabled("drafts")) syncAiDraftButton();
+    else cancelAiDraft();
+    if (!operatorAiFeatureEnabled("autoReplies") && state.aiLastResult && !state.aiLastResult.draftContext) {
+      state.aiLastResult = null;
+      aiModePanel?.classList.add("is-hidden");
+    }
+    reconcileAiProductSuggestions();
   }
 
   function getMessagePlainText(message) {
@@ -11934,6 +12013,7 @@ Once received, our team will prepare the quotation accordingly.`
   async function callAiModeForChannel(channel, messageText, trigger = "manual", conversationHistory = null) {
     const mode = getAiMode();
 
+    if (!operatorAiFeatureEnabled("autoReplies")) throw new Error("SH AI automatic replies are off.");
     if (!channel || !messageText) {
       throw new Error("Select a conversation with a customer message first.");
     }
@@ -12042,6 +12122,157 @@ Once received, our team will prepare the quotation accordingly.`
     return String(result?.customer_reply || result?.suggested_customer_reply || "").trim();
   }
 
+  function aiProductSuggestionsAvailable() {
+    const channel = state.selectedChannel;
+    return !state.destroyed && !document.hidden && !!state.session?.uid &&
+      operatorAiFeatureEnabled("productSuggestions") &&
+      appLayout.classList.contains("has-selected-chat") &&
+      channel?.channel_type === "whatsapp" && isWhatsappWindowOpen(channel);
+  }
+
+  function isProductConversationDetail(text) {
+    const words = text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+    if (!words || /^(?:message|attachment|photo|image|video|audio|voice message)$/.test(words)) return false;
+    const courtesy = /^(?:(?:hi+|hello|hey|there|good morning|good afternoon|good evening|thank you|thanks|thankyou|ok(?:ay)?|theek hai|shukriya|namaste|namaskar|sir|madam|bhai|ji|नमस्ते|नमस्कार|धन्यवाद|ठीक है|जी)(?: |$))+$/u;
+    return !courtesy.test(words);
+  }
+
+  function aiProductLookupInput() {
+    const channelId = Number(state.selectedChannelId);
+    const partnerId = safeId(state.selectedChannel?.whatsapp_partner_id) || safeId(state.selectedChannel?.partner_id);
+    if (!partnerId) return null;
+    const messages = state.messages.slice(-24).filter(message => message.message_type === "whatsapp_message" &&
+      (!message.res_id || Number(message.res_id) === channelId));
+    const rows = messages.map(message => {
+      const inbound = Number(safeId(message.author_id)) === Number(partnerId);
+      const photoId = inbound && (message.attachment_ids || []).find(id =>
+        /^(?:image\/jpeg|image\/png|image\/webp)$/i.test(state.attachmentsById[id]?.mimetype || ""));
+      const text = getMessagePlainText(message).slice(0, 1200);
+      return { id: message.id, inbound, photoId, text };
+    });
+    const latest = rows.map(row => row.inbound && !!(row.photoId || isProductConversationDetail(row.text))).lastIndexOf(true);
+    if (latest < 0) return null;
+    const context = rows.slice(Math.max(0, latest - 13), latest + 1);
+    const photoId = [...context].reverse().find(row => row.photoId)?.photoId;
+    const conversation = context.filter(row => row.text || row.photoId).map(row =>
+      `${row.inbound ? "Customer" : "Team"}: ${row.text}${row.photoId ? " [Photo attached]" : ""}`
+    ).join("\n\n").slice(-12000);
+    const key = JSON.stringify([state.session.uid, channelId, rows[latest].id, photoId, conversation]);
+    return { channelId, key, photoId, conversation };
+  }
+
+  function cancelAiProductSuggestions() {
+    const runtime = state.productSuggestions;
+    clearTimeout(runtime.context?.timer);
+    runtime.context?.controller.abort();
+    runtime.context = null;
+    if (!operatorAiFeatureEnabled("productSuggestions") || state.destroyed) runtime.results.clear();
+    renderAiProductSuggestions(null);
+  }
+
+  function renderAiProductSuggestions(result) {
+    const panel = byId("shAiProductSuggestions");
+    const cards = result?.suggestions || [];
+    const question = result?.clarifyingQuestion || "";
+    const visible = !!cards.length || !!question;
+    panel.classList.toggle("is-hidden", !visible);
+    patchKeyedChildren(panel, visible ? `
+      <strong class="sh-product-suggestions-title" data-render-key="title">${cards.length ? "Suggested products" : "Suggested question"}</strong>
+      <div class="sh-product-suggestions-list" data-render-key="suggestions">
+        ${cards.map(product => `<button type="button" class="sh-product-suggestion" data-product-suggestion="${product.id}" data-render-key="product:${product.id}" title="Add ${escapeHtml(product.name)} photo and link">
+          <img src="${product.imagePath}" width="48" height="48" alt="" loading="lazy" decoding="async">
+          <span><b>${escapeHtml(product.name)}</b><small>${escapeHtml([product.sku, product.reason].filter(Boolean).join(" · "))}</small></span>
+        </button>`).join("")}
+        ${question ? `<button type="button" class="sh-product-suggestion sh-product-clarification" data-product-question data-render-key="question" title="Add this question to your reply">${escapeHtml(question)}</button>` : ""}
+      </div>` : "");
+  }
+
+  function normalizeAiProductSuggestion(product) {
+    const id = product?.id;
+    if (!Number.isSafeInteger(id) || id < 1) return null;
+    const imagePath = `/web/image/product.product/${id}/image_512`;
+    try {
+      const website = new URL(product.websiteUrl);
+      if (website.origin !== "https://www.smarthandicrafts.com" || website.username || website.password ||
+          !website.pathname.startsWith("/shop/") || product.imageUrl !== website.origin + imagePath ||
+          typeof product.name !== "string" || !product.name.trim()) return null;
+      return { id, imagePath, websiteUrl: website.href, name: product.name.trim().slice(0, 180),
+        sku: String(product.sku || "").trim().slice(0, 80), reason: String(product.reason || "").trim().slice(0, 140) };
+    } catch { return null; }
+  }
+
+  async function aiProductInputPhoto(photoId, signal) {
+    if (!photoId) return "";
+    try {
+      const response = await appFetch(`/web/image/ir.attachment/${Number(photoId)}/datas?width=768&height=768`, {
+        credentials: "same-origin", redirect: "error", signal
+      });
+      if (!response.ok || Number(response.headers.get("content-length")) > 6 * 1024 * 1024) return "";
+      const source = await response.blob();
+      if (!/^(image\/jpeg|image\/png|image\/webp)$/i.test(source.type) || source.size > 6 * 1024 * 1024 || signal.aborted) return "";
+      const image = await createImageBitmap(source);
+      const canvas = document.createElement("canvas");
+      const ratio = Math.min(1, 768 / Math.max(image.width, image.height));
+      canvas.width = Math.max(1, Math.round(image.width * ratio));
+      canvas.height = Math.max(1, Math.round(image.height * ratio));
+      const context = canvas.getContext("2d", { alpha: false });
+      try {
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        for (const quality of [0.75, 0.55, 0.35]) {
+          const data = canvas.toDataURL("image/jpeg", quality);
+          if (data.length <= 262167 && data.startsWith("data:image/jpeg;base64,")) return data;
+        }
+      } finally { image.close(); }
+    } catch { /* A photo read can fail independently of the customer's written enquiry. */ }
+    return "";
+  }
+
+  async function loadAiProductSuggestions(context) {
+    const runtime = state.productSuggestions;
+    const current = () => runtime.context === context && !context.controller.signal.aborted &&
+      aiProductSuggestionsAvailable() && aiProductLookupInput()?.key === context.key;
+    try {
+      if (!current()) return;
+      const image = await aiProductInputPhoto(context.photoId, context.controller.signal);
+      if (!current()) return;
+      const response = await appFetch(`${AI_MODE_BACKEND_BASE}/api/ai-mode/product-suggestions`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: context.controller.signal,
+        body: JSON.stringify({ channelId: context.channelId, conversation: context.conversation, ...(image ? { image } : {}) })
+      });
+      const data = await response.json().catch(() => null);
+      if (!current() || !response.ok || data?.ok !== true || data.channelId !== context.channelId) return;
+      const suggestions = (Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : []).map(normalizeAiProductSuggestion).filter(Boolean);
+      const clarifyingQuestion = typeof data.clarifyingQuestion === "string" ? data.clarifyingQuestion.trim().slice(0, 260) : "";
+      const result = { suggestions: [...new Map(suggestions.map(product => [product.id, product])).values()], clarifyingQuestion };
+      context.result = result;
+      runtime.results.set(context.key, { result, expiresAt: Date.now() + 5 * 60 * 1000 });
+      if (runtime.results.size > 24) runtime.results.delete(runtime.results.keys().next().value);
+      renderAiProductSuggestions(result);
+    } catch { /* Suggestions are optional and must never interrupt composing or call controls. */ }
+  }
+
+  function reconcileAiProductSuggestions() {
+    if (!aiProductSuggestionsAvailable()) { cancelAiProductSuggestions(); return; }
+    if (state.isLoadingMessages) return;
+    const input = aiProductLookupInput();
+    if (!input) { cancelAiProductSuggestions(); return; }
+    const runtime = state.productSuggestions;
+    if (runtime.context?.key === input.key) return;
+    cancelAiProductSuggestions();
+    const context = { ...input, controller: new AbortController() };
+    runtime.context = context;
+    const cached = runtime.results.get(input.key);
+    if (cached?.expiresAt > Date.now()) {
+      context.result = cached.result;
+      renderAiProductSuggestions(cached.result);
+    } else {
+      runtime.results.delete(input.key);
+      context.timer = setTimeout(() => { void loadAiProductSuggestions(context); }, 550);
+    }
+  }
+
   function buildAiDraftConversation() {
     return buildAiConversationHistory(18).map(row =>
       `${row.role === "operator" ? "Operator" : "Customer"}: ${row.text}`
@@ -12057,7 +12288,9 @@ Once received, our team will prepare the quotation accordingly.`
 
   function syncAiDraftButton() {
     if (!aiDraftBtn) return;
-    aiDraftBtn.disabled = state.destroyed || !state.session?.uid || !state.selectedChannelId ||
+    const enabled = operatorAiFeatureEnabled("drafts");
+    aiDraftBtn.classList.toggle("is-hidden", !enabled);
+    aiDraftBtn.disabled = !enabled || !state.session?.uid || !state.selectedChannelId ||
       state.isLoadingMessages || !!state.aiDraftRequest;
     aiDraftBtn.textContent = state.aiDraftRequest ? "Drafting\u2026" : "AI draft";
   }
@@ -12081,7 +12314,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function runAiDraft() {
-    if (state.destroyed || state.aiDraftRequest || state.isLoadingMessages || !state.session?.uid) return;
+    if (!operatorAiFeatureEnabled("drafts") || state.aiDraftRequest || state.isLoadingMessages || !state.session?.uid) return;
     const channelId = Number(state.selectedChannelId);
     const conversation = buildAiDraftConversation();
     if (!Number.isSafeInteger(channelId) || channelId <= 0 || !conversation.trim()) {
@@ -12146,6 +12379,7 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   async function runAiModeManually() {
+    if (!operatorAiFeatureEnabled("autoReplies")) return;
     const mode = getAiMode();
     if (mode === "manual") {
       showOperatorToast("AI Mode is Manual. Switch to Assist or Chat.");
@@ -12170,7 +12404,7 @@ Once received, our team will prepare the quotation accordingly.`
 
     try {
       const result = await callAiModeForChannel(channel, messageText, "manual_button");
-      if (state.destroyed) return;
+      if (!operatorAiFeatureEnabled("autoReplies")) return;
       state.aiSuggestionsByChannel[String(channel.id)] = result;
       if (state.selectionEpoch !== epoch || String(state.selectedChannelId) !== String(channel.id)) return;
       showAiModePanel(result, { title: mode === "chat" ? "AI Chat Mode" : "AI Assist Mode" });
@@ -12183,7 +12417,7 @@ Once received, our team will prepare the quotation accordingly.`
         syncMobileComposerMode();
       }
     } catch (error) {
-      if (!state.destroyed && state.selectionEpoch === epoch && String(state.selectedChannelId) === String(channel?.id)) showAiModeError(error);
+      if (operatorAiFeatureEnabled("autoReplies") && state.selectionEpoch === epoch && String(state.selectedChannelId) === String(channel?.id)) showAiModeError(error);
     } finally {
       state.aiIsThinking = false;
       if (aiModeRunBtn) aiModeRunBtn.disabled = false;
@@ -12340,9 +12574,79 @@ Once received, our team will prepare the quotation accordingly.`
   }
 
   // ---------- Composer ----------
+  function renderProductAttachmentDraft() {
+    const preview = byId("shProductAttachment");
+    const product = state.productAttachmentsByChannel.get(String(state.selectedChannelId));
+    preview.classList.toggle("is-hidden", !product);
+    patchKeyedChildren(preview, product ? `
+      <img src="${product.imagePath}" width="38" height="38" alt="" data-render-key="photo:${product.id}">
+      <span data-render-key="filename">${escapeHtml(product.name)}</span>
+      <button type="button" data-remove-product-attachment data-render-key="remove" aria-label="Remove product photo and link">${shUiIcon("close")}</button>` : "");
+  }
+
+  function updateProductAttachmentDraft(product) {
+    if (state.isSending || state.isUploadingAttachment || !state.selectedChannelId) return;
+    const key = String(state.selectedChannelId);
+    const before = state.productAttachmentsByChannel.get(key);
+    if (product && before?.id === product.id) return;
+    const lines = messageInput.value.split("\n");
+    if (before?.appendedLink) {
+      const existing = lines.lastIndexOf(before.websiteUrl);
+      if (existing >= 0) lines.splice(existing, 1);
+    }
+    messageInput.value = lines.join("\n").trimEnd();
+    if (product) {
+      const appendedLink = !lines.some(line => line.trim() === product.websiteUrl);
+      if (appendedLink) messageInput.value += `${messageInput.value ? "\n\n" : ""}${product.websiteUrl}`;
+      state.productAttachmentsByChannel.set(key, { ...product, appendedLink });
+    } else {
+      state.productAttachmentsByChannel.delete(key);
+    }
+    state.draftsByChannel.set(key, messageInput.value);
+    renderProductAttachmentDraft();
+    autoGrowTextarea();
+  }
+
+  async function getProductAttachmentFile(product) {
+    const response = await appFetch(product.imagePath, { credentials: "same-origin", redirect: "error" });
+    if (!response.ok || Number(response.headers.get("content-length")) > 5 * 1024 * 1024) {
+      throw new Error("The product photo could not be loaded. Try again.");
+    }
+    const photo = await response.blob();
+    const extension = { "image/jpeg": "jpg", "image/png": "png" }[photo.type];
+    if (!extension || !photo.size || photo.size > 5 * 1024 * 1024) {
+      throw new Error("Odoo did not return an available product photo.");
+    }
+    const name = product.name.replace(/[^\p{L}\p{N} -]+/gu, "").trim().slice(0, 80) || `Product ${product.id}`;
+    return new File([photo], `${name}.${extension}`, { type: photo.type });
+  }
+
+  byId("shAiProductSuggestions")?.addEventListener("click", event => {
+    if (!aiProductSuggestionsAvailable() || state.isSending || state.isUploadingAttachment) return;
+    const result = state.productSuggestions.context?.result;
+    if (!result) return;
+    const row = event.target.closest("[data-product-suggestion]");
+    if (row) {
+      const product = result.suggestions.find(item => item.id === Number(row.dataset.productSuggestion));
+      if (product) updateProductAttachmentDraft(product);
+    } else if (event.target.closest("[data-product-question]") && result.clarifyingQuestion) {
+      const question = result.clarifyingQuestion;
+      const current = messageInput.value.trimEnd();
+      if (!current.includes(question)) messageInput.value = current ? `${current}\n\n${question}` : question;
+      state.draftsByChannel.set(String(state.selectedChannelId), messageInput.value);
+      autoGrowTextarea();
+      messageInput.focus();
+    }
+  });
+
+  byId("shProductAttachment")?.addEventListener("click", event => {
+    if (event.target.closest("[data-remove-product-attachment]")) updateProductAttachmentDraft(null);
+  });
+
   function updateComposerState() {
     const channel = state.selectedChannel;
     syncAiDraftButton();
+    renderProductAttachmentDraft();
 
     composerWarning.classList.add("is-hidden");
     composerWarning.textContent = "";
@@ -12391,8 +12695,10 @@ Once received, our team will prepare the quotation accordingly.`
 
     const channel = state.selectedChannel;
     const text = messageInput.value.trim();
+    const key = String(channel?.id);
+    const product = state.productAttachmentsByChannel.get(key);
 
-    if (!channel || !text) return;
+    if (!channel || (!text && !product) || (product && state.isUploadingAttachment)) return;
 
     if (channel.channel_type === "whatsapp" && !isWhatsappWindowOpen(channel)) {
       updateComposerState();
@@ -12404,6 +12710,18 @@ Once received, our team will prepare the quotation accordingly.`
     sendButton.classList.add("is-sending");
 
     try {
+      if (product) {
+        const file = await getProductAttachmentFile(product);
+        if (state.destroyed) return;
+        await sendAttachmentsFromInput([file], {
+          channel, body: text,
+          onPosted: () => {
+            state.productAttachmentsByChannel.delete(key);
+            if (state.draftsByChannel.get(key)?.trim() === text) state.draftsByChannel.delete(key);
+          }
+        });
+        return;
+      }
       const sent = await postTextToChannel(channel, text, { reload: true });
       if (!sent) return;
 
@@ -12562,6 +12880,7 @@ Once received, our team will prepare the quotation accordingly.`
     if (open) {
       showPanel(panel);
       byId("shNavTools").setAttribute("aria-expanded", "true");
+      void loadAiModeFromServer();
     }
   });
   byId("shWorkspaceToolsClose")?.addEventListener("click", () => closeWorkspaceTools(true));
@@ -12976,10 +13295,24 @@ Once received, our team will prepare the quotation accordingly.`
   });
 
   aiReplyToggle?.addEventListener("change", async () => {
-    const isOn = !!aiReplyToggle.checked;
-    const confirmed = await setAiMode(isOn ? "zapier" : "manual");
-    if (confirmed && !state.destroyed) showOperatorToast(isOn ? "SH AI Mode ON" : "SH AI Mode OFF");
+    if (aiReplyToggle.disabled || !state.aiServerGlobal) return;
+    const masterEnabled = aiReplyToggle.checked;
+    if (await setAiMode({ masterEnabled, features: state.aiServerGlobal.features }))
+      showOperatorToast(masterEnabled ? "SH AI on" : "SH AI off for all operators");
   });
+  aiFeatureOptions?.addEventListener("change", event => {
+    const input = event.target.closest("[data-ai-feature]");
+    if (!input || input.disabled || aiFeatureOptions.disabled || !state.aiServerGlobal) return;
+    const { masterEnabled, features } = state.aiServerGlobal;
+    void setAiMode({ masterEnabled, features: { ...features, [input.dataset.aiFeature]: input.checked } });
+  });
+  aiEnableAll?.addEventListener("click", () => {
+    if (aiEnableAll.disabled || !state.aiServerGlobal) return;
+    const { availableFeatures } = state.aiServerGlobal;
+    const features = Object.fromEntries(aiFeatureInputs.map(input => [input.dataset.aiFeature, availableFeatures[input.dataset.aiFeature]]));
+    void setAiMode({ masterEnabled: true, features });
+  });
+  aiStatusRetry?.addEventListener("click", () => { void loadAiModeFromServer({ silent: false }); });
 
   // Legacy dropdown/manual AI support is intentionally hidden, but kept for future Gemini fallback.
   aiModeSelect?.addEventListener("change", () => {
@@ -13001,7 +13334,7 @@ Once received, our team will prepare the quotation accordingly.`
 
   aiModeSendBtn?.addEventListener("click", async () => {
     const reply = aiCustomerReplyFromResult(state.aiLastResult);
-    if (!reply || state.isSending || state.aiLastResult?.draftContext) return;
+    if (!operatorAiFeatureEnabled("autoReplies") || !reply || state.isSending || state.aiLastResult?.draftContext) return;
 
     try {
       state.isSending = true;
@@ -13038,8 +13371,6 @@ Once received, our team will prepare the quotation accordingly.`
     }
   });
 
-  // Always keep SH AI Reply OFF when the app opens.
-  // Do not auto-load server mode here, otherwise a previously enabled server state can turn the toggle ON again.
   syncAiModeUi();
 
   sendButton.addEventListener("click", sendCurrentMessage);
@@ -13060,6 +13391,7 @@ Once received, our team will prepare the quotation accordingly.`
   mobileBack.addEventListener("click", () => {
     closeCompositionPanels();
     appLayout.classList.remove("has-selected-chat");
+    cancelAiProductSuggestions();
   });
 
   function hubActionLabel(action) {
@@ -14248,6 +14580,11 @@ Once received, our team will prepare the quotation accordingly.`
     if (target && Number(state.selectedChannelId) !== Number(target)) {
       event.target.value = "";
       showOperatorToast("The conversation changed. Choose the attachment again for this chat.");
+      return;
+    }
+    if (state.productAttachmentsByChannel.has(String(state.selectedChannelId))) {
+      event.target.value = "";
+      showOperatorToast("Send or remove the product photo before attaching another file.");
       return;
     }
     await sendAttachmentsFromInput(event.target.files);
@@ -18111,7 +18448,17 @@ html.sh-operator-hub-page:has(#shOperatorApp) #shOperatorApp {
 #shOperatorApp[data-build] #shWorkspaceTools .sh-workspace-settings { padding:12px 20px !important; margin:8px 0 !important; background:#fff !important; }
 #shOperatorApp[data-build] #shWorkspaceTools :is(.sh-ai-global-row,.sh-ai-toggle-control) { width:100% !important; min-width:0 !important; max-width:none !important; border:0 !important; border-radius:0 !important; background:#fff !important; padding:0 !important; margin:0 !important; box-shadow:none !important; overflow:visible !important; animation:none !important; }
 #shOperatorApp[data-build] #shWorkspaceTools .sh-ai-toggle-control { display:flex !important; align-items:center !important; justify-content:space-between !important; gap:16px !important; min-height:52px !important; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-toggle-copy { flex-direction:column; align-items:flex-start; gap:4px; }
 #shOperatorApp[data-build] #shWorkspaceTools .sh-ai-mode-label { font-size:16px !important; font-weight:400 !important; color:var(--sh-ink) !important; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-settings-status { margin:0; color:var(--sh-muted); font-size:13px; line-height:1.35; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-feature-options { min-width:0; margin:12px 0; padding:4px 0 0; border:0; border-top:1px solid var(--sh-page-line); }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-feature-options legend { padding:0 8px 0 0; color:var(--sh-muted); font-size:13px; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-feature-options label { display:flex; align-items:center; gap:10px; min-height:44px; color:var(--sh-ink); font-size:14px; cursor:pointer; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-feature-options input { margin:0; width:18px; height:18px; accent-color:var(--sh-green); }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-feature-options small { margin-left:auto; color:var(--sh-muted); }
+#shOperatorApp[data-build] #shWorkspaceTools :is(#shAiEnableAll,.sh-ai-status-retry) { min-height:40px; margin:4px 0; padding:6px 12px; border:1px solid var(--sh-page-line); border-radius:8px; background:transparent; color:var(--sh-green); font:inherit; font-size:13px; cursor:pointer; }
+#shOperatorApp[data-build] #shWorkspaceTools #shAiEnableAll:disabled { opacity:.55; cursor:default; }
+#shOperatorApp[data-build] #shWorkspaceTools .sh-ai-status-retry[hidden] { display:none; }
 #shOperatorApp[data-build] #shWorkspaceTools .sh-ai-reply-switch { width:48px; height:44px; }
 #shOperatorApp[data-build] #shWorkspaceTools .sh-ai-reply-slider { inset:10px 4px; }
 #shOperatorApp[data-build] #shWorkspaceTools .sh-ai-reply-slider::before { width:20px; height:20px; }
@@ -19656,5 +20003,26 @@ html.sh-operator-hub-page:has(#shOperatorApp) #shOperatorApp {
 #shOperatorApp #shWhatsappCallTransferBtn:disabled { opacity: .55; cursor: default; }
 #shOperatorApp #shWhatsappCallTransferCancelBtn { margin-top: 10px; min-height: 40px; border: 1px solid currentColor; border-radius: 999px; background: transparent; color: inherit; padding: 8px 14px; font: inherit; font-size: 13px; }
 #shOperatorApp #shWhatsappCallTransferCancelBtn.is-hidden { display: none !important; }
+</style>
+<style id="shProductSuggestionStyles">
+#shOperatorApp .sh-product-suggestions { min-width: 0; margin: 0 0 6px; color: var(--sh-ink, #182621); }
+#shOperatorApp .sh-product-suggestions-title { display: block; margin: 2px 0 4px; color: var(--sh-muted, #526860); font-size: 12px; }
+#shOperatorApp .sh-product-suggestions-list { display: flex; gap: 6px; overflow-x: auto; padding: 1px 1px 4px; scrollbar-width: thin; }
+#shOperatorApp .sh-product-suggestion, #shOperatorApp .sh-product-attachment {
+  display: flex; align-items: center; gap: 8px; border: 1px solid var(--sh-page-line, #dce5df);
+  background: var(--sh-page, #fff); color: var(--sh-ink, #182621); border-radius: 11px; text-align: left;
+}
+#shOperatorApp .sh-product-suggestion { flex: 0 0 min(248px, 78%); min-height: 58px; padding: 4px 7px; font: inherit; cursor: pointer; }
+#shOperatorApp .sh-product-suggestion:hover { border-color: var(--sh-accent, #00876b); }
+#shOperatorApp .sh-product-suggestion img, #shOperatorApp .sh-product-attachment img { flex: 0 0 auto; border-radius: 6px; object-fit: cover; }
+#shOperatorApp .sh-product-suggestion span { display: grid; min-width: 0; line-height: 1.25; }
+#shOperatorApp .sh-product-suggestion b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; }
+#shOperatorApp .sh-product-suggestion small { color: var(--sh-muted, #526860); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shOperatorApp .sh-product-clarification { padding: 6px 9px; font-size: 12px; }
+#shOperatorApp .sh-product-attachment { width: fit-content; max-width: 100%; margin: 0 0 5px; padding: 3px 4px; font-size: 12px; }
+#shOperatorApp .sh-product-attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#shOperatorApp .sh-product-attachment button {
+  flex: 0 0 38px; min-height: 38px; border: 0; background: transparent; color: var(--sh-muted, #526860); cursor: pointer;
+}
 </style>
 </section>

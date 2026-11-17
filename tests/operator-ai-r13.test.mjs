@@ -184,6 +184,64 @@ test('actual worker does not forward after another device changes mode during no
   f.state.mode = 'manual'; f.state.revision++; f.state.mode = 'zapier'; f.state.revision++; gate.resolve();
   assert.equal((await running).skipped, 'ai_mode_changed_during_processing'); assert.equal(f.forwarded.length, 0);
 });
+
+test('disabled automatic replies leave the legacy scan idle when browser push is unused', async () => {
+  const ctx = load(['aiModeBackgroundTick'], {
+    AI_MODE_BACKGROUND_WORKER_ENABLED: true, aiModeGlobalState: { mode: 'zapier' },
+    operatorAiControls: { enabled: feature => { assert.equal(feature, 'autoReplies'); return false; } },
+    webPushConfigured: () => false,
+    nativeMessageBackgroundEnabled: () => assert.fail('Dedicated native discovery must not depend on this scan')
+  });
+  await ctx.aiModeBackgroundTick();
+});
+
+test('revoking SH Chat AI aborts Gemini and prevents retries or provider fallback', async () => {
+  const active = new AbortController(), started = deferred(), calls = [];
+  const ctx = load(['requestCancellableGemini', 'callGemini', 'callGeminiWithFallback'], {
+    GEMINI_MODEL: 'fixture-model', GEMINI_API_KEY: 'fixture-key', genAI: {}, AI_MODEL_TIMEOUT_MS: 20_000, AbortSignal,
+    fetch: async (url, { signal }) => {
+      calls.push(url); started.resolve();
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }
+  });
+  const result = ctx.callGeminiWithFallback('Fixture system', 'Fixture prompt', '', 'fixture-fallback', active.signal);
+  await started.promise;
+  active.abort();
+  await assert.rejects(result, { name: 'AbortError' });
+  assert.deepEqual(calls, ['https://generativelanguage.googleapis.com/v1beta/models/fixture-model:generateContent']);
+});
+
+test('revoking SH Chat AI aborts an in-flight Zapier forward and releases its lease', async () => {
+  const active = new AbortController(), started = deferred();
+  let enabled = true, released = 0, forwarded = 0;
+  const state = { mode: 'zapier', epoch: 'offline-epoch-1', revision: 1, enabled_since_ms: START - 20000 };
+  const ctx = load(['aiModeCaptureLease', 'aiModeLeaseCurrent', 'sendIncomingWhatsAppToZapier'], {
+    aiModeGlobalState: state, AbortSignal,
+    operatorAiControls: { enabled: () => enabled, startRequest: () => ({ signal: active.signal, finish: () => released++ }) },
+    ZAPIER_INCOMING_WHATSAPP_ENABLED: true, ZAPIER_INCOMING_WHATSAPP_WEBHOOK_URL: 'https://zapier.fixture.invalid/incoming',
+    ZAPIER_INCOMING_WHATSAPP_TIMEOUT_MS: 20_000, aiModeLooksLikeExternalCustomerChannel: () => true,
+    aiModeSafeString: String, zapierIncomingWhatsAppMessageKey: message => String(message.id),
+    zapierLoadIncomingWhatsAppSentIds: async () => {}, zapierIncomingWhatsAppState: { sent_ids: new Set() },
+    operatorAiReplyAuth: { issue: () => 'fixture-grant' }, aiModeParseOdooDateMs: Date.parse,
+    aiModeZapierChannelLabel: () => 'whatsapp', aiModeNormalizeMode: String,
+    aiModeChannelDisplayName: () => 'Fixture', aiModeChannelPhone: () => '', now: () => new Date(START).toISOString(),
+    aiModeCanPostToChannel: () => true,
+    fetch: async (_url, { signal }) => {
+      forwarded++; started.resolve();
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }
+  });
+  const input = { channel: { id: 22 }, message: { id: 51, date: new Date(START - 5000).toISOString() }, messageText: 'Fixture inbound' };
+  const sending = ctx.sendIncomingWhatsAppToZapier(input);
+  await started.promise;
+  enabled = false;
+  active.abort();
+  assert.equal((await sending).skipped, 'ai_mode_changed_during_forward');
+  assert.equal((await ctx.sendIncomingWhatsAppToZapier(input)).skipped, 'ai_mode_off');
+  assert.equal(released, 1);
+  assert.equal(forwarded, 1);
+});
+
 test('actual internal AI dispatcher directly executes handler and never bypasses HTTP authorization', async () => {
   let called = 0;
   const ctx = load(['aiModeCallLocalDecisionEngine'], { handleAiModeChat: async (req,res) => {
@@ -285,6 +343,17 @@ test('lost Odoo activity acknowledgement leaves durable pending receipt instead 
   assert.equal((await f.dispatcher.dispatch(f.input)).status, 'activity_outcome_pending');
   assert.equal((await f.dispatcher.dispatch(f.input)).status, 'activity_outcome_pending');
   assert.equal(f.calls.filter(x => x.model === 'mail.activity').length, 1);
+});
+test('disabling automatic replies during handover preflight prevents a new Odoo activity', async () => {
+  const f = handoverFixture(), active = new AbortController();
+  const dispatcher = createOdooHandoverDispatcher({ ...f.options, execute: async (...args) => {
+    const response = await f.options.execute(...args);
+    if (args[0] === 'ir.model.data') active.abort();
+    return response;
+  } });
+  assert.equal((await dispatcher.dispatch({ ...f.input, signal: active.signal })).status, 'ai_disabled');
+  assert.equal(f.calls.filter(x => x.model === 'mail.activity').length, 0);
+  assert.equal(f.db.documents.size, 0);
 });
 test('concurrent handover callbacks produce one assigned activity', async () => {
   const f = handoverFixture();

@@ -53,16 +53,16 @@ function leadValues(session, enquiry) {
  * The durable claim grants one create per call and confirms replays only for the same enquiry hash.
  * An unfinished claim is retained because Odoo may have committed the request. */
 export function createAiVoiceHandoff({ execute, claim, settle }) {
-  return async ({ session, operationId, enquiry }) => {
+  return async ({ session, operationId, enquiry, signal }) => {
     const lead = leadValues(session, enquiry);
-    if (!lead || typeof operationId !== 'string' || !operationId.trim()) return false;
+    if (signal?.aborted || !lead || typeof operationId !== 'string' || !operationId.trim()) return false;
 
     const enquiryHash = createHash('sha256').update(JSON.stringify(lead)).digest('hex');
     const receipt = { session, operationId, enquiryHash };
     try {
       const state = await claim(receipt);
-      if (state === 'complete') return true;
-      if (state !== 'claimed') return false;
+      if (state === 'complete') return !signal?.aborted;
+      if (state !== 'claimed' || signal?.aborted) return false;
     } catch { return false; }
 
     let leadId;
@@ -77,7 +77,7 @@ export function createAiVoiceHandoff({ execute, claim, settle }) {
         await settle({ ...receipt, status: 'uncertain' });
         return false;
       }
-      return await settle({ ...receipt, status: 'complete', leadId }) === true;
+      return await settle({ ...receipt, status: 'complete', leadId }) === true && !signal?.aborted;
     } catch { return false; }
   };
 }

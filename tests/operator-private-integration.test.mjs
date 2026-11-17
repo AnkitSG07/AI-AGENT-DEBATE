@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHmac, hkdfSync } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createOperatorDocumentLinks, safeDocumentRedirect } from '../operator-document-links.js';
 import { createOperatorBrowserAuth } from '../operator-browser-auth.js';
 import { createOperatorAiReplyAuth } from '../operator-ai-reply-auth.js';
@@ -17,7 +18,7 @@ const SECRET = 'synthetic-r13-profile-secret-abcdefghijklmnopqrstuvwxyz-1234';
 const BACKEND = 'https://ai-agent-debate.onrender.com', HUB = 'https://www.smarthandicrafts.com';
 const source = await readFile(new URL('../server.js', import.meta.url), 'utf8');
 
-async function startFixture({ weakSecret = false, callbacks = false, zapier = {}, aiEnabled = true } = {}) {
+async function startFixture({ weakSecret = false, callbacks = false, zapier = {}, aiEnabled = true, draftsEnabled = false } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'sh-private-r13-'));
   const env = { PATH: process.env.PATH, NODE_ENV: 'test', PORT: '0', SH_CHAT_AI_ENABLED: String(aiEnabled),
     PROFILE_SESSION_SECRET: weakSecret ? '' : SECRET, PROFILE_PASS_SMART_HANDICRAFTS: 'fixture-profile-password',
@@ -28,7 +29,8 @@ async function startFixture({ weakSecret = false, callbacks = false, zapier = {}
     ZOHO_MAIL_API_BASE: 'https://mail.zoho.fixture.invalid', ZOHO_MAIL_ACCOUNTS_BASE: 'https://accounts.zoho.fixture.invalid',
     ZOHO_MAIL_REDIRECT_URI: BACKEND + '/zoho/callback', GOOGLE_CONTACTS_CLIENT_ID: 'fixture',
     GOOGLE_CONTACTS_CLIENT_SECRET: 'fixture', GOOGLE_CONTACTS_REFRESH_TOKEN: 'fixture',
-    GOOGLE_CONTACTS_REDIRECT_URI: BACKEND + '/google-contacts/callback', AI_MODE_BACKGROUND_WORKER_ENABLED: 'false',
+    GOOGLE_CONTACTS_REDIRECT_URI: BACKEND + '/google-contacts/callback', AI_MODE_BACKGROUND_WORKER_ENABLED: 'true',
+    AI_MODE_BACKGROUND_INTERVAL_MS: '600000', SH_CHAT_AI_DRAFTS_ENABLED: String(draftsEnabled), OPENAI_API_KEY: draftsEnabled ? 'fixture-key' : '',
     SH_ANDROID_REGISTRY_BACKEND: 'file', SH_ANDROID_DEVICES_PATH: join(cwd, 'devices.json'),
     ZAPIER_REPLY_SECRET: zapier.replySecret ?? 'fixture-zapier-secret',
     ZAPIER_INCOMING_WHATSAPP_ENABLED: zapier.enabled === false ? 'false' : 'true',
@@ -103,7 +105,8 @@ test('complete actual server denies all anonymous private integration and altern
     ['GET','/api/odoo-documents/tree'], ['GET','/api/odoo-documents/folder/root'], ['GET','/api/odoo-documents/file/41'],
     ['GET','/api/odoo-documents/view/41'], ['GET','/api/odoo-documents/download/41'], ['POST','/api/odoo-documents/share'],
     ['GET','/api/ai-mode'], ['POST','/api/ai-mode'], ['GET','/api/ai-mode/global'], ['POST','/api/ai-mode/global'],
-    ['GET','/api/ai-mode/status'], ['POST','/api/ai-mode/chat'], ['GET','/api/debug/webhooks/recent'], ['POST','/api/debug/webhooks/clear'],
+    ['GET','/api/ai-mode/status'], ['POST','/api/ai-mode/chat'], ['POST','/api/ai-mode/draft'], ['POST','/api/ai-mode/product-suggestions'],
+    ['GET','/api/debug/webhooks/recent'], ['POST','/api/debug/webhooks/clear'],
     ['POST','/api/odoo/query'], ['POST','/api/odoo/action'], ['GET','/api/odoo/invoices'], ['GET','/api/labels'],
     ['GET','/api/self-training'], ['GET','/api/product-bot/self-training'], ['GET','/zoho/auth'], ['GET','/google-contacts/auth'],
     ['GET','/zoho/callback?code=fixture&state=fixture'], ['GET','/google-contacts/callback?code=fixture&state=fixture']
@@ -300,6 +303,66 @@ test('actual AI mode writes cannot omit arbitration or reuse a state after serve
   assert.equal(attempts.filter(result => result.status === 409).length, 7);
   const final = (await f.request('/api/ai-mode', { token })).data;
   assert.equal(final.mode, 'manual'); assert.equal(final.revision, 2);
+});
+
+test('SH AI settings cancel an active draft across devices, preserve feature selections, and gate new work', async t => {
+  const f = await startFixture({ aiEnabled: false, draftsEnabled: true }); t.after(f.close);
+  const first = await f.grant(await f.login()), second = await f.grant(await f.login());
+  const getState = async token => {
+    const response = await f.request('/api/ai-mode', { token });
+    assert.equal(response.status, 200, response.text);
+    return response.data;
+  };
+  const save = (token, state, masterEnabled, features) => f.request('/api/ai-mode', { method: 'POST', token,
+    body: { expectedEpoch: state.epoch, expectedRevision: state.revision, masterEnabled, features } });
+  const draft = () => f.request('/api/ai-mode/draft', { token: first, method: 'POST',
+    body: { channelId: 22, conversation: 'Customer: Do you sell warm-white COB LEDs?' } });
+  const initial = await getState(first);
+  assert.equal(initial.settingsReady, true);
+  assert.equal(initial.masterEnabled, true);
+  assert.equal(initial.availableFeatures.drafts, true);
+  assert.equal(initial.availableFeatures.autoReplies, false);
+  const selected = { drafts: true, productSuggestions: false, voiceFallback: false, autoReplies: false };
+  for (const malformed of [{ ...selected, typo: true }, { ...selected, drafts: 'true' }]) {
+    const rejected = await save(first, initial, true, malformed);
+    assert.equal(rejected.status, 400, rejected.text);
+  }
+  const saved = await save(first, initial, true, selected);
+  assert.equal(saved.status, 200, saved.text);
+  assert.deepEqual((await getState(second)).features, selected);
+  await f.scenario({ acceptAiDraft: true, waitForDraftCancellation: true });
+  const pending = draft();
+  let providerCalls = [];
+  for (let i = 0; i < 30; i++) {
+    providerCalls = (await f.calls()).filter(call => call.host === 'api.openai.com');
+    if (providerCalls.length) break;
+    await delay(10);
+  }
+  assert.equal(providerCalls.length, 1, 'The draft must already be in the provider transport.');
+  const off = await save(second, saved.data, false, selected);
+  assert.equal(off.status, 200, off.text);
+  const cancelled = await pending;
+  assert.equal(cancelled.status, 409, cancelled.text);
+  assert.equal(cancelled.data.code, 'AI_FEATURE_DISABLED');
+  const fresh = await draft();
+  assert.equal(fresh.status, 409, fresh.text);
+  assert.equal(fresh.data.code, 'AI_FEATURE_DISABLED');
+  assert.equal((await f.calls()).filter(call => call.host === 'api.openai.com').length, 1);
+  const disabled = await getState(first);
+  assert.equal(disabled.masterEnabled, false);
+  assert.deepEqual(disabled.features, selected);
+
+  await f.scenario({ acceptAiDraft: true });
+  const restored = await save(first, disabled, true, selected);
+  assert.equal(restored.status, 200, restored.text);
+  const resumed = await draft();
+  assert.equal(resumed.status, 200, resumed.text);
+  assert.equal(resumed.data.draft, 'Fixture reviewed draft');
+  const suggestions = await f.request('/api/ai-mode/product-suggestions', { token: first, method: 'POST',
+    body: { channelId: 22, conversation: 'Customer: warm-white COB LED' } });
+  assert.equal(suggestions.status, 409, suggestions.text);
+  assert.equal(suggestions.data.code, 'AI_FEATURE_DISABLED');
+  assert.equal((await f.calls()).filter(call => call.host === 'api.openai.com').length, 1);
 });
 
 test('actual provider callbacks fail closed when secrets missing and still accept configured authenticated contracts', async t => {
@@ -636,16 +699,18 @@ test('least-privilege integration scopes do not grant generic ERP, writes from r
 });
 
 
-test('deployment-disabled AI rejects toggles, direct inference and automation callbacks over actual HTTP', async t => {
+test('deployment-disabled legacy automation rejects direct inference and callbacks over actual HTTP', async t => {
   const f = await startFixture({ aiEnabled: false }); t.after(f.close);
   const token = await f.grant(await f.login());
   const state = await f.request('/api/ai-mode/global', { token });
   assert.equal(state.status, 200); assert.equal(state.data.global.mode, 'manual');
   assert.equal(state.data.worker.enabled, false); assert.equal(state.data.worker.running, false);
   assert.equal(state.data.worker.started_at, null);
-  for (const path of ['/api/ai-mode', '/api/ai-mode/global', '/api/ai-mode/chat', '/api/zapier/reply']) {
+  for (const path of ['/api/ai-mode/global', '/api/ai-mode/chat', '/api/zapier/reply']) {
     const result = await f.request(path, { token, method: 'POST', body: { aiEnabled: true, mode: 'chat', message: 'synthetic' } });
     assert.equal(result.status, 503, path); assert.equal(result.data.code, 'AI_DISABLED');
   }
-  assert.equal((await f.request('/api/ai-mode', { token })).data.aiEnabled, false);
+  const settings = (await f.request('/api/ai-mode', { token })).data;
+  assert.equal(settings.aiEnabled, false);
+  assert.equal(settings.availableFeatures.autoReplies, false);
 });

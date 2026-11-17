@@ -10,6 +10,7 @@ test.after(finish);
 async function draftFixture({ connect = true } = {}) {
   const sim = new Simulator();
   for (const id of [101, 102]) sim.models['mail.message'].push(...messagesFor(id));
+  sim.aiSettings = { masterEnabled: true, features: { drafts: true, productSuggestions: false, voiceFallback: false, autoReplies: false } };
   const requests = [];
   let pending;
   const f = await fixture({ connect, services: async (route, url, req) => {
@@ -18,7 +19,10 @@ async function draftFixture({ connect = true } = {}) {
     pending = route;
     return true;
   } });
-  await f.page.evaluate(() => __hubUiTest.selectChannel(101));
+  await f.page.evaluate(async () => {
+    await __hubUiTest.loadAiModeFromServer();
+    await __hubUiTest.selectChannel(101);
+  });
   async function reply(body = { ok: true, channelId: 101, draft: 'Thank you for your enquiry. Which quantity would you like?', model: 'gpt-6.1-terra' }, status = 200) {
     assert.ok(pending, 'The draft request reached the offline endpoint');
     const route = pending;
@@ -151,8 +155,8 @@ test('unavailable and mismatched responses leave the original composer intact', 
 test('a disconnected operator cannot send inference requests and context is bounded', async () => {
   const f = await draftFixture({ connect: false });
   try {
-    await f.page.locator('#shAiDraftBtn').click();
-    await f.page.waitForFunction(() => !__hubUiTest.state.aiDraftRequest);
+    assert.equal(await f.page.locator('#shAiDraftBtn').isVisible(), false);
+    await f.page.evaluate(() => __hubUiTest.runAiDraft());
     assert.equal(f.draftRequests.length, 0);
     assert.equal(await f.page.locator('#shAiModeUseBtn').isDisabled(), true);
     const text = await f.page.evaluate(() => {
@@ -161,6 +165,55 @@ test('a disconnected operator cannot send inference requests and context is boun
     });
     assert.equal(text.length, 24000);
     assert.equal(sentMessages(f).length, 0);
+  } finally { await f.close(); }
+});
+
+test('the shared master switch aborts a pending draft and can restore the selected features', async () => {
+  const f = await draftFixture();
+  try {
+    await f.page.locator('#shAiDraftBtn').click();
+    await assertEventually(() => f.draftRequests.length === 1);
+    await f.page.evaluate(() => {
+      window.previousDraftSignal = __hubUiTest.state.aiDraftRequest.controller.signal;
+      document.getElementById('shNavTools').click();
+    });
+    await f.page.locator('.sh-ai-reply-switch').click();
+    await f.page.waitForFunction(() => __hubUiTest.state.aiServerGlobal?.masterEnabled === false);
+    assert.equal(await f.page.evaluate(() => previousDraftSignal.aborted), true);
+    assert.equal(await f.page.locator('#shAiDraftBtn').isVisible(), false);
+    assert.equal(await f.page.locator('#shAiModePanel').isVisible(), false);
+    assert.equal(f.sim.aiSettings.features.drafts, true);
+    await f.reply();
+    await f.page.locator('.sh-ai-reply-switch').click();
+    await f.page.waitForFunction(() => __hubUiTest.operatorAiFeatureEnabled('drafts'));
+    assert.deepEqual(f.sim.aiSettings, { masterEnabled: true,
+      features: { drafts: true, productSuggestions: false, voiceFallback: false, autoReplies: false } });
+    assert.equal(f.draftRequests.length, 1);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.close(); }
+});
+
+test('operators can select individual AI features or turn on all available features', async () => {
+  const f = await draftFixture();
+  try {
+    f.sim.aiAvailableFeatures.voiceFallback = false;
+    await f.page.evaluate(async () => {
+      document.getElementById('shNavTools').click();
+      await __hubUiTest.loadAiModeFromServer();
+    });
+    const drafts = f.page.locator('[data-ai-feature="drafts"]');
+    const voice = f.page.locator('[data-ai-feature="voiceFallback"]');
+    assert.equal(await voice.isDisabled(), true);
+    assert.equal(await voice.locator('..').getByText('Unavailable').isVisible(), true);
+    await drafts.uncheck();
+    await f.page.waitForFunction(() => __hubUiTest.state.aiServerGlobal?.features.drafts === false);
+    assert.equal(await f.page.locator('#shAiDraftBtn').isVisible(), false);
+    await f.page.locator('#shAiEnableAll').click();
+    await f.page.waitForFunction(() => __hubUiTest.operatorAiFeatureEnabled('productSuggestions'));
+    assert.deepEqual(f.sim.aiSettings, { masterEnabled: true,
+      features: { drafts: true, productSuggestions: true, voiceFallback: false, autoReplies: true } });
+    assert.equal(f.draftRequests.length, 0);
+    assert.deepEqual(f.errors, []);
   } finally { await f.close(); }
 });
 

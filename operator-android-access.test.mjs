@@ -214,12 +214,13 @@ test('identity pseudonym stays stable across reauthorization and rotation withou
   })).res.payload.code, 'ANDROID_ENROLLMENT_PROOF_REQUIRED');
 });
 
-test('Android capabilities allow exact mail, document and AI draft operations with fresh checks each time', async () => {
+test('Android capabilities allow exact mail, document and AI operations with fresh checks each time', async () => {
   const f = fixture(), token = (await f.issue()).res.payload.token;
   const paths = [['/api/zoho-mail/status', 'GET'], ['/api/zoho-mail/messages', 'GET'],
     ['/api/zoho-mail/message/1234', 'GET'], ['/api/zoho-mail/send', 'POST'], ['/api/zoho-mail/reply', 'POST'],
     ['/api/odoo-documents/tree', 'GET'], ['/api/odoo-documents/file/42', 'GET'],
-    ['/api/odoo-documents/share', 'POST'], ['/api/ai-mode/draft', 'POST']];
+    ['/api/odoo-documents/share', 'POST'], ['/api/ai-mode/draft', 'POST'],
+    ['/api/ai-mode/product-suggestions', 'POST'], ['/api/ai-mode', 'GET'], ['/api/ai-mode', 'POST']];
   for (const [path, method] of paths) {
     const { req, res } = await f.guard(path, token, { method, body: { deviceId: 'spoofed', operator_name: 'SUDO' } });
     assert.equal(res.next, 1, path); assert.equal(req.operatorAuth.kind, 'browser');
@@ -236,7 +237,8 @@ test('Android capabilities never grant call controls, admin, OAuth, contacts, ER
   for (const [path, method] of [
     ['/api/whatsapp-calls/config', 'GET'], ['/api/whatsapp-calls/recent', 'GET'], ['/api/whatsapp-calls/accept', 'POST'],
     ['/api/operator-call-transfer/request', 'POST'], ['/api/operator-devices', 'GET'],
-    ['/api/ai-mode', 'GET'], ['/api/ai-mode/global', 'POST'], ['/api/ai-mode/chat', 'POST'], ['/api/ai-mode/draft', 'GET'],
+    ['/api/ai-mode', 'PUT'], ['/api/ai-mode/global', 'POST'], ['/api/ai-mode/chat', 'POST'], ['/api/ai-mode/draft', 'GET'],
+    ['/api/ai-mode/product-suggestions', 'GET'],
     ['/api/debug/webhooks', 'GET'], ['/api/push/subscribe', 'POST'], ['/api/google-contacts/search', 'GET'],
     ['/api/odoo/partners', 'POST'], ['/api/labels', 'GET'], ['/zoho/auth', 'GET'],
     ['/api/zoho-mail/admin', 'POST'], ['/api/odoo-documents/share', 'DELETE']

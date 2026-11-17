@@ -7,7 +7,7 @@ const maxOfferAgeMs = 25000;
 
 /** Arm only verified, recent incoming calls covered by the server's rollout. */
 export function createAiVoiceFallback({ env = process.env, loadInstructions, tools, callTool, saveEnquiry,
-  startMedia = startAiVoiceMedia, humanAnswerInProgress = () => false, logger = console,
+  startRequest = () => null, startMedia = startAiVoiceMedia, humanAnswerInProgress = () => false, logger = console,
   now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   const allowed = new Set(String(env.SH_AI_VOICE_PILOT_CALLERS || '').split(',').map(phone).filter(validPhone));
   const allCallers = env.SH_AI_VOICE_ALL_CALLERS === 'true';
@@ -27,6 +27,11 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
   function release(entry) {
     if (active.get(entry.id) === entry) active.delete(entry.id);
     if (entry.timer !== undefined) clearTimer(entry.timer);
+    if (entry.lease) {
+      entry.lease.signal.removeEventListener('abort', entry.onDisabled);
+      entry.lease.finish();
+      entry.lease = null;
+    }
     entry.controller.abort();
     const media = entry.media;
     entry.media = null;
@@ -34,9 +39,9 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
   }
   async function end(entry, reason) {
     release(entry);
-    if (!entry.claimStarted) return;
-    try { await entry.runtime.endAiIncoming(entry.id, entry.operationId, reason); }
-    catch { log('cleanup_deferred'); }
+    if (!entry.dispatched) return;
+    entry.endTask ||= entry.runtime.endAiIncoming(entry.id, entry.operationId, reason).catch(() => log('cleanup_deferred'));
+    await entry.endTask;
   }
   async function run(entry) {
     const { id, runtime, operationId, controller } = entry;
@@ -76,7 +81,8 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
           if (request.name !== 'capture_enquiry') return callTool(request);
           await ready;
           if (!current() || request.signal?.aborted) return { status: 'unavailable' };
-          return saveEnquiry({ request, session: { ...session, verifiedCustomerPhone: entry.caller }, operationId, runtime });
+          return saveEnquiry({ request, session: { ...session, verifiedCustomerPhone: entry.caller }, operationId,
+            runtime, policySignal: entry.lease.signal });
         },
         onDisconnect: () => {
           if (current()) void end(entry, 'AI_VOICE_DISCONNECTED');
@@ -84,8 +90,8 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       });
       entry.media = media;
       if (!beforeClaim()) return;
-      entry.claimStarted = true;
-      const result = await runtime.acceptAiIncoming(id, { operationId, identity, maxCallMs, mayClaim: beforeClaim, canDispatch: current });
+      const result = await runtime.acceptAiIncoming(id, { operationId, identity, maxCallMs, mayClaim: beforeClaim,
+        canDispatch: current, onDispatch: () => { entry.dispatched = true; }, policySignal: entry.lease.signal });
       if (!result || !current()) return;
       accepted = true;
       if (callerAudio) onReady();
@@ -96,8 +102,10 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       entry.keepOpen = true;
       log('answered');
     } catch {
-      log('fallback_unavailable');
-      await end(entry, 'AI_VOICE_FAILED');
+      if (current()) {
+        log('fallback_unavailable');
+        await end(entry, 'AI_VOICE_FAILED');
+      }
     } finally {
       if (!entry.keepOpen) release(entry);
     }
@@ -108,9 +116,14 @@ export function createAiVoiceFallback({ env = process.env, loadInstructions, too
       const caller = phone(callerPhone), age = now() - occurredAtMs;
       if (closed || !validPhone(caller) || !(allCallers || allowed.has(caller)) || !Number.isFinite(age) || age < -3000 ||
           age >= maxOfferAgeMs - ringMs || active.has(id) || active.size >= 2) return;
+      const lease = startRequest('voiceFallback');
+      if (!lease) return;
+      if (lease.signal.aborted) { lease.finish(); return; }
       const controller = new AbortController();
-      const entry = { id, callId, caller, offeredAt: Math.min(occurredAtMs, now()), runtime, controller,
+      const entry = { id, callId, caller, offeredAt: Math.min(occurredAtMs, now()), runtime, controller, lease,
         operationId: randomUUID() };
+      entry.onDisabled = () => void end(entry, 'AI_VOICE_DISABLED');
+      lease.signal.addEventListener('abort', entry.onDisabled, { once: true });
       active.set(id, entry);
       entry.timer = setTimer(() => void run(entry), ringMs);
       entry.timer?.unref?.();

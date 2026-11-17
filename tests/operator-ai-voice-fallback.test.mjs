@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate as turn } from 'node:timers/promises';
 import { createAiVoiceFallback } from '../call-runtime/ai-voice-fallback.mjs';
+import { sessionKey } from '../call-runtime/call-runtime.mjs';
 import { createOperatorMediaGateway, nativeCallHistoryEvent } from '../operator-media-gateway.js';
 import { deferred, fixture } from './operator-r12-helpers.mjs';
 
@@ -50,6 +51,7 @@ function pilot(f, options = {}) {
   const timers = new Set(), events = [];
   const fallback = createAiVoiceFallback({ env, now: f.now, loadInstructions: async () => 'Approved knowledge',
     tools: [], callTool: async () => ({}), saveEnquiry: async () => ({ status: 'captured' }),
+    startRequest: () => ({ signal: new AbortController().signal, finish() {} }),
     setTimer(fn, ms) { const timer = { fn, ms }; timers.add(timer); return timer; },
     clearTimer(timer) { timers.delete(timer); },
     logger: { info() {} },
@@ -68,6 +70,21 @@ function pilot(f, options = {}) {
     await turn();
   }
   return { fallback, timers, events, schedule, fire };
+}
+
+function pilotGate() {
+  let gate = null, active = 0;
+  return {
+    on() { gate = new AbortController(); },
+    off() { gate?.abort(); gate = null; },
+    startRequest(feature) {
+      assert.equal(feature, 'voiceFallback');
+      if (!gate) return null;
+      active++;
+      return { signal: gate.signal, finish() { active--; } };
+    },
+    get active() { return active; }
+  };
 }
 
 test('pilot waits for operators, rechecks freshness and skips other callers', async () => {
@@ -140,6 +157,108 @@ test('failed preparation leaves the call available for a normal answer', async (
   assert.equal(p.timers.size, 0);
   await f.accept();
   assert.equal(f.effects.filter(effect => effect.kind === 'accept').length, 1);
+});
+
+test('disabling voice cancels the ring timer and a reused offer can still be answered by a person', async () => {
+  const f = fixture(); await f.incoming();
+  const gate = pilotGate(), p = pilot(f, { startRequest: gate.startRequest });
+  p.schedule();
+  assert.equal(p.timers.size, 0);
+  gate.on(); p.schedule();
+  assert.equal(p.timers.size, 1);
+  gate.off(); gate.on();
+  assert.equal(p.timers.size, 0);
+  assert.equal(gate.active, 0);
+  assert.equal((await f.runtime.locate(callId)).phase, 'ringing');
+  await f.accept();
+  assert.equal((await f.runtime.locate(callId)).owner.deviceId, 'a');
+  assert.deepEqual(p.events, []);
+});
+
+test('disabling voice aborts pending media and closes late media handles without answering', async () => {
+  const f = fixture(); await f.incoming();
+  const gate = pilotGate(), preparing = deferred(), media = deferred();
+  gate.on();
+  const p = pilot(f, { startRequest: gate.startRequest, startMedia: async ({ signal }) => {
+    preparing.resolve(signal);
+    return media.promise;
+  } });
+  p.schedule();
+  const fired = p.fire([...p.timers][0]);
+  const signal = await preparing.promise;
+  gate.off();
+  assert.equal(signal.aborted, true);
+  media.resolve({ speak: () => assert.fail('disabled media must not greet'), close: () => p.events.push('closed') });
+  await fired;
+  assert.equal(gate.active, 0);
+  assert.deepEqual(p.events, ['closed']);
+  assert.equal((await f.runtime.locate(callId)).phase, 'ringing');
+  assert.equal(f.effects.some(effect => effect.kind === 'accept'), false);
+});
+
+test('disabling after the durable AI claim rejects without dispatching a provider Accept', async () => {
+  const f = fixture(); await f.incoming();
+  const gate = pilotGate(), p = pilot(f, { startRequest: gate.startRequest });
+  const originalGet = f.store.get.bind(f.store);
+  const provisional = deferred(), release = deferred();
+  f.runtime.store = { ...f.store, async get(key) {
+    const record = await originalGet(key);
+    if (key === sessionKey(callId) && record?.routeChoice === 'ai' && record.phase === 'accepting') {
+      provisional.resolve();
+      await release.promise;
+    }
+    return record;
+  } };
+  gate.on(); p.schedule();
+  const fired = p.fire([...p.timers][0]);
+  await provisional.promise;
+  gate.off();
+  release.resolve();
+  await fired; await turn();
+  const session = await f.runtime.locate(callId);
+  assert.equal(session.terminal.reason, 'AI_VOICE_DISABLED');
+  assert.equal(session.routeChoice, 'ai');
+  assert.equal(session.operations.accept.errorCode, 'NOT_DISPATCHED');
+  assert.equal(session.outbox.some(item => item.kind === 'terminate'), false);
+  assert.equal(session.outbox.some(item => item.kind === 'reject'), true);
+  assert.equal(f.effects.some(effect => effect.kind === 'accept'), false);
+});
+
+test('disabling an answered voice session closes realtime and queues provider cleanup', async () => {
+  const f = fixture(); await f.incoming();
+  const gate = pilotGate(), p = pilot(f, { startRequest: gate.startRequest });
+  gate.on(); p.schedule();
+  await p.fire([...p.timers][0]);
+  assert.equal((await f.runtime.locate(callId)).phase, 'ai_connected');
+  gate.off(); await turn();
+  assert.equal(gate.active, 0);
+  assert.equal(p.timers.size, 0);
+  assert.deepEqual(p.events, ['prepared', 'greeting', 'closed']);
+  assert.equal((await f.runtime.locate(callId)).terminal.reason, 'AI_VOICE_DISABLED');
+  await f.runtime.dispatchCriticalCleanup(callId);
+  assert.equal(f.effects.some(effect => effect.kind === 'terminate'), true);
+});
+
+test('disabling during a dispatched Accept fences the late response without greeting or replay', async () => {
+  const entered = deferred(), release = deferred();
+  let acceptAttempts = 0;
+  const f = fixture({ provider: { async acceptIncoming(data) {
+    acceptAttempts++;
+    entered.resolve(); await release.promise;
+    const session = await f.runtime.locate(callId);
+    return { callId: data.callId, roomName: data.roomName, customerIdentity: session.customerIdentity };
+  } } }); await f.incoming();
+  const gate = pilotGate(), p = pilot(f, { startRequest: gate.startRequest });
+  gate.on(); p.schedule();
+  const fired = p.fire([...p.timers][0]);
+  await entered.promise;
+  gate.off(); await turn();
+  assert.equal((await f.runtime.locate(callId)).terminal.reason, 'AI_VOICE_DISABLED');
+  release.resolve(); await fired; await turn();
+  const session = await f.runtime.locate(callId);
+  assert.ok(session.outbox.some(item => item.id === 'terminate:late-accept'));
+  assert.equal(acceptAttempts, 1);
+  assert.deepEqual(p.events, ['prepared', 'closed']);
 });
 
 test('only one durable claim wins, and neither human path can override it', async () => {

@@ -665,7 +665,7 @@ export class CallRuntime {
 
   /** Server-only fallback. Prepare audio before invoking this method so both
    * human answer paths remain available until the same durable claim commits. */
-  async acceptAiIncoming(id, { operationId, identity, maxCallMs, mayClaim, canDispatch }) {
+  async acceptAiIncoming(id, { operationId, identity, maxCallMs, mayClaim, canDispatch, onDispatch, policySignal }) {
     identifier(operationId, 'voice operation'); identifier(identity, 'voice participant');
     requireValue(Number.isSafeInteger(maxCallMs) && maxCallMs >= 30000 && maxCallMs <= 300000,
       'INVALID_VOICE_DURATION', 'The voice call duration is invalid.', 400);
@@ -690,9 +690,11 @@ export class CallRuntime {
       const provider = this.providerFor(prepared);
       const current = await this.store.get(sessionKey(id));
       if (current.terminal || !canDispatch()) {
-        await this.failProviderOperation(id, 'accept', null, { notDispatched: true });
+        await this.failProviderOperation(id, 'accept', null,
+          { notDispatched: true, terminalReason: policySignal?.aborted ? 'AI_VOICE_DISABLED' : 'FAILED' });
         return null;
       }
+      onDispatch?.();
       dispatched = true;
       const result = await provider.acceptIncoming({ callId: prepared.providerCallId, phoneNumberId: this.phoneNumberId,
         offerSdp: prepared.offerSdp, roomName: prepared.roomName });
@@ -943,7 +945,7 @@ export class CallRuntime {
     return !current.terminal && current.phase === 'joining' && current.owner.identity === session.owner.identity;
   }
 
-  async failProviderOperation(id, operation, error, { notDispatched = false } = {}) {
+  async failProviderOperation(id, operation, error, { notDispatched = false, terminalReason = 'FAILED' } = {}) {
     await this.store.transaction(async tx => {
       const session = await tx.get(sessionKey(id)); this.requireSession(session);
       const current = session.operations[operation];
@@ -952,7 +954,7 @@ export class CallRuntime {
       current.status = notDispatched || error?.outcomeUnknown === false ? 'failed' : 'uncertain';
       current.failedAt = this.now(); current.errorCode = notDispatched ? 'NOT_DISPATCHED' : error?.outcomeUnknown === false ? 'PROVIDER_REJECTED' : 'OUTCOME_UNCERTAIN';
       if (current.status === 'failed') {
-        terminalize(session, 'FAILED', this.now(), { confirmed: operation === 'dial' && !session.providerCallId });
+        terminalize(session, terminalReason, this.now(), { confirmed: operation === 'dial' && !session.providerCallId });
         if (operation === 'accept' && session.routeChoice !== 'ai')
           job(session, { id: 'reject-after-failure', kind: 'reject', callId: session.providerCallId });
       } else if (!session.terminal) { session.phase = 'uncertain'; session.version++; session.updatedAt = this.now(); }
