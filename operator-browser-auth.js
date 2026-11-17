@@ -3,10 +3,13 @@
 import { createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createAndroidAccessChallenges } from './operator-android-access.js';
+import { ODOO_OPERATOR_SCOPES } from './operator-odoo-proof.js';
+import { createOdooOperatorChallenges } from './operator-odoo-sso-challenges.js';
 
 export const OPERATOR_BROWSER_AUTH_VERSION = 'sh-operator-browser-auth-v1';
 export const OPERATOR_BROWSER_TOKEN_TTL_MS = 10 * 60 * 1000;
 const PROFILE_MAX_MS = 2 * 60 * 60 * 1000;
+const ODOO_IDENTITY_RECOVERY_MS = 5 * 60 * 1000;
 const PREFIX = 'shb1';
 const AUDIENCE = 'sh-operator-legacy-calls';
 const PROFILES = new Set(['SUDO', 'Smart handicrafts']);
@@ -14,6 +17,7 @@ export const OPERATOR_BROWSER_SCOPES = Object.freeze(['calls:read', 'calls:write
   'mail:read', 'mail:write', 'contacts:read', 'contacts:write',
   'documents:read', 'documents:write', 'ai:read', 'ai:write']);
 const SCOPES = OPERATOR_BROWSER_SCOPES;
+export { ODOO_OPERATOR_SCOPES };
 export const ANDROID_OPERATOR_SCOPES = Object.freeze(['mail:read', 'mail:write',
   'documents:read', 'documents:write', 'ai:draft', 'ai:settings']);
 const ANDROID_HUB_ORIGIN = 'https://www.smarthandicrafts.com';
@@ -115,6 +119,31 @@ function androidOperatorScope(path, method) {
   return null;
 }
 
+// Only these operational paths accept the proof-based Odoo grant. Access to
+// any future admin or automation handler needs its own explicit decision.
+const ODOO_CALL_READ_PATHS = new Set(['/api/whatsapp-calls/config', '/api/whatsapp-calls/logs',
+  '/api/whatsapp-calls/recent', '/api/whatsapp-calls/incoming', '/api/whatsapp-calls/events',
+  '/api/odoo/call-log/recent', '/api/operator-devices', '/api/operator-call-locks/active',
+  '/api/operator-call-transfer/pending', '/api/operator-call-transfer/status', '/api/push/status']);
+const ODOO_CALL_WRITE_PATHS = new Set(['/api/whatsapp-calls/outgoing', '/api/whatsapp-calls/accept',
+  '/api/whatsapp-calls/reject', '/api/whatsapp-calls/terminate', '/api/whatsapp-calls/cancel-pending-outgoing',
+  '/api/whatsapp-calls/note', '/api/odoo/call-log/update-note', '/api/operator-devices/status',
+  '/api/operator-devices/heartbeat', '/api/operator-call-locks/claim', '/api/operator-call-locks/release',
+  '/api/operator-call-transfer/request', '/api/operator-call-transfer/accept',
+  '/api/operator-call-transfer/decline', '/api/operator-call-transfer/cancel', '/api/push/subscribe', '/api/push/unsubscribe']);
+function odooOperatorScope(path, method) {
+  if (/^\/api\/whatsapp-calls\/(?:diagnostics|test|admin|debug)(?:\/|$)/.test(path)) return null;
+  if (READ_METHODS.has(method)) {
+    if (ODOO_CALL_READ_PATHS.has(path) || nativeReadPath(path)) return 'calls:read';
+    if (['/api/google-contacts/status', '/api/google-contacts/search'].includes(path)) return 'contacts:read';
+  }
+  if (method === 'POST') {
+    if (ODOO_CALL_WRITE_PATHS.has(path)) return 'calls:write';
+    if (path === '/api/google-contacts/import-to-odoo') return 'contacts:write';
+  }
+  return androidOperatorScope(path, method);
+}
+
 const STRING_FIELDS = new Set(['id', 'call_id', 'callId', 'provider_call_id', 'providerCallId', 'session_id', 'sessionId',
   'direction', 'event', 'status', 'state', 'source', 'customer_name', 'customerName', 'caller_name', 'customer_phone',
   'customerPhone', 'phone', 'wa_id', 'from', 'to', 'date', 'created_at', 'updated_at', 'started_at', 'connected_at',
@@ -173,6 +202,7 @@ export function createProfileLoginLimiter({ clock = Date.now, maxAttempts = 8, w
 
 export function createOperatorBrowserAuth({ secret, readProfileSession, authenticateNative, authorizeDocumentLink,
   androidAccessEnabled = false, verifyAndroidCapability,
+  odooSsoEnabled = false, verifyOdooOperatorProof,
   allowedHubOrigins = DEFAULT_ORIGINS, backendOrigin = 'https://ai-agent-debate.onrender.com', clock = Date.now } = {}) {
   const origins = new Set(Array.isArray(allowedHubOrigins) ? allowedHubOrigins.map(origin).filter(Boolean) : []);
   const backend = origin(backendOrigin);
@@ -183,6 +213,8 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   const activeAndroidChecks = new Map();
   let totalAndroidChecks = 0;
   const androidChallenges = createAndroidAccessChallenges({ clock });
+  const odooChallenges = createOdooOperatorChallenges({ allowedOrigins: [...origins], clock });
+  let activeOdooVerifications = 0;
   function ready() { requireAuth(configured, 503, 'BROWSER_AUTH_NOT_CONFIGURED', 'Browser call sign-in is not configured. Ask the administrator to configure the operator session secret.'); }
   function publicConfig() { return { ok: true, version: OPERATOR_BROWSER_AUTH_VERSION, authRequired: true,
     browserAuthReady: configured, browserTokenTtlMs: OPERATOR_BROWSER_TOKEN_TTL_MS, authenticatedEventStream: true }; }
@@ -193,7 +225,10 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   function androidBaseDeviceId(deviceId) {
     return `web_${createHmac('sha256', signingKey).update(`android-operator:${deviceId}`).digest('hex').slice(0, 32)}`;
   }
-  function verifyClaims(token, { expectedOrigin, recoverExpiredAccess = false } = {}) {
+  function odooBaseDeviceId(uid) {
+    return `web_${createHmac('sha256', signingKey).update(`odoo-operator:${uid}`).digest('hex').slice(0, 32)}`;
+  }
+  function verifyClaims(token, { expectedOrigin, recoverExpiredAccess = false, recoverOdooIdentity = false } = {}) {
     ready();
     requireAuth(typeof token === 'string' && token.length <= 4096, 401, 'BROWSER_AUTH_REQUIRED', 'Connect an authorized operator profile before using call controls.');
     const parts = token.split('.');
@@ -206,13 +241,18 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     try { claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); } catch { throw failure(401, 'INVALID_BROWSER_CAPABILITY', 'The browser authorization is invalid.'); }
     const now = clock();
     const android = safeObject(claims) && claims.source === 'android';
-    const acceptedScopes = android ? ANDROID_OPERATOR_SCOPES : SCOPES;
-    const acceptedIdentity = android
+    const odoo = safeObject(claims) && claims.source === 'odoo';
+    const acceptedScopes = android ? ANDROID_OPERATOR_SCOPES : odoo ? ODOO_OPERATOR_SCOPES : SCOPES;
+    const acceptedIdentity = odoo
+      ? claims.profile === 'Odoo operator' && Number.isSafeInteger(claims.odooUid) && claims.odooUid > 0 &&
+        claims.nativeDeviceId === undefined && claims.nativeCredentialGeneration === undefined &&
+        claims.baseDeviceId === odooBaseDeviceId(claims.odooUid)
+      : android
       ? claims.profile === 'Android operator' && claims.hubOrigin === ANDROID_HUB_ORIGIN &&
         ANDROID_DEVICE_ID.test(claims.nativeDeviceId || '') && Number.isSafeInteger(claims.nativeCredentialGeneration) &&
-        claims.nativeCredentialGeneration > 0 && claims.baseDeviceId === androidBaseDeviceId(claims.nativeDeviceId)
+        claims.nativeCredentialGeneration > 0 && claims.odooUid === undefined && claims.baseDeviceId === androidBaseDeviceId(claims.nativeDeviceId)
       : safeObject(claims) && claims.source === undefined && claims.nativeDeviceId === undefined &&
-        claims.nativeCredentialGeneration === undefined && PROFILES.has(claims.profile);
+        claims.nativeCredentialGeneration === undefined && claims.odooUid === undefined && PROFILES.has(claims.profile);
     requireAuth(safeObject(claims) && claims.v === 1 && claims.aud === AUDIENCE && claims.iss === backend &&
       acceptedIdentity && origins.has(claims.hubOrigin) && BASE_ID.test(claims.baseDeviceId || '') &&
       SESSION_ID.test(claims.operatorSessionId || '') && claims.operatorDeviceId === `${claims.baseDeviceId}::${claims.operatorSessionId}` &&
@@ -221,20 +261,22 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
       claims.scopes.every(scope => acceptedScopes.includes(scope)) && time(claims.iat) && time(claims.exp) &&
       time(claims.grantIssuedAt) && time(claims.authExpiresAt) && claims.grantIssuedAt <= claims.iat &&
       claims.iat <= now + 30000 && claims.exp > claims.iat && claims.exp - claims.iat <= OPERATOR_BROWSER_TOKEN_TTL_MS &&
-      claims.exp <= claims.authExpiresAt && claims.authExpiresAt - claims.grantIssuedAt <= (android ? OPERATOR_BROWSER_TOKEN_TTL_MS : PROFILE_MAX_MS),
+      claims.exp <= claims.authExpiresAt && claims.authExpiresAt - claims.grantIssuedAt <= (android || odoo ? OPERATOR_BROWSER_TOKEN_TTL_MS : PROFILE_MAX_MS),
     401, 'INVALID_BROWSER_CAPABILITY', 'The browser authorization is invalid.');
-    requireAuth((recoverExpiredAccess || now < claims.exp) && now < claims.authExpiresAt,
+    if (odoo) odooReady();
+    const recoveringOdoo = odoo && recoverOdooIdentity && now < claims.authExpiresAt + ODOO_IDENTITY_RECOVERY_MS;
+    requireAuth((recoverExpiredAccess || now < claims.exp) && now < claims.authExpiresAt || recoveringOdoo,
       401, 'BROWSER_CAPABILITY_EXPIRED', 'Operator authorization expired. Connect your operator profile again.');
     if (expectedOrigin !== undefined) requireAuth(expectedOrigin === claims.hubOrigin, 403, 'BROWSER_ORIGIN_MISMATCH', 'This authorization belongs to another Hub origin.');
     return Object.freeze(claims);
   }
-  // The exported verifier never accepts an expired access capability. Only the
-  // issuer can recover its actor, after independently verifying a current
-  // Render profile, and only within the original absolute authorization lease.
+  // Only an issuer that verifies current authority can recover an expired
+  // identity. Protected operations always require an unexpired capability.
   function verifyToken(token, { expectedOrigin } = {}) { return verifyClaims(token, { expectedOrigin }); }
   function result(claims) { return { ok: true, token: sign(claims), expiresAt: claims.exp, authExpiresAt: claims.authExpiresAt,
     operatorDeviceId: claims.operatorDeviceId, baseDeviceId: claims.baseDeviceId, operatorSessionId: claims.operatorSessionId,
-    ...(claims.source === 'android' ? { source: 'android', scopes: [...claims.scopes] } : {}) }; }
+    ...(claims.source ? { source: claims.source, scopes: [...claims.scopes] } : {}),
+    ...(claims.source === 'odoo' ? { odooUid: claims.odooUid } : {}) }; }
   function rateIssue(req, profile) {
     const now = clock();
     for (const [id, row] of issuerRates) if (row.until <= now) issuerRates.delete(id);
@@ -252,6 +294,57 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
   function sameOriginWrite(req) {
     requireAuth(req.headers?.origin === backend && req.headers?.[AUTH_HEADER] === '1',
       403, 'SAME_ORIGIN_ACTION_REQUIRED', 'Open this action from the operator sign-in page.');
+  }
+  function odooReady() {
+    requireAuth(odooSsoEnabled === true && typeof verifyOdooOperatorProof === 'function' &&
+      verifyOdooOperatorProof.configured !== false, 503, 'ODOO_SSO_DISABLED', 'Odoo operator access is not configured.');
+  }
+  function odooRequest(req, keys) {
+    ready();
+    odooReady();
+    requireAuth(origins.has(req.headers?.origin), 403, 'ODOO_ORIGIN_REQUIRED', 'Open this action from the authorized Odoo Hub.');
+    requireAuth(req.method === 'POST' && /^application\/json(?:\s*;|$)/i.test(req.headers?.['content-type'] || ''),
+      400, 'INVALID_ODOO_AUTH_REQUEST', 'The Odoo sign-in request must use JSON.');
+    requireAuth(!new URL(String(req.originalUrl || req.url || req.path || ''), backend).search &&
+      safeObject(req.body) && Object.keys(req.body).every(key => keys.includes(key)) && JSON.stringify(req.body).length <= 5000,
+    400, 'INVALID_ODOO_AUTH_REQUEST', 'The Odoo sign-in request is invalid.');
+    return { origin: req.headers.origin, ip: req.ip || req.socket?.remoteAddress || 'unknown' };
+  }
+  function issueOdooChallenge(req) {
+    return { ok: true, ...odooChallenges.issue(odooRequest(req, [])) };
+  }
+  async function issueOdooToken(req) {
+    const context = odooRequest(req, ['challenge', 'proofId', 'previousToken']);
+    const { challenge, proofId, previousToken } = req.body;
+    requireAuth(Number.isSafeInteger(proofId) && proofId > 0 &&
+      (previousToken === undefined || typeof previousToken === 'string' && previousToken.length <= 4096),
+    400, 'INVALID_ODOO_AUTH_REQUEST', 'The Odoo sign-in request is invalid.');
+    const proof = odooChallenges.consume({ ...context, challenge });
+    const prior = previousToken ? verifyClaims(previousToken, {
+      expectedOrigin: context.origin, recoverExpiredAccess: true, recoverOdooIdentity: true
+    }) : null;
+    requireAuth(!prior || prior.source === 'odoo', 403, 'ODOO_OPERATOR_CHANGED', 'The previous operator session belongs to another sign-in.');
+    requireAuth(activeOdooVerifications < 16, 429, 'ODOO_AUTH_RATE_LIMITED', 'Please wait before reconnecting operator services.');
+    let verified;
+    activeOdooVerifications++;
+    try {
+      verified = await verifyOdooOperatorProof({ proofId, ...proof });
+    } catch {
+      throw failure(503, 'ODOO_PROOF_UNAVAILABLE', 'Odoo operator verification is temporarily unavailable.');
+    } finally { activeOdooVerifications--; }
+    requireAuth(clock() < proof.expiresAt, 401, 'ODOO_PROOF_CHALLENGE_INVALID', 'The Odoo sign-in challenge expired.');
+    requireAuth(safeObject(verified) && Number.isSafeInteger(verified.uid) && verified.uid > 0 &&
+      Array.isArray(verified.scopes) && verified.scopes.length > 0 && verified.scopes.length <= ODOO_OPERATOR_SCOPES.length &&
+      new Set(verified.scopes).size === verified.scopes.length && verified.scopes.every(scope => ODOO_OPERATOR_SCOPES.includes(scope)),
+    403, 'ODOO_OPERATOR_NOT_AUTHORIZED', 'Your Odoo account is not authorized for these operator services.');
+    requireAuth(!prior || prior.odooUid === verified.uid, 403, 'ODOO_OPERATOR_CHANGED', 'Your Odoo account changed. Reconnect operator services.');
+    const now = clock(), authExpiresAt = now + OPERATOR_BROWSER_TOKEN_TTL_MS;
+    const baseDeviceId = odooBaseDeviceId(verified.uid);
+    const operatorSessionId = prior?.operatorSessionId || `tab_${randomBytes(12).toString('hex')}`;
+    return result({ v: 1, aud: AUDIENCE, iss: backend, hubOrigin: context.origin,
+      source: 'odoo', profile: 'Odoo operator', odooUid: verified.uid, scopes: [...verified.scopes],
+      baseDeviceId, operatorSessionId, operatorDeviceId: `${baseDeviceId}::${operatorSessionId}`,
+      jti: randomBytes(16).toString('hex'), grantIssuedAt: now, authExpiresAt, iat: now, exp: authExpiresAt });
   }
   function androidReady() {
     requireAuth(androidAccessEnabled === true && typeof authenticateNative === 'function' &&
@@ -356,6 +449,7 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     ready(); rejectQueryCredentials(req);
     const previous = verifyToken(bearer(req), { expectedOrigin: req.headers?.origin || '' });
     requireAuth(previous.source !== 'android', 401, 'ANDROID_ENROLLMENT_PROOF_REQUIRED', 'Reconnect through the enrolled SH Chat app to renew operator services.');
+    requireAuth(previous.source !== 'odoo', 401, 'ODOO_PROOF_REQUIRED', 'Reconnect with your current Odoo sign-in to renew operator services.');
     const now = clock();
     // This renews only the existing signed grant. No profile, scope, actor,
     // origin or absolute authorization expiry can be supplied by the caller.
@@ -433,8 +527,15 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
         actor = await privateProfileActor(req, { erp: isPrivateErpPath(path) });
       } else if (raw.startsWith(`${PREFIX}.`)) {
         const claims = verifyToken(raw, { expectedOrigin: req.headers?.origin || '' });
-        const needed = claims.source === 'android' ? androidOperatorScope(path, req.method) : requiredOperatorScope(path, req.method);
-        requireAuth(needed, 403, 'ANDROID_OPERATION_NOT_PERMITTED', 'Use the native SH Chat controls for this operation.');
+        const needed = claims.source === 'odoo' ? odooOperatorScope(path, req.method)
+          : claims.source === 'android' ? androidOperatorScope(path, req.method) : requiredOperatorScope(path, req.method);
+        if (claims.source === 'odoo') {
+          requireAuth(needed, 403, 'ODOO_OPERATION_NOT_PERMITTED', 'This action is not available through Odoo operator access.');
+          if (typeof verifyOdooOperatorProof.scopesFor === 'function') {
+            const currentScopes = verifyOdooOperatorProof.scopesFor(claims.odooUid);
+            requireAuth(currentScopes?.includes(needed), 403, 'OPERATOR_SCOPE_REQUIRED', 'This authorization does not permit that operator operation.');
+          }
+        } else requireAuth(needed, 403, 'ANDROID_OPERATION_NOT_PERMITTED', 'Use the native SH Chat controls for this operation.');
         requireAuth(claims.scopes.includes(needed), 403, 'OPERATOR_SCOPE_REQUIRED', 'This authorization does not permit that operator operation.');
         if (path === '/api/odoo-documents/share' && String(req.body?.channel || req.body?.mode || '').trim().toLowerCase() === 'email')
           requireAuth(claims.scopes.includes('mail:write'), 403, 'OPERATOR_SCOPE_REQUIRED', 'Email permission is required to send this document.');
@@ -501,6 +602,8 @@ export function createOperatorBrowserAuth({ secret, readProfileSession, authenti
     app.get('/operator-auth.html', popup);
     app.post('/api/operator-browser-auth/token', handler(issue));
     app.post('/api/operator-browser-auth/refresh', handler(refresh));
+    app.post('/api/operator-browser-auth/odoo/challenge', handler(issueOdooChallenge));
+    app.post('/api/operator-browser-auth/odoo/token', handler(issueOdooToken));
     app.post('/api/operator-browser-auth/android/challenge', handler(issueAndroidChallenge));
     app.post('/api/operator-browser-auth/android/token', handler(issueAndroidToken));
   }

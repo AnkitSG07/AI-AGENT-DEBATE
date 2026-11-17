@@ -45,7 +45,7 @@ test('AI drafts run only on an explicit tap, use operator auth and wait for comp
     await f.page.waitForFunction(() => !!__hubUiTest.state.aiDraftRequest);
     await f.page.evaluate(() => __hubUiTest.runAiDraft());
     await assertEventually(() => f.draftRequests.length === 1);
-    assert.ok(f.draftRequests[0].authorization.startsWith('Bearer SIMULATED_ONLY_'));
+    assert.ok(f.draftRequests[0].authorization.startsWith('Bearer shb1.'));
     assert.deepEqual(Object.keys(f.draftRequests[0].body).sort(), ['channelId', 'conversation']);
     assert.equal(f.draftRequests[0].body.channelId, 101);
     assert.match(f.draftRequests[0].body.conversation, /Customer: Hello/);

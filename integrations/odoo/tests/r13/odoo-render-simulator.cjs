@@ -28,6 +28,8 @@ class Simulator {
     this.calls=[];this.unexpected=[];this.holds=new Map();this.faults=[];this.nextId=2000;this.backendReads=[];this.backendWrites=[];this.aiMode='manual';this.aiRevision=1;
     this.aiSettings = null;
     this.aiAvailableFeatures = { drafts: true, productSuggestions: true, voiceFallback: true, autoReplies: true };
+    this.odooChallenge = null;
+    this.odooCapability = null;
     const now=new Date().toISOString();
     this.models={
       'res.partner':[
@@ -107,13 +109,45 @@ class Simulator {
       const state=url.searchParams.get('state');
       await route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset=utf-8><title>Offline profile simulator</title><p>Simulated signed profile, no real credentials.</p><script>const state=${JSON.stringify(state)};window.addEventListener('message',e=>{if(e.origin!=='https://www.smarthandicrafts.com'||e.source!==opener||e.data.state!==state)return;opener.postMessage({type:'sh-operator-browser-auth',state,token:'SIMULATED_ONLY_${crypto.randomBytes(30).toString('hex')}',expiresAt:Date.now()+600000,authExpiresAt:Date.now()+3600000,operatorDeviceId:'offline::demo'},'https://www.smarthandicrafts.com');});opener.postMessage({type:'sh-operator-auth-ready',state},'https://www.smarthandicrafts.com');</script>`});return true;
     }
+    if (url.origin === 'https://ai-agent-debate.onrender.com' && url.pathname === '/api/operator-browser-auth/odoo/challenge') {
+      const issuedAt = Date.now(), challenge = crypto.randomBytes(32).toString('base64url');
+      this.odooChallenge = { challenge, issuedAt, expiresAt: issuedAt + 45000, proofId: null };
+      await json({ ok: true, challenge, issuedAt, expiresAt: this.odooChallenge.expiresAt });
+      return true;
+    }
+    if (url.origin === 'https://www.smarthandicrafts.com' && url.pathname === '/web/dataset/call_kw/x_sh_operator_proof/create') {
+      const packet = req.postDataJSON(), challenge = this.odooChallenge;
+      const digest = challenge && crypto.createHash('sha256').update(challenge.challenge).digest('hex');
+      if (!digest || packet.params?.args?.[0]?.x_name !== digest) await json({ ok: false }, 403);
+      else {
+        challenge.proofId = ++this.nextId;
+        await json({ jsonrpc: '2.0', id: packet.id, result: challenge.proofId });
+      }
+      return true;
+    }
+    if (url.origin === 'https://ai-agent-debate.onrender.com' && url.pathname === '/api/operator-browser-auth/odoo/token') {
+      const body = req.postDataJSON(), challenge = this.odooChallenge;
+      this.odooChallenge = null;
+      if (!challenge?.proofId || body.challenge !== challenge.challenge || body.proofId !== challenge.proofId) await json({ ok: false }, 403);
+      else {
+        const token = `shb1.${crypto.randomBytes(48).toString('base64url')}.${crypto.randomBytes(32).toString('base64url')}`;
+        const expiresAt = Date.now() + 600000;
+        this.odooCapability = token;
+        await json({ ok: true, source: 'odoo', odooUid: 7, token, expiresAt, authExpiresAt: expiresAt,
+          operatorDeviceId: 'offline::demo', baseDeviceId: 'offline', operatorSessionId: 'demo' });
+      }
+      return true;
+    }
     if(url.pathname.startsWith('/web/dataset/call_kw/')){
       const packet=JSON.parse(req.postData()||'{}');try{await json({jsonrpc:'2.0',id:packet.id,result:await this.rpc(packet)});}catch(e){await json({jsonrpc:'2.0',id:packet.id,error:{message:e.message,data:{name:'odoo.exceptions.AccessError',message:e.message}}});}return true;
     }
     // Odoo19 AttachmentController returns data.attachment_id, not a bare id.
     if(url.pathname==='/mail/attachment/upload'){this.backendWrites.push({path:url.pathname,method:req.method(),body:req.postData()});await this.gate('upload');await json({data:{attachment_id:901,store_data:{'ir.attachment':[this.models['ir.attachment'][0]]}}});return true;}
     if(!url.pathname.startsWith('/api/'))return false;
-    const authorized=/^Bearer SIMULATED_ONLY_[a-f0-9]{60}$/.test(req.headers().authorization||'');
+    const authorization = req.headers().authorization || '';
+    const authorized = /^(\/api\/ai-mode(?:\/(?:draft|product-suggestions))?)$/.test(url.pathname)
+      ? !!this.odooCapability && authorization === `Bearer ${this.odooCapability}`
+      : /^Bearer SIMULATED_ONLY_[a-f0-9]{60}$/.test(authorization);
     const item={path:url.pathname,query:Object.fromEntries(url.searchParams),method:req.method(),body:req.postData()?JSON.parse(req.postData()):null,authorized};
     (req.method()==='GET'?this.backendReads:this.backendWrites).push(item);
     if(/^\/api\/(zoho-mail|google-contacts|odoo-documents|ai-mode)(\/|$)/.test(url.pathname)&&!authorized){await json({ok:false,error:'Offline simulator requires the operator capability'},401);return true;}

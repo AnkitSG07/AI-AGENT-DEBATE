@@ -103,7 +103,10 @@ async function fixture({ width = 390, height = 844, mobile = true, rights = true
   });
   await page.goto('https://www.smarthandicrafts.com/livechat-api-test');
   await page.waitForFunction(() => !!window.__hubUiTest);
-  if (connect) await page.evaluate(() => window.SHOperatorAuth?.connect());
+  if (connect) await page.evaluate(() => {
+    window.SHOperatorAuth.setOdooUser(7);
+    return window.SHOperatorAuth.connect();
+  });
   await page.evaluate(({messages,fields}) => {
     const h=window.__hubUiTest, now=Date.now();
     Object.assign(h.state,{session:{uid:7,partner_id:7,name:'Demo Operator',db:'offline-demo'},autoRefreshEnabled:false,

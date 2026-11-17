@@ -126,7 +126,6 @@
                   <button id="shAiEnableAll" type="button">Turn all on</button>
                 </fieldset>
                 <button class="sh-ai-status-retry" id="shAiStatusRetry" type="button" hidden>Refresh AI status</button>
-                <button class="sh-ai-status-retry" type="button" data-operator-auth-connect hidden>Connect operator services</button>
               </div>
 <button class="sh-mobile-live-top" id="shAutoRefreshToggle" type="button" title="Auto-refresh is on" aria-label="Toggle auto refresh">
               <span></span><span></span><span></span><span></span><span></span>
@@ -1202,6 +1201,9 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   const backend = "https://ai-agent-debate.onrender.com", originalFetch = window.fetch.bind(window);
   let capability = null, reconnectCapability = null, refreshPromise = null, connection = null, refreshTimer = null;
   let cancelConnection = null, authGeneration = 0;
+  let currentOdooUid = null, odooGeneration = 0, odooRefreshTimer = null;
+  let odooCapability = null, odooReconnectCapability = null;
+  let odooConnection = null, odooController = null, odooFailure = null, odooRetryAfter = 0;
   let deviceAccess = null, deviceConnection = null, deviceController = null;
   const activeStreams = new Set();
   const callPrefix = "/api/whatsapp-calls/";
@@ -1278,6 +1280,11 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     deviceAccess = null;
     deviceController?.abort(); deviceController = null; deviceConnection = null;
   }
+  function odooValid() { return !!odooCapability && odooCapability.expiresAt > Date.now() + 1000; }
+  function odooAiPath(path, method) {
+    return path === "/api/ai-mode" && ["GET", "POST"].includes(method) ||
+      method === "POST" && ["/api/ai-mode/draft", "/api/ai-mode/product-suggestions"].includes(path);
+  }
   function publish(type) { window.dispatchEvent(new CustomEvent(type, { detail: { connected: valid(), expiresAt: capability?.expiresAt || 0 } })); }
   function required() {
     publish("sh-operator-auth-required");
@@ -1299,6 +1306,104 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => refresh().catch(() => {}), Math.max(1000, capability.expiresAt - now - 120000));
     publish("sh-operator-auth-connected");
+  }
+  function odooAuthError(code, message) { return Object.assign(new Error(message), { code }); }
+  function rememberOdoo(value) {
+    const now = Date.now();
+    if (!value || value.source !== "odoo" || value.odooUid !== currentOdooUid || typeof value.token !== "string" ||
+        !value.token.startsWith("shb1.") || value.token.length < 40 || value.token.length > 4096 ||
+        !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= now || value.expiresAt > now + 660000 ||
+        typeof value.operatorDeviceId !== "string" || !/^[A-Za-z0-9_:.-]{1,160}$/.test(value.operatorDeviceId))
+      throw odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+    odooCapability = { token: value.token, expiresAt: value.expiresAt,
+      authExpiresAt: Number.isSafeInteger(value.authExpiresAt) ? value.authExpiresAt : value.expiresAt,
+      operatorDeviceId: value.operatorDeviceId, odooUid: value.odooUid,
+      baseDeviceId: String(value.baseDeviceId || value.operatorDeviceId.split("::")[0] || ""),
+      operatorSessionId: String(value.operatorSessionId || value.operatorDeviceId.split("::")[1] || "") };
+    odooReconnectCapability = odooCapability;
+    clearTimeout(odooRefreshTimer);
+    scheduleOdooRenewal(Math.max(1000, odooCapability.expiresAt - now - 120000));
+  }
+  function scheduleOdooRenewal(delay) {
+    clearTimeout(odooRefreshTimer);
+    odooRefreshTimer = setTimeout(() => {
+      if (odooValid()) connectWithOdoo({ renew: true }).catch(() => { if (odooValid()) scheduleOdooRenewal(15000); });
+    }, delay);
+  }
+  async function postOdooAuthorization(path, body, signal) {
+    const response = await originalFetch(backend + "/api/operator-browser-auth/odoo/" + path, {
+      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    const result = await response.json().catch(() => null);
+    if (response.ok && result?.ok === true) return result;
+    if (path === "challenge" && (response.status === 404 || result?.code === "ODOO_SSO_DISABLED"))
+      throw odooAuthError("ODOO_SSO_DISABLED", "Odoo access for SH Chat services is being set up. Try again later.");
+    if (result?.code === "ODOO_OPERATOR_NOT_AUTHORIZED")
+      throw odooAuthError("ODOO_OPERATOR_NOT_AUTHORIZED", "This Odoo account has no access to these SH Chat services.");
+    if (result?.code === "ODOO_OPERATOR_CHANGED")
+      throw odooAuthError("ODOO_OPERATOR_CHANGED", "Your Odoo account changed. Refresh SH Chat to continue.");
+    throw odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+  }
+  function connectWithOdoo({ renew = false, retry = false } = {}) {
+    if (!currentOdooUid)
+      return Promise.reject(odooAuthError("ODOO_SESSION_REQUIRED", "Sign in to Odoo to use SH Chat services."));
+    if (!renew && odooValid()) return Promise.resolve();
+    if (odooConnection) return odooConnection;
+    if (!retry && Date.now() < odooRetryAfter) return Promise.reject(odooFailure);
+    const generation = odooGeneration, uid = currentOdooUid, controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 12000);
+    odooController = controller;
+    const pending = (async () => {
+      const prior = odooReconnectCapability?.odooUid === uid && odooReconnectCapability.authExpiresAt + 240000 > Date.now()
+        ? odooReconnectCapability.token : null;
+      const { challenge, issuedAt, expiresAt } = await postOdooAuthorization("challenge", {}, controller.signal);
+      if (typeof challenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(challenge) ||
+          !Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt || expiresAt - issuedAt > 60000)
+        throw odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+      const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(challenge));
+      const digest = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
+      const model = "x_sh_operator_proof", method = "create";
+      const response = await originalFetch("/web/dataset/call_kw/" + model + "/" + method, {
+        method: "POST", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal,
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "call", id: Date.now(), params: { model, method, args: [{ x_name: digest }], kwargs: {} } })
+      });
+      const proof = await response.json().catch(() => null);
+      const errorName = String(proof?.error?.data?.name || "");
+      if (response.status === 401 || /SessionExpired/i.test(errorName))
+        throw odooAuthError("ODOO_SESSION_REQUIRED", "Your Odoo session expired. Refresh SH Chat to sign in again.");
+      if (response.status === 403 || /AccessError|AccessDenied/.test(errorName))
+        throw odooAuthError("ODOO_OPERATOR_NOT_AUTHORIZED", "This Odoo account has no access to these SH Chat services.");
+      if (!response.ok || !Number.isSafeInteger(proof?.result) || proof.result <= 0)
+        throw odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+      const result = await postOdooAuthorization("token", { challenge, proofId: proof.result, ...(prior ? { previousToken: prior } : {}) }, controller.signal);
+      if (generation !== odooGeneration || controller.signal.aborted) throw new DOMException("Odoo connection cancelled", "AbortError");
+      if (result.odooUid !== uid)
+        throw odooAuthError("ODOO_OPERATOR_CHANGED", "Your Odoo account changed. Refresh SH Chat to continue.");
+      odooFailure = null; odooRetryAfter = 0;
+      rememberOdoo(result);
+    })().catch(error => {
+      if (generation !== odooGeneration) throw error;
+      const safe = /^ODOO_[A-Z_]+$/.test(error?.code || "") ? error :
+        odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+      if (["ODOO_OPERATOR_CHANGED", "ODOO_OPERATOR_NOT_AUTHORIZED", "ODOO_SESSION_REQUIRED"].includes(safe.code)) {
+        odooCapability = null; odooReconnectCapability = null; clearTimeout(odooRefreshTimer);
+      }
+      odooFailure = safe;
+      odooRetryAfter = Date.now() + (safe.code === "ODOO_SSO_DISABLED" || safe.code === "ODOO_OPERATOR_NOT_AUTHORIZED" ? 60000 : 10000);
+      throw safe;
+    }).finally(() => {
+      clearTimeout(deadline);
+      if (odooController === controller) { odooController = null; odooConnection = null; }
+    });
+    odooConnection = pending;
+    return pending;
+  }
+  function clearOdooAuthorization() {
+    odooGeneration++; odooCapability = null; odooReconnectCapability = null;
+    odooController?.abort(); odooController = null; odooConnection = null;
+    odooFailure = null; odooRetryAfter = 0; clearTimeout(odooRefreshTimer);
   }
   async function refresh() {
     if (refreshPromise) return refreshPromise;
@@ -1380,6 +1485,19 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
       if ((response.status === 401 || response.status === 403) && deviceAccess === used) deviceAccess = null;
       return response;
     }
+    if (odooAiPath(url.pathname, method)) {
+      const signal = options.signal || (input instanceof Request ? input.signal : undefined);
+      if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+      await connectWithOdoo();
+      if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+      if (!odooValid()) throw odooAuthError("ODOO_OPERATOR_UNAVAILABLE", "Could not verify your Odoo connection. Try again shortly.");
+      const used = odooCapability;
+      const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+      headers.set("Authorization", "Bearer " + used.token);
+      const response = await originalFetch(input, { ...options, credentials: "omit", redirect: "error", headers });
+      if (response.status === 401 && odooCapability === used) { odooCapability = null; clearTimeout(odooRefreshTimer); }
+      return response;
+    }
     if (!valid() && url.pathname === callPrefix + "config" && method === "GET") return originalFetch(input, options);
     if (!valid()) throw required();
     if (capability.expiresAt < Date.now() + 120000 && !options.keepalive) {
@@ -1448,16 +1566,23 @@ function a(e,t){return n(e)||r(e,t)||o(e,t)||i()}function o(e,n){if(e){if(typeof
   window.fetch = authenticatedFetch;
   window.SHOperatorAuth = Object.freeze({ connect, connected: valid, openCallEvents, supportsDeviceAccess,
     deviceConnected: deviceAccessValid,
+    setOdooUser: uid => {
+      const next = Number.isSafeInteger(uid) && uid > 0 ? uid : null;
+      if (next === currentOdooUid) return;
+      currentOdooUid = next;
+      clearOdooAuthorization();
+    },
+    retryAiConnection: () => { odooRetryAfter = 0; },
     identity: () => valid() ? { operatorDeviceId: capability.operatorDeviceId, baseDeviceId: capability.baseDeviceId,
       operatorSessionId: capability.operatorSessionId } : null,
     clear: () => {
       authGeneration++; capability = null; reconnectCapability = null;
-      clearDeviceAccess();
+      clearDeviceAccess(); clearOdooAuthorization();
       for (const source of Array.from(activeStreams)) source.close();
       cancelConnection?.(); clearTimeout(refreshTimer); publish("sh-operator-auth-required");
     }
   });
-  window.addEventListener("pagehide", () => { clearDeviceAccess(); clearTimeout(refreshTimer); for (const source of Array.from(activeStreams)) source.close(); });
+  window.addEventListener("pagehide", () => { clearDeviceAccess(); clearOdooAuthorization(); clearTimeout(refreshTimer); for (const source of Array.from(activeStreams)) source.close(); });
 })();
 </script>
 <!-- SH_OPERATOR_AUTH_R13_END -->
@@ -8117,6 +8242,7 @@ Once received, our team will prepare the quotation accordingly.`
     }
 
     state.session = session;
+    window.SHOperatorAuth?.setOdooUser?.(session.uid);
     try {
       const saved = JSON.parse(sessionStorage.getItem("sh-odoo-session-drafts") || "null");
       sessionStorage.removeItem("sh-odoo-session-drafts");
@@ -11655,7 +11781,8 @@ Once received, our team will prepare the quotation accordingly.`
     } catch (error) {
       if (!current()) return null;
       console.warn("AI Mode server load failed:", error);
-      state.aiModeSyncError = ["DEVICE_AUTH_REQUIRED", "DEVICE_AUTH_UNAVAILABLE"].includes(error?.code)
+      state.aiModeSyncError = ["DEVICE_AUTH_REQUIRED", "DEVICE_AUTH_UNAVAILABLE", "ODOO_SESSION_REQUIRED", "ODOO_SSO_DISABLED",
+        "ODOO_OPERATOR_NOT_AUTHORIZED", "ODOO_OPERATOR_CHANGED", "ODOO_OPERATOR_UNAVAILABLE"].includes(error?.code)
         ? error.message
         : "Shared AI status is unavailable. Refresh to check the current settings.";
       if (!silent) showOperatorToast("AI Mode status load failed");
@@ -13312,7 +13439,10 @@ Once received, our team will prepare the quotation accordingly.`
     const features = Object.fromEntries(aiFeatureInputs.map(input => [input.dataset.aiFeature, availableFeatures[input.dataset.aiFeature]]));
     void setAiMode({ masterEnabled: true, features });
   });
-  aiStatusRetry?.addEventListener("click", () => { void loadAiModeFromServer({ silent: false }); });
+  aiStatusRetry?.addEventListener("click", () => {
+    window.SHOperatorAuth?.retryAiConnection?.();
+    void loadAiModeFromServer({ silent: false });
+  });
 
   // Legacy dropdown/manual AI support is intentionally hidden, but kept for future Gemini fallback.
   aiModeSelect?.addEventListener("change", () => {

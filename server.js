@@ -18,6 +18,7 @@ import { createOperatorCallPermission } from "./operator-call-permission.js";
 import { registerOperatorAdminRoutes } from "./operator-admin.js";
 import { createOperatorReportingRuntime } from "./operator-reporting-runtime.js";
 import { createOperatorBrowserAuth, createProfileLoginLimiter, constantTimePasswordEqual } from "./operator-browser-auth.js";
+import { createOdooOperatorProofVerifier } from "./operator-odoo-proof.js";
 import { assertPushSubscriptionOwner } from "./operator-push-ownership.js";
 import { createOperatorDocumentLinks, safeDocumentRedirect, documentContentDisposition } from "./operator-document-links.js";
 import { createOperatorAiReplyAuth } from "./operator-ai-reply-auth.js";
@@ -116,6 +117,15 @@ const operatorBrowserAuth = createOperatorBrowserAuth({
   readProfileSession,
   allowedHubOrigins: allowedOrigins,
   authorizeDocumentLink: operatorDocumentLinks.authorize,
+  odooSsoEnabled: process.env.SH_ODOO_OPERATOR_SSO_ENABLED === 'true',
+  verifyOdooOperatorProof: createOdooOperatorProofVerifier({
+    grantsJson: process.env.SH_ODOO_OPERATOR_SSO_GRANTS || '',
+    companyId: process.env.SH_ODOO_OPERATOR_SSO_COMPANY_ID,
+    execute: async (model, method, args, kwargs) => {
+      const signal = AbortSignal.timeout(7000);
+      return odooExecute(await odooLoginCached(signal), model, method, args, kwargs, signal);
+    }
+  }),
   androidAccessEnabled: process.env.SH_ANDROID_OPERATOR_ACCESS_ENABLED === 'true',
   verifyAndroidCapability: async ({ deviceId, credentialGeneration }) => {
     const registry = operatorFirestoreRuntime.deviceRegistry;
@@ -667,10 +677,11 @@ function getDefaultFromAddress() {
 }
 
 // ===================== ODOO JSON-RPC HELPERS =====================
-async function odooJsonRpc(service, method, args) {
+async function odooJsonRpc(service, method, args, signal) {
   const base = ODOO_URL.replace(/\/$/, "");
   const resp = await fetch(`${base}/jsonrpc`, {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -695,21 +706,21 @@ async function odooJsonRpc(service, method, args) {
 // Caches the Odoo UID for 20 minutes so we don't do a fresh login on every bot message
 const odooUidCache = { uid: null, expiresAt: 0 };
 
-async function odooLogin() {
-  const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS]);
+async function odooLogin(signal) {
+  const uid = await odooJsonRpc("common", "login", [ODOO_DB, ODOO_USERNAME, ODOO_PASS], signal);
   if (!uid) throw new Error("Odoo login failed. Check DB/username/api key.");
   return uid;
 }
 
-async function odooLoginCached() {
+async function odooLoginCached(signal) {
   if (odooUidCache.uid && Date.now() < odooUidCache.expiresAt) return odooUidCache.uid;
-  const uid = await odooLogin();
+  const uid = await odooLogin(signal);
   odooUidCache.uid = uid;
   odooUidCache.expiresAt = Date.now() + 20 * 60 * 1000; // 20 min TTL
   return uid;
 }
 
-async function odooExecute(uid, model, method, params = [], kw = {}) {
+async function odooExecute(uid, model, method, params = [], kw = {}, signal) {
   return await odooJsonRpc("object", "execute_kw", [
     ODOO_DB,
     uid,
@@ -718,7 +729,7 @@ async function odooExecute(uid, model, method, params = [], kw = {}) {
     method,
     params,
     kw
-  ]);
+  ], signal);
 }
 
 // ===================== ZOHO MAIL API HELPERS =====================
@@ -16118,6 +16129,8 @@ async function aiModeApplyToggle(req, res, globalOnly = false) {
   const requestedModes = modes.map(key => String(body[key]).toLowerCase());
   const allowedModes = AI_MODE_ALLOW_HIDDEN_CHAT_MODE ? ['manual','zapier','chat','assist'] : ['manual','zapier'];
   const hasSettings = Object.hasOwn(body, 'masterEnabled') || Object.hasOwn(body, 'features');
+  if (req.operatorAuth?.source === 'odoo' && !hasSettings)
+    return res.status(400).json({ ok: false, code: 'INVALID_AI_MODE', error: 'Choose the AI features in SH Chat settings.' });
   const invalidSettings = hasSettings && (toggleKeys.length || modes.length ||
     typeof body.masterEnabled !== 'boolean' || !validOperatorAiFeatures(body.features));
   if (invalidSettings || (!hasSettings && !toggleKeys.length && !modes.length) || toggleKeys.some(key => !validBoolean(body[key])) ||

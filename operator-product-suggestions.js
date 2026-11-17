@@ -280,7 +280,7 @@ export function registerOperatorProductSuggestionRoutes(app, { provider, startRe
   app.post('/api/ai-mode/product-suggestions', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const actor = req.operatorAuth;
-    const scope = actor?.source === 'android' ? 'ai:draft' : 'ai:write';
+    const scope = ['android', 'odoo'].includes(actor?.source) ? 'ai:draft' : 'ai:write';
     if (actor?.kind !== 'browser' || !actor.scopes?.includes(scope) || !actor.baseDeviceId) {
       return res.status(401).json({ ok: false, code: 'OPERATOR_AUTH_REQUIRED', error: 'Connect operator services to get product suggestions.' });
     }

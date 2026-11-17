@@ -107,6 +107,19 @@ test('manual drafting succeeds through the real guard while global automated inf
   assert.equal(f.calls.length, 1);
 });
 
+test('an Odoo session proof grants draft inference without a Render profile sign-in', async t => {
+  const f = await fixture(t, { authOptions: { odooSsoEnabled: true,
+    verifyOdooOperatorProof: async ({ proofId }) => proofId === 91 ? { uid: 42, scopes: ['ai:draft'] } : null } });
+  const challenge = await f.request('/api/operator-browser-auth/odoo/challenge', { body: {} });
+  assert.equal(challenge.status, 200);
+  const grant = await f.request('/api/operator-browser-auth/odoo/token', { body: { challenge: challenge.data.challenge, proofId: 91 } });
+  assert.equal(grant.status, 200);
+  const token = grant.data.token;
+  assert.deepEqual((await f.request(DRAFT_PATH, { token })).data, { ok: true, channelId: 42, ...RESULT });
+  assert.equal((await f.request('/api/ai-mode/chat', { token })).data.code, 'ODOO_OPERATION_NOT_PERMITTED');
+  assert.equal(f.calls.length, 1);
+});
+
 test('enrolled-device proof grants manual drafting, reauthorization keeps admission identity, and revocation blocks inference', async t => {
   const id = 'android_11111111-2222-3333-4444-555555555555', nativeToken = `${id}.${'A'.repeat(43)}`;
   let current = { id, credentialGeneration: 1, revokedAt: 0, tokenExpiresAt: START + 3600000 };
